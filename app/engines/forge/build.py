@@ -24,9 +24,15 @@ from engines.forge.density import DEFAULT as DEFAULT_DENSITY, FILL, STORY, WRITE
 from engines.forge.render import _PERIOD, ARCHETYPES, render  # noqa: E402
 from engines.forge.common import SCALE as _SCALE, numbers as _numbers  # noqa: E402
 from engines.forge.validate_pptx import validate  # noqa: E402
+from engines import max_turns as _cap  # noqa: E402
 
-MODEL = os.environ.get("FORGE_MODEL") or os.environ.get("MH_MODEL", "deepseek-v4.1-flash")
+from meshpool_harness.providers import configured_model  # noqa: E402
+MODEL = os.environ.get("FORGE_MODEL") or configured_model()
 STORY_MODEL = os.environ.get("FORGE_STORY_MODEL", MODEL)
+
+_COVER_LINE = """"date" (the occasion and today's month and year, e.g. "Board meeting, " + the month)."""
+_COVER_METRICS = """
+  "metrics": 2-3 of {"value", "label" (<= 6 words), "prov"}: the figures that size the decision, shown on the cover."""
 
 _ARCH = """Archetypes (pick the one that best PROVES the title; never more than 3 of the same in a row). The
 renderer applies a strict consulting design; you only fill fields.
@@ -131,7 +137,10 @@ superscript footnote marker. Numbers in bullets are emphasised automatically. Fo
 
 def arch_help(density: str = "read") -> str:
     """The archetype guide with the density mode's FILL targets (density.py)."""
-    return _ARCH.replace("{fill}", FILL[density])
+    arch = _ARCH.replace("{fill}", FILL[density])
+    if os.environ.get("MH_COVER_METRICS") == "1":      # opt in: headline figures on the cover's right half
+        arch = arch.replace(_COVER_LINE, _COVER_LINE + _COVER_METRICS, 1)
+    return arch
 
 
 ARCH_HELP = arch_help("read")                     # the dense send-ahead guide (kept for callers that import it)
@@ -551,7 +560,7 @@ def _user_prefs() -> str:
 
 def today_line() -> str:
     d = _today()
-    return (f"- Today is {d:%-d %B %Y}. The cover date is {d:%B %Y} (or the meeting date the brief gives); every date "
+    return (f"- Today is {d.day} {d:%B %Y}. The cover date is {d:%B %Y} (or the meeting date the brief gives); every date "
             f"in a plan, roadmap or next step is after today.")
 
 
@@ -1145,6 +1154,11 @@ PER_SHARE = {"dividend", "dividends", "payout", "price", "eps", "earnings", "buy
              "book", "value", "cash"}
 
 
+CONSISTENCY_RECOMPUTE = """ Recompute derived figures from the deck's own inputs and flag any that disagree: a
+per-share amount times the share count against the stated total, a quarterly figure times four against the annual
+one, a total divided by shares against the per-share figure ("$1.47 a quarter on 443.1M shares" is about $2.6B a year,
+not $2.46B)."""   # opt in with MH_CONSISTENCY_RECOMPUTE=1: it adds to the consistency prompt, never replaces it
+
 CONSISTENCY = """You check a board deck for figures that disagree. Below is every line a reader sees, slide by slide,
 including footnotes and chart values. List each place where the SAME quantity (same metric, entity and period) is
 given different values on different lines or slides, where a footnote or label contradicts a figure or chart value,
@@ -1201,6 +1215,13 @@ def _consistency_key(slides) -> str:
 _CONSISTENCY_CACHE: dict[str, dict] = {}
 
 
+def _consistency_prompt() -> str:
+    if os.environ.get("MH_CONSISTENCY_RECOMPUTE") != "1":
+        return CONSISTENCY
+    head, sep, tail = CONSISTENCY.partition(" Do not flag different quantities")
+    return head + CONSISTENCY_RECOMPUTE + sep + tail
+
+
 def consistency_checks(slides, client, models: list[str], task_id: str = "consistency") -> dict[int, list[str]]:
     """One metric, one value, across lines, footnotes and charts: a cheap model reads the whole deck once (cached on
     its text) and lists disagreements the regex tie check cannot key (different wording, a footnote against a chart
@@ -1215,7 +1236,7 @@ def consistency_checks(slides, client, models: list[str], task_id: str = "consis
         got = None
         for m in models:
             try:
-                got = _call(client, m, CONSISTENCY, text[:40000], task_id, max_tokens=3000)
+                got = _call(client, m, _consistency_prompt(), text[:40000], task_id, max_tokens=3000)
                 break
             except Exception:  # noqa: BLE001 - a checker that cannot run adds nothing
                 continue
@@ -1302,6 +1323,59 @@ def arith_checks(slides) -> dict[int, list[str]]:
                         f"arithmetic in the text does not hold: '{m.group(0).strip()[:120]}' - {m.group(1)} "
                         f"{'+' if op in ('plus', 'and') else '-'} {m.group(3)} is {shown}, not {m.group(5)}. Fix the "
                         "figure (or add the missing step as a calc) so every sum on the page adds up")
+    return out
+
+
+def _qty(cell) -> tuple[float, str] | None:
+    """A table cell as (value, kind): '$3.0B' -> (3e9, '$'), '2.7M' or '2.7M shares' -> (2.7e6, 'n')."""
+    if isinstance(cell, dict):                          # {"text"} or {"lead", "bullets"}: the lead is the value
+        cell = cell.get("lead") or cell.get("text") or cell.get("value") or ""
+    t = re.sub(r"\*\*|\^\d+", "", str(cell)).replace(",", "")
+    m = re.search(r"(\$)?\s?(-?\d+(?:\.\d+)?)\s?(B|bn|billion|M|m|million|K|k)?\b", t)
+    if not m:
+        return None
+    mult = {"b": 1e9, "bn": 1e9, "billion": 1e9, "m": 1e6, "million": 1e6, "k": 1e3}.get((m.group(3) or "").lower(), 1)
+    return float(m.group(2)) * mult, "$" if m.group(1) else "n"
+
+
+def table_checks(slides) -> dict[int, list[str]]:
+    """Option tables must be internally consistent: where a table has an amount column ($) and a shares column, every
+    row implies one share price (amount / shares). '$3.0B retires 2.7M shares' beside '$4.0B retires 3.6M' is the
+    MD's first circle. The writer gets the price the other rows imply and the share count it gives."""
+    out: dict[int, list[str]] = {}
+    for n, sl in enumerate(slides, 1):
+        if sl.get("fixed"):
+            continue
+        tabs = [sl.get("table")] + [p.get("table") if isinstance(p.get("table"), dict) else p
+                                    for p in sl.get("parts") or [] if isinstance(p, dict) and p.get("type") == "table"]
+        for t in tabs:
+            if not isinstance(t, dict):
+                continue
+            cols = [str(c if not isinstance(c, dict) else c.get("text", "")).lower() for c in t.get("columns") or []]
+            si = next((i for i, c in enumerate(cols) if "share" in c and ("retire" in c or "bought" in c
+                                                                             or "repurchas" in c)), None)
+            if si is None:
+                continue
+            implied = []
+            for r in t.get("rows") or []:
+                cells = r if isinstance(r, list) else []
+                if len(cells) <= si:
+                    continue
+                sh = _qty(cells[si])
+                amt = next((q for j, c in enumerate(cells) if j != si and (q := _qty(c)) and q[1] == "$"
+                            and q[0] >= 1e7), None)
+                if sh and sh[1] == "n" and sh[0] > 0 and amt:
+                    implied.append((amt[0] / sh[0], amt[0], cells))
+            if len(implied) < 2:
+                continue
+            prices = sorted(x[0] for x in implied)
+            mid = prices[len(prices) // 2]
+            for price, amt, cells in implied:
+                if abs(price - mid) / mid > 0.03:
+                    out.setdefault(n, []).append(
+                        f"table row '{' | '.join(str(c) for c in cells)[:90]}' implies a share price of ${price:,.0f} "
+                        f"while the other rows imply ${mid:,.0f}; at ${mid:,.0f} that amount retires "
+                        f"{amt / mid / 1e6:,.2f}M shares. Fix the row so every option uses one price")
     return out
 
 
@@ -1799,7 +1873,7 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
           theme=None, density: str | None = None, fixed_pages: list | None = None,
           extra_facts: list | None = None, template: str | None = None, brand: dict | None = None,
           insert: bool = False, research: bool | None = None, design: str | None = None,
-          design_images=None) -> dict:
+          design_images=None, data_expectations: list | None = None) -> dict:
     """research: allow the reviewers' research step (None: on for live builds, see research.allowed()).
     design: "image" | "auto" | "archetype" (None: env MH_DESIGN, then rules design.mode): content slides drawn
     design-first (an image model designs the page, a vision model reads it back, the page is rebuilt natively;
@@ -1827,6 +1901,23 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
         start_story = json.loads((start / "storyline.json").read_text())
         start_slides = json.loads((start / "slides.json").read_text())
         start_slides = start_slides.get("slides", start_slides) if isinstance(start_slides, dict) else start_slides
+        if os.environ.get("MH_RESEARCH_GUIDANCE", "1") != "0":
+            try:                  # the computed economics and the primary-filing plans may be newer than the run
+                from engines.forge.research import economics_facts, next_fact_no
+                have = {(f.get("company"), f.get("label")) for f in facts if f.get("derived")}
+                facts += [f for f in economics_facts(facts, next_fact_no(facts))
+                          if (f["company"], f["label"]) not in have]
+                from engines.research.guidance import guidance_facts
+                from engines.sheets import spreading as SP
+                cos = {f.get("company") for f in facts if f.get("company") and f.get("research")}
+                tick = json.loads(SP._get(SP.TICKERS, SP.default_user_agent()))
+                rows = list(tick.values()) if isinstance(tick, dict) else tick
+                for co in list(cos)[:2]:
+                    hit = next((r for r in rows if str(r.get("title", "")).lower() == str(co).lower()), None)
+                    if hit and not any(f.get("label") in ("dividend", "share repurchase plan") for f in facts):
+                        facts += guidance_facts(str(hit["cik_str"]), co, next_fact_no(facts))
+            except Exception:  # noqa: BLE001
+                pass
     fixed = [dict(p, fixed=True) for p in fixed_pages or []]
     agenda = wants_agenda(brief, slides_wanted, insert)
     # the brief's count is the count (P16): a two-page memo is two slides (a floor of 3 built a third one, live build)
@@ -1943,7 +2034,7 @@ supports it. Choose varied archetypes that prove each title.
     research_log: list[dict] = []
     sb: dict = {"rounds": [], "research_allowed": rs_ok, "why_no_research": rs_why or None}
     if panel_on and not start:                         # a resumed run keeps its storyline; the deck panel still runs
-        max_sb = max(1, int(os.environ.get("MH_STORYBOARD_ROUNDS") or cfg["max_storyboard_rounds"]))
+        max_sb = _cap(max(1, int(os.environ.get("MH_STORYBOARD_ROUNDS") or cfg["max_storyboard_rounds"])))
         for rnd in range(1, max_sb + 1):
             mat = critics.storyboard_material(story, facts, brief, narrative_n, agenda=agenda)
             pn = critics.run_panel(client, "storyboard", mat, critics.text_models(cfg), bar=cfg["bar"],
@@ -2096,6 +2187,9 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             fails.setdefault(n, []).extend(f"[tie] {m}" for m in msgs)
         for n, msgs in arith_checks(slides).items():
             fails.setdefault(n, []).extend(f"[calc] {m}" for m in msgs)
+        if os.environ.get("MH_TABLE_PRICE_CHECK") == "1":      # opt in: option rows must imply one share price
+            for n, msgs in table_checks(slides).items():
+                fails.setdefault(n, []).extend(f"[calc] {m}" for m in msgs)
         from engines.forge.playbooks import playbook_checks
         for n, msgs in playbook_checks(slides, brief).items():
             fails.setdefault(n, []).extend(msgs)
@@ -2134,6 +2228,14 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
 
     unified: list[str] = []
 
+    def content_check(res, path):             # P22: a chart of the deck must hold the data the request asks for
+        if data_expectations:
+            from engines.forge.data_pages import check_data
+            bad = check_data(str(path), data_expectations)
+            res["failures"] = list(res["failures"]) + bad
+            res["rules"]["P22"] = "fail" if bad else "pass"
+        return res
+
     def draw():
         try:                                  # one value per figure across the deck, fixed in code where mechanical
             unified.extend(unify_figures(slides, client, critics.text_models(critics.settings(rules)),
@@ -2147,6 +2249,7 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             prov = json.loads(Path(r["provenance"]).read_text())
             res = validate(str(pptx), rules, brief={"slide_count": len(slides) if fixed else slides_wanted, **ends},
                            provenance=prov, storyline={"nodes": nodes}, render=True, density=density)
+            content_check(res, pptx)
             if not specs or not designer.check(str(pptx), r, res, slides, specs):
                 break
         return r, res
@@ -2193,15 +2296,16 @@ choice or the number of items; never layout. Keep node and keep the point of the
         return repaired
 
     import copy as _copy
+    max_repair = _cap(rules["repair"]["max_rounds"])     # MH_ENGINE_MAX_TURNS caps it (engines.max_turns)
     best = None                                              # (score, round, slides): a repair round can make the deck
-    for rnd in range(rules["repair"]["max_rounds"] + 1):     # worse (live build: P10 and P11 passed in rounds 2-3 and
+    for rnd in range(max_repair + 1):                        # worse (live build: P10 and P11 passed in rounds 2-3 and
         r, res = draw()                                      # failed again in round 4); the best round is kept
         fails = collect(r, res)
         rounds.append({"round": rnd, "rules": res["rules"], "content_failures": sum(len(v) for v in fails.values())})
         score = (sum(1 for v in res["rules"].values() if v == "fail"), rounds[-1]["content_failures"])
         if best is None or score < best[0]:
             best = (score, rnd, _copy.deepcopy(slides))
-        if not fails or rnd == rules["repair"]["max_rounds"]:
+        if not fails or rnd == max_repair:
             break
         if len(rounds) >= 3 and rounds[-1]["content_failures"] >= rounds[-3]["content_failures"]:
             break                                            # two rounds without progress: stop paying for repairs
@@ -2372,11 +2476,20 @@ choice or the number of items; never layout. Keep node and keep the point of the
 
         best = None
         stall = 0
-        max_rv = max(1, int(os.environ.get("MH_REVIEW_ROUNDS") or cfg["max_review_rounds"]))
+        max_rv = _cap(max(1, int(os.environ.get("MH_REVIEW_ROUNDS") or cfg["max_review_rounds"])))
         for rnd in range(1, max_rv + 1):
-            pn = critics.deck_panel(client, str(pptx), slides, str(out / ".review" / f"r{rnd}"), cfg,
-                                    task_id=f"{task_id}-panel{rnd}")
-            calls += len(pn["reviews"]) * int(pn.get("batches") or 1)
+            n_samples = max(1, int(os.environ.get("MH_DECK_REVIEW_SAMPLES") or 1))
+            if n_samples == 1:                                # the default: one panel, exactly as before
+                pn = critics.deck_panel(client, str(pptx), slides, str(out / ".review" / f"r{rnd}"), cfg,
+                                        task_id=f"{task_id}-panel{rnd}")
+                calls += len(pn["reviews"]) * int(pn.get("batches") or 1)
+            else:    # one reviewer reply moves by up to 2 points: the panel with the median score is the verdict
+                pns = [critics.deck_panel(client, str(pptx), slides, str(out / ".review" / f"r{rnd}" / f"s{k}"), cfg,
+                                          task_id=f"{task_id}-panel{rnd}" + (f"s{k}" if k else ""))
+                       for k in range(n_samples)]
+                calls += sum(len(x["reviews"]) * int(x.get("batches") or 1) for x in pns)
+                scored = sorted(pns, key=lambda x: critics.score(x) if critics.score(x) is not None else -1)
+                pn = dict(scored[len(scored) // 2], samples=[critics.score(x) for x in pns])
             sc = critics.score(pn)
             entry = {"round": rnd, "panel": pn, "score": sc, "signed_off": pn["signed_off"]}
             deck_hist.append(entry)
@@ -2462,6 +2575,7 @@ choice or the number of items; never layout. Keep node and keep the point of the
         prov = json.loads(Path(r["provenance"]).read_text())
         res = validate(str(pptx), rules, brief={"slide_count": slides_wanted, **ends}, provenance=prov,
                        storyline={"nodes": nodes}, render=True, density=density)
+        content_check(res, pptx)
     (out / "slides.json").write_text(json.dumps(slides, indent=1))
     (out / "facts.json").write_text(json.dumps(facts + [f for v in verify_calcs(slides, facts, rules)[0].values()
                                                          for f in v], indent=1))

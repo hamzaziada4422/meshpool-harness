@@ -377,6 +377,7 @@
 .msg-user{position:relative;flex-direction:row;align-items:flex-start;justify-content:flex-end;gap:8px}
 .msg-user .macts{display:flex;align-items:center;gap:2px;margin-top:6px;opacity:0;transition:opacity var(--t-hover) ease;order:-1}
 .msg-user:hover .macts,.msg-user:focus-within .macts{opacity:1}
+@media (hover:none){.msg-user .macts{opacity:1}}
 .macts .mts{font-size:var(--fs-xs);color:var(--ink-3);margin-right:4px;white-space:nowrap}
 .macts .iconbtn{color:var(--ink-3)}.macts .iconbtn:hover{color:var(--ink)}
 .work>summary{gap:8px}
@@ -385,7 +386,8 @@
 @keyframes mp-dots{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-2px)}}
 .gel{color:var(--ink-3);font-variant-numeric:tabular-nums;font-size:var(--fs-xs)}
 .work[data-done] .gdots{display:none}
-.panel .ptabs{gap:0}.ptabs button[aria-selected="true"]{background:var(--hover);color:var(--ink)}
+.panel .ptabs{gap:0}.ptabs .pstrip{display:flex;gap:2px;min-width:0;overflow-x:auto;scrollbar-width:none}.ptabs .pstrip::-webkit-scrollbar{display:none}.ptabs #pclose{flex:none;margin-left:auto}
+.ptabs .sp{flex:0 0 0}.ptabs button[aria-selected="true"]{background:var(--hover);color:var(--ink)}
 .pbody{background:var(--bg)}
 .col:has(>.gal){max-width:none;padding:0}
 .ctx .mi-i:empty{display:none}
@@ -402,3 +404,7 @@
 .col .note.using{font-size:var(--fs-xs);color:var(--ink-3);margin:2px 0 6px}
 .pill.stylechip{color:var(--ink-2);padding:0 10px;height:28px;margin-left:4px;border:1px solid var(--line);background:none}
 .pill.stylechip:hover{background:var(--hover);color:var(--ink)}
+
+/* phone width: the tab strip gets its own row so no tab is hidden off-screen */
+@media (max-width:640px){.gbar{flex-wrap:wrap}.gbar .gtabs{order:-1;flex:1 0 100%;overflow-x:auto}}
+.pvadv{margin:6px 0 10px}.pvadv>summary{cursor:pointer;color:var(--ink-3);font-size:var(--fs-s);margin-bottom:6px}.pvadv select{width:100%}

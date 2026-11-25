@@ -185,6 +185,12 @@ def _within(q: dict, p: dict, share: float) -> bool:
     return ix > 0 and iy > 0 and ix * iy >= share * area
 
 
+def _unavailable(e: BaseException) -> bool:
+    """No LibreOffice to run (not installed, or a system copy Meshpool does not use): the rule did not run."""
+    from meshpool_harness.office_runtime import is_unavailable
+    return is_unavailable(e)
+
+
 def _render_check(path: str, m: dict, R: dict, failures: list, stats: dict):
     """P1: render with LibreOffice; every rendered text span must sit inside some text box on its slide."""
     with tempfile.TemporaryDirectory() as td:
@@ -192,7 +198,7 @@ def _render_check(path: str, m: dict, R: dict, failures: list, stats: dict):
             pdf = soffice_convert(path, "pdf", td, R["render"]["timeout_s"])
         except Exception as e:
             failures.append(F("P1", "render", f"The deck could not be rendered by LibreOffice: {e}",
-                              fix_scope="renderer", status="not_run" if "not installed" in str(e) else "fail"))
+                              fix_scope="renderer", status="not_run" if _unavailable(e) else "fail"))
             return
         try:
             pages = _pdf_spans(str(pdf))
@@ -646,7 +652,8 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
                 t = sh["text"]
                 found = sorted({m.group(1).lower() for m in ban_re.finditer(t)}) if ban_re else []
                 if found:
-                    failures.append(F("P21", "banned_phrase", f"Slide {n}, {sh['name']}: \"{'\", \"'.join(found)}\" "
+                    banned = '", "'.join(found)
+                    failures.append(F("P21", "banned_phrase", f"Slide {n}, {sh['name']}: \"{banned}\" "
                                       "reads as machine-written; say it plainly.", slide=n, shape=sh["name"]))
                 if L.get("forbid_em_dash", True) and "\u2014" in t:
                     failures.append(F("P21", "em_dash", f"Slide {n}, {sh['name']}: em dash; use a comma, colon or "

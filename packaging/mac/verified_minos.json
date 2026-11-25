@@ -159,6 +159,11 @@
    "minos": null,
    "worst": null
   },
+  "filelock==4.3.1": {
+   "file": "filelock-4.3.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
   "flatbuffers==25.12.19": {
    "file": "flatbuffers-25.12.19-py2.py3-none-any.whl",
    "minos": null,
@@ -347,6 +352,11 @@
     0
    ],
    "worst": "numpy/linalg/lapack_lite.cpython-312-darwin.so"
+  },
+  "olefile==0.47": {
+   "file": "olefile-0.47-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
   },
   "onnxruntime==1.19.2": {
    "file": "onnxruntime-1.19.2-cp312-cp312-macosx_11_0_universal2.whl",
@@ -579,6 +589,11 @@
     0
    ],
    "worst": "tokenizers/tokenizers.abi3.so"
+  },
+  "tomli==2.5.0": {
+   "file": "tomli-2.5.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
   },
   "tornado==6.6.1": {
    "file": "tornado-6.6.1-cp311-abi3-macosx_10_9_universal2.whl",
@@ -915,6 +930,11 @@
    "minos": null,
    "worst": null
   },
+  "filelock==4.3.1": {
+   "file": "filelock-4.3.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
   "flatbuffers==25.12.19": {
    "file": "flatbuffers-25.12.19-py2.py3-none-any.whl",
    "minos": null,
@@ -1103,6 +1123,11 @@
     13
    ],
    "worst": "numpy/linalg/lapack_lite.cpython-312-darwin.so"
+  },
+  "olefile==0.47": {
+   "file": "olefile-0.47-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
   },
   "onnxruntime==1.19.2": {
    "file": "onnxruntime-1.19.2-cp312-cp312-macosx_11_0_universal2.whl",
@@ -1335,6 +1360,11 @@
     12
    ],
    "worst": "tokenizers/tokenizers.abi3.so"
+  },
+  "tomli==2.5.0": {
+   "file": "tomli-2.5.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
   },
   "tornado==6.6.1": {
    "file": "tornado-6.6.1-cp311-abi3-macosx_10_9_universal2.whl",

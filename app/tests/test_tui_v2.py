@@ -26,8 +26,8 @@ def _env(monkeypatch):
 def test_startup_header_notices_box_and_footer():
     t, out, scr = S.startup_scene()
     text = scr.text()
-    assert "MeshPool v0.0.7" in text
-    assert "deepseek-v4.1-flash · MeshPool API" in text
+    assert "Meshpool v0.0.7" in text
+    assert "deepseek-v4.1-flash · Meshpool API" in text
     assert "~/projects/demo" in text
     assert "1 more notice hidden" in text
     assert 'Try "fix the failing test in tests/"' in text
@@ -185,16 +185,13 @@ def test_no_color_keeps_layout_drops_colours(monkeypatch):
     out = S.FakeTTY()
     t = T.Terminal(out=out, width=80, interactive=True)
     assert t.st.depth == 0
-    t.version, t.model, t.provider, t.cwd, t.branch = "0.0.7", "m", "MeshPool API", "~/d", "main"
+    t.version, t.model, t.provider, t.cwd, t.branch = "0.0.7", "m", "Meshpool API", "~/d", "main"
     t.status_fn = lambda: []
     t.startup()
     t.emit({"type": "tool_start", "id": "1", "name": "bash", "summary": "ls"})
     t.emit({"type": "tool_end", "id": "1", "name": "bash", "ok": True, "output": "a\nb"})
     t.keys_factory = lambda: FakeKeys(lambda: None)
-    try:
-        t.read_input()
-    except Exception:  # noqa: BLE001
-        pass
+    t.read_input()
     raw = out.getvalue()
     assert "\x1b[38" not in raw and "\x1b[48" not in raw and "\x1b[1m" not in raw and "\x1b[2m" not in raw
     assert "$ ls" in raw and "Took" in raw and "─" * 80 in raw
@@ -293,6 +290,9 @@ def test_slash_commands(monkeypatch, tmp_path):
     sess.command("/status")
     sess.command("/auto edits")
     assert a.mode == "edits"
+    sess.command("/access ask")                     # the old /mode name is now /access (and /permissions)
+    assert a.mode == "ask"
+    sess.command("/auto edits")
     sess.command("/model gpt-x")
     assert a.model == "gpt-x"
     sess.command("/compact")
@@ -311,7 +311,7 @@ def test_slash_commands(monkeypatch, tmp_path):
                                                        "error": "", "models": [{"id": "alpha", "context": 64000},
                                                                                {"id": "beta"}]})
     monkeypatch.setattr(PS, "save", lambda *a, **k: saved.update(args=a, kw=k) or {})
-    ks = FakeKeys("\r", "\x1b[B", "\r")      # MeshPool key, then the second model
+    ks = FakeKeys("\r", "\x1b[B", "\r")      # Meshpool key, then the second model
     t.keys_factory = lambda: ks
     sess.command("/login")
     assert saved["args"][2:4] == ("openai", "beta") and "sk-test" not in S.screen(out).text()
@@ -363,3 +363,24 @@ def test_a_status_line_command_shows_in_the_footer(tmp_path, monkeypatch):
             break
         _t.sleep(0.05)
     assert "branch main | mode" in t.footer_line()
+def test_ctrl_c_while_the_prompt_redraws_is_not_a_crash(tmp_path):
+    """Ctrl+C is SIGINT: it reached the prompt loop when it landed during a redraw (a slow or paused terminal) and
+    the program ended with a KeyboardInterrupt traceback. It clears the line instead; the session goes on."""
+    t, out, clk = S.make_terminal()
+
+    class FakeAgent:
+        mode, root, usage, model, title, messages = "ask", str(tmp_path), {}, None, "", []
+
+        def current_model(self):
+            return "m1"
+    sess = T.Session(t, FakeAgent())
+    answers = iter([KeyboardInterrupt(), "/status", None])
+
+    def read_input():
+        a = next(answers)
+        if isinstance(a, BaseException):
+            raise a
+        return a
+    t.read_input = read_input
+    sess.loop()                                  # returns at the end of input: no exception
+    assert "Model" in S.screen(out).text()       # the /status after the Ctrl+C still ran

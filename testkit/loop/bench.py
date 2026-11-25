@@ -67,7 +67,8 @@ def load_suites(names: list[str]) -> list[dict]:
     out = []
     for n in names:
         p = HERE / "suites" / f"{n}.json"
-        for t in json.loads(p.read_text()):
+        swe_dir = os.environ.get("MESHPOOL_SWE_DIR") or os.path.join(os.path.expanduser("~"), ".cache", "meshpool-swe")
+        for t in json.loads(p.read_text(encoding="utf-8").replace("${MESHPOOL_SWE_DIR}", swe_dir.replace("\\", "/"))):
             t["suite"] = n
             out.append(t)
     return out
@@ -121,18 +122,28 @@ def grade(task: dict, answer: str, workdir: str) -> tuple[bool, str]:
     for pat in g.get("must_not", []):
         if re.search(pat, answer or "", re.I | re.S):
             return False, f"has /{pat}/"
-    for rel, body in (g.get("hidden") or {}).items():   # tests the agent never saw: written only now
-        hp = Path(workdir) / rel
-        hp.parent.mkdir(parents=True, exist_ok=True)
-        hp.write_text(body)
-    if g.get("check"):
-        try:
-            r = subprocess.run(g["check"], shell=True, cwd=workdir, capture_output=True, text=True,
-                               timeout=g.get("timeout", 120))
-        except subprocess.TimeoutExpired:
-            return False, f"check timed out after {g.get('timeout', 120)}s"
-        if r.returncode != 0:
-            return False, "check failed: " + (r.stdout + r.stderr).strip()[-300:]
+    if g.get("hidden") or g.get("check"):
+        # hidden tests and the check run on a scratch COPY: grading never writes into the workspace under test
+        sys.path.insert(0, str(HERE.parent))
+        import gradekit as GK
+        with GK.scratch_copy(workdir) as w:
+            for rel, body in (g.get("hidden") or {}).items():   # tests the agent never saw: written only now
+                hp = w / rel
+                hp.parent.mkdir(parents=True, exist_ok=True)
+                hp.write_text(body)
+            if g.get("check"):
+                try:
+                    r = subprocess.run(g["check"], shell=True, cwd=w, capture_output=True, text=True,
+                                       timeout=g.get("timeout", 120))
+                except subprocess.TimeoutExpired:
+                    return False, f"check timed out after {g.get('timeout', 120)}s"
+                out = (r.stdout or "") + (r.stderr or "")
+                if r.returncode != 0:
+                    return False, "check failed: " + out.strip()[-300:]
+                cnt = GK.count_tests(out)               # a chained `pytest ...; true` must not hide a red line
+                if cnt["failed"] or cnt["errors"]:
+                    return False, (f"check reported {cnt['failed']} failed / {cnt['errors']} errors despite exit 0: "
+                                   + out.strip()[-200:])
     for rel, pat in (g.get("file_must") or {}).items():
         p = Path(workdir) / rel
         if not p.exists() or not re.search(pat, p.read_text(errors="replace"), re.S):
@@ -158,7 +169,7 @@ def child(task_json: str, arm: str, out_path: str) -> None:
     elif arm.split("@")[0].endswith("-routed") and arm.split("@")[0][:-7] in ACP_ARMS:
         res = run_acp_agent(arm.split("@")[0][:-7], task, wd, routed=True)
     else:
-        res = run_task(task["prompt"], workdir=wd, engine=engine, max_steps=task.get("max_steps", int(os.environ.get("MH_BENCH_MAX_STEPS", "60"))))
+        res = run_task(task["prompt"], workdir=wd, engine=engine, max_steps=task.get("max_steps", _bench_steps()))
     ok, why = grade(task, res.get("answer", ""), wd)
     row = {"task": task["id"], "suite": task["suite"], "arm": arm, "pass": ok, "why": why,
            "secs": round(time.time() - t0, 1), "route": res.get("route"), "route_keys": res.get("route_keys"),
@@ -167,6 +178,15 @@ def child(task_json: str, arm: str, out_path: str) -> None:
            "trace": res.get("trace") or [], **{
                k: res.get("usage", {}).get(k, 0) for k in ("prompt_tokens", "cached_tokens", "completion_tokens",
                                                             "model_calls")}}
+    try:                                               # this run's own call ledger (the temp MESHPOOL_HOME): nested calls too
+        from meshpool_harness.core import usage as U
+        U.flush()
+        led = U.summarize(U.read_records())
+        if led["calls"]:
+            row.update(prompt_tokens=led["in"], cached_tokens=led["cached"], completion_tokens=led["out"],
+                       model_calls=led["calls"], usd_ledger=round(led["cost"], 6), unpriced_calls=led["unpriced_calls"])
+    except Exception:  # noqa: BLE001
+        pass
     if meta:                                           # the router's pick and its classifier call (tokens included above)
         row.update(meta_harness=meta["harness"], meta_category=meta["category"], meta_reason=meta["reason"],
                    meta_stage=meta["stage"])
@@ -178,6 +198,13 @@ def child(task_json: str, arm: str, out_path: str) -> None:
         import swe_local
         swe_local.drop_worktree(task, wd)
     shutil.rmtree(wd, ignore_errors=True)
+
+
+def _bench_steps() -> int:
+    """Step cap for the Meshpool arms: the product default (Max steps per reply, 200), as a user gets. The old default of
+    60 applied to Meshpool only, while the Codex arm has just the wall timeout (broad1: both swe_sympy misses were cut at
+    exactly 60 steps). MH_BENCH_MAX_STEPS overrides it; set it only together with a matching cap on the Codex arm."""
+    return int(os.environ.get("MH_BENCH_MAX_STEPS", "200"))
 
 
 def run_meta(task: dict, wd: str, engine: str) -> tuple[dict, dict]:
@@ -194,7 +221,7 @@ def run_meta(task: dict, wd: str, engine: str) -> tuple[dict, dict]:
         if sel["profile"]:
             os.environ["MH_HARNESS_PROFILE"] = os.environ["MH_PROFILE"] = sel["profile"]
         res = run_task(task["prompt"], workdir=wd, engine=engine,
-                       max_steps=task.get("max_steps", int(os.environ.get("MH_BENCH_MAX_STEPS", "60"))))
+                       max_steps=task.get("max_steps", _bench_steps()))
     elif base == "pi":
         res = run_pi_agent(task, wd, routed=routed)
     elif base in ACP_ARMS:
@@ -334,6 +361,10 @@ def cap_left(model: str) -> float | None:
 
 
 def cost(row: dict, prices: dict) -> float:
+    """USD of one run: the run's own ledger cost (each call priced for its model) when every call had a known price
+    and no meter replaced the tokens, else the per-model prices times the row's tokens."""
+    if row.get("usd_ledger") is not None and not row.get("unpriced_calls") and not row.get("metered"):
+        return float(row["usd_ledger"])
     prices = (prices.get("by_model") or {}).get(row.get("model") or "", prices)
     fresh = max(0, row.get("prompt_tokens", 0) - row.get("cached_tokens", 0))
     return (fresh * prices["in"] + row.get("cached_tokens", 0) * prices["cached"]

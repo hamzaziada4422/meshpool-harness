@@ -1,0 +1,13 @@
+{
+  "_doc": "Name-pattern hints for ModelCaps (core/modelcaps.py). First matching pattern wins per field group; add a row for a new model family. Fields: reasoning (none | effort | always), efforts (accepted reasoning_effort values, lowest first), parallel_tools, reliability (high | medium | low), max_output. Everything unlisted falls back to safe defaults and is learned from the server's replies.",
+  "models": [
+    {"match": "^(o[1-9](-|$)|gpt-?5|gpt-?6|codex)", "reasoning": "effort", "efforts": ["minimal", "low", "medium", "high"], "reliability": "high"},
+    {"match": "gpt-oss", "reasoning": "effort", "efforts": ["low", "medium", "high"], "reliability": "medium"},
+    {"match": "claude", "reliability": "high", "max_output": 8192},
+    {"match": "deepseek-(reasoner|v3\\.2|v4)", "reliability": "medium", "keep_reasoning": true},
+    {"match": "kimi-k2-thinking|kimi.*thinking", "reliability": "medium", "keep_reasoning": true},
+    {"match": "deepseek|glm|kimi|qwen|grok", "reliability": "medium"},
+    {"match": "mistral-(large|medium)|codestral", "reliability": "medium"},
+    {"match": "llama|mistral|mixtral|gemma|phi|tinyllama|smollm", "reliability": "low", "parallel_tools": false}
+  ]
+}

@@ -1,0 +1,35 @@
+{
+ "_doc": "Per-call overhead budgets for the offline check: limit = measured value + 10%. Re-measure with `python testkit/loop/small_offline.py --write-budgets` when a change of prompt or tools is intended.",
+ "set_at": "2026-11-25",
+ "token_estimate": "chars/3.7",
+ "lanes": {
+  "code": {
+   "measured_fixed_tokens": 4990,
+   "fixed_tokens_limit": 5489,
+   "measured_growth_per_call": 362.8,
+   "growth_per_call_limit": 400
+  },
+  "work": {
+   "measured_fixed_tokens": 2159,
+   "fixed_tokens_limit": 2374,
+   "measured_growth_per_call": 259.2,
+   "growth_per_call_limit": 286
+  },
+  "chat": {
+   "measured_fixed_tokens": 2159,
+   "fixed_tokens_limit": 2374,
+   "measured_growth_per_call": 259.2,
+   "growth_per_call_limit": 286
+  },
+  "data": {
+   "measured_fixed_tokens": 2159,
+   "fixed_tokens_limit": 2374,
+   "measured_growth_per_call": 259.2,
+   "growth_per_call_limit": 286
+  }
+ },
+ "codex_reference": {
+  "fixed_tokens": 10411,
+  "version": "codex-cli 0.171.0"
+ }
+}

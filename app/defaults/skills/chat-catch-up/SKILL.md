@@ -1,6 +1,6 @@
 ---
 name: chat-catch-up
-description: "Catch up on Slack or Teams channels: what happened, what needs the user, and what was decided. Use when the user asks what they missed."
+description: 'Catch up on Slack or Teams channels: what happened, what needs the user, and what was decided. Use when the user asks what they missed.'
 ---
 
 # Chat catch-up

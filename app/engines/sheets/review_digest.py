@@ -14,7 +14,6 @@ own share: outputs, checks and validation, then assumptions, then the formula de
 from __future__ import annotations
 
 import re
-import tempfile
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -68,6 +67,9 @@ def _unit(label: str) -> str:
     return m[-1].strip() if m else ""
 
 
+MAX_SCAN_ROWS = 5000          # the digest samples big sheets: a 100k-row data tab must not stall the finish gate
+
+
 def _title(ws) -> str:
     for r in range(1, 4):
         for c in range(1, 4):
@@ -80,9 +82,8 @@ def _title(ws) -> str:
 def _values_book(path: str):
     """(recalculated workbook with values, note). Falls back to the cached values in the file."""
     try:
-        from engines.sheets.qa import recalc
-        out = recalc(path, tempfile.mkdtemp(prefix="digest_"))
-        return load_workbook(out, data_only=True), "values recalculated in LibreOffice"
+        from engines.sheets.qa import recalc_values
+        return recalc_values(path), "values recalculated in LibreOffice"
     except Exception as e:  # noqa: BLE001 - no LibreOffice or a failed conversion: cached values, said plainly
         return load_workbook(path, data_only=True), f"values are the file's cached values (recalculation failed: " \
                                                    f"{type(e).__name__})"
@@ -170,12 +171,12 @@ def checks_section(wf, wv) -> list[str]:
         return ["- no Checks tab"]
     ws, wsv = wf["Checks"], wv["Checks"]
     out, bad = [], 0
-    for row in ws.iter_rows():
+    for row in ws.iter_rows(max_row=min(ws.max_row, MAX_SCAN_ROWS)):
         for c in row:
             if c.value == "All checks" or (isinstance(c.value, str) and c.value.lower().startswith("all checks")):
                 out.append(f"- Master status ({ws.title}!{get_column_letter(c.column + 1)}{c.row}): "
                            f"{_fmt(wsv.cell(c.row, c.column + 1).value)}")
-    for r in range(1, ws.max_row + 1):
+    for r in range(1, min(ws.max_row, MAX_SCAN_ROWS) + 1):
         lab = ws.cell(r, 1).value
         if not isinstance(lab, str) or lab.strip().lower() in ("check", "checks"):
             continue
@@ -214,7 +215,7 @@ def errors_section(wf, wv) -> list[str]:
     out = []
     for ws in wf.worksheets:
         wsv = wv[ws.title]
-        for row in ws.iter_rows():
+        for row in ws.iter_rows(max_row=min(ws.max_row, MAX_SCAN_ROWS)):
             for c in row:
                 f = c.value
                 if f is None:
@@ -252,7 +253,7 @@ def assumptions_section(wf, wv, names) -> list[str]:
             continue
         wsv = wv[ws.title]
         hdr = None
-        for r in range(1, ws.max_row + 1):
+        for r in range(1, min(ws.max_row, MAX_SCAN_ROWS) + 1):
             a = ws.cell(r, 1).value
             if isinstance(a, str) and a.strip().lower().startswith("assumption"):
                 m = _header_map(ws, r)
@@ -289,7 +290,7 @@ def assumptions_section(wf, wv, names) -> list[str]:
             out.append("; ".join(parts))
         if hdr is None:                                  # an Inputs tab without an assumption book: label | value
             rows = []
-            for r in range(1, ws.max_row + 1):
+            for r in range(1, min(ws.max_row, MAX_SCAN_ROWS) + 1):
                 a, b = ws.cell(r, 1).value, wsv.cell(r, 2).value
                 if isinstance(a, str) and b is not None and not isinstance(b, str):
                     rows.append(f"  - {_fmt(a)} = {_fmt(b)} (no Source column)")
@@ -313,7 +314,7 @@ def literals_section(wf) -> list[str]:
     for ws in wf.worksheets:
         if INPUT_TABS.search(ws.title) or ws.title == "Cover":
             continue
-        for row in ws.iter_rows():
+        for row in ws.iter_rows(max_row=min(ws.max_row, MAX_SCAN_ROWS)):
             for c in row:
                 f = c.value
                 if isinstance(f, str) and f.startswith("="):
@@ -335,7 +336,7 @@ def formulas_section(wf, wv, budget: int = 8000) -> list[str]:
         wsv = wv[ws.title]
         key, rest = [], []
         pcols = set(_period_header(ws)[1])             # consistency is judged across period columns only
-        for r in range(1, ws.max_row + 1):
+        for r in range(1, min(ws.max_row, MAX_SCAN_ROWS) + 1):
             cells = [ws.cell(r, c) for c in range(2, ws.max_column + 1)]
             fc = [c for c in cells if isinstance(c.value, str) and c.value.startswith("=")]
             if not fc:

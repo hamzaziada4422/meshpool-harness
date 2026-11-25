@@ -111,12 +111,8 @@ def settings(rules: dict | None) -> dict:
 
 
 def vision_models(cfg: dict) -> list[str]:
-    from .review import chain
-    out: list[str] = []
-    for m in [os.environ.get("MH_DESIGN_VISION_MODEL")] + list(cfg.get("vision_models") or []) + chain(None):
-        if m and m not in out:
-            out.append(m)
-    return out
+    from meshpool_harness.core.models import vision_reviewer_models
+    return vision_reviewer_models(os.environ.get("MH_DESIGN_VISION_MODEL"), *cfg.get("vision_models") or [])
 
 
 def mode_from(task: str = "", options: dict | None = None) -> str | None:
@@ -469,11 +465,12 @@ def design_prompt(s: dict, direc: dict, recent: list[str], layout: str | None = 
 def _post(url: str, body: dict, timeout: float) -> tuple[int, dict]:
     """POST JSON; (status, payload). The proxy injects the gateway's key; a configured key is sent when present."""
     from meshpool_harness import providers as PV
+    from meshpool_harness.core import http as _mhttp
     key = PV.key() or "dummy"
     req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
                                  headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _mhttp.open(req, timeout) as r:
             raw, st = r.read(), r.status
     except urllib.error.HTTPError as e:
         raw, st = e.read(), e.code
@@ -558,8 +555,20 @@ class ImageClient:
         self.post = post or _post
         self.sizes = sizes or [DEFAULTS["size"]] + list(DEFAULTS["fallback_sizes"])
         self.calls: list[dict] = []
+        self._prompt = ""
+
+    def _account(self, pl) -> None:
+        """One successful image call in the usage ledger (the provider's usage block when it sends one; an image
+        model the price table does not know is counted but unpriced)."""
+        try:
+            from meshpool_harness.core import usage
+            usage.record(self.model, pl.get("usage") if isinstance(pl, dict) else None, base=self.base,
+                         source="engine:forge-image", request_chars=len(self._prompt), reply_chars=0)
+        except Exception:  # noqa: BLE001 - accounting never breaks a design run
+            pass
 
     def generate(self, prompt: str) -> dict:
+        self._prompt = prompt
         why = ""
         fmt = True
         for size in self.sizes:
@@ -569,6 +578,7 @@ class ImageClient:
             st, pl = self.post(f"{self.base}/images/generations", body, self.timeout)
             self.calls.append({"endpoint": "images/generations", "size": size, "status": st})
             if st == 200:
+                self._account(pl)
                 d = (pl.get("data") or [{}])[0] if isinstance(pl, dict) else {}
                 raw = _decode(d.get("b64_json") or d.get("url") or "", self.timeout)
                 if raw:
@@ -585,6 +595,7 @@ class ImageClient:
                                                                        if k != "response_format"}, self.timeout)
                 self.calls.append({"endpoint": "images/generations", "size": size, "status": st})
                 if st == 200:
+                    self._account(pl)
                     d = (pl.get("data") or [{}])[0]
                     raw = _decode(d.get("b64_json") or d.get("url") or "", self.timeout)
                     if raw:
@@ -604,6 +615,7 @@ class ImageClient:
                             "messages": [{"role": "user", "content": prompt[:30000]}]}, self.timeout)
         self.calls.append({"endpoint": "chat/completions", "status": st})
         if st == 200:
+            self._account(pl)
             u = _image_from_chat(pl)
             raw = _decode(u, self.timeout) if u else None
             if raw:

@@ -144,7 +144,7 @@ def insert_position(task: str) -> int | None:
     if re.search(r"\b(at|to) the (start|beginning|front)\b|\bbefore (the )?first slide\b", t):
         return 1
     words = "|".join(_WORDN)
-    m = re.search(r"\b(after|before|as|at|in position|into position)\s+(?:slide|page|position)?\s*(?:number\s*)?"
+    m = re.search(r"\b(after|before|as|at|in position|into position)\s+(?:slide|page|position)\s*(?:number\s*)?"
                   r"(\d{1,3}|" + words + r")\b", t) or \
         re.search(r"\b(after|before)\s+the\s+(" + words + r")\s+(?:slide|page)\b", t)
     if not m:
@@ -266,6 +266,14 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
             fixed, extra = pages_from_workbook(wbk)
         except Exception as e:                                  # noqa: BLE001 - the deck still builds without them
             print(f"model pages skipped: {type(e).__name__}: {e}", file=sys.stderr)
+    nfin = len(fixed)
+    expect = None
+    try:                    # chart pages computed from the user's own csv/xlsx (the pivot the request asks for), P22
+        from engines.forge import data_pages
+        dpages, dfacts, expect = data_pages.pages(task, [f for f in attached if not (fixed and f == wbk)])
+        fixed, extra = fixed + dpages, extra + dfacts
+    except Exception as e:  # noqa: BLE001 - the deck still builds without them
+        print(f"data pages skipped: {type(e).__name__}: {e}", file=sys.stderr)
     # The computed pages count inside the slides asked for: the model writes the rest (at least 3: cover, argument,
     # next steps). Asked for fewer than that leaves room for, the first pages (football field, DCF, comps) stay.
     if fixed and len(fixed) > slides - 3:
@@ -278,7 +286,7 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
         look["theme"] = {**(th if isinstance(th, dict) else {"palette": th} if th else {}), "icon_set": iset}
     from engines.forge.design import mode_from as design_mode
     from engines.forge import select as SEL
-    kw_ = dict(density=mode, fixed_pages=fixed, extra_facts=extra, research=(options or {}).get("research"),
+    kw_ = dict(density=mode, fixed_pages=fixed, extra_facts=extra, data_expectations=expect or None, research=(options or {}).get("research"),
                design=design_mode(task, options), **look)
     if SEL.wanted() > 1:                                       # best of N builds, graded (MH_BEST_OF; off by default)
         res = SEL.best_of(_brief(task, workdir, files), workdir, SEL.wanted(), build, client=client,
@@ -295,14 +303,17 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
     except Exception:  # noqa: BLE001
         made = max(slides, len(fixed) + 3)
     answer = (f"Built {Path(pptx).name}: {made} slides in the forge design system ({mode} density), "
-              + (f"{len(fixed)} of them computed from {Path(wbk).name} (football field, comps, DCF, statements), "
-                 if fixed else "")
+              + (f"{nfin} of them computed from {Path(wbk).name} (football field, comps, DCF, statements), "
+                 if nfin else "")
+              + (f"{len(expect)} chart page{'s' if len(expect) != 1 else ''} computed from "
+                 f"{', '.join(dict.fromkeys(e['file'] for e in expect))}, "
+                 if expect else "")
               + (f"in the {prof.get('name') or 'company'} look ("
                  + ("its slide master, " if look.get("template") else "") + "colours, fonts"
                  + (", logo" if (look.get("brand") or {}).get("logo") else "") + "), " if prof else "")
               + "checked after rendering. "
               + (f"{left} items still flagged in the speaker notes ([QA] lines); rules failing: {', '.join(failing)}."
-                 if left else "All content checks passed."))
+                 if left or "P22" in failing else "All content checks passed."))
     answer += design_sentence(res.get("design"))
     answer += panel_sentence(res.get("panel"))
     rv = res.get("review") or {}

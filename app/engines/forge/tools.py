@@ -1,6 +1,6 @@
 """Forge tools for Meshpool Work (Cowork): exposed through the meshpool-office MCP server.
 
-check_deck(path, slide_count?)   -> P0-P19 report with repair messages (P0: opens in PowerPoint without repair)
+check_deck(path, slide_count?, data_files?, request?) -> P0-P19 report (+ P22 against the data) with repair messages (P0: opens in PowerPoint without repair)
 check_workbook(path)             -> X0-X13 report after a headless recalculation (X0: opens in Excel without repair)
 check_document(path)             -> does a .docx/.pptx/.xlsx open in Office without a repair prompt
 measure_office_file(path)        -> anatomy of a .pptx, .xlsx or .pdf (how it is built), with evidence IDs
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import warnings
+import zipfile
 from pathlib import Path
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -20,11 +21,28 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 def _sidecar(path: Path, name: str):
     p = path.with_name(f"{path.stem}.{name}.json")
     if not p.exists():
+        # a job folder (built by forge) keeps its sidecars under the plain name; a user's own deck never borrows
+        # an unrelated job's file from the same folder
+        if not (path.parent / "storyline.json").exists():
+            return None
         p = path.parent / f"{name}.json"
-    return json.loads(p.read_text()) if p.exists() else None
+    try:
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+    except (OSError, ValueError):
+        return None
 
 
-def check_deck(path: str, slide_count: int | None = None, render: bool = True) -> tuple[str, bool]:
+def _p22(path: str, data_files, request) -> list[dict]:
+    """P22: the charts of the deck against the data files the request asks a pivot of ([] when none are asked)."""
+    if not data_files or not (request or "").strip():
+        return []
+    from . import data_pages
+    _, _, expect = data_pages.pages(request, [data_files] if isinstance(data_files, str) else data_files)
+    return data_pages.check_data(path, expect)
+
+
+def check_deck(path: str, slide_count: int | None = None, render: bool = True, data_files=None,
+               request: str | None = None) -> tuple[str, bool]:
     from .validate_pptx import report_text, validate
     p = Path(path)
     if not p.exists():
@@ -32,6 +50,10 @@ def check_deck(path: str, slide_count: int | None = None, render: bool = True) -
     brief = {"slide_count": int(slide_count)} if slide_count else _sidecar(p, "brief")
     res = validate(str(p), brief=brief, provenance=_sidecar(p, "provenance"), storyline=_sidecar(p, "storyline"),
                    render=render)
+    p22 = _p22(str(p), data_files, request)
+    res["failures"] += p22
+    if p22:
+        res["rules"]["P22"] = "fail"
     return report_text(res, 30) + _scope_note(res), False
 
 
@@ -81,7 +103,10 @@ def measure_office_file(path: str, pages: str | None = None) -> tuple[str, bool]
     ext = p.suffix.lower()
     if ext in (".pptx", ".potx"):
         from .measure_pptx import measure, public
-        summary = public(measure(str(p)))["summary"]
+        try:
+            summary = public(measure(str(p)))["summary"]
+        except zipfile.BadZipFile:
+            return f"{p.name} is not a valid PowerPoint file (the zip container is unreadable).", True
     elif ext in (".xlsx", ".xlsm"):
         from .validate_xlsx import validate
         summary = validate(str(p))["stats"]
@@ -93,7 +118,7 @@ def measure_office_file(path: str, pages: str | None = None) -> tuple[str, bool]
     return json.dumps(summary, indent=1, default=str)[:8000], False
 
 
-def qa_summary(files: list[str]) -> str:
+def qa_summary(files: list[str], data_files=None, request: str | None = None) -> str:
     """One line per produced deck/workbook, for appending to an engine job's report."""
     lines = []
     for f in files:
@@ -101,6 +126,8 @@ def qa_summary(files: list[str]) -> str:
             if f.endswith(".pptx"):
                 from .validate_pptx import validate
                 r = validate(f, render=False)
+                if _p22(f, data_files, request):
+                    r["rules"]["P22"] = "fail"
             elif f.endswith(".xlsx"):
                 from .validate_xlsx import validate
                 r = validate(f)
@@ -115,9 +142,11 @@ def qa_summary(files: list[str]) -> str:
             bad = [k for k, v in r["rules"].items() if v == "fail"]
             unverified = ""
             if f.endswith(".xlsx"):
-                from meshpool_harness.config import find_soffice
-                if not find_soffice():
-                    unverified = "; values not recalculated: LibreOffice is not installed here, so formula results (errors, checks that do not tie) are unverified. Open the file in Excel to check"
+                from meshpool_harness.office_runtime import unavailable_reason
+                why = unavailable_reason()
+                if why:
+                    unverified = (f"; values not recalculated ({why}), so formula results (errors, checks that do "
+                                  "not tie) are unverified. Open the file in Excel to check")
             lines.append(f"- {Path(f).name}: forge rules failing: {', '.join(bad) or 'none'} "
                          f"(run check_deck/check_workbook for the repair list){unverified}")
         except Exception as e:  # QA must never break a finished job
@@ -222,30 +251,20 @@ def slide_layouts(message: str, kind: str = "all", show_references: bool | None 
 
 S = {"type": "string"}
 TOOLS = {
-    "check_deck": (check_deck, "Check a PowerPoint deck (.pptx) against Meshpool's 20 consulting-quality rules: opens "
-                   "in PowerPoint without a repair prompt (every XML part against the Office schemas), native "
-                   "charts and tables, theme fonts and colours, text fit, grid, density, action titles, storyline, "
-                   "sourced numbers, text matching the charts, archetypes, slide count, editability, alt text. Returns "
-                   "each failure as a fix instruction (e.g. 'Slide 4, Body 2: text overflows by 3 lines at 14pt; cut "
-                   "to 45 words'). `slide_count` is the count the brief asked for.",
-                   {"path": S, "slide_count": {"type": "integer"}}, ["path"]),
-    "check_workbook": (check_workbook, "Check an Excel workbook (.xlsx) against Meshpool's 14 financial-model rules "
-                       "after recalculating it: opens in Excel without a repair prompt, no hardcoded numbers in calculations, no numbers buried in formulas, no "
-                       "balancing plugs, historicals tie, no #REF!/#NAME? errors, no circular references, consistent "
-                       "formulas across periods, formatting conventions, a checks sheet with a master flag, no external "
-                       "links or macros.", {"path": S}, ["path"]),
-    "check_document": (check_document, "Check that a Word, PowerPoint or Excel file (.docx/.pptx/.xlsx) opens in "
-                       "Microsoft Office without the 'found a problem with content ... repair' prompt: every XML part "
-                       "against the Office schemas, relationships, content types and shape ids. Returns each problem "
-                       "with the part it is in.", {"path": S}, ["path"]),
-    "measure_office_file": (measure_office_file, "Measure how a .pptx, .xlsx or .pdf deck is built: generator, masters "
-                            "and layouts, theme colours vs hardcoded colours, fonts and type scale, grid, native charts "
-                            "and tables, text density, title style, source lines (decks); formulas vs constants, links, "
-                            "names, cycles, checks (workbooks). Use it to reverse-engineer a reference file.",
+    "check_deck": (check_deck, "Check a .pptx against Meshpool's deck rules (opens without repair, native charts, text "
+                   "fit, density, action titles, sourced numbers, alt text). Returns each failure as a fix "
+                   "instruction. `data_files` and `request` also check the charts against the data.",
+                   {"path": S, "slide_count": {"type": "integer"}, "data_files": {"type": "array", "items": S},
+                    "request": S}, ["path"]),
+    "check_workbook": (check_workbook, "Check an .xlsx after recalculating it against Meshpool's financial-model rules "
+                       "(opens without repair, no hardcodes or plugs, no errors or circular references, consistent "
+                       "formulas, checks sheet).", {"path": S}, ["path"]),
+    "check_document": (check_document, "Check that a .docx, .pptx or .xlsx opens in Office without a repair prompt; "
+                       "returns each problem with its part.", {"path": S}, ["path"]),
+    "measure_office_file": (measure_office_file, "Measure how a .pptx, .xlsx or .pdf is built (masters, theme, fonts, "
+                            "grid, charts, density; formulas vs constants) to reverse-engineer a reference file.",
                             {"path": S, "pages": S}, ["path"]),
-    "slide_layouts": (slide_layouts, "Which slide layouts prove a message, and what strong slides of that kind measure "
-                      "in 130 published consulting and financial services decks (title and body words, empty space, "
-                      "type sizes). Give the slide's message (its action title). Read-only; use it while planning a "
-                      "deck's storyline or when a slide's layout does not fit its point. `kind`: all, consulting or "
-                      "financial_services.", {"message": S, "kind": S}, ["message"]),
+    "slide_layouts": (slide_layouts, "Which slide layouts prove a message, with what strong consulting slides of that "
+                      "kind measure. Give the slide's action title; `kind`: all, consulting or financial_services.",
+                      {"message": S, "kind": S}, ["message"]),
 }

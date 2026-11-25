@@ -1,5 +1,5 @@
 """The "codex" engine style: Codex's apply_patch, shell and update_plan, its base instructions, and its loop (no review,
-mutation or plan rounds), under MeshPool's routing. No network and no model calls (the transport is scripted)."""
+mutation or plan rounds), under Meshpool's routing. No network and no model calls (the transport is scripted)."""
 import json
 import sys
 from pathlib import Path
@@ -149,8 +149,8 @@ def test_parser_errors_follow_upstream_texts(tmp_path):
     w = ws(tmp_path)
     with pytest.raises(T.ToolError, match="The first line of the patch must be '\\*\\*\\* Begin Patch'"):
         w.apply_patch("hello")
-    with pytest.raises(T.ToolError, match="The last line of the patch must be '\\*\\*\\* End Patch'"):
-        w.apply_patch("*** Begin Patch\n*** Add File: a\n+x")
+    w.apply_patch("*** Begin Patch\n*** Add File: a\n+x")         # a missing end marker is repaired (it cost a failed call)
+    assert (tmp_path / "a").read_text() == "x\n"
     with pytest.raises(T.ToolError, match="Invalid patch hunk on line 2"):
         w.apply_patch("*** Begin Patch\nnonsense\n*** End Patch")
     with pytest.raises(T.ToolError, match="is empty"):
@@ -236,13 +236,13 @@ def test_the_codex_profile_is_defined_and_the_default_style_is_unchanged():
     assert PR._clean({"engine_style": "nonsense"})["engine_style"] == "meshpool"
     shipped = json.loads((Path(core.__file__).resolve().parents[2] / "defaults" / "profiles.json").read_text())
     assert shipped["profiles"]["codex"]["engine_style"] == "codex"
-    assert shipped["default"] == "codex"          # measured on the 52 eval tasks: 47/52, a tie with Codex itself
+    assert shipped["default"] == "core" and shipped["profiles"]["core"]["lean_core"] is True   # lean core (final20-22)
 
 
 def test_system_prompt_is_codex_text_with_attribution_kept_in_the_file(tmp_path):
     a = _agent(tmp_path)
     sp = a.messages[0]["content"]
-    assert sp.startswith("You are a coding agent running in MeshPool")
+    assert sp.startswith("You are a coding agent running in Meshpool")
     assert "Please keep going until the query is completely resolved" in sp              # upstream wording
     assert "Use the `apply_patch` tool to edit files" in sp and "*** Begin Patch" in sp and "## `update_plan`" in sp
     assert "Codex CLI, an open source project led by OpenAI" in sp                       # says what it is built on
@@ -271,6 +271,7 @@ def test_without_the_profile_nothing_changes(tmp_path):
 
 
 def test_work_chats_and_plan_mode_keep_their_own_tools(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_LEAN_WORK", "0")                 # the full Cowork lane (lean Work: test_lean_work.py)
     monkeypatch.setenv("MH_ENGINE_STYLE", "codex")
     w = Agent(str(tmp_path), mode="auto", profile="work")
     assert not w._codex() and w.messages[0]["content"].startswith("You are Meshpool Cowork")
@@ -307,7 +308,7 @@ def test_tool_list_is_exactly_the_codex_set_plus_mcp(tmp_path):
     _script(a, [_call("bash", {"command": "echo hi"}), {"role": "assistant", "content": "done"}])
     a.send("go")
     out = [m["content"] for m in a.messages if m["role"] == "tool"][0]
-    assert "unknown tool 'bash'" in out and "shell, apply_patch, update_plan" in out          # no MeshPool tools
+    assert "unknown tool 'bash'" in out and "shell, apply_patch, update_plan" in out          # no Meshpool tools
 
 
 def test_route_method_rides_on_the_first_message_not_the_system_prompt(tmp_path):
@@ -339,13 +340,13 @@ def test_ask_mode_is_on_request_and_asks_before_shell_and_patch(tmp_path):
         asked.append((kind, title, detail))
         return "yes", ""
     a = _agent(tmp_path, mode="ask", approve=approve)
-    _script(a, [_call("shell", {"command": ["bash", "-lc", "echo hi"], "workdir": "."}),
+    _script(a, [_call("shell", {"command": ["bash", "-lc", "make hi"], "workdir": "."}),
                 _call("apply_patch", {"input": patch("*** Update File: f.txt", "@@", "-1", "+2")}, "c2"),
                 _call("update_plan", {"plan": [{"step": "x", "status": "pending"}]}, "c3"),
                 {"role": "assistant", "content": "done"}])
     a.send("go")
     assert "<approval_policy>on-request</approval_policy>" in a.bodies[0]["messages"][1]["content"]
-    assert asked[0][0] == "bash" and asked[0][1] == "Run this command?" and "echo hi" in asked[0][2]
+    assert asked[0][0] == "bash" and asked[0][1] == "Run this command?" and "make hi" in asked[0][2]
     assert asked[1][0] == "edit" and "f.txt" in asked[1][1] and "+2" in asked[1][2]
     assert len(asked) == 2                                    # the plan tool needs no approval
     assert (tmp_path / "f.txt").read_text() == "2\n"
@@ -366,7 +367,7 @@ def test_accept_edits_mode_lets_patches_through_but_asks_for_commands(tmp_path):
     via_shell = ["apply_patch", patch("*** Update File: f.txt", "@@", "-2", "+3")]
     _script(a, [_call("apply_patch", {"input": patch("*** Update File: f.txt", "@@", "-1", "+2")}),
                 _call("shell", {"command": via_shell}, "c2"),
-                _call("shell", {"command": ["true"]}, "c3"), {"role": "assistant", "content": "ok"}])
+                _call("shell", {"command": ["make", "x"]}, "c3"), {"role": "assistant", "content": "ok"}])
     a.send("go")
     assert asked == ["bash"] and (tmp_path / "f.txt").read_text() == "3\n"
 
@@ -408,7 +409,8 @@ def test_no_review_mutation_or_plan_rounds_and_no_verify_nudge(tmp_path, monkeyp
         str(m.get("content")) for m in a.messages if m["role"] == "user")
 
 
-def test_the_loop_guard_and_compaction_still_work_in_codex_style(tmp_path):
+def test_the_loop_guard_and_compaction_still_work_in_codex_style(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_COMPACT_MODEL", "0")                            # no summary call to the dead gateway
     a = _agent(tmp_path)
     _script(a, [_call("shell", {"command": ["echo", "same"]}, f"c{i}") for i in range(4)]
             + [{"role": "assistant", "content": "ok"}])
@@ -421,3 +423,52 @@ def test_the_loop_guard_and_compaction_still_work_in_codex_style(tmp_path):
     a.messages.append({"role": "user", "content": "x" * 200000})
     a._maybe_compact()
     assert core._context_size(a.messages) < 200000 + 100000
+
+
+def test_codex_review_profile_runs_one_review_of_the_diff(tmp_path, monkeypatch):
+    import subprocess
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path)
+    (tmp_path / "t.py").write_text("x = 1\n")
+    subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=a", "add", "-A"], cwd=tmp_path)
+    subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-qm", "i"], cwd=tmp_path)
+    a = Agent(str(tmp_path), mode="auto", emit=lambda e: None)
+    a.set_route(_route(profile="codex+review"), "fix the failing test")
+    assert a._codex() and a.hsettings()["review"] is True
+    reviews = []
+    monkeypatch.setattr(a, "_aux_complete", lambda *x, **k: reviews.append(1) or "LGTM")
+    monkeypatch.setattr(a, "_mutation_feedback", lambda: pytest.fail("a mutation round ran"))
+    _script(a, [_call("apply_patch", {"input": patch("*** Update File: t.py", "@@", "-x = 1", "+x = 2")}),
+                {"role": "assistant", "content": "Done."}])
+    assert a.send("set x to 2") == "Done." and reviews == [1]
+
+
+def test_route_card_switch_leaves_the_method_card_out(tmp_path, monkeypatch):
+    for on in ("1", "0"):
+        monkeypatch.setenv("MH_ROUTE_CARD", on)
+        a = _agent(tmp_path)
+        _script(a, [{"role": "assistant", "content": "Done."}])
+        a.send("fix the failing test")
+        first = a.bodies[0]["messages"][1]["content"]
+        assert ("[Harness:" in first) == (on == "1") and "<environment_context>" in first
+
+
+def test_core_profile_is_codex_style_without_the_extra_verification_layers(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_SMALL_REPO_STYLE", "core")         # the lean core itself (default code lane: c171)
+    from meshpool_harness.agent import core as C
+    s = PR.settings("core")
+    assert s["engine_style"] == "codex" and s["lean_core"] is True and s["review"] is False
+    assert PR.settings("codex")["lean_core"] is False                    # the codex profile is unchanged
+    lean, full = C._codex_prompt(lean=True), C._codex_prompt()
+    assert len(lean) < len(full) / 2 and "NOTICE" not in lean and "$TMPDIR" in lean
+    a = Agent(str(tmp_path), mode="auto", emit=lambda e: None)
+    a.set_route(_route(profile="core"), "fix the failing test")
+    assert a._lean() and a.system_prompt().startswith("You are a coding agent running in Meshpool")
+    _script(a, [{"role": "assistant", "content": "Done."}])
+    a.send("Fix it. Keep the current output byte-for-byte identical. Ties must go first. Lines must match exactly.")
+    first = a.bodies[0]["messages"][1]["content"]
+    assert "[Harness:" not in first and C.KEEP_NOTE.strip() not in first and C.REQ_NOTE.strip() not in first
+    assert "<environment_context>" in first
+    assert a._grade_gate({}, {}, "Done.") == (False, "Done.")               # no independent grader
+    b = Agent(str(tmp_path), mode="auto", emit=lambda e: None)
+    b.set_route(_route(profile="codex"), "fix the failing test")
+    assert not b._lean() and len(b.system_prompt()) > len(a.system_prompt())

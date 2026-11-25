@@ -91,6 +91,7 @@ def agent(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "meshpool.config"))
     monkeypatch.setenv("MESHPOOL_API_KEY", "k")
     monkeypatch.setenv("MH_MODEL", "today-model")
+    monkeypatch.setenv("MH_CONTEXT_WINDOW", "200000")   # these tests are about the gateway's size limit, not a small window
     return K.Agent(str(tmp_path), mode="auto")
 
 
@@ -172,7 +173,7 @@ def test_a_request_too_large_keeps_the_screenshot_just_attached(agent, monkeypat
         return _ok()
     agent._post = post
     agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
-    assert len(sent[0]) == 4 and len(sent[1]) == 2 and sent[1][-1] == "ZZZ"   # the new screenshot still goes
+    assert 3 <= len(sent[0]) <= 4 and len(sent[1]) == 2 and sent[1][-1] == "ZZZ"   # the new screenshot still goes (P-06: the cut moves in steps)
 
 
 def test_a_request_too_big_for_the_gateway_answered_with_502_is_trimmed(agent, monkeypatch):

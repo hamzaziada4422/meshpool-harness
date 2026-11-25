@@ -26,6 +26,14 @@ def _c(sev="medium", issue="Title 'Market overview' is a topic", fix="Rewrite as
     return {"severity": sev, "category": cat, "rule": rule, "issue": issue, "fix": fix, "scope": scope}
 
 
+@pytest.fixture(autouse=True)
+def _one_endpoint(monkeypatch):
+    """The reviewer chain is the configured model plus explicit overrides: never a built-in name (S-03)."""
+    monkeypatch.setenv("MH_MODEL", "m-main")
+    for k in ("MH_REVIEW_MODEL", "MH_REVIEWER_MODELS"):
+        monkeypatch.delenv(k, raising=False)
+
+
 class _Stub:
     """Per-model behaviour: "raise", "sleep", or a function(slide numbers) -> reply text."""
     def __init__(self, plan):
@@ -92,9 +100,9 @@ def test_normalize_clamps_and_guards_numbers():
 def test_batches_parallel_and_rubric_prompt(tmp_path):
     pngs = [_png(tmp_path, n) for n in range(1, 8)]
     slides = [{"archetype": "grid", "title": f"Slide {n} title", "prov": ["F1"]} for n in range(1, 8)]
-    stub = _Stub({"claude-sonnet-5.5": _ok})
+    stub = _Stub({"m-main": _ok})
     rv = R.review_deck("", slides=slides, client=stub, pngs=pngs, batch=3)
-    assert rv["status"] == "ok" and rv["model"] == "claude-sonnet-5.5" and rv["calls"] == 3
+    assert rv["status"] == "ok" and rv["model"] == "m-main" and rv["calls"] == 3
     assert sorted(len(c["slides"]) for c in stub.calls) == [1, 3, 3]
     assert all(c["images"] == len(c["slides"]) for c in stub.calls)       # one image per slide in the batch
     assert [s["slide"] for s in rv["slides"]] == list(range(1, 8))
@@ -112,26 +120,28 @@ def test_outline_and_slide_json_reach_the_model(tmp_path):
             return super().chat(model=model, messages=messages, **kw)
     slides = [{"archetype": "cover", "title": "Deck"}, {"archetype": "bar_takeaway", "title": "Sales rose 9%",
                                                        "prov": ["F9"], "notes": "secret"}]
-    R.review_deck("", slides=slides, client=Spy({"claude-sonnet-5.5": _ok}), pngs=[_png(tmp_path, 2)])
+    R.review_deck("", slides=slides, client=Spy({"m-main": _ok}), pngs=[_png(tmp_path, 2)])
     assert "1. [cover] Deck" in seen["text"] and "2. [bar_takeaway] Sales rose 9%" in seen["text"]
     assert "Slide 2 (bar_takeaway)" in seen["text"] and "secret" not in seen["text"] and "F9" not in seen["text"]
 
 
 def test_fallback_chain_and_env_model(tmp_path, monkeypatch):
     pngs = [_png(tmp_path, n) for n in (1, 2)]
-    stub = _Stub({"gpt-6.1-terra": _ok})                                 # sonnet missing: terra answers
-    rv = R.review_deck("", client=stub, pngs=pngs, batch=2)
-    assert [c["model"] for c in stub.calls] == ["claude-sonnet-5.5", "gpt-6.1-terra"]
-    assert rv["status"] == "ok" and rv["model"] == "gpt-6.1-terra" and rv["errors"]
+    assert R.chain() == ["m-main"]                                       # only the configured model, no built-in names
     monkeypatch.setenv("MH_REVIEW_MODEL", "my-vision")
-    assert R.chain() == ["my-vision", "claude-sonnet-5.5", "gpt-6.1-terra", "kimi-k3"]
+    stub = _Stub({"m-main": _ok})                                        # the override is not deployed: main answers
+    rv = R.review_deck("", client=stub, pngs=pngs, batch=2)
+    assert [c["model"] for c in stub.calls] == ["my-vision", "m-main"]
+    assert rv["status"] == "ok" and rv["model"] == "m-main" and rv["errors"]
+    assert R.chain() == ["my-vision", "m-main"]
     assert R.chain("explicit")[:2] == ["explicit", "my-vision"]
 
 
-def test_bad_json_falls_through_and_renumbered_replies_map_by_order(tmp_path):
+def test_bad_json_falls_through_and_renumbered_replies_map_by_order(tmp_path, monkeypatch):
     pngs = [_png(tmp_path, n) for n in (5, 6)]
-    stub = _Stub({"claude-sonnet-5.5": lambda nums: "Sorry, here you go: {not json",
-                  "gpt-6.1-terra": lambda nums: json.dumps({"slides": [_entry(1, _c()), _entry(2)]})})
+    monkeypatch.setenv("MH_REVIEW_MODEL", "m-alt")
+    stub = _Stub({"m-alt": lambda nums: "Sorry, here you go: {not json",
+                  "m-main": lambda nums: json.dumps({"slides": [_entry(1, _c()), _entry(2)]})})
     rv = R.review_deck("", client=stub, pngs=pngs, batch=2)
     assert rv["status"] == "ok" and [s["slide"] for s in rv["slides"]] == [5, 6]
     assert "unparseable" in rv["errors"][0]
@@ -139,7 +149,7 @@ def test_bad_json_falls_through_and_renumbered_replies_map_by_order(tmp_path):
 
 def test_partial_and_not_run(tmp_path):
     pngs = [_png(tmp_path, n) for n in (1, 2, 3, 4)]
-    half = _Stub({"claude-sonnet-5.5": lambda nums: _ok(nums) if 1 in nums else "nonsense"})
+    half = _Stub({"m-main": lambda nums: _ok(nums) if 1 in nums else "nonsense"})
     rv = R.review_deck("", client=half, pngs=pngs, batch=2)
     assert rv["status"] == "partial" and rv["not_run"] == [3, 4] and [s["slide"] for s in rv["slides"]] == [1, 2]
     dead = R.review_deck("", client=_Stub({}), pngs=pngs, batch=2)
@@ -147,11 +157,12 @@ def test_partial_and_not_run(tmp_path):
     assert R.as_failures(dead) == {} and R.deck_verdict(dead)["status"] == "not_run"
 
 
-def test_timeout_gives_not_run(tmp_path):
+def test_timeout_gives_not_run(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_REVIEW_MODEL", "m-alt")
     t0 = time.time()
-    rv = R.review_deck("", client=_Stub({m: "sleep" for m in R.CHAIN}), pngs=[_png(tmp_path, 1)], timeout=0.2)
+    rv = R.review_deck("", client=_Stub({m: "sleep" for m in ("m-main", "m-alt")}), pngs=[_png(tmp_path, 1)], timeout=0.2)
     assert rv["status"] == "not_run" and "TimeoutError" in rv["errors"][0]
-    assert time.time() - t0 < 3                                           # three models x 0.2 s, not 3 x 5 s
+    assert time.time() - t0 < 12                                           # two models x 0.2 s, not 3 x 5 s
 
 
 def test_render_failure_is_not_run(monkeypatch):

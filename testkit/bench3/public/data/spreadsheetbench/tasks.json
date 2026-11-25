@@ -1,0 +1,38 @@
+[
+ {
+  "id": 41969,
+  "instruction": "How can I apply the formula '=COUNTBLANK(A3:C3)' to multiple cells in a pattern where the cell range shifts by three columns each time, such as obtaining '=COUNTBLANK(D3:F3)', '=COUNTBLANK(G3:I3)', and so on without having to manually retype or adjust the formula for each new cell range? Apply the outputs to A6:C6",
+  "instruction_type": "Cell-Level Manipulation",
+  "answer_position": "A6:C6"
+ },
+ {
+  "id": 39515,
+  "instruction": "How can I modify my Excel formula to return a value based on both month and year, rather than just month? I have a worksheet where I want to pull a specific value into column O based on the given month and year. The current formula only extracts the value for the current year (2023), but I need it to correctly extract the value for January of the previous year (2022) for all rows corresponding to that year. All 2022 rows should have the value for Jan. Can someone provide an updated formula that handles this two-parameter lookup?  @INDEX($C2:$N2,MATCH($A2,$C$1:$N$1,0))\n\nNow please apply this formula to my worksheet.",
+  "instruction_type": "Cell-Level Manipulation",
+  "answer_position": "O2:O13"
+ },
+ {
+  "id": 56921,
+  "instruction": "I am struggling to get a SUMPRODUCT formula to work correctly in Excel. The goal is to sum every 4 columns, with the criterion being determined by column A. In the file I've attached, you'll see the formula located in C15, which currently yields an incorrect result. How do I fix this?\n\nMy current formula is: \nSUMPRODUCT(--(MOD(COLUMN(C3:N3)-COLUMN(C3),4)=0)*($A$3:$A$10=B15)*(C3:N3))",
+  "instruction_type": "Cell-Level Manipulation",
+  "answer_position": "C15:C16"
+ },
+ {
+  "id": "269-43",
+  "instruction": "How can I create a macro in Excel to delete a row if there's a value in column I but the corresponding cell in column H is blank? For example, if there's a value in cell I8 but cell H8 is empty, then the whole row should be deleted. I attempted writing a VBA code to perform this action, but it didn't work. Once you have a method of completing this task, please execute on it.",
+  "instruction_type": "Sheet-Level Manipulation",
+  "answer_position": "A1:I7"
+ },
+ {
+  "id": "280-17",
+  "instruction": "How can I remove all rows from an Excel spreadsheet except those with the last unique entry in a specific column? I have a file with 1100 rows and 36 columns, and within one column there are some numbers that are duplicates. Specifically, in my example file, I want to keep the rows that contain the last unique number in the column, such as row 3, row 6, and so on, and then delete the other rows with duplicate numbers. An example file is provided for your reference.",
+  "instruction_type": "Sheet-Level Manipulation",
+  "answer_position": "A1:B12"
+ },
+ {
+  "id": "374-31",
+  "instruction": "How can I modify my existing VBA code to only delete the blank rows that appear above a cell with the text \"Code\" in column A, while preserving any blank rows below it?",
+  "instruction_type": "Sheet-Level Manipulation",
+  "answer_position": "'Sheet1'!A1:D5"
+ }
+]

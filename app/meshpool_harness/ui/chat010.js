@@ -35,7 +35,7 @@ renderTop = function () {
 
 /* ---------- X-ray ---------- */
 function popAt(anchor, html, cls = "") {
-  $(".mem-pop")?.remove();
+  { const old = $(".mem-pop"); if (old) { if (old.close) old.close(); else old.remove(); } }
   const p = document.createElement("div"); p.className = "mem-pop " + cls; p.setAttribute("role", "dialog"); p.innerHTML = html; document.body.appendChild(p);
   const r = anchor.getBoundingClientRect();
   p.style.left = Math.max(8, Math.min(innerWidth - p.offsetWidth - 8, r.left)) + "px";
@@ -48,7 +48,7 @@ function popAt(anchor, html, cls = "") {
   p.close = close; return p;
 }
 async function xray010(anchor) {
-  const q = new URLSearchParams({chat: S.cur?.id || "", text: $("#input").value || "", project: S.cur?.view?.project_id || S.draft.pid || "", workdir: S.cur ? "" : (S.draft.project || ""), incognito: inc010() ? "1" : ""});
+  const q = new URLSearchParams({chat: S.cur?.id || "", text: ($("#input").value || "").slice(0, 4000), project: S.cur?.view?.project_id || S.draft.pid || "", workdir: S.cur ? "" : (S.draft.project || ""), incognito: inc010() ? "1" : ""});
   let x; try { x = await api("/api/xray?" + q); } catch (e) { return toast(e.message); }
   const exclude = new Set([...(x.excluded || []).map(f => f.id), ...(S.cur ? [] : (S.draft.exclude || []))]);
   const draw = () => `<h4>What the agent sees</h4><p class="note">${esc(x.note)} ${x.incognito ? "Incognito: no memory." : x.memory_on ? "" : "Memory is off."}</p>
@@ -182,7 +182,7 @@ window.runInsightAction = async function (a, ctx) {
   const p = a.payload || {};
   const kind = {draft_skill: "skill", make_project: "project", new_chat: "rerun", set_default: "route", teach_accept: "teach"}[a.kind] || a.kind;
   if (kind === "schedule") {                     // the form opens prefilled; nothing is saved until Create task
-    const v = await taskDialog({name: p.name || "", prompt: p.prompt || "", when: p.when || "daily", time: p.time || "09:00", day: p.day || "mon", minutes: p.minutes || 60, only_on_change: p.only_on_change !== false});
+    const v = await taskDialog({name: p.name || "", prompt: p.prompt || "", when: p.when || "daily", time: p.time || "09:00", day: p.day || "mon", minutes: p.minutes || 60, only_on_change: p.only_on_change !== false, kind: p.kind, folder: p.folder});
     if (v && await taskSave(v)) { toast("Task created.", 8000, {label: "Open", fn: () => goPage("scheduled")}); }
     return;
   }
@@ -245,8 +245,11 @@ const _applyEv010 = applyEv;
 applyEv = function (ev) { const r = _applyEv010.apply(this, arguments); try { ev010(ev); } catch (e) { /* never break the transcript */ } return r; };
 
 /* "Noted for next time" gets an Undo: the status event carries the fact ids. */
-const _status010 = new MutationObserver(() => {
-  $$(".note:not([data-u010])").forEach(n => {
+const _status010 = new MutationObserver(ms => {
+  const seen = new Set();                         // look only at what was just added, not at every note in a long chat
+  for (const m of ms) for (const a of m.addedNodes) if (a.nodeType === 1) { if (a.matches?.(".note")) seen.add(a); a.querySelectorAll?.(".note:not([data-u010])").forEach(x => seen.add(x)); }
+  seen.forEach(n => {
+    if (n.dataset.u010) return;
     if (!/^Noted for next time/.test(n.textContent)) return;
     n.dataset.u010 = "1";
     const ids = n.dataset.undo ? JSON.parse(n.dataset.undo) : null; if (!ids) return;
@@ -288,8 +291,8 @@ openThread = function (id, fresh) {
 const THUMB = d => `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
 const UP = THUMB("M7 11v9H4v-9zM7 11l4-8a2 2 0 0 1 2 2v4h5.5a2 2 0 0 1 2 2.3l-1.2 6A2 2 0 0 1 17.3 20H7");
 const DOWN = THUMB("M7 13V4H4v9zM7 13l4 8a2 2 0 0 0 2-2v-4h5.5a2 2 0 0 0 2-2.3l-1.2-6A2 2 0 0 0 17.3 4H7");
-function feedback010(outcome) { if (S.cur) post("/api/receipt/feedback", {chat: S.cur.id, outcome}).catch(() => {}); }
-function acts010(n, text) {
+function feedback010(outcome, n) { if (S.cur) post("/api/receipt/feedback", {chat: S.cur.id, outcome, turn: n}).catch(() => {}); }
+function acts010(n, text, ei) {
   const f = foot010(); if (!f || f.dataset.acts010) return; f.dataset.acts010 = "1";
   const w = document.createElement("span"); w.className = "racts010";
   w.innerHTML = `<button class="iconbtn" data-ra="copy" data-tip="Copy reply" data-tip-pos="above" aria-label="Copy reply">${ICON.copy}</button><button class="iconbtn" data-ra="check" data-tip="Check this" data-tip-pos="above" aria-label="Check this: have an independent reviewer check the result">${ICON.check2}</button><button class="iconbtn" data-ra="retry" data-tip="Try again" data-tip-pos="above" aria-label="Try again">${ICON.refresh}</button><button class="iconbtn" data-ra="up" data-tip="Good reply" data-tip-pos="above" aria-label="Good reply" aria-pressed="false">${UP}</button><button class="iconbtn" data-ra="down" data-tip="Not good" data-tip-pos="above" aria-label="Not good" aria-pressed="false">${DOWN}</button>`;
@@ -307,38 +310,50 @@ function acts010(n, text) {
   w.onclick = async e => {
     const b = e.target.closest("[data-ra]"); if (!b) return;
     if (b.dataset.ra === "copy") return navigator.clipboard.writeText(text || "").then(() => toast("Copied"), () => toast("Could not copy."));
-    if (b.dataset.ra === "retry") return retry010(n);
+    if (b.dataset.ra === "retry") return retry010(ei, n);
     if (b.dataset.ra === "check") return checkThis010(b);
     const on = b.getAttribute("aria-pressed") !== "true";
     $$("[data-ra=up],[data-ra=down]", w).forEach(x => { x.setAttribute("aria-pressed", "false"); x.classList.remove("on"); });
-    if (on) { b.setAttribute("aria-pressed", "true"); b.classList.add("on"); feedback010(b.dataset.ra); toast(b.dataset.ra === "up" ? "Thanks." : "Thanks. Meshpool will use agents like this less for this kind of task.", 3500); }
+    if (on) { b.setAttribute("aria-pressed", "true"); b.classList.add("on"); feedback010(b.dataset.ra, n); toast(b.dataset.ra === "up" ? "Thanks." : "Thanks. Meshpool will use agents like this less for this kind of task.", 3500); }
   };
 }
-async function rewind010(n, keepVersions) {
-  await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9, keep_versions: !!keepVersions});
-  renderBranch(); clearTimeout(S.cur.pollT); resetChat(S.cur); await poll(); if (S.panel === "diff") renderPanel();
+// Edit and Try again go back to just before one of your messages, found by its event number (the server maps it to the
+// message and to its checkpoint). Never by a count of messages on the page: checkpoint numbers keep growing and are not
+// reused after an Undo, and steer messages get turns of their own, so a count names the wrong turn.
+async function rewind010(ei) {
+  const cur = S.cur;
+  const r = await post(`/api/agent/${cur.id}/rewind`, {event_index: ei, files: true, since: 1e9});
+  if (r.forked) { await loadThreads(); openThread(r.forked); return r; }
+  renderBranch(); clearTimeout(cur.pollT); resetChat(cur); await poll(); if (S.panel === "diff") renderPanel();
+  return r;
 }
-async function retry010(n) {
-  const asked = threadLog().filter(e => e.type === "user" && !e.steer)[n - 1]?.text || "";
+async function retry010(ei, n) {
   if (!S.cur || S.cur.busy) return toast("Wait for it to finish, or stop it first.");
-  if (!asked) return toast("Could not find the message to send again.");
-  const log = threadLog(), users = log.map((e, i) => e.type === "user" && !e.steer ? i : -1).filter(i => i >= 0);
-  const reply = log.slice(users[n - 1], users[n] ?? log.length).filter(e => e.type === "assistant" && (e.text || "").trim()).pop()?.text || "";
-  if (reply) { try { await post(`/api/threads/${S.cur.id}`, {action: "keep_version", turn: n, text: reply}); } catch (e) { /* the retry still runs */ } }
-  try { await rewind010(n, true); feedback010("retry"); $("#input").value = asked; sendNow(false); } catch (e) { toast(e.message); }
+  const ue = typeof ei === "number" && threadLog().find(e => e.type === "user" && !e.steer && e.i === ei);
+  if (!ue || !ue.text) return toast("Could not find the message to send again.");
+  const log = threadLog(), at = log.indexOf(ue), nextU = log.findIndex((e, i) => i > at && e.type === "user" && !e.steer);
+  const reply = log.slice(at, nextU < 0 ? log.length : nextU).filter(e => e.type === "assistant" && (e.text || "").trim()).pop()?.text || "";
+  if (reply && n) { try { await post(`/api/threads/${S.cur.id}`, {action: "keep_version", turn: n, text: reply}); } catch (e) { /* the retry still runs */ } }
+  try {
+    const r = await rewind010(ei); feedback010("retry", n);
+    const inp = $("#input"), draft = inp.value;     // a draft in the box is kept: the message is sent, then it comes back
+    inp.value = ue.text || r.text; sendNow(false);
+    if (draft.trim() && !inp.value.trim()) { inp.value = draft; inp.dispatchEvent(new Event("input")); }
+  } catch (e) { toast(e.message); }
 }
 document.addEventListener("click", async e => {
   const b = e.target.closest('[data-ma="edit"]'); if (!b || !S.cur) return;
-  const msgs = $$(".msg-user").filter(m => $(".macts", m)), mine = b.closest(".msg-user"), n = msgs.indexOf(mine) + 1;
+  const msgs = $$(".msg-user").filter(m => $(".macts", m)), mine = b.closest(".msg-user"), idx = msgs.indexOf(mine) + 1;
+  const ei = mine && mine.dataset.ei !== undefined && mine.dataset.ei !== "" ? +mine.dataset.ei : NaN;
   const text = $(".b", mine)?.innerText.replace(/^Plan mode\n?/, "").trim() || "";
   e.stopImmediatePropagation();
-  const fill = () => { const i = $("#input"); i.value = text; i.focus(); i.dispatchEvent(new Event("input")); };
-  if (S.cur.busy || n < 1) { fill(); return toast("Edit it and send to ask again.", 3500); }
-  if (n < msgs.length && !await ask({title: "Edit this message?", text: "The replies after it are removed, and files Meshpool changed after it go back.", ok: "Edit it", danger: true})) return;
-  try { await rewind010(n); fill(); toast("Edit it and send. The old reply is gone.", 4000); } catch (err) { toast(err.message); }
+  const fill = () => fillInput(text);             // a draft in the box is kept: the message goes after it
+  if (S.cur.busy || idx < 1 || isNaN(ei)) { fill(); return toast("Edit it and send to ask again.", 3500); }
+  if (idx < msgs.length && !await ask({title: "Edit this message?", text: "The replies after it are removed, and files Meshpool changed after it go back.", ok: "Edit it", danger: true})) return;
+  try { const r = await rewind010(ei); fill(); toast(r.forked ? "This agent cannot go back in place, so the conversation up to there is a new chat. Edit it and send." : "Edit it and send. The old reply is gone.", 4000); } catch (err) { toast(err.message); }
 }, true);
 const _ev010b = ev010;
-ev010 = function (ev) { _ev010b(ev); if (ev.type === "turn_end" && S.cur) acts010(S.cur.turn, S.cur.lastText); };
+ev010 = function (ev) { _ev010b(ev); if (ev.type === "turn_end" && S.cur) acts010(S.cur.turn, S.cur.lastText, S.cur.turnEi); };
 
 
 /* ---------- diagrams and maths in chat: Mermaid and KaTeX are bundled and load only when a reply uses them ---------- */

@@ -102,7 +102,9 @@ def test_a_turn_cut_off_by_a_rate_limit_is_picked_up_where_it_stopped(tmp_path, 
         return _ok("picked up")
     a2._post = post
     assert a2.send("continue") == "picked up"
-    assert seen[0].startswith("continue") and seen[0].endswith(RESUME_NOTE)
+    # the unanswered ask and "continue" are two user messages in a row: sent merged into one (strict chat
+    # templates refuse two in a row, H-05), with the resume note still at the end
+    assert seen[0].startswith("build the report") and "\n\ncontinue" in seen[0] and seen[0].endswith(RESUME_NOTE)
     assert [e["text"] for e in ev if e["type"] == "user"][-1] == "continue"   # the note is hidden in the chat
     assert not a2.unfinished
     a2.send("next thing")

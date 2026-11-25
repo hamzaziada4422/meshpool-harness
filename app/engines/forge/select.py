@@ -21,12 +21,11 @@ KEYS = ("clarity", "navigation", "polish", "human_feel", "readability", "density
 
 def judge(pptx: str, client, model: str | None = None, task_id: str = "select") -> dict:
     """{"mean": float, scores..., "worst"} for one deck (mean 0.0 when grading fails)."""
-    from engines.forge.review import CHAIN, image_part, render_pngs
+    from engines.forge.review import image_part, render_pngs
+    from meshpool_harness.core.models import vision_reviewer_models
     pages = render_pngs(pptx, width_px=1100)
     content = [{"type": "text", "text": "The deck, one image per slide in order:"}] + [image_part(p) for _, p in pages]
-    for m in [model] + CHAIN if model else CHAIN:
-        if not m:
-            continue
+    for m in vision_reviewer_models(model):
         try:
             r = client.chat(model=m, messages=[{"role": "system", "content": RUBRIC},
                                                {"role": "user", "content": content}],

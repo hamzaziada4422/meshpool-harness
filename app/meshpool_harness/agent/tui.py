@@ -1,4 +1,4 @@
-"""Terminal front end for the MeshPool coding agent.
+"""Terminal front end for the Meshpool coding agent.
 
   meshpool                       start a session in the current folder
   meshpool --dir PATH            start in another folder
@@ -14,6 +14,7 @@ the same events come out as plain lines; NO_COLOR keeps the layout and drops the
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -33,35 +34,55 @@ from meshpool_harness.agent.tui_render import Style
 COMMANDS = [
     ("help", "", "show the commands"),
     ("model", "[id]", "pick the model"),
-    ("login", "", "sign in: MeshPool key, another provider, or ChatGPT"),
+    ("login", "", "sign in: Meshpool key, another provider, or ChatGPT"),
     ("clear", "", "start a new conversation in this folder"),
     ("compact", "[what to keep]", "summarize earlier steps to free context; say what to keep in full"),
     ("grade", "", "have an independent reviewer check the last piece of work"),
     ("review", "[quick|deep] [--max N] [what]", "review the current changes for bugs, ranked by severity"),
     ("simplify", "[what]", "make the changed code simpler without changing what it does"),
     ("status", "", "model, folder, access mode, usage"),
-    ("doctor", "", "find problems in settings, hooks, rules, MCP servers, skills and sub-agents"),
-    ("auto", "[ask|edits|auto]", "set what the agent may do without asking"),
-    ("mcp", "", "MCP servers and their tools"),
+    ("auto", "[ask|accept-edits|full-access]", "set what the agent may do without asking"),
+    ("plan", "[on|off|file]", "plan mode: read and plan, change nothing; file shows where the last plan was saved"),
+    ("goal", "[text|off]", "keep working until this is done"),
+    ("style", "[id]", "pick how the agent writes"),
+    ("agent", "[id]", "switch the agent for this chat"),
+    ("mode", "code|work", "switch this chat between Code and Work"),
+    ("undo", "[turn]", "undo the file changes of a turn and everything after it"),
+    ("diff", "[turn]", "show what a turn (or the whole chat) changed"),
+    ("rewind", "[turn]", "undo to a turn and edit its message"),
+    ("attach", "PATH...", "send files or pictures with your next message"),
+    ("resume", "[search]", "switch to another chat"),
+    ("mcp", "[list|on NAME|off NAME|test NAME]", "MCP servers and their tools"),
     ("connect", "[app]", "connect Notion, Gmail, Slack... or an MCP server"),
-    ("tokens", "", "tokens and cost of this session"),
+    ("trust", "", "trust this folder's .meshpool hooks and allow rules"),
+    ("usage", "[days]", "usage and cost: this chat and the ledger (/tokens, /cost)"),
+    ("receipt", "", "what the last turn cost and which model ran it"),
+    ("effort", "[low|medium|high|xhigh|off]", "how hard the model thinks, for this chat"),
+    ("fork", "[turn]", "start a new chat from this one, up to a turn"),
+    ("chats", "[search]", "list or search your chats"),
+    ("rename", "TITLE", "rename this chat"),
+    ("delete", "", "delete this chat"),
+    ("project", "[list|use ID|show ID|memory ID ...]", "projects: list, move this chat into one, memory"),
+    ("memory", "[list|add TEXT|forget ID|search Q]", "what Meshpool remembers about you"),
+    ("skills", "[list|show ID|enable ID|disable ID]", "your skills"),
+    ("schedule", "[list|run ID|enable ID|disable ID|delete ID]", "scheduled tasks"),
+    ("settings", "[KEY [VALUE]]", "show or change a setting"),
+    ("checks", "", "what the checks found on the last piece of work"),
+    ("worktree", "[list|diff ID|merge ID|discard ID]", "isolated copies of this folder"),
+    ("doctor", "", "find problems in settings, hooks, rules, MCP servers, skills and sub-agents"),
     ("agents", "", "saved sub-agents (agents/*.md)"),
     ("btw", "<question>", "a quick side question; not added to the conversation"),
     ("add-dir", "<folder>", "let the agent read and edit in another folder too"),
     ("context", "", "what fills the context window"),
-    ("resume", "[id]", "open an earlier session"),
     ("export", "[file]", "save this conversation as Markdown"),
     ("copy", "[n]", "copy the last reply (or the nth from the end)"),
-    ("effort", "[auto|low|medium|high]", "how hard the model thinks"),
-    ("plan", "[on|off|file]", "plan mode: read and plan, change nothing; file shows where the last plan was saved"),
     ("permissions", "", "saved allow, ask and deny rules, and folder trust"),
-    ("diff", "", "uncommitted changes in this folder (git diff)"),
     ("init", "", "have the agent write MESHPOOL.md (project notes)"),
     ("import", "", "bring in old chats, Claude Code and Codex sessions"),
     ("setup", "", "first-run walkthrough: key, folder, skills"),
     ("exit", "", "quit"),
 ]
-ALIASES = {"quit": "exit", "q": "exit", "mode": "auto", "cost": "tokens"}
+ALIASES = {"quit": "exit", "q": "exit", "access": "auto", "permissions": "auto", "cost": "usage", "tokens": "usage"}
 MODES = ["ask", "edits", "auto"]
 PLACEHOLDERS = ["fix the failing test in tests/", "explain how this project is organised",
                 "add a --verbose flag to the CLI", "find where errors are logged", "write tests for <filepath>"]
@@ -142,7 +163,7 @@ class Terminal:
         self._branch_v = ""
         self.model = ""
         self.provider = ""
-        self.effort = os.environ.get("MH_EFFORT") or os.environ.get("MH_REASONING_EFFORT") or ""
+        self.effort = os.environ.get("MH_REASONING_EFFORT") or ""
         self.mode = "ask"
         self.modes = MODES
         self.usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
@@ -164,7 +185,7 @@ class Terminal:
         return max(20, shutil.get_terminal_size((100, 24)).columns)
 
     def _write(self, s: str, to=None):
-        (to or self.out).write(s)
+        (to or self.out).write(R.safe(s))
         (to or self.out).flush()
 
     def p(self, s="", end="\n", to=None):
@@ -332,7 +353,10 @@ class Terminal:
             if not self._text_open and not self.print_mode:
                 self._write("\n", self.out)
             self._text_open = True
-            self._write(chunk, self.out)
+            if self.print_mode:                        # written once the reply is complete: a retry cannot append to it
+                self._pbuf = getattr(self, "_pbuf", "") + chunk
+            else:
+                self._write(chunk, self.out)
             return
         self._text_open = True
         self._partial += chunk
@@ -351,12 +375,16 @@ class Terminal:
                 rest, self._partial = self._partial, ""
                 self.scroll(["  " + x if x else "" for x in R.markdown(rest, self.width - 2, self.st, self._md)])
         elif self._text_open:
+            if self.print_mode and getattr(self, "_pbuf", ""):
+                self._write(self._pbuf, self.out)
+            self._pbuf = ""
             self._write("\n", self.out)
         self._text_open = False
         self._md = R.MdState()
 
     # ---------- agent events ----------
     def emit(self, ev: dict):
+        ev = {k: (R.safe_text(v) if isinstance(v, str) else v) for k, v in ev.items()}   # model text never drives the tty
         t, st = ev.get("type"), self.st
         if t == "model_start":
             if self.interactive and not self._turn:
@@ -374,6 +402,8 @@ class Terminal:
         elif t == "stream_reset":
             if self._text_open:
                 self._partial = ""
+                if self.print_mode:                    # the partial reply is discarded, nothing was written yet
+                    self._pbuf, self._text_open = "", False
                 self._flush_text()
                 self.p(st.dim("[connection dropped; the reply restarts below]"))
         elif t == "assistant":
@@ -410,6 +440,15 @@ class Terminal:
             self._flush_text()
             lines = [ln for ln in str(ev.get("text", "")).splitlines() if ln.strip()]
             self.scroll([""] + ["  " + st.dim(R.clip(ln, self.width - 4)) for ln in lines])
+        elif t == "checks_line":
+            self._flush_text()
+            self.p(st.dim("  Checked: " + str(ev.get("text", ""))))
+        elif t == "task_receipt":
+            self._flush_text()
+            from meshpool_harness import receipts as RC
+            line = RC.line(ev)
+            if line:
+                self.p(st.dim("  " + line))
         elif t == "review":
             self._flush_text()
             self.scroll([""] + self._review_lines(ev))
@@ -436,7 +475,7 @@ class Terminal:
         self.cost = getattr(self, "measured", None) if getattr(self, "measured", None) is not None else self._price()
 
     def _price(self) -> float | None:
-        """Session cost from MH_PRICE_IN / MH_PRICE_OUT / MH_PRICE_CACHED (USD per million tokens). MeshPool has no
+        """Session cost from MH_PRICE_IN / MH_PRICE_OUT / MH_PRICE_CACHED (USD per million tokens). Meshpool has no
         price list, so without those variables no dollar figure is shown."""
         try:
             pi, po = float(os.environ["MH_PRICE_IN"]), float(os.environ["MH_PRICE_OUT"])
@@ -493,22 +532,22 @@ class Terminal:
         ok = bool(ev.get("ok"))
         if name in R.SHELL_TOOLS:
             meta = f"(timeout {info['timeout']}s)" if info.get("timeout") else ""
-            lines, hidden = R.shell_block(info["summary"], out, took, st, self.width, meta=meta,
-                                          limit=self.output_limit, ok=ok)
+            lines, hidden = R.guard(R.shell_block, st, info["summary"], out, took, st, self.width, meta=meta,
+                                    limit=self.output_limit, ok=ok)
             self.last_block = {"command": info["summary"], "output": out, "took": took, "meta": meta, "ok": ok,
                                "hidden": hidden}
             self.scroll(lines)
         else:
-            self.scroll(["  " + x for x in R.tool_line(name, info["summary"], out, ok, took, st, self.width - 4,
-                                                       info["diff"], bool(info["mcp"]))])
+            self.scroll(["  " + x for x in R.guard(R.tool_line, st, name, info["summary"], out, ok, took, st, self.width - 4,
+                                                    info["diff"], bool(info["mcp"]))])
 
     def expand_last(self):
         """Ctrl+O: print the last shell output in full (the screen above is append-only, so it is printed again)."""
         b = self.last_block
         if not b:
             return self.scroll(["  " + self.st.dim("Nothing to expand.")])
-        lines, _ = R.shell_block(b["command"], b["output"], b["took"], self.st, self.width, meta=b["meta"], limit=0,
-                                 ok=b["ok"])
+        lines, _ = R.guard(R.shell_block, self.st, b["command"], b["output"], b["took"], self.st, self.width,
+                           meta=b["meta"], limit=0, ok=b["ok"])
         self.scroll(lines)
 
     # ---------- facts for the screen ----------
@@ -524,7 +563,7 @@ class Terminal:
         except Exception:  # noqa: BLE001
             label = prov
         self.provider = "ChatGPT subscription" if prov == "chatgpt" else (
-            "MeshPool API" if label.lower() == "meshpool" else f"{label} API")
+            "Meshpool API" if label.lower() == "meshpool" else f"{label} API")
         self.mode = getattr(agent, "mode", self.mode) or "ask"
         self.modes = ["ask", "auto"] if hasattr(agent, "manifest") else MODES
         self.cwd = self.cwd_label or str(getattr(agent, "root", self.cwd))
@@ -732,9 +771,10 @@ class Terminal:
         self.keys_free.wait(0.5)                # the Esc watcher of the last turn lets go first
         if not self.raw_ok():
             return self._read_plain()
-        if not prefill and getattr(self, "stash", "") and getattr(self, "stash_used", False):
-            prefill, self.stash, self.stash_used = self.stash, "", False   # the stashed prompt comes back after a send
-        s = {"buf": prefill, "cur": len(prefill), "sel": 0, "note": "",
+        pre, self.prefill = getattr(self, "prefill", ""), ""        # /rewind: the earlier message, to edit
+        if not pre and getattr(self, "stash", "") and getattr(self, "stash_used", False):
+            pre, self.stash, self.stash_used = self.stash, "", False   # the stashed prompt comes back after a send
+        s = {"buf": pre, "cur": len(pre), "sel": 0, "note": "",
              "hint": PLACEHOLDERS[len(self.history) % len(PLACEHOLDERS)], "search": None}
         h = len(self.history)
         draft = ""
@@ -809,6 +849,15 @@ class Terminal:
                         j = len(buf[:cur].rstrip(" "))
                         j = buf.rfind(" ", 0, j) + 1
                         s["buf"], s["cur"] = buf[:j] + buf[cur:], j
+                    elif k == "word_left":
+                        j = len(buf[:cur].rstrip(" "))
+                        s["cur"] = buf.rfind(" ", 0, j) + 1
+                    elif k == "word_right":
+                        j = buf.find(" ", cur)
+                        j = len(buf) if j < 0 else j
+                        while j < len(buf) and buf[j] == " ":
+                            j += 1
+                        s["cur"] = j
                     elif k in ("up", "ctrl_p"):
                         recalled = h < len(self.history) and buf == self.history[h]   # walking history, not the menu
                         if menu and not recalled:
@@ -912,7 +961,7 @@ class Terminal:
         lines = []
         while True:
             try:
-                line = input("❯ " if sys.stdin.isatty() and not lines else "")
+                line = input(R.safe("❯ ") if sys.stdin.isatty() and not lines else "")
             except EOFError:
                 return "\n".join(lines).strip() if lines else None
             if line.endswith("\\"):
@@ -979,17 +1028,25 @@ class Terminal:
         finally:
             self.set_live(prev)
 
-    def approve(self, kind: str, title: str, detail: str, options=None):
+    def approve(self, kind: str, title: str, detail: str, options=None, scope: str = ""):
         if not (sys.stdin.isatty() or self.keys_factory):
-            return "no", "No terminal to ask in. Run with --auto."
+            return "no", ("No terminal to ask in, so this was not allowed. Re-run with --auto, --permission-mode edits, or "
+                          "--allowed-tools.")
         if self.stopping:
             return "no", ""
-        self.idle.clear()
-        self.keys_free.wait(1.0)                # the Esc watcher lets go of the keyboard first
-        try:
-            choice, note = self._approve_raw(kind, title, detail) if self.raw_ok() else self._approve(kind, title, detail)
-        finally:
-            self.idle.set()
+        if not hasattr(self, "_approve_lock"):
+            self._approve_lock = threading.Lock()
+        with self._approve_lock:                       # parallel tool calls: one question on the screen at a time
+            if self.stopping:
+                return "no", ""
+            self.idle.clear()
+            if hasattr(self, "keys_free"):
+                self.keys_free.wait(1.0)                # the Esc watcher lets go of the keyboard first
+            try:
+                extra = (scope,) if scope else ()
+                choice, note = self._approve_raw(kind, title, detail, *extra) if self.raw_ok() else self._approve(kind, title, detail, *extra)
+            finally:
+                self.idle.set()
         if self.stopping:                 # Ctrl+C while the question was open: the turn is over
             return "no", ""
         if choice == "always" and options:
@@ -997,7 +1054,7 @@ class Terminal:
             return next((o["id"] for o in options if o.get("kind") == "allow_always"), "yes"), note
         return choice, note
 
-    def _approve_raw(self, kind: str, title: str, detail: str):
+    def _approve_raw(self, kind: str, title: str, detail: str, scope: str = ""):
         st = self.st
         rows = detail.splitlines()
 
@@ -1017,7 +1074,11 @@ class Terminal:
             shown = [st.dim(f"The full text ({len(rows)} lines) is above.")]
         else:
             shown = [style(ln) for ln in rows]
-        what = {"edit": "file edits", "bash": "commands", "mcp": "this MCP tool"}.get(kind, "this")
+        what = scope or {"edit": "file edits", "bash": "commands", "mcp": "this MCP tool"}.get(kind, "this")
+        if scope == "once":               # a chained or redirecting command: approved one at a time, never for the session
+            i = self.choose(title, shown, ["Yes", "No"], hotkeys={"y": 0, "n": 1},
+                            hint="↑↓ or 1-2 · enter to confirm · esc: no")
+            return ("yes" if i == 0 else "no"), ""
         opts = ["Yes", f"Yes, and don't ask again for {what} in this session"]
         if kind in ("bash", "edit", "mcp"):
             opts.append("Yes, and always allow this in this folder")
@@ -1025,7 +1086,7 @@ class Terminal:
                         hint=f"↑↓ or 1-{len(opts) + 1} · enter to confirm · esc: no")
         return {0: "yes", 1: "always", 2: "save" if len(opts) > 2 else "no"}.get(i, "no"), ""
 
-    def _approve(self, kind: str, title: str, detail: str):
+    def _approve(self, kind: str, title: str, detail: str, scope: str = ""):
         """The same question with plain input(): no raw keys (a pipe, a test)."""
         st = self.st
         self.p("")
@@ -1037,10 +1098,11 @@ class Terminal:
                 self.p("  " + st.red(line))
             else:
                 self.p("  " + (line if kind == "bash" else st.dim(line)))
-        what = {"edit": "file edits", "bash": "commands", "mcp": "this MCP tool"}.get(kind, "this")
+        what = scope or {"edit": "file edits", "bash": "commands", "mcp": "this MCP tool"}.get(kind, "this")
         while True:
             try:
-                a = input(B.prompt(f"  {st.bold('y')} yes   {st.bold('a')} yes, and allow {what} for this session   "
+                always = "" if scope == "once" else f"{st.bold('a')} yes, and allow {what} for this session   "
+                a = input(B.prompt(f"  {st.bold('y')} yes   {always}"
                                    f"{st.bold('n')} no (Enter: no) > ")).strip().lower()
             except EOFError:
                 return "no", ""
@@ -1050,11 +1112,11 @@ class Terminal:
                 return "no", ""
             if a in ("y", "yes"):
                 return "yes", ""
-            if a in ("a", "always"):
+            if a in ("a", "always") and scope != "once":
                 return "always", ""
             if a in ("n", "no"):
                 try:
-                    note = input("  What should MeshPool do instead? (Enter to skip) > ").strip()
+                    note = input("  What should Meshpool do instead? (Enter to skip) > ").strip()
                 except EOFError:
                     note = ""
                 return "no", note
@@ -1103,8 +1165,9 @@ class Terminal:
                 a = input(f"  Pick{' (Enter: ' + ','.join(rec) + ')' if rec else ''}, or type your own answer > ").strip()
             except EOFError:
                 return None
-            nums = [int(x) for x in re.split(r"[ ,]+", a or ",".join(rec)) if x.isdigit()]
-            if a and not nums or any(not 1 <= n <= len(opts) for n in nums):
+            toks = [x for x in re.split(r"[ ,]+", a or ",".join(rec)) if x]
+            nums = [int(x) for x in toks if x.isdigit()]
+            if a and (not nums or len(nums) != len(toks)) or any(not 1 <= n <= len(opts) for n in nums):
                 answers.append({"selected": [], "other": a})
             else:
                 answers.append({"selected": [opts[n - 1]["label"] for n in nums], "other": ""})
@@ -1119,14 +1182,19 @@ def ask_key(force: bool = False) -> bool:
     if not force and (os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY") or _PV.key()):
         return True
     if not sys.stdin.isatty():
-        print(f"No API key. Run: meshpool login   (or add MESHPOOL_API_KEY=... to {C.config_path()})", file=sys.stderr)
+        if force:                                    # `meshpool login` itself, run without a terminal
+            print("meshpool login needs an interactive terminal to ask for the key. Without one, set "
+                  f"MESHPOOL_API_KEY=... in the environment, or add it to {C.config_path()}.", file=sys.stderr)
+        else:
+            print(f"No API key. Run: meshpool login   (or add MESHPOOL_API_KEY=... to {C.config_path()})",
+                  file=sys.stderr)
         return False
     from meshpool_harness.agent import onboard
     return onboard.key_step(Style(_enable_ansi()), header=True)
 
 
 def logo_lines(color: bool) -> list[str]:
-    """The MeshPool mark, for terminals."""
+    """The Meshpool mark, for terminals."""
     return R.logo(B.depth() if color else 0)
 
 
@@ -1135,7 +1203,7 @@ def _context() -> str:
     The same block the app sends (assistant.context_block), so the two never drift apart."""
     try:
         from meshpool_harness import assistant as AS
-        return AS.context_block() or ""
+        return AS.context_block(rules=False) or ""   # the CLI agent carries HONESTY and PLAIN in its system prompt
     except Exception:  # noqa: BLE001
         return ""
 
@@ -1199,11 +1267,19 @@ def _mcp_status(term: Terminal, mcp):
 
 # ---------- the session: commands and the turn loop --------------------------------------------------------------
 
-class Session:
-    """One interactive session: the input loop, the slash commands and sending a message to the agent."""
+from meshpool_harness.agent.tui_session import SharedCommands, TermFrontend  # noqa: E402
 
-    def __init__(self, term: Terminal, agent, mcp=None, sub: str | None = None):
+
+class Session(SharedCommands):
+    """One interactive session: the input loop, the slash commands and sending a message to the agent.
+    With `front` (a TermFrontend) the chat is the app's Session and everything goes through it; without, `agent` is
+    driven directly (tests, embedders)."""
+
+    def __init__(self, term: Terminal, agent, mcp=None, sub: str | None = None, front: TermFrontend | None = None):
         self.term, self.agent, self.mcp, self.sub = term, agent, mcp, sub
+        self.front = front
+        self.s = front.s if front else None
+        self.pending_attach = None
         self.ctx = True                                    # your instructions and memory go with the first message
         term.agent = agent
         term.on_mode = self.set_mode
@@ -1213,6 +1289,13 @@ class Session:
     # -- sending
     def send(self, text: str):
         term, agent, st = self.term, self.agent, self.term.st
+        if self.front:                                     # the shared chat adds memory, style and checkpoints itself
+            images = None
+            if self.pending_attach:
+                extra, images = self.pending_attach
+                self.pending_attach = None
+                text = (text + "\n\n" + extra) if extra else text
+            return self.front.send(text, images)
         if self.ctx:
             self.ctx = False
             block = _context()
@@ -1235,6 +1318,9 @@ class Session:
             term.set_title(getattr(agent, "title", "") or "")
 
     def set_mode(self, mode: str):
+        if self.s is not None:
+            self.s.set_mode(mode)                          # also remembered with the chat, as in the app
+            mode = self.s.mode
         self.agent.mode = mode
         self.term.mode = mode
         if hasattr(self.agent, "apply_mode"):             # Codex & co. have their own modes: switch them too
@@ -1250,7 +1336,12 @@ class Session:
             term.echo_user(first)
             self.send(first)
         while True:
-            text = term.read_input()
+            try:
+                text = term.read_input()
+            except KeyboardInterrupt:
+                # Ctrl+C is read as a key while the prompt waits, but one that lands while the prompt redraws (a slow
+                # or paused terminal) raised out of here and ended the program with a traceback: clear the line instead
+                continue
             if text is None:
                 break
             if not text:
@@ -1332,6 +1423,8 @@ class Session:
         t.scroll(rows + [""] + ["  " + st.dim(x) for x in HELP_TIPS])
 
     def cmd_clear(self, arg):
+        if self.s is not None:
+            return SharedCommands.cmd_clear(self, arg)
         t = self.term
         self.agent.reset()
         self.ctx = True
@@ -1345,8 +1438,9 @@ class Session:
 
     def cmd_auto(self, arg):
         t, st = self.term, self.term.st
-        if arg and arg not in t.modes:
-            return t.p(st.amber(f"  Modes: {', '.join(t.modes)}"))
+        arg = C.normalize_mode(arg, None) if arg else ""
+        if arg is None or (arg and arg not in t.modes):
+            return t.p(st.amber("  Modes: " + ", ".join({"ask": "ask", "edits": "accept-edits", "auto": "full-access"}[m] for m in t.modes)))
         mode = arg or ("ask" if t.mode == "auto" else "auto")
         self.set_mode(mode)
         t.p(st.dim("  " + {"ask": "Edits and commands are asked first.",
@@ -1389,15 +1483,6 @@ class Session:
                                          + (f" · model: {d['model']}" if d['model'] else "")))
         self.term.p(self.term.st.dim("  Ask for one by name, for example: use the reviewer agent on calc.py."))
 
-    def cmd_tokens(self, arg):
-        u = self.agent.usage
-        pct = round(100 * u["cached"] / u["in"]) if u["in"] else 0
-        cost = u.get("cost") if isinstance(u.get("cost"), (int, float)) else self.term.cost
-        self.term.p(f"  {u['calls']} model calls, {u['in']:,} input tokens ({pct}% from cache), "
-                    f"{u['out']:,} output tokens" + (f", ${cost:.4f}." if cost is not None else
-                                                     ". Cost not measured: the endpoint sends no price; set "
-                                                     "MH_PRICE_IN and MH_PRICE_OUT (USD per million tokens) to see one."))
-
     def cmd_context(self, arg):
         from meshpool_harness.agent import tui_more as TM
         t, st = self.term, self.term.st
@@ -1412,40 +1497,6 @@ class Session:
         lines += ["", f"  {R.pad('About', w)}{total:>9,} of {window:,} tokens ({round(100 * total / window) if window else 0}%)",
                   st.dim("  Estimates, at four characters a token. /compact makes room.")]
         t.scroll(lines)
-
-    def cmd_resume(self, arg):
-        from meshpool_harness.agent import tui_more as TM
-        from meshpool_harness.agent.core import Agent
-        t, st = self.term, self.term.st
-        if self.sub or not isinstance(self.agent, Agent):
-            return t.p(st.dim("  /resume is not available for this agent."))
-        rows = [r for r in TM.sessions(None, 40) if r["id"] != self.agent.id]
-        if arg:
-            rows = [r for r in rows if r["id"].startswith(arg) or arg.lower() in r["title"].lower()]
-        if not rows:
-            return t.p(st.dim("  No earlier sessions."))
-        here = os.path.realpath(str(self.agent.root))
-        rows.sort(key=lambda r: (os.path.realpath(r["workdir"]) != here, -r["updated"]))    # this folder first
-        if len(rows) == 1 and arg:
-            pick = 0
-        else:
-            labels = [f"{R.clip(r['title'] or '(untitled)', 44)}  {st.dim(TM.ago(r['updated']) + ' · ' + _tilde(r['workdir']))}"
-                      for r in rows]
-            pick = t.choose("Resume which session?", [], labels)
-        if pick is None:
-            return
-        r = rows[pick]
-        a = self.agent
-        new = Agent.resume(r["workdir"], r["id"], mcp=self.mcp, emit=a.emit, approve=a.approve, mode=a.mode,
-                           profile=getattr(a, "profile", "code"))
-        if new is None:
-            return t.p(st.red("  That session could not be opened."))
-        new.ask = getattr(a, "ask", None)
-        self.agent = t.agent = new
-        t.on_esc = new.stop
-        self.ctx = False
-        t.refresh_facts(new)
-        t.p(st.dim(f"  Resumed \"{r['title'] or r['id']}\" ({r['messages']} messages) in {_tilde(r['workdir'])}."))
 
     def cmd_export(self, arg):
         from meshpool_harness.agent import tui_more as TM
@@ -1470,19 +1521,6 @@ class Session:
             return t.p(st.dim("  No reply to copy yet." if not reps else f"  There are only {len(reps)} replies."))
         how = TM.copy_to_clipboard(reps[-n], out=t.out)
         t.p(st.dim("  Copied." if how else "  Could not reach the clipboard."))
-
-    def cmd_effort(self, arg):
-        from meshpool_harness.agent.core import EFFORTS, effort_choice
-        t, st = self.term, self.term.st
-        if not hasattr(self.agent, "effort"):
-            return t.p(st.dim("  This agent chooses its own effort."))
-        if not arg:
-            return t.p(f"  Effort: {self.agent.effort}. Choose one of: {', '.join(EFFORTS)}.")
-        if arg.lower() not in EFFORTS:
-            return t.p(st.amber(f"  Effort is one of: {', '.join(EFFORTS)}."))
-        self.agent.effort = t.effort = effort_choice(arg)
-        t.p(st.dim("  " + ({"auto": "Meshpool sizes the effort to each request."}.get(self.agent.effort)
-                           or f"The model is asked for {self.agent.effort} reasoning effort. Models without effort levels ignore it.")))
 
     def cmd_plan(self, arg):
         t, st = self.term, self.term.st
@@ -1515,33 +1553,20 @@ class Session:
                             "in the project.")]
         t.scroll(rows)
 
-    def cmd_diff(self, arg):
+    def cmd_trust(self, arg):
+        from meshpool_harness.agent import extras as EX
         t, st = self.term, self.term.st
-        root = str(getattr(self.agent, "root", os.getcwd()))
-        try:
-            from meshpool_harness.core import tools as TT
-            if not TT.git_config_safe(root):
-                return t.p(st.amber("  This repository's own git settings or hooks run programs, so /diff does not run "
-                                    "git here. Run git diff yourself if you trust it."))
-            safe = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "diff.external=", "--no-pager"]
-            stat = subprocess.run(["git", "-C", root, *safe, "diff", "--no-ext-diff", "--no-textconv", "--stat", "HEAD"],
-                                  capture_output=True, text=True, timeout=20)
-            body = subprocess.run(["git", "-C", root, *safe, "diff", "--no-ext-diff", "--no-textconv", "HEAD"],
-                                  capture_output=True, text=True, timeout=20)
-        except (OSError, subprocess.SubprocessError) as e:
-            return t.p(st.red(f"  git diff failed: {e}"))
-        if stat.returncode:
-            return t.p(st.dim("  Not a git repository, or it has no commits yet."))
-        if not stat.stdout.strip():
-            return t.p(st.dim("  No uncommitted changes."))
-        lines = body.stdout.splitlines()
-        paint = lambda ln: st.green(ln) if ln.startswith("+") and not ln.startswith("+++") else \
-            st.red(ln) if ln.startswith("-") and not ln.startswith("---") else st.dim(ln) if ln.startswith("@@") else ln
-        shown = [paint(R.clip(ln, t.width - 2)) for ln in lines[:400]]
-        t.scroll([""] + ["  " + x for x in stat.stdout.rstrip().splitlines()] + [""] + shown +
-                 ([st.dim(f"  ... {len(lines) - 400} more lines (git diff HEAD)")] if len(lines) > 400 else []))
+        root = self.agent.root
+        if EX.project_trusted(root):
+            return t.p(st.dim("  This folder is already trusted."))
+        EX.trust_project(root)
+        t.p(st.green(f"  Trusted {root}: its .meshpool hooks and allow rules now apply."))
 
     def cmd_mcp(self, arg):
+        sub = arg.split(None, 1)
+        if sub and sub[0] in ("list", "on", "off", "test", "enable", "disable", "library"):
+            word = {"on": "enable", "off": "disable"}.get(sub[0], sub[0])
+            return self._cli(["mcp", word] + (sub[1].split() if len(sub) > 1 else []))
         _mcp_status(self.term, self.mcp)
 
     def cmd_review(self, arg):
@@ -1581,6 +1606,8 @@ class Session:
             t.p(st.dim("  New sessions use it."))
 
     def cmd_grade(self, arg):
+        if self.s is not None:
+            return SharedCommands.cmd_grade(self, arg)
         t, st = self.term, self.term.st
         if self.sub or not hasattr(self.agent, "grade_now"):
             return t.p(st.dim("  /grade is not available for this agent."))
@@ -1654,7 +1681,9 @@ class Session:
         return ids, note
 
     def set_model(self, mid: str):
-        if self.sub:
+        if self.s is not None:
+            self.s.set_model(mid)
+        elif self.sub:
             self.agent.set_model(mid)
         else:
             self.agent.model = mid
@@ -1682,7 +1711,7 @@ class Session:
         from meshpool_harness import provider_setup as PS
         from meshpool_harness import providers as PV
         t, st = self.term, self.term.st
-        kinds = ["MeshPool API key", "Another provider (OpenAI-compatible URL and key)", "ChatGPT subscription"]
+        kinds = ["Meshpool API key", "Another provider (OpenAI-compatible URL and key)", "ChatGPT subscription"]
         i = t.choose("Sign in", [], kinds)
         if i is None:
             return
@@ -1768,13 +1797,28 @@ def _trust_step(term: "Terminal", wd: str, interactive: bool) -> None:
         term.p(st.dim("  Trusted. Its hooks and rules are on. Undo with: meshpool trust --revoke"))
     else:
         term.p(st.dim("  Its hooks and allow rules are off. Trust it later with: meshpool trust"))
+def _resume_target(wd: str, session: str | None) -> str | None:
+    """The chat -c / --resume means: the id given, or the newest chat of this folder (the app's own listing)."""
+    from pathlib import Path
+
+    from meshpool_harness import chats
+    if session:
+        return session
+    root = str(Path(wd).expanduser().resolve())
+    return next((r["id"] for r in chats.listing() if r.get("workdir") == root), None)
+
+
+_KINDS = {"code": "code", "work": "cowork", "cowork": "cowork", "auto": None}
 
 
 def main(workdir: str | None = None, prompt: str | None = None, auto: bool = False, resume: bool = False,
          session: str | None = None, no_mcp: bool = False, first: str | None = None, onboarded: bool = False,
-         json_out: bool = False) -> int:
-    from meshpool_harness.agent.core import Agent
-    from meshpool_harness.agent.mcp import Manager
+         json_out: bool = False, mode: str | None = None, agent: str | None = None, project: str | None = None,
+         incognito: bool = False, attach: list | None = None, output_last_message: str | None = None,
+         model: str | None = None, worktree_id: str | None = None, effort: str | None = None) -> int:
+    """The terminal. A chat is the app's chat (meshpool_harness.chats, the same Session the web page uses): this only
+    draws it, answers its questions at the prompt, and reports the outcome. Exit codes: 0 done, 1 failed, 3 done but
+    something was not allowed (-p cannot ask)."""
     C.load_into_env()
     term = Terminal(print_mode=prompt is not None)
     if json_out:
@@ -1790,112 +1834,91 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
                 return 1
             wd = str(folder)
         elif not ask_key():
-            term.p(st.red(f"No API key yet. Run meshpool login, or add MESHPOOL_API_KEY=... to {C.config_path()}"))
+            if sys.stdin.isatty():              # not a terminal: ask_key already said it
+                term.p(st.red(f"No API key yet. Run meshpool login, or add MESHPOOL_API_KEY=... to {C.config_path()}"))
             return 1
     _trust_step(term, wd, interactive=prompt is None and sys.stdin.isatty())
-    # The terminal runs MeshPool Code, or the official Codex when it is set as the default.
-    hid = HR.default_for("code")
+    os.environ["MESHPOOL_FRONTEND"] = "terminal"        # the app's desktop notifications stay quiet: this is the prompt
+    from meshpool_harness import chats
+    raw_pm = str(os.environ.get("MH_PERMISSION_MODE") or "").strip().lower()
+    plan_mode = raw_pm == "plan"                 # plan is not an access level: normalize_mode drops it, so read it first
+    pm = C.normalize_mode(raw_pm, "")            # old names accepted (F-19)
+    mode_kind = mode or ("work" if os.environ.get("MH_AGENT_PROFILE") == "work" else "code")
+    if mode_kind not in _KINDS:
+        term.p(st.red(f"Unknown mode {mode_kind}. Use code, work or auto."))
+        return 1
+    body = {"workdir": wd, "kind": _KINDS[mode_kind] or "",
+            "mode": "auto" if auto else (pm if pm in ("ask", "edits") else None),
+            "plan": True if plan_mode else None, "incognito": incognito, "project_id": project or "",
+            "no_mcp": no_mcp, "model": model or os.environ.get("MH_MODEL") or None, "task": prompt or first or "", "effort": effort or ""}
+    if mode_kind == "auto":
+        body["harness"] = "meshpool-auto"
+    elif agent:
+        body["harness"] = agent
+    if worktree_id:
+        body["worktree_id"] = worktree_id
+    body = {k: v for k, v in body.items() if v not in (None, "")}
+    sid = None
     try:
-        h = HR.get(hid)
-    except (KeyError, ValueError) as e:
-        term.p(st.red(str(e)))
-        return 1
-    if not h.get("ready", True):
-        term.p(st.red(f"{h['name']} cannot run yet. {h.get('setup') or ''} Run: meshpool setup"))
-        return 1
-    sub = h["id"] if h.get("type") == "acp" else None
-    mcp = None
-    if not no_mcp and not sub:                   # an ACP agent gets the MCP servers through ACP itself
-        if prompt is None:
-            term.spin.start("Starting MCP servers")
-        try:
-            from meshpool_harness.harnesses.acp import office_extra
-            extra = office_extra(wd)                 # the same office tools the app's agents have
-        except Exception:  # noqa: BLE001
-            extra = None
-        if os.environ.get("MH_MCP_CONFIG"):        # --mcp-config: servers for this run only
-            try:
-                more = _mcp_for_run(os.environ.pop("MH_MCP_CONFIG"))
-                extra = {**(extra or {}), **more}
-                if prompt is None:
-                    term.notices.append(f"MCP servers for this run: {', '.join(more) or 'none'}")
-            except ValueError as e:
-                term.notices.append(f"--mcp-config: {e}")
-        mcp = Manager(roots=[wd], extra=extra).start(timeout=float(os.environ.get("MH_MCP_START_S", "60")))
-        term.spin.stop()
-    pm = os.environ.get("MH_PERMISSION_MODE", "")
-    mode = "auto" if auto else (pm if pm in ("ask", "edits") else None)
-    kw = dict(mcp=mcp, emit=term.emit, approve=term.approve, mode=mode,
-              profile="work" if os.environ.get("MH_AGENT_PROFILE") == "work" else "code")   # --profile work: Cowork
-    if sub:
-        from meshpool_harness.harnesses.acp import ACPAgent
         if resume or session:
-            term.p(st.amber(f"Resuming is not available with {h['name']} in the terminal yet. Starting a new session."))
+            sid = _resume_target(wd, session)
+            if sid is None:
+                term.p(st.amber("No earlier session for this folder. Starting a new one."))
+            else:
+                if os.environ.pop("MH_FORK_SESSION", ""):     # --fork-session: go on in a new chat, the old one stays
+                    from meshpool_harness import chat_rewind as CRW
+                    old, sid = sid, CRW.fork(sid, None)
+                    term.p(st.dim(f"Continuing {old} as a new session, {sid}."))
+                s = chats.get(sid, no_mcp=no_mcp)
+        if sid is None:
+            s = chats.get(chats.create(body)["id"], no_mcp=no_mcp)
+    except (ValueError, KeyError) as e:           # a missing folder, an agent that cannot run, a chat open elsewhere
+        term.p(st.red(str(e).strip("'\"")))
+        return 1
+    if not s.harness.get("ready", True):
+        term.p(st.red(f"{s.harness['name']} cannot run yet. {s.harness.get('setup') or ''} Run: meshpool setup"))
+        return 1
+    if os.environ.get("MH_START_AGENT") and hasattr(s.agent, "as_agent"):     # meshpool --subagent NAME
         try:
-            agent = ACPAgent(h, wd, emit=term.emit, approve=term.approve, mode=mode)
-        except (ValueError, KeyError) as e:
-            term.p(st.red(str(e)))
-            return 1
-    else:
-        agent = (Agent.resume(wd, session, **kw) if (resume or session) else None)
-        if (resume or session) and agent is None:
-            term.p(st.amber("No earlier session for this folder. Starting a new one."))
-        if agent is not None and os.environ.pop("MH_FORK_SESSION", ""):     # --fork-session
-            old = agent.id
-            agent.fork_id(os.environ.pop("MH_SESSION_ID", ""))
-            term.p(st.dim(f"Continuing {old} as a new session, {agent.id}."))
-        try:
-            agent = agent or Agent(wd, **kw)
-        except ValueError as e:
-            term.p(st.red(str(e)))
-            return 1
-    if os.environ.get("MH_START_AGENT") and not sub:     # meshpool --agent NAME
-        try:
-            d = agent.as_agent(os.environ.pop("MH_START_AGENT"))
+            d = s.agent.as_agent(os.environ.pop("MH_START_AGENT"))
             term.notices.append(f"Working as your saved agent {d['name']}.")
         except ValueError as e:
             term.p(st.red(str(e)))
             return 1
-    term.agent = agent
-    agent.headless = prompt is not None and not sub     # one request, no one to answer questions
-    if pm == "plan" and hasattr(agent, "plan"):
-        agent.plan = True                        # read only: investigate, then reply with a plan
-    agent.ask = term.ask_questions               # ask_user questions are answered in the terminal
-    sess = Session(term, agent, mcp, sub)
+    if plan_mode and not getattr(s, "plan", False):
+        s.set_plan(True)                          # a resumed chat: --permission-mode plan applies to it too
+    headless = prompt is not None
+    front = TermFrontend(s, term, headless=headless, stream=json_out == "stream-json")
+    front.body = body
+    sess = Session(term, s.agent, s.mcp, front.sub, front=front)
+    t_start = time.time()
     if prompt is None:
         from meshpool_harness.agent import tui_more as TM
         term.history = TM.load_history(wd)       # Up arrow reaches prompts from earlier sessions in this folder
     try:
-        if prompt is not None:
-            if json_out:                          # headless: progress goes to stderr, one JSON object to stdout
-                import contextlib
-                import json as _json
-                if json_out == "stream-json":     # one event per line while it works, then the final object
-                    _emit = agent.emit
-
-                    def _stream(ev, _emit=_emit):
-                        _emit(ev)
-                        if isinstance(ev, dict) and ev.get("type") not in ("token", "delta", "thinking"):
-                            sys.__stdout__.write(_json.dumps(ev, ensure_ascii=False, default=str) + "\n")
-                            sys.__stdout__.flush()
-                    agent.emit = _stream
-                with contextlib.redirect_stdout(sys.stderr):
-                    sess.send(prompt)
-                reply = next((m.get("content") for m in reversed(agent.messages) if m.get("role") == "assistant"
-                              and isinstance(m.get("content"), str) and m.get("content").strip()), "")
-                out = {"type": "result", "ok": not term.failed, "result": reply, "session_id": agent.id,
-                       "usage": dict(agent.usage), "steps": len([m for m in agent.messages if m.get("role") == "tool"])}
-                rv = getattr(agent, "last_review", None)
-                if rv:                                # the independent check of a big task (agent/grader.py)
-                    out["review"] = {k: v for k, v in rv.items() if k not in ("type", "turn")}
-                sys.__stdout__.write(_json.dumps(out, ensure_ascii=False, default=str) + "\n")
+        if headless:
+            text, images = prompt, None
+            if attach:
+                from meshpool_harness.agent.tui_session import collect_attachments
+                extra, images = collect_attachments(attach, s.workdir)
+                text = prompt + ("\n\n" + extra if extra else "")
+            import contextlib
+            with contextlib.redirect_stdout(sys.stderr) if json_out else contextlib.nullcontext():
+                front.send(text, images)
+            failed = bool(term.failed)
+            note = front.denial_note()
+            if note:
+                print(note, file=sys.stderr)
+            if output_last_message:
+                from pathlib import Path
+                Path(output_last_message).expanduser().write_text(front.reply(), encoding="utf-8")
+            if json_out:
+                sys.__stdout__.write(json.dumps(front.result(failed), ensure_ascii=False, default=str) + "\n")
                 sys.__stdout__.flush()            # a piped stdout is block buffered: the caller must see the result now
-                return 1 if term.failed else 0
-            sess.send(prompt)
-            return 1 if term.failed else 0
-        term.notices = (term.notices or []) + _notices(agent, mcp)    # --mcp-config and --agent notes first
-        if (resume or session) and getattr(agent, "unfinished", False):
-            term.notices.append("The last task stopped before it finished. Type continue to pick it up.")
+            return 1 if failed else (3 if front.denied else 0)
+        front.wait_ready()
+        sess.mcp = s.mcp
+        term.notices = (term.notices or []) + _notices(s.agent, s.mcp)    # --mcp-config and --subagent notes first
         term.startup()
         t_start = time.time()
         sess.loop(first)
@@ -1903,18 +1926,18 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
         term.spin.stop()
         try:
             from meshpool_harness.agent import extras as EXE
-            EXE.run_hooks(Path(wd), "SessionEnd", {"session": getattr(sess.agent, "id", "")}, timeout=10)
+            EXE.run_hooks(Path(wd), "SessionEnd", {"session": getattr(s, "id", "")}, timeout=10)
         except Exception:  # noqa: BLE001
             pass
-        if mcp:
-            mcp.close()
-        if sub:
-            agent.close()
-        if not getattr(agent, "persist", True):    # --no-session-persistence: nothing of this run is kept
-            import shutil
-            shutil.rmtree(getattr(agent, "dir", ""), ignore_errors=True)
-    if prompt is None and not sub:
-        _leave_worktree(term, wd)
+        front.detach()
+        s.close()
+        if not getattr(s.agent, "persist", True):    # --no-session-persistence: nothing of this run is kept
+            try:
+                from meshpool_harness.ui import agent_api as _A
+                _A._purge(s.id, force=True)
+            except Exception:  # noqa: BLE001
+                pass
+    if prompt is None:
         _session_summary(term, locals().get("sess"), locals().get("t_start"))
         term.p(st.dim("  Session saved. Resume it with: meshpool --continue"))
     return 0
@@ -1954,32 +1977,4 @@ def _session_summary(term: "Terminal", sess, t_start) -> None:
                            + (f", {mins} min" if mins is not None else "") + "."))
     except Exception:  # noqa: BLE001 - a summary must never fail the exit
         pass
-
-
-def _leave_worktree(term: "Terminal", wd: str) -> None:
-    """Leaving a session that meshpool -w started in a new worktree: keep it, or remove it (safely, or with its
-    uncommitted changes discarded; commits always stay on the branch)."""
-    made = os.environ.get("MH_WORKTREE_MADE", "")
-    if not made or not sys.stdin.isatty() or os.path.realpath(made) != os.path.realpath(wd) or not os.path.isdir(made):
-        return
-    from meshpool_harness import worktrees as WT
-    st = term.st
-    try:
-        state = next((w for w in WT.listing(made) if os.path.realpath(w["path"]) == os.path.realpath(made)), {})
-    except WT.WorktreeError:
-        return
-    note = ("it has uncommitted changes" if state.get("dirty") else "") + \
-        (("; " if state.get("dirty") else "") + f"{state['unpushed']} unpushed commit(s)" if state.get("unpushed") else "")
-    opts = ["Keep it", "Remove it"] + (["Remove it and discard the uncommitted changes"] if state.get("dirty") else [])
-    pick = term.choose(f"Keep the worktree {state.get('name', '')}?",
-                       [_tilde(made) + (f" ({note})" if note else " (no changes)"),
-                        f"Branch {state.get('branch', '')} stays either way unless nothing would be lost."], opts, sel=0)
-    if pick in (1, 2):
-        try:
-            r = WT.remove(made, force=pick == 2)
-            term.p(st.dim(f"  Removed {r['removed']}" + ("" if r["branch_deleted"] else f"; branch {r['branch']} kept")))
-        except WT.WorktreeError as e:
-            term.p(st.amber(f"  Kept it: {e}"))
-    else:
-        term.p(st.dim(f"  Kept {_tilde(made)}. Remove it later with: meshpool worktree remove {state.get('name', '')}"))
 

@@ -1,6 +1,6 @@
 ---
 name: build-app
-description: "Build a small working app or tool: a calculator, tracker, form, to-do list, timer, notes, board, converter or anything with buttons and saved data. Use when the user asks for an app or a tool that does something."
+description: 'Build a small working app or tool: a calculator, tracker, form, to-do list, timer, notes, board, converter or anything with buttons and saved data. Use when the user asks for an app or a tool that does something.'
 ---
 
 # Build app

@@ -665,6 +665,14 @@ def validate(path: str, rules: dict | None = None, recompute: dict | None = None
         failures.append(F("X12", "no_checks_sheet", "No checks sheet. Add one row per integrity check and a master "
                           "flag on the cover sheet.", fix_scope="renderer"))
     else:
+        try:                                       # a check that reads only empty cells, or its own tab, checks nothing
+            from engines.sheets.qa import hollow_checks
+            for h in hollow_checks(wb)[:8]:
+                if h["cell"].rpartition("!")[0] in chk_sheets:
+                    failures.append(F("X12", h["kind"], h["detail"], sheet=h["cell"].rpartition("!")[0],
+                                      cell=h["cell"].rpartition("!")[2]))
+        except Exception:  # noqa: BLE001 - the guard must never stop the other workbook rules
+            pass
         flags = []
         for s in chk_sheets:
             for row in vals[s].iter_rows():

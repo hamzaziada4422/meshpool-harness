@@ -7,13 +7,13 @@ The scorecard (defaults/harness_scorecard.json, fitted by testkit/loop/harness_s
 
   1. Only harnesses available in this build (not harnesses.unsupported(), installed) are candidates.
   2. A category with fewer than min_tasks (3) tasks of evidence for a harness ignores that harness and inherits the
-     parent category (code.debug.perf -> code.debug -> code); with no evidence anywhere the default is MeshPool's own
+     parent category (code.debug.perf -> code.debug -> code); with no evidence anywhere the default is Meshpool's own
      engine with the profile assigned to that route (hrouter/profiles.py).
   3. Highest solve rate wins; harnesses within `tie` tasks of it (default 1) are tied and the cheaper, then faster
      one is taken.
 
 Harness ids are the bench arm names: "meshpool" or "meshpool:<profile>", "pi", "pi-routed", "codex", "codex-routed",
-"opencode", "opencode-routed", "hermes", "hermes-routed". "-routed" means the MeshPool harness method rides on the
+"opencode", "opencode-routed", "hermes", "hermes-routed". "-routed" means the Meshpool harness method rides on the
 first message.
 """
 from __future__ import annotations
@@ -135,7 +135,7 @@ def pick(card: dict, model: str, category: str, avail: set[str] | None = None, t
 
 # ---------- the router --------------------------------------------------------------------------------------------
 def default_profile(category: str, route=None) -> str:
-    """The profile MeshPool's own engine runs this category under (profiles.json assignment, else the default)."""
+    """The profile Meshpool's own engine runs this category under (profiles.json assignment, else the default)."""
     from . import profiles as PROF
     from .route import Route
     spec, var = SPEC_OF.get(category, (category, ""))
@@ -158,7 +158,7 @@ def select(prompt: str, workdir: str | None = None, model: str | None = None, *,
     if got:
         harness, why = got["harness"], got["reason"]
     else:
-        harness, why = DEFAULT, "no scorecard evidence for this category: MeshPool's own harness"
+        harness, why = DEFAULT, "no scorecard evidence for this category: Meshpool's own harness"
     profile = ""
     if base_id(harness) == DEFAULT:
         profile = harness.split(":", 1)[1] if ":" in harness else default_profile(cat, cl.get("route"))
@@ -204,8 +204,10 @@ def log_outcome(decision_id: str, *, ok: bool | None, secs: float, usage: dict |
     scorecard can later be refitted from (opt-in)."""
     if decision_id:
         _append({"type": "outcome", "id": decision_id, "t": time.time(), "ok": ok, "secs": round(secs, 1),
-                 "usage": {k: (usage or {}).get(k, 0) for k in ("prompt_tokens", "cached_tokens", "completion_tokens",
-                                                               "model_calls")},
+                 "usage": {**{k: (usage or {}).get(k, 0) for k in ("prompt_tokens", "cached_tokens",
+                                                                   "completion_tokens", "model_calls")},
+                           "cost_usd": (usage or {}).get("cost_usd"),
+                           "unpriced_calls": (usage or {}).get("unpriced_calls", 0)},
                  "error": (error or "")[:200] or None})
 
 

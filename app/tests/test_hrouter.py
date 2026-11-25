@@ -187,7 +187,7 @@ def test_outcomes_log_and_refit(tmp_path, monkeypatch):
                      "tokens_out": 100, "error": False, "stopped": False})
     OUT.mark("c1", "undo")
     got = OUT.refit()["chat|meshpool-work"]
-    assert got["turns"] == 3 and got["fail_rate"] == 1.0 and got["median_secs"] == 5
+    assert got["turns"] == 3 and got["fail_rate"] == round(1 / 3, 3) and got["median_secs"] == 5   # a mark hits one row (M29-04)
 
 
 # ---------- zero-call checks ---------------------------------------------------------------------------------------
@@ -397,10 +397,12 @@ def test_independent_reads_run_together_and_answer_in_order(tmp_path, monkeypatc
     from meshpool_harness.core.tools import Workspace
     for n in "abc":
         (tmp_path / f"{n}.txt").write_text(n * 3)
+    import threading as _th
     real = Workspace.read_file
+    met = _th.Barrier(3, timeout=10)                   # all three reads must be in flight at once: no wall clock
 
     def slow(self, path, start=None, end=None):
-        _t.sleep(0.4)
+        met.wait()                                     # sequential reads would break the barrier, not just run late
         return real(self, path, start, end)
     monkeypatch.setattr(Workspace, "read_file", slow)
     calls = {"role": "assistant", "content": "", "tool_calls": [
@@ -416,9 +418,8 @@ def test_independent_reads_run_together_and_answer_in_order(tmp_path, monkeypatc
         return {"role": "assistant", "content": "ok"}, False
     from meshpool_harness.agent import core as A
     monkeypatch.setattr(A.Agent, "_chat", capture)
-    t0 = _t.time()
     run_task("read them", workdir=str(tmp_path), engine="agent")
-    assert _t.time() - t0 < 1.0                                            # 3 x 0.4 s sequentially would be 1.2 s
+    assert not met.broken
     assert [m["tool_call_id"] for m in seen["tools"]] == ["ca", "cb", "cc"]
     assert "aaa" in seen["tools"][0]["content"] and "ccc" in seen["tools"][2]["content"]
 

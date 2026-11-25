@@ -52,6 +52,15 @@ class Mock:
                 self._j(200, {"object": "list", "data": [{"id": "gpt-b", "object": "model", "context_length": 8000},
                                                          {"id": "gpt-a", "object": "model"}]})
 
+            def do_POST(self):             # a chat probe: "nolist" servers check the key, then the model name
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                bearer = (self.headers.get("Authorization") or "").replace("Bearer ", "")
+                if outer.style == "nolist" and self.path.endswith("/chat/completions"):
+                    if bearer not in (outer.key, "sk-whatever-1234"):
+                        return self._j(401, {"error": {"message": "bad key"}})
+                    return self._j(400, {"error": {"message": "The model `x` does not exist"}})
+                self._j(404, {"error": "nope"})
+
             def _j(self, code, obj):
                 b = json.dumps(obj).encode()
                 self.send_response(code)
@@ -323,7 +332,7 @@ def test_anthropic_wire_round_trip():
             "tools": [{"type": "function", "function": {"name": "ls", "description": "d",
                                                         "parameters": {"type": "object", "properties": {}}}}]}
     r = AW.to_request(body)
-    assert r["system"] == "be brief" and r["max_tokens"] == 100 and r["tools"][0]["name"] == "ls"
+    assert (r["system"] if isinstance(r["system"], str) else r["system"][0]["text"]) == "be brief" and r["max_tokens"] == 100 and r["tools"][0]["name"] == "ls"
     assert [m["role"] for m in r["messages"]] == ["user", "assistant", "user"]
     assert r["messages"][1]["content"][0] == {"type": "tool_use", "id": "t1", "name": "ls", "input": {"p": "."}}
     assert [b["type"] for b in r["messages"][2]["content"]] == ["tool_result", "text"]
@@ -408,6 +417,8 @@ def test_the_chat_agent_speaks_the_messages_wire_to_an_anthropic_style_endpoint(
         {"role": "system", "content": "be brief"}, {"role": "user", "content": "hi"}]}, True)
     srv.shutdown()
     assert got["path"] == "/v1/messages" and got["hdr"]["x-api-key"] == "sk-good-key-1234"
-    assert "authorization" not in got["hdr"] and "stream" not in got["body"]
-    assert got["body"]["system"] == "be brief" and got["body"]["messages"][0]["role"] == "user"
+    # the agent now streams the Messages wire; this server answers plain JSON anyway, which is still read (one call)
+    assert "authorization" not in got["hdr"] and got["body"]["stream"] is True
+    assert got["hdr"]["accept"] == "text/event-stream"
+    assert got["body"]["system"][0]["text"] == "be brief" and got["body"]["messages"][0]["role"] == "user"
     assert resp["choices"][0]["message"]["content"] == "hello" and streamed is False

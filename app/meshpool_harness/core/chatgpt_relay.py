@@ -21,6 +21,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from meshpool_harness.core import chatgpt as CG
+from meshpool_harness.core import usage as USAGE
 
 MAX_BODY = 64 * 1024 * 1024
 _LOCK = threading.Lock()
@@ -54,13 +55,37 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _error(self, code: int, msg: str, kind: str = "invalid_request_error"):
+        self.close_connection = True          # the request body may be unread: do not reuse the connection
         self._json(code, {"error": {"message": msg, "type": kind}})
+
+    _too_big = False
+
+    def _read_chunked(self):
+        """The body of a Transfer-Encoding: chunked request, or None when malformed or over MAX_BODY."""
+        data = b""
+        try:
+            while True:
+                size = int(self.rfile.readline(64).split(b";")[0].strip() or b"0", 16)
+                if size == 0:
+                    while self.rfile.readline(1024).strip():     # trailers
+                        pass
+                    return data
+                if len(data) + size > MAX_BODY:
+                    self._too_big = True
+                    return None
+                data += self.rfile.read(size)
+                self.rfile.readline(4)                            # the CRLF after the chunk
+        except (ValueError, OSError):
+            return None
 
     def do_GET(self):
         if not self._authorized():
             return self._error(401, "Missing or wrong relay token.", "authentication_error")
         if self.path.rstrip("/") in ("/v1/models", "/models"):
-            ids = list(dict.fromkeys([CG.default_model()] + CG.models()))
+            try:
+                ids = list(dict.fromkeys([CG.default_model()] + CG.models()))
+            except Exception as e:  # noqa: BLE001 - always answer, never drop the connection
+                return self._error(502, f"The ChatGPT model list failed: {e}", "api_error")
             return self._json(200, {"object": "list", "data": [{"id": i, "object": "model", "owned_by": "openai"}
                                                                for i in ids]})
         self._error(404, "Not found.")
@@ -70,11 +95,20 @@ class _Handler(BaseHTTPRequestHandler):
             return self._error(401, "Missing or wrong relay token.", "authentication_error")
         if self.path.rstrip("/") not in ("/v1/chat/completions", "/chat/completions"):
             return self._error(404, "Not found.")
-        n = int(self.headers.get("Content-Length") or 0)
-        if n <= 0 or n > MAX_BODY:
-            return self._error(413 if n > MAX_BODY else 400, "Bad request size.")
+        if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
+            raw = self._read_chunked()
+            if raw is None:
+                return self._error(413 if self._too_big else 400, "Bad request size.")
+        else:
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                n = 0
+            if n <= 0 or n > MAX_BODY:
+                return self._error(413 if n > MAX_BODY else 400, "Bad request size.")
+            raw = self.rfile.read(n)
         try:
-            body = json.loads(self.rfile.read(n))
+            body = json.loads(raw)
         except ValueError:
             return self._error(400, "The body is not JSON.")
         stream = bool(body.get("stream"))
@@ -90,9 +124,14 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._error(401, str(e), "authentication_error")
             except RuntimeError as e:
                 return self._error(_status(e), str(e), "api_error")
-            from meshpool_harness.core.wire import from_responses
-            out = from_responses(r)
-            out.update(id=rid, object="chat.completion", created=int(time.time()), model=model)
+            except Exception as e:  # noqa: BLE001 - always answer, never drop the connection
+                return self._error(502, f"ChatGPT relay error: {e}", "api_error")
+            try:
+                from meshpool_harness.core.wire import from_responses
+                out = from_responses(r)
+                out.update(id=rid, object="chat.completion", created=int(time.time()), model=model)
+            except Exception as e:  # noqa: BLE001
+                return self._error(502, f"ChatGPT relay error: {e}", "api_error")
             return self._json(200, out)
         # Streamed: text goes out as it arrives; tool calls and usage follow when the reply is complete.
         started, sent_text = [False], [False]
@@ -130,20 +169,39 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(f"data: {json.dumps({'error': {'message': str(e), 'type': 'api_error'}})}\n\n".encode())
             self.close_connection = True
             return
-        from meshpool_harness.core.wire import from_responses
-        c = from_responses(r)
-        msg = c["choices"][0]["message"]
-        start()
-        if msg.get("content") and not sent_text[0]:
-            self.wfile.write(_chunk(rid, model, {"content": msg["content"]}))   # text that came without deltas
-        for i, tc in enumerate(msg.get("tool_calls") or []):
-            self.wfile.write(_chunk(rid, model, {"tool_calls": [{"index": i, "id": tc["id"], "type": "function",
-                                                                 "function": tc["function"]}]}))
-        self.wfile.write(_chunk(rid, model, {}, c["choices"][0]["finish_reason"]))
-        if (body.get("stream_options") or {}).get("include_usage"):
-            self.wfile.write(_chunk(rid, model, usage=c["usage"]))
-        self.wfile.write(b"data: [DONE]\n\n")
-        self.wfile.flush()
+        except Exception as e:  # noqa: BLE001 - always answer, never drop the connection
+            return self._stream_fail(started[0], e)
+        try:
+            from meshpool_harness.core.wire import from_responses
+            c = from_responses(r)
+            msg = c["choices"][0]["message"]
+            start()
+            if msg.get("content") and not sent_text[0]:
+                self.wfile.write(_chunk(rid, model, {"content": msg["content"]}))   # text that came without deltas
+            for i, tc in enumerate(msg.get("tool_calls") or []):
+                self.wfile.write(_chunk(rid, model, {"tool_calls": [{"index": i, "id": tc["id"], "type": "function",
+                                                                     "function": tc["function"]}]}))
+            self.wfile.write(_chunk(rid, model, {}, c["choices"][0]["finish_reason"]))
+            if (body.get("stream_options") or {}).get("include_usage"):
+                self.wfile.write(_chunk(rid, model, usage=c["usage"]))
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as e:  # noqa: BLE001
+            return self._stream_fail(started[0], e)
+        self.close_connection = True
+
+    def _stream_fail(self, started: bool, e: Exception):
+        """An unexpected error: before the stream starts answer 502, after it send an error event and close."""
+        msg = f"ChatGPT relay error: {e}"
+        if not started:
+            return self._error(502, msg, "api_error")
+        try:
+            self.wfile.write(f"data: {json.dumps({'error': {'message': msg, 'type': 'api_error'}})}\n\n".encode())
+            self.wfile.flush()
+        except OSError:
+            pass
         self.close_connection = True
 
 

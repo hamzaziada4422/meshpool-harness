@@ -1,6 +1,6 @@
 ---
 name: survey-analysis
-description: "Analyse survey results: response counts, scores, splits by segment and themes in open answers. Use when the user uploads survey data."
+description: 'Analyse survey results: response counts, scores, splits by segment and themes in open answers. Use when the user uploads survey data.'
 ---
 
 # Survey analysis

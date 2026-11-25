@@ -24,7 +24,9 @@ How you work:
 1. Read any attached input files first (inspect with a short pandas script: sheets, columns, row counts).
 2. Write ONE Python build script (build_workbook.py) using the helper library below, then run it with python.
    Save a first complete version early; improve it afterwards.
-3. Run the checker: python -m engines.sheets.check <file.xlsx>. Fix every issue it reports and rerun until it prints PASS.
+3. Run the checker: python -m engines.sheets.check <file.xlsx>. It runs exactly the checks finish applies (workbook
+   QA, Checks tab, Cover tab, formula rules, sources), so PASS means finish will accept it. Fix every issue it reports
+   and rerun until it prints PASS.
 4. Finish with a short answer (what the workbook contains, key outputs with their cell references) and cite the
    checker command as evidence. List the .xlsx in artifacts.
 5. You have a fixed turn budget, stated in the task. A checked workbook delivered on time beats a richer one that is
@@ -32,6 +34,8 @@ How you work:
    build scripts are moved out of the output folder when the run ends; only the .xlsx stays there.
 
 Workbook rules:
+- Raw data copied from an input file goes in as typed values in input style, never as formulas like =34; literal
+  dates, years and rates go in labelled input cells that formulas reference.
 - Structure (banker style): wb = B.banker_workbook(title, purpose, author, date) gives Cover -> Inputs -> Calc ->
   Outputs -> Checks with colored tabs and a linked tab map. Put middle tabs in that order; add tabs only when needed
   (e.g. Historicals/Model/DCF/Valuation inputs, or Comps/Precedents), passing middle=(...). Use B.section(ws, row, "Revenue build")
@@ -82,9 +86,9 @@ Helper library (import from engines.sheets.builder as B; it is importable from t
 find it, start the script with: import sys; sys.path.insert(0, r"{ROOT}")):
   wb = B.new_workbook(("Inputs","Calc","Outputs"))   B.title(ws, text)   B.header(ws, row, labels, col=1)
   B.input_cell(ws, "B3", 0.1, "pct", name="Growth")  B.formula(ws, "C5", "=B5*(1+Growth)", "usd", total=False)
-  B.section(ws, row, text, ncols)   B.add_check(wb, label, "=diff formula")
+  B.section(ws, row, text, ncols)   B.add_check(wb, label, "=Calc!D5-Inputs!B4")  (sheet-qualified refs, or sheet="Calc")
   B.widths(ws)   B.chart(ws, "bar"|"line"|"pie", (min_col,min_row,max_col,max_row), cats_ref, "E3", "Title", "usd")
-  formats: usd, usd2, pct, int, x, num, or any Excel format string. wb.save(path).
+  formats: usd, usd2, usd0, pct, pct2, int, x, num, num0, num2, text, date, or any Excel format string. wb.save(path).
 Finance kit (all live formulas; raw numbers are blue inputs; results are workbook names you can link to):
   book = B.assumption_book(wb["Inputs"], row=3)        # Assumption | Value | Source | Evidence / rationale | Low | High
   book.section("WACC")
@@ -191,9 +195,145 @@ Integrated model kit (spreading -> statements -> DCF -> scenarios -> method weig
       # "Inputs" (the factor scores and weights are inputs). B.select_methods(profile) shows the rules in Python."""
 
 
-def finish_check(answer, artifacts, ws, report=None):
-    """The engine's deterministic finish gate: None when every listed workbook passes, else the issues. report (a
-    dict), when given, collects the forge rule statuses ("rules") and warning-level findings ("warnings")."""
+DERIVE_SYSTEM = """You edit an Excel workbook, or derive a new one from a workbook or CSV the user has, as asked.
+
+Work only in the current folder, which is your output folder: write every file there and run every command from there.
+Do NOT read, grep or list Meshpool's engine or library source (those reads are refused).
+
+How you work:
+1. Inspect the input with one short script: sheet names, the header row, a few rows, row counts.
+2. Write ONE Python script with openpyxl (pandas to compute, if it helps) that loads the source, makes the change and
+   saves the result under the name the request gives (else "<source name> (edited).xlsx"). Run it.
+3. Run the checker: python -m engines.sheets.check <file.xlsx>. Fix what it reports and rerun until it prints PASS.
+4. Finish with a short answer (what changed and where) and list the .xlsx in artifacts.
+
+Keep the source's structure unless the request asks otherwise:
+- The same sheet names, in the same order. The header stays in the row it is in (row 1 stays row 1): no title row and
+  no blank rows above it.
+- No Cover, Checks or other extra tabs, and no new styling: keep the source's fonts, fills, number formats and widths.
+- Change only what the request is about. A new column or row follows the existing ones' formats. A value computed from
+  other cells (a total, an average) is a live formula; data that is moved or copied (sort, filter, extract) stays typed
+  values."""
+
+
+def _job() -> tuple[str, list[str], set[str]]:
+    """The job kind solve() set for this run and the checker it starts: ("derive", source files, parts the request
+    asks for) for an edit or derivation of an existing workbook, else ("build", [], set())."""
+    if os.environ.get("MH_SHEETS_JOB") != "derive":
+        return "build", [], set()
+    return ("derive", [f for f in os.environ.get("MH_SHEETS_SOURCES", "").split(os.pathsep) if f],
+            set(filter(None, os.environ.get("MH_SHEETS_ASKS", "").split(","))))
+
+
+def _header(ws) -> tuple[int, tuple]:
+    """(row, values) of a sheet's header: the first of its top 50 rows that is as wide as its widest one, so a title
+    row or a blank row above the table is not taken for it. (1, ()) for an empty sheet or a chartsheet."""
+    if not hasattr(ws, "iter_rows"):                # a chartsheet has no cells
+        return 1, ()
+    rows = [(r[0].row, tuple(c.value for c in r if c.value not in (None, "")))
+            for r in ws.iter_rows(max_row=min(ws.max_row, 50)) if r]
+    width = max((len(v) for _, v in rows), default=0)
+    if not width:
+        return 1, ()
+    # a header is a row of labels: the first wide row whose cells are all text (no numbers, no formulas). A data row
+    # with an extra filled cell (an added Total) is wider than the header and must not be taken for it.
+    wide = [(n, v) for n, v in rows if len(v) >= max(2, width // 2) or len(v) == width]
+    labels = next(((n, v) for n, v in wide if all(isinstance(x, str) and not x.startswith("=") for x in v)), None)
+    return labels or next(((n, v) for n, v in rows if len(v) == width), (1, ()))
+
+
+def derive_issues(path: str, sources: list[str], asks: set[str]) -> list[dict]:
+    """An edit or derivation keeps the source's structure: no Cover or Checks tab, no title or blank rows above the
+    header, and the source's sheet names, unless the request asks for them. Compared with the first source workbook
+    (a renamed sheet is matched by its header); from a CSV, every header sits in row 1. The sheet names are kept only
+    when the output is the source itself or a copy of it under its name: a summary, pivot or extract saved as a new
+    file names its sheets for what they hold."""
+    from openpyxl import load_workbook
+    from engines.sheets.qa import CHECK_SHEETS
+    out = load_workbook(path)
+    src_path = next((s for s in sources if s.lower().endswith((".xlsx", ".xlsm")) and os.path.exists(s)), None)
+    src = load_workbook(src_path) if src_path else None
+    src_names = src.sheetnames if src else []
+    issues = []
+    for name in out.sheetnames:
+        if name in src_names:
+            continue
+        if name.strip().lower() == "cover" and "cover" not in asks:
+            issues.append({"check": "keep_structure", "cell": name, "detail": "a Cover tab the request did not ask "
+                           "for; remove it (an edit keeps the source's sheets)"})
+        elif CHECK_SHEETS.search(name) and "checks" not in asks:
+            issues.append({"check": "keep_structure", "cell": name, "detail": "a Checks tab the request did not ask "
+                           "for; remove it (an edit keeps the source's sheets)"})
+    same_file = bool(src_path) and (os.path.abspath(path) == os.path.abspath(src_path) or _copy_of(path, src_path))
+    if same_file and not set(src_names) & set(out.sheetnames) and "rename" not in asks:
+        issues.append({"check": "keep_structure", "cell": "", "detail": "none of the source's sheet names "
+                       f"({', '.join(src_names)}) is kept; name the sheets as in the source"})
+    if "title" in asks:
+        return issues
+    heads = {v: n for n, v in (_header(src[s]) for s in reversed(src_names))} if src else {}
+    for name in out.sheetnames:
+        got, values = _header(out[name])
+        want = _header(src[name])[0] if name in src_names else heads.get(values) if src else 1
+        if want is not None and got > want:
+            issues.append({"check": "keep_structure", "cell": f"{name}!A{got}", "detail": f"the header is in row "
+                           f"{got}, not row {want} as in the source; remove the title or blank rows above it"})
+    return issues
+
+
+def _copy_of(path: str, src: str) -> bool:
+    """The output is the source edited as a copy: the same file name, or "<source name> (edited)"."""
+    out, s = Path(path).stem.lower(), Path(src).stem.lower()
+    return out == s or out.startswith(s + " (edited)")
+
+
+_BASELINES: dict = {}
+
+
+def _source_issues(sources: list[str]):
+    """Counter of (check, detail) for the issues the user's source workbooks already have (a #DIV/0!, an #N/A
+    literal, a failing check on their own Checks tab): an edit is not asked to fix them. Cached per file version."""
+    import csv
+    from collections import Counter
+    from engines.sheets.qa import ERRORS, check
+    seen = Counter()
+    for s in sources:
+        try:
+            st = os.stat(s)
+        except OSError:
+            continue
+        key = (os.path.abspath(s), st.st_mtime_ns, st.st_size)
+        if key not in _BASELINES:
+            got = Counter()
+            try:
+                if s.lower().endswith((".xlsx", ".xlsm")):
+                    got.update((i["check"], str(i["detail"])) for i in check(s, allow_hardcoded=True)["issues"])
+                elif s.lower().endswith(".csv"):
+                    with open(s, newline="", encoding="utf-8", errors="replace") as fh:
+                        got.update(("error_literal", v) for row in csv.reader(fh) for v in row
+                                   if v.strip().startswith(ERRORS))
+            except Exception:  # noqa: BLE001 - an unreadable source has no baseline
+                pass
+            _BASELINES[key] = got
+        seen.update(_BASELINES[key])
+    return seen
+
+
+def _new_issues(issues: list[dict], baseline) -> list[dict]:
+    """The issues that are not already in the source (each source issue excuses one output issue like it)."""
+    left, out = baseline.copy(), []
+    for i in issues:
+        k = (i["check"], str(i["detail"]))
+        if left[k] > 0:
+            left[k] -= 1
+        else:
+            out.append(i)
+    return out
+
+
+def _derive_check(artifacts, ws, sources: list[str], asks: set[str]):
+    """The finish gate for an edit or derivation: the workbook opens and recalculates without errors and keeps the
+    source's structure. No Cover, Checks, input-source or model rules: those are for models built from nothing. Errors
+    the source already has are not the edit's to fix: only issues that are new or changed are reported."""
     from engines.sheets.qa import check
     xl = [a for a in artifacts if a.endswith((".xlsx", ".xlsm"))]
     if not xl:
@@ -202,14 +342,42 @@ def finish_check(answer, artifacts, ws, report=None):
         p = a if os.path.isabs(a) else str(ws.root / a)
         if not os.path.exists(p):
             return f"ENGINE CHECK: artifact not found: {a}"
-        r = check(p)
-        from engines.sheets.qa import value
+        try:
+            issues = [i for i in check(p, allow_hardcoded=True)["issues"] if i["check"] != "no_formulas"]
+            issues = _new_issues(issues, _source_issues(sources)) if issues else issues
+            issues += derive_issues(p, sources, asks)
+        except Exception as e:  # noqa: BLE001
+            return (f"ENGINE CHECK: {a} is not a valid .xlsx workbook ({type(e).__name__}: {e}). Save it with "
+                    "openpyxl (wb.save) as a real workbook, then finish again.")
+        if issues:
+            return "ENGINE CHECK: workbook check failed:\n" + "\n".join(
+                f"- {i['check']} {i['cell']}: {i['detail']}" for i in issues[:15])
+    return None
+
+
+def finish_check(answer, artifacts, ws, report=None):
+    """The engine's deterministic finish gate: None when every listed workbook passes, else the issues. report (a
+    dict), when given, collects the forge rule statuses ("rules") and warning-level findings ("warnings"). An edit or
+    derivation of an existing workbook (_job) gets the lighter gate that keeps the source's structure."""
+    kind, sources, asks = _job()
+    if kind == "derive":
+        return _derive_check(artifacts, ws, sources, asks)
+    from engines.sheets.qa import check
+    xl = [a for a in artifacts if a.endswith((".xlsx", ".xlsm"))]
+    if not xl:
+        return "ENGINE CHECK: list the produced .xlsx file in artifacts."
+    for a in xl:
+        p = a if os.path.isabs(a) else str(ws.root / a)
+        if not os.path.exists(p):
+            return f"ENGINE CHECK: artifact not found: {a}"
+        try:
+            r = check(p)
+        except Exception as e:  # noqa: BLE001 - BadZipFile (a csv or half-saved file named .xlsx), KeyError, ...
+            return (f"ENGINE CHECK: {a} is not a valid .xlsx workbook ({type(e).__name__}: {e}). Save it with "
+                    "openpyxl (wb.save) as a real workbook, then finish again.")
         if "Checks" in r["stats"]["sheets"]:
-            try:
-                status = value(p, "Checks!F3")
-            except Exception:
-                status = None
-            if status not in (None, "OK"):
+            status = r["stats"].get("checks_status")    # read from check()'s recalculation: no second run
+            if status not in (None, "OK") and not any(i["cell"] == "Checks!F3" for i in r["issues"]):
                 r["issues"].append({"check": "checks_tab", "cell": "Checks!F3", "detail": f"shows {status}"})
         if "Cover" not in r["stats"]["sheets"]:
             r["issues"].append({"check": "structure", "cell": "", "detail": "no Cover tab; use B.banker_workbook"})
@@ -222,7 +390,8 @@ def finish_check(answer, artifacts, ws, report=None):
                     f"{f['rule']} {f.get('cell') or f.get('sheet') or ''}: {f['message']}".replace("  ", " ")
                     for f in fr["failures"] if f["status"] == "fail" and f["severity"] == "warning")
             r["issues"] += [{"check": f["rule"], "cell": f.get("cell") or f.get("sheet") or "", "detail": f["message"]}
-                            for f in fr["failures"] if f["status"] == "fail" and f["severity"] == "error"][:10]
+                            for f in fr["failures"] if f["status"] == "fail" and f["severity"] == "error"
+                            and f["check"] not in ("check_refs_empty", "check_refs_own_sheet")][:10]   # QA said it
         except Exception:
             pass
         from engines.sheets.qa import missing_sources          # valuation workbooks: every input carries a source
@@ -262,6 +431,22 @@ class SheetsWorkspace(Workspace):
         self.wrapped = False                  # the ~80% "wrap up and finish" note was sent
         self.turn = 0                         # last turn whose tools ran (set by turn_budget)
         self.before = set(_files(self.root))  # files already in the folder: never moved or deleted by the tidy-up
+        # "written in this run" is judged by content, not mtime or path: the CLI copies inputs into the folder (new
+        # mtime), so fingerprint every workbook already there and every input at the start
+        self._file_shas: dict = {}            # (path, mtime_ns, size) -> sha256, so per-turn checks stay cheap
+        self.start_hashes = {p.resolve(): h for p in self.before if p.suffix.lower() in (".xlsx", ".xlsm")
+                             and (h := self._file_sha(p))}
+        self.input_hashes = {h for p in self.inputs if p.is_file() and (h := self._file_sha(p))}
+
+    def _file_sha(self, p: Path) -> str | None:
+        try:
+            st = p.stat()
+            key = (str(p), st.st_mtime_ns, st.st_size)
+            if key not in self._file_shas:
+                self._file_shas[key] = _sha(p)
+            return self._file_shas[key]
+        except OSError:
+            return None
 
     def _allowed(self, q: Path) -> bool:
         return q == self.root or self.root in q.parents or q in self.inputs
@@ -307,8 +492,9 @@ class SheetsWorkspace(Workspace):
         return msg
 
     def saved_workbooks(self) -> list[Path]:
-        """.xlsx files written in this run (input workbooks copied in beforehand do not count): top-level files first,
-        then the most recently saved."""
+        """.xlsx files written in this run: top-level files first, then the most recently saved. A file counts only
+        when its content differs from what the folder held at the start and from every input workbook, so an input
+        copied into the folder (new mtime, same bytes) is not the run's work."""
         out = []
         for p in self.root.rglob("*.xlsx"):
             rel = p.relative_to(self.root).parts
@@ -316,7 +502,10 @@ class SheetsWorkspace(Workspace):
                 continue
             try:
                 m = p.stat().st_mtime
-                if m >= self.started - 1 and p.resolve() not in self.inputs:
+                if m < self.started - 1 or p.resolve() in self.inputs:
+                    continue
+                h = self._file_sha(p)              # content must differ from the start-of-run file and every input
+                if h is not None and h != self.start_hashes.get(p.resolve()) and h not in self.input_hashes:
                     out.append((len(rel) > 1, -m, p))
             except OSError:
                 continue
@@ -356,12 +545,18 @@ def turn_budget(turn: int, max_turns: int, ws) -> str | None:
     17-tab model, kept refining it and hit the turn cap without calling finish; these make it land the work:
     - at ~60% with no workbook: BUILD NOW (build_first);
     - at ~80%: stop adding features, run the checks, fix only failures, finish;
-    - on the last two turns: finish now."""
+    - on the last two turns: finish now (or, with no workbook saved yet, save one now)."""
     ws.turn = turn                                    # last completed turn (reported if the loop raises)
     left = max_turns - turn                           # turns still to come after this note
     notes = [n for n in [build_first(turn, max_turns, ws)] if n]
     if left <= 0:
         return "\n".join(notes) or None
+    if left <= 2 and not ws.saved_workbook():
+        ws.wrapped = ws.nudged = True                 # one instruction only: no BUILD NOW beside it, no "do not change"
+        return (f"SAVE NOW: {turn} of {max_turns} turns used, {left} left, and no .xlsx has been saved. Run your "
+                "build script now so the workbook exists (write build_workbook.py first if you have none), run the "
+                "checker, and call finish with it. If the run ends first, the last saved workbook is checked and "
+                "delivered.")
     if left <= 2:
         ws.wrapped = True
         notes.append(f"FINISH NOW: {turn} of {max_turns} turns used; {left} turn{'s' if left != 1 else ''} left. "
@@ -385,6 +580,26 @@ def turn_budget(turn: int, max_turns: int, ws) -> str | None:
 CAPS = ("turn cap", "wall-clock cap", "task budget")
 
 
+def _end_head(r, max_turns: int) -> str:
+    """The first line of a salvaged answer: why the run ended without an accepted finish."""
+    reason = r.reason or ""
+    if reason.startswith("turn cap"):
+        return f"Stopped at the turn limit ({max_turns} turns) before the model called finish."
+    if reason.startswith(CAPS):
+        return f"Stopped at the {reason} before the model called finish."
+    if reason.startswith("model stopped calling tools"):
+        return "The model stopped calling tools before it called finish."
+    if reason.startswith("aborted"):
+        return f"The run was stopped by the repeated-failure guard before the model called finish ({reason})."
+    if reason == "need_context":
+        nc = getattr(r, "need_context", None) or {}
+        asked = "; ".join(str(x) for x in (nc.get("reason"), ", ".join(map(str, nc.get("paths") or []))) if x) \
+            if isinstance(nc, dict) else str(nc)
+        return ("The model stopped to ask for more context before it called finish"
+                + (f": {asked}" if asked else "."))
+    return f"The run stopped on an error before the model called finish ({reason})."
+
+
 def salvage(r, ws, max_turns: int) -> dict:
     """The run hit a cap without an accepted finish. Do not throw the work away: check the last saved workbook with
     the same gate finish uses. Passing -> ok with the file; failing -> not ok, but with the file and the failures, so
@@ -392,8 +607,10 @@ def salvage(r, ws, max_turns: int) -> dict:
     books = ws.saved_workbooks()
     if not books:
         return {"ok": False, "artifacts": [], "evidence": [], "checks": [],
-                "answer": (f"Stopped at the {r.reason} before any workbook was saved; nothing to deliver. Run again "
-                           "with a larger turn budget (MH_SHEETS_MAX_TURNS) or a narrower request."),
+                "answer": ((f"Stopped at the {r.reason} before any workbook was saved; nothing to deliver. Run again "
+                            "with a larger turn budget (MH_SHEETS_MAX_TURNS) or a narrower request.")
+                           if r.reason.startswith(CAPS) else
+                           _end_head(r, max_turns).rstrip(".") + ", and no workbook was saved; nothing to deliver."),
                 "reason": f"{r.reason}; no workbook saved"}
     book = books[0]
     rel = str(book.relative_to(ws.root))
@@ -414,9 +631,7 @@ def salvage(r, ws, max_turns: int) -> dict:
         wb.close()
     except Exception:                          # noqa: BLE001
         pass
-    head = (f"Stopped at the turn limit ({max_turns} turns) before the model called finish."
-            if r.reason.startswith("turn cap") else f"Stopped at the {r.reason} before the model called finish."
-            if r.reason.startswith(CAPS) else f"The run stopped on an error before the model called finish ({r.reason}).")
+    head = _end_head(r, max_turns)
     what = f"{rel}" + (f" ({len(tabs)} tabs: {', '.join(tabs)})" if tabs else "")
     lines = [head]
     if not msg:
@@ -485,7 +700,6 @@ def tidy(ws, artifacts: list) -> list:
     return [str(moved.get(Path(a if os.path.isabs(a) else ws.root / a).resolve(), a)) for a in artifacts]
 
 
-REVIEW_CHAIN = ("claude-sonnet-5.5", "gpt-6.1-terra")       # strong text models for the partner / MD panel
 NAMES = {"md": "MD (bulge-bracket bank)", "partner": "senior partner (strategy firm)"}
 
 
@@ -552,8 +766,8 @@ class WorkbookReview:
                  min_turns: int | None = None, budget: int | None = None, task_id: str = "sheets"):
         self.client, self.ws, self.max_turns, self.task_id = client, ws, max_turns, task_id
         env = os.environ
-        self.models = [m for m in dict.fromkeys([model, env.get("MH_SHEETS_REVIEW_MODEL"), env.get("MH_REVIEW_MODEL"),
-                                                 *REVIEW_CHAIN]) if m]
+        from meshpool_harness.core.models import reviewer_models      # explicit models, then the configured one
+        self.models = reviewer_models(model, env.get("MH_SHEETS_REVIEW_MODEL"), env.get("MH_REVIEW_MODEL"))
         self.max_rounds = max(1, int(max_rounds or env.get("MH_REVIEW_ROUNDS") or 3))
         self.min_turns = int(min_turns if min_turns is not None else env.get("MH_REVIEW_MIN_TURNS") or 4)
         self.budget = int(budget or env.get("MH_REVIEW_DIGEST_CHARS") or 25000)
@@ -578,7 +792,7 @@ class WorkbookReview:
         except Exception as e:  # noqa: BLE001 - a digest failure is reported as a review that could not run
             text = ""
             err = f"digest failed: {type(e).__name__}: {e}"
-        (box / "digest.txt").write_text(text)
+        (box / "digest.txt").write_text(text, encoding="utf-8")
         res, used, errors = None, None, []
         if text:
             material = (f"Workbook to review: {rel}. The digest below was built by the engine from the recalculated "
@@ -721,12 +935,17 @@ class WorkbookReview:
             if not (cur and cur.exists() and out.get("ok") and _sha(cur) == best["sha256"]):
                 dst = self.ws.root / best["workbook"]
                 dst.parent.mkdir(parents=True, exist_ok=True)
+                if dst.is_file() and _sha(dst) not in {r["sha256"] for r in self.rounds}:
+                    keep = self.ws.run_dir / "review" / "latest" / dst.name    # a newer version nobody reviewed
+                    keep.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(dst, keep)
+                    self.notes.append(f"The newer, unreviewed version is kept at .run/review/latest/{dst.name}.")
                 shutil.copy2(best["copy"], dst)
                 rest = [a for a in out.get("artifacts") or [] if not str(a).endswith((".xlsx", ".xlsm"))]
                 out["artifacts"] = [str(dst)] + rest
                 if out.get("ok"):
                     self.notes.append(f"Delivered the round {best['round']} version: it scored higher than the later "
-                                      "version, which is kept in .run/review/.")
+                                      "version, which is kept in .run/review/ (as a reviewed round copy, or in latest/).")
                 out["ok"] = True
                 out["reason"] = f"{out.get('reason', '')}; delivered the best reviewed workbook (round {best['round']})"
             delivered = best["round"]
@@ -790,13 +1009,19 @@ class WorkbookReview:
             pass
 
 
-def dossier_brief(task: str, workdir: str, client, model: str, task_id: str) -> str:
+_COMPANY_WORDS = re.compile(r"valuation|\bDCF\b|\bLBO\b|\bcomps?\b|precedent|\bIPO\b|M&A|merger|acquisition|fairness|credit|"
+                            r"three[- ]statement|company|ticker", re.I)
+
+
+def dossier_brief(task: str, workdir: str, client, model: str, task_id: str, files=None) -> str:
     """Research the company before the first cell is written (engines/research/dossier.py): a model built from the
     statements alone misses what changed since them (an asset-light shift, a disposal, new guidance). Returns the text
     added to the task: the structural changes, the sourced findings and the open questions; '' when research is off
     (MH_DOSSIER=0, MH_RESEARCH=0, an offline client, no network) or found nothing."""
     if os.environ.get("MH_DOSSIER", "1") == "0":
         return ""
+    if any(str(f).lower().endswith((".xlsx", ".xlsm", ".csv")) for f in files or []) and not _COMPANY_WORDS.search(task):
+        return ""                              # a report or edit of the user's own data: no company to research
     try:
         from engines.forge import research as RS
         from engines.research.dossier import build_dossier, brief_block
@@ -804,7 +1029,7 @@ def dossier_brief(task: str, workdir: str, client, model: str, task_id: str) -> 
         if not ok:
             return ""
         d = build_dossier(task, [], client=client, models=[os.environ.get("MH_STORY_REVIEW_MODEL") or model],
-                          out_dir=workdir, task_id=f"{task_id}-dossier")
+                          out_dir=workdir, task_id=f"{task_id}-dossier", require_company=True)
     except Exception:  # noqa: BLE001 - research never costs the model
         return ""
     if not d.get("facts"):
@@ -890,30 +1115,56 @@ def _pipeline(task: str, ws, client, model: str, task_id: str, rv) -> dict | Non
     return out
 
 
-def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None, model: str = "deepseek-v4.1-flash",
+def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None, model: str | None = None,
           client=None, phase: str = "phase_2_build", files=None, review: bool | None = None,
           review_model: str | None = None, review_rounds: int | None = None) -> dict:
+    from meshpool_harness.providers import configured_model
+    model = configured_model(model)
     ws = SheetsWorkspace(workdir, os.path.join(workdir, ".run"), inputs=files)
     os.environ.setdefault("MH_DOOM", "1")     # the loop guard on: a cheap model repeated one refused call 40 times
     client = client or LiveClient(phase)
     ctx = {"task_id": task_id, "model": model, "profile": "deepseek", "role": "worker"}
-    n = max_turns or int(os.environ.get("MH_SHEETS_MAX_TURNS", "50"))
+    from engines import max_turns as _cap
+    n = _cap(max_turns or int(os.environ.get("MH_SHEETS_MAX_TURNS", "50")))
+    from meshpool_harness.office_intent import asks_for, derive_job
+    derive = derive_job(task, files, workdir)  # sort, filter, add a column ... on a workbook the user has
+    job_env = {"MH_SHEETS_JOB": "derive" if derive else "build",       # read by finish_check here and by the
+               # checker CLI, which runs in another folder: absolute paths
+               "MH_SHEETS_SOURCES": os.pathsep.join(os.path.abspath(str(f)) for f in files or []) if derive else "",
+               "MH_SHEETS_ASKS": ",".join(sorted(asks_for(task))) if derive else ""}
+    saved = {k: os.environ.get(k) for k in job_env}
+    os.environ.update(job_env)
+    try:
+        return _solve(task, workdir, ws, client, model, task_id, ctx, n, derive, files, review, review_model,
+                      review_rounds)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def _solve(task, workdir, ws, client, model, task_id, ctx, n, derive, files, review, review_model,
+           review_rounds) -> dict:
     task = (f"{task}\n\nTurn budget: {n} turns (one turn = one reply with its tool calls). Save a first complete "
             f"workbook by about turn {max(2, int(0.4 * n))}, stop adding features by turn {max(2, int(0.8 * n))}, "
             f"and call finish before turn {n}; if the budget runs out first, the last saved workbook is checked and "
             "delivered as it is.")
-    task += dossier_brief(task, workdir, client, model, task_id)
+    if not derive:                            # research, recipes and the partner review are for models
+        task += dossier_brief(task, workdir, client, model, task_id, files)
     rv = WorkbookReview(client, ws, n, model=review_model, max_rounds=review_rounds, task_id=task_id) \
-        if review_enabled(client, review) else None
+        if review_enabled(client, review) and not derive else None
     if rv:
         task += ("\n\nA bank MD and a strategy-firm senior partner review the workbook each time it passes the engine "
                  "checks; if they do not sign off, their issues come back to you to fix before you finish again.")
-    done = _pipeline(task, ws, client, model, task_id, rv)
+    done = None if derive else _pipeline(task, ws, client, model, task_id, rv)
     if done is not None:                      # a known model shape: built in code from one call's sourced inputs
         return done
     crashed = False
     try:
-        r = run(task, client=client, model=model, profile=None, ws=ws, ctx=ctx, system_text=SYSTEM,
+        r = run(task, client=client, model=model, profile=None, ws=ws, ctx=ctx,
+                system_text=DERIVE_SYSTEM if derive else SYSTEM,
                 caps=Caps(max_turns=n), temperature=0.0, finish_check=rv.gate if rv else finish_check,
                 turn_hook=rv.hook if rv else turn_budget)
     except Exception as e:                     # noqa: BLE001 - e.g. a gateway 502 on turn 47 of a run whose
@@ -925,7 +1176,7 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None
                             reason=f"{type(e).__name__}: {e}")
     out = {"ok": r.ok, "answer": r.answer, "artifacts": r.artifacts, "evidence": r.evidence, "turns": r.turns,
            "reason": r.reason, "usage": r.usage}
-    at_cap = not r.ok and (crashed or r.reason.startswith(CAPS))
+    at_cap = not r.ok                          # no accepted finish, whatever the end reason: salvage and deliver
     if at_cap:
         out.update(salvage(r, ws, n))
     if rv and (r.ok or at_cap):
@@ -937,4 +1188,7 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None
         out["artifacts"] = tidy(ws, out["artifacts"])
     except Exception:                          # noqa: BLE001 - tidying never costs the result
         pass
+    note = getattr(ws, "pipeline_note", None)
+    if note:
+        out["answer"] = ((out.get("answer") or "") + "\n\n" + note).strip()
     return out

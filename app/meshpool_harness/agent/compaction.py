@@ -24,17 +24,17 @@ SYSTEM = ("You write a handoff note for an AI agent that will continue a long ta
           "constraints, user preferences), Problems still open, Next steps. Under 700 words.")
 
 
-def split(messages: list, keep_recent: int = KEEP_RECENT):
+def split(messages: list, keep_recent: int = KEEP_RECENT, min_middle: int = 5):
     """(head, middle, tail) or None when there is nothing worth summarising. The tail never starts on a tool result,
     so every tool result in it still has the assistant call that asked for it."""
     n = len(messages)
-    if n < keep_recent + 6:
+    if n < keep_recent + min_middle + 1:
         return None
     head_len = 2 if n > 1 and messages[1].get("role") == "user" else 1
     cands = [i for i in range(head_len, n) if messages[i].get("role") in ("user", "assistant")]
     ahead = [i for i in cands if i >= n - keep_recent]
     start = min(ahead) if ahead else (max(cands) if cands else None)
-    if start is None or start - head_len < 5:
+    if start is None or start - head_len < min_middle:
         return None
     return messages[:head_len], messages[head_len:start], messages[start:]
 
@@ -59,7 +59,7 @@ def _calls(m: dict) -> list[tuple[str, str, dict]]:
     return out
 
 
-def render(middle: list) -> str:
+def render(middle: list, max_log: int = MAX_LOG) -> str:
     """The older steps as a short log for the summariser (the start and the most recent part when it is long)."""
     lines = []
     for m in middle:
@@ -73,8 +73,9 @@ def render(middle: list) -> str:
         for _id, name, args in _calls(m):
             lines.append(f"  call {name}: " + json.dumps(args, ensure_ascii=False)[:260])
     log = "\n".join(lines)
-    if len(log) > MAX_LOG:
-        log = log[:10_000] + "\n... [middle of the log left out] ...\n" + log[-(MAX_LOG - 10_000):]
+    if len(log) > max_log:
+        h = min(10_000, max_log // 4)
+        log = log[:h] + "\n... [middle of the log left out] ...\n" + log[-(max_log - h):]
     return log
 
 
@@ -95,6 +96,9 @@ def rule_notes(middle: list) -> str:
                 out = results.get(cid, "")
                 mm = re.match(r"\[exit (\d+)\]", out)
                 cmds.append((str(args.get("command") or name)[:140], mm.group(1) if mm else "?"))
+            elif name == "exec_command":               # Codex 0.171's result format (profile c171)
+                mm = re.search(r"^Process exited with code (-?\d+)$", results.get(cid, ""), re.M)
+                cmds.append((str(args.get("cmd") or name)[:140], mm.group(1) if mm else "?"))
             elif name == "bash_many":
                 for c in args.get("commands") or []:
                     cmds.append((str(c)[:140], "?"))
@@ -113,42 +117,63 @@ def rule_notes(middle: list) -> str:
     return "\n".join(parts)
 
 
-def summarize(middle: list, task: str, client=None, model: str | None = None, focus: str = "") -> str:
+def budgets(win: int | None) -> dict:
+    """Sizes for the summary call and the note, from the model's window (None: the large-window defaults). The call
+    itself (instructions, task, log and the reply) stays inside half the window."""
+    if not win or win >= 100_000:
+        return {"max_log": MAX_LOG, "note": MAX_NOTE, "reply": 2800, "keep": KEEP_RECENT, "min_middle": 5, "task": 3000}
+    chars = int(win * 3.5)
+    reply = max(200, min(2800, win // 8))
+    return {"max_log": max(1500, int(chars * 0.35) - 1500), "note": max(800, min(MAX_NOTE, int(chars * 0.12))),
+            "reply": reply, "keep": 4 if win <= 16_384 else 6 if win <= 40_000 else KEEP_RECENT,
+            "min_middle": 2 if win <= 16_384 else 3 if win <= 40_000 else 5, "task": max(400, int(chars * 0.06))}
+
+
+def summarize(middle: list, task: str, client=None, model: str | None = None, win: int | None = None,
+              focus: str = "") -> str:
     """The note's model-written part. "" when no model can be reached (the rule-based part still goes in)."""
     if os.environ.get("MH_COMPACT_MODEL", "1") == "0":
         return ""
+    b = budgets(win)
     try:
         if client is None:
             from meshpool_harness.core.client import LiveClient
             client = LiveClient("compact")
         model = model or os.environ.get("MH_MODEL_FAST") or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
-        own = os.environ.get("MH_COMPACT_PROMPT", "").strip()
+        words = "Under 700 words." if b["reply"] >= 1500 else f"Under {max(60, int(b['reply'] * 0.6))} words."
+        own = os.environ.get("MH_COMPACT_PROMPT", "").strip()      # the user's own summary instructions
         if "\n" not in own and own.endswith((".md", ".txt")):    # a file: read it (missing: meshpool's own)
             try:
                 own = Path(own).expanduser().read_text(encoding="utf-8", errors="replace").strip()[:6000]
             except OSError:
                 own = ""
+        system = (own[:6000] + "\n\nUse only facts in the log. " + words) if own else SYSTEM.replace("Under 700 words.", words)
         r = client.chat(model=model, messages=[
-            {"role": "system", "content": (own[:6000] + "\n\nUse only facts in the log.") if own else SYSTEM},
-            {"role": "user", "content": f"The task:\n{task[:3000]}\n\nThe log of earlier steps:\n{render(middle)}"
-             + (f"\n\nThe user asked this summary to keep, in full detail: {focus[:1000]}" if focus else "")}],
-            max_tokens=2800, temperature=0.1, task_id="compact", role="worker")
-        return (r["choices"][0]["message"].get("content") or "").strip()[:MAX_NOTE]
+            {"role": "system", "content": system},
+            {"role": "user", "content": f"The task:\n{task[:b['task']]}\n\nThe log of earlier steps:\n"
+                                        f"{render(middle, b['max_log'])}"
+                                        + (f"\n\nThe user asked this summary to keep, in full detail: {focus[:1000]}"
+                                           if focus else "")}],
+            max_tokens=b["reply"], temperature=0.1, task_id="compact", role="worker")
+        return (r["choices"][0]["message"].get("content") or "").strip()[:b["note"]]
     except Exception:  # noqa: BLE001 - a failed summary must never stop the task
         return ""
 
 
-def compact_history(messages: list, client=None, model: str | None = None, keep_recent: int = KEEP_RECENT,
-                    focus: str = "") -> dict | None:
+def compact_history(messages: list, client=None, model: str | None = None, keep_recent: int | None = None,
+                    win: int | None = None, focus: str = "") -> dict | None:
     """Replace the older steps in `messages` (in place) with the handoff note. Returns {"removed": n, "model": bool}
-    or None when nothing was done."""
-    parts = split(messages, keep_recent)
+    or None when nothing was done. win: the model's context window in tokens; it sizes the summary call and the note."""
+    b = budgets(win)
+    parts = split(messages, keep_recent if keep_recent is not None else b["keep"], b["min_middle"])
     if parts is None:
         return None
     head, middle, tail = parts
     task = _text(head[-1].get("content")) if head[-1].get("role") == "user" else ""
-    written = summarize(middle, task, client, model, focus)
+    written = summarize(middle, task, client, model, win, focus)
     rules = rule_notes(middle)
+    if win and win < 100_000:
+        rules = rules[:max(300, b["note"] // 2)]
     note = ("[Earlier steps of this task were summarized to save space. The summary and the log facts below are "
             "accurate; the user's task above is unchanged.]\n"
             + (written + "\n\n" if written else "(The summary could not be written; the facts from the log follow.)\n")

@@ -4,19 +4,23 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meshpool-harness"
-version = "0.0.14"
+version = "0.0.16"
 description = "Meshpool: a model-agnostic coding agent (terminal and local app, with MCP) plus one-shot engines for code, data, office and browser tasks."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["pandas>=2.0", "openpyxl>=3.1", "python-pptx>=0.6.23", "python-docx>=1.1", "PyYAML>=6.0",
                 "lxml>=5.0", "Pillow>=10.0", "cairosvg>=2.7", "reportlab>=4.0",
-                "ddgs>=9.0", "playwright>=1.40"]                 # free web search out of the box (DuckDuckGo and other engines)
+                "ddgs>=9.0", "playwright>=1.40",
+                "psutil>=5.9", "pypdf>=4.0", "pypdfium2>=4.0", "pdfminer.six>=20231228", "xlrd>=2.0", "olefile>=0.47", "duckdb>=1.1",
+                "tomli>=2.0; python_version < '3.11'"]                 # free web search out of the box (DuckDuckGo and other engines)
 
 [project.optional-dependencies]
 browser = ["playwright>=1.40"]
+powerbi = ["pbixray>=0.3"]                       # optional: read the data model of .pbix files (the schema is read without it)
+analysis = ["pymupdf"]                          # optional (AGPL): measure_office_file on a .pdf
 ocr = ["rapidocr>=3.0", "onnxruntime>=1.17"]      # optional: read text in pictures (needs macOS 13 or later); without it the viewer gives the file's own text
 office = ["cryptography>=41"]                     # meshpool office install: the localhost certificate (or the openssl command)
-dev = ["pytest>=8.0", "ruff"]
+dev = ["pytest>=8.0", "ruff", "jsonschema>=4.0"]
 
 [project.scripts]
 meshpool = "meshpool_harness.cli:main"

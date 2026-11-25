@@ -12,11 +12,13 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import re
 import shutil
 import socket
+import ssl
 import subprocess
 import threading
 import time
@@ -79,36 +81,126 @@ def _candidates(base: str) -> list[str]:
     return [base] if p.path else [base, base + "/v1"]
 
 
-_OPENER = EP.OPENER                           # never follows a redirect: it would carry the key to another host
 
 
-def _get(url: str, headers: dict, timeout: float = 15.0):
-    """(status, parsed JSON or None, error kind). error kind: "" | "refused" | "timeout"."""
-    req = urllib.request.Request(url, headers={"User-Agent": "Meshpool", "Accept": "application/json", **headers})
+def _tls_kind(exc) -> str:
+    """"cert" (certificate not trusted), "tls" (the server does not speak TLS here) or "" for anything else."""
+    chain, e = [], exc
+    for _ in range(4):
+        if e is None or isinstance(e, str):
+            break
+        chain.append(e)
+        e = getattr(e, "reason", None)
+    if any(isinstance(t, ssl.SSLCertVerificationError) or "CERTIFICATE_VERIFY_FAILED" in str(t) for t in chain):
+        return "cert"
+    if any(isinstance(t, ssl.SSLError) or re.search(r"WRONG_VERSION_NUMBER|record layer failure|UNKNOWN_PROTOCOL",
+                                                    str(t)) for t in chain):
+        return "tls"
+    return ""
+
+
+def _net_error(err: str, base: str) -> str:
+    """The sentence for a failed connection kind ("" when err is not one)."""
+    if err == "refused":
+        return "No server at that address. Check the address and your connection."
+    if err == "timeout":
+        return "The server did not answer in time."
+    if err == "not_http":
+        return "Something answers at that address, but it is not a web API. Check the address and port."
+    if err == "tls":
+        return "That address does not speak HTTPS. Try http://" + base.split("://", 1)[-1]
+    if err == "cert":
+        return __import__("meshpool_harness.core.http", fromlist=["x"]).explain(
+            ssl.SSLCertVerificationError("CERTIFICATE_VERIFY_FAILED"), base)
+    return ""
+
+
+def _is_reply(wire: str, data) -> bool:
+    """Does a chat probe's JSON body look like a model's reply (not an error body, not a page)?"""
+    if not isinstance(data, dict):
+        return False
+    if wire == "anthropic":
+        return isinstance(data.get("content"), list) or data.get("type") == "message"
+    if wire == "responses":
+        return "output" in data
+    return isinstance(data.get("choices"), list)
+
+
+def _not_reply_msg(data) -> str:
+    err = data.get("error") if isinstance(data, dict) else None
+    txt = (err.get("message") if isinstance(err, dict) else err) if err else ""
+    if txt:
+        return str(txt)[:200]
+    return "The address answered, but not like a model API."
+
+
+def _get(url: str, headers: dict, timeout: float = 15.0, body: dict | None = None):
+    """(status, parsed JSON or None, error kind). error kind: "" | "refused" | "timeout". With `body`: a JSON POST."""
+    hdr = {"User-Agent": "Meshpool", "Accept": "application/json", **headers}
+    if body is not None:
+        hdr["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, headers=hdr, data=json.dumps(body).encode("utf-8") if body is not None else None,
+                                 method="POST" if body is not None else "GET")
     try:
-        with _OPENER.open(req, timeout=timeout) as r:
+        with EP.urlopen(req, timeout, refuse_redirects=True) as r:
             raw = r.read(4_000_000)
             status = r.status
     except urllib.error.HTTPError as e:
         raw, status = e.read(200_000), e.code
     except (socket.timeout, TimeoutError):
         return 0, None, "timeout"
+    except http.client.HTTPException:
+        return 0, None, "not_http"
     except urllib.error.URLError as e:
         if isinstance(e.reason, (socket.timeout, TimeoutError)):
             return 0, None, "timeout"
-        return 0, None, "refused"
-    except (OSError, ValueError):
-        return 0, None, "refused"
+        return 0, None, _tls_kind(e) or "refused"
+    except (OSError, ValueError) as e:
+        return 0, None, _tls_kind(e) or "refused"
     try:
         return status, json.loads(raw.decode("utf-8", "replace")), ""
     except ValueError:
         return status, None, ""
 
 
-def _headers(wire: str, key: str) -> dict:
+def _headers(wire: str, key: str, base: str = "", header: str = "", scheme: str = "") -> dict:
+    return PV.auth_headers(key, base, wire, header, scheme)
+
+
+def explain(status: int, data, *, base: str, model: str = "", version: str = "") -> str:
+    """What a failed call means, in words the user can act on (core/endpoint.py decides by the kind of provider)."""
+    kind, ver = EP.resolve(base)
+    return EP.explain(status, data, kind=kind, host=PV.host(base), model=model, api_version=version or ver)
+
+
+def probe_chat(base: str, key: str, model: str, wire: str = "openai", header: str = "", scheme: str = "",
+               version: str = "", kind: str = "") -> tuple[int, object, str]:
+    """One tiny chat call: (status, JSON or None, error kind). It exercises the real URL, key header and model."""
     if wire == "anthropic":
-        return {"x-api-key": key, "anthropic-version": AW.VERSION} if key else {"anthropic-version": AW.VERSION}
-    return {"Authorization": f"Bearer {key}"} if key else {}
+        body = AW.to_request({"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": "ping"}]})
+        res = _get(base.rstrip("/") + "/messages", _headers(wire, key, base, header, scheme), 30.0, body)
+    else:
+        kind, ver = (kind, "") if kind else EP.resolve(base)
+        url, body, hdr = EP.chat_request(base, key, {"model": model, "max_tokens": 16,
+                                                     "messages": [{"role": "user", "content": "ping"}]},
+                                         kind=kind, api_version=version or ver)
+        if header or scheme:
+            hdr = {k: v for k, v in hdr.items() if k.lower() not in ("authorization", "api-key", "x-api-key")}
+            hdr.update(_headers(wire, key, base, header, scheme))
+        res = _get(url, hdr, 30.0, body)
+    _account_probe(res, base, model)
+    return res
+
+
+def _account_probe(res: tuple, base: str, model: str) -> None:
+    """A test call that got an answer is billed like any other: put its usage in the ledger (source "check")."""
+    try:
+        status, data, _ = res
+        if status == 200 and isinstance(data, dict):
+            from meshpool_harness.core import usage
+            usage.record(model, data.get("usage") or None, base=base, source="check", request_chars=4)
+    except Exception:  # noqa: BLE001 - accounting never breaks a connection test
+        pass
 
 
 def _items(data) -> list | None:
@@ -175,7 +267,7 @@ def _same_endpoint(a: str, b: str) -> bool:
 
 
 def test(base_url: str, api_key=None, wire: str = "auto", env: str = "", model: str = "", api_version: str = "",
-         kind: str = "") -> dict:
+         kind: str = "", auth_header: str = "", auth_scheme: str = "") -> dict:
     """Check an address and key. Where the endpoint has a model list (most do) the key is checked by reading it. Azure,
     and any endpoint with no list, has none to read: there the check is a one-token chat call to `model` (for Azure
     the deployment name), and without a model the answer says so (needs_model) rather than calling the key bad."""
@@ -239,16 +331,18 @@ def test(base_url: str, api_key=None, wire: str = "auto", env: str = "", model: 
                                            or caps["wire"] == "anthropic" else ["openai", "anthropic"])
     auth_code = 0
     saw_missing = False
+    missing_base = ""
     last_status = 0
     for b in _candidates(base):
         for w in order:
-            status, data, err = _get(b.rstrip("/") + "/models", _headers(w, key))
-            if err == "refused":
-                out["error"] = "No server at that address. Check the address and your connection."
-                out["latency_ms"] = int((time.time() - t0) * 1000)
-                return out
-            if err == "timeout":
-                out["error"] = "The server did not answer in time."
+            status, data, err = _get(b.rstrip("/") + "/models", _headers(w, key, b, auth_header.strip(), auth_scheme.strip().lower()))
+            if err == "tls" and urlparse(b).scheme == "https" and PV.keyless_ok(b) and not key:
+                # a local server speaking plain http, tried over http only with no key: a keyed request is never
+                # downgraded unless the user typed http:// (the error below tells them how)
+                plain = "http://" + base.split("://", 1)[1]
+                return test(plain, api_key, wire, env, model, api_version, kind, auth_header, auth_scheme)
+            if err:
+                out["error"] = _net_error(err, b) or "No server at that address. Check the address and your connection."
                 out["latency_ms"] = int((time.time() - t0) * 1000)
                 return out
             last_status = status or last_status
@@ -264,18 +358,44 @@ def test(base_url: str, api_key=None, wire: str = "auto", env: str = "", model: 
                 return out
             if status in (401, 403):
                 auth_code = auth_code or status
-            elif status == 404 or (status == 200 and items is None):
+            elif status in (404, 405) or (status == 200 and items is None):
                 saw_missing = True
+                missing_base = missing_base or b
     out["latency_ms"] = int((time.time() - t0) * 1000)
     if auth_code:
         out["error"] = EP.explain(auth_code, None, kind=kind, host=host, key=key)
     elif saw_missing and model:          # no list, but a model was typed: a chat call proves the key
         return probe_now()
-    elif saw_missing:      # something answers, but has no /models: the key stays unchecked, the user types a model
-        out.update(ok=True, wire=("openai" if wire == "auto" else wire), base_url=base,
-                   error="Connected, but this endpoint does not list models: type a model name.")
+    elif saw_missing:
+        # Something answers but lists no models (or answered 200 with an error body or a web page): a tiny real call
+        # per wire finds the wire and checks the key. A 200 that is not a model's reply never counts as connected.
+        pm = "meshpool-connection-test"
+        hdr_name, hdr_scheme = auth_header.strip(), auth_scheme.strip().lower()
+        note = ""
+        for w in order:
+            st, dt, er = probe_chat(missing_base, key, pm, w, hdr_name, hdr_scheme, kind=kind)
+            if er:
+                out["error"] = _net_error(er, missing_base) or str(er)
+                return out
+            msg = ((dt.get("error") or {}).get("message") if isinstance(dt.get("error"), dict) else dt.get("error")) \
+                if isinstance(dt, dict) else ""
+            if st in (401, 403):
+                out["error"] = EP.explain(st, dt, kind=kind, host=host, key=key)
+                return out
+            named_model = st in (400, 404, 422) and "model" in str(msg or "").lower()
+            if (st == 200 and _is_reply(w, dt)) or st == 429 or named_model:
+                out.update(ok=True, wire=w, base_url=missing_base.rstrip("/"),
+                           error="Connected, but this endpoint does not list models: type a model name.")
+                return out
+            if st == 200 and not note:
+                note = _not_reply_msg(dt)
+        out["error"] = (note + " " if note and not note.startswith("The address answered") else "") + \
+            f"The address answered, but not like a model API ({last_status}). Check the address: it should end in " \
+            "/v1 for most services."
     elif last_status >= 500:
         out["error"] = f"The server answered with an error ({last_status}). Try again in a moment."
+    elif last_status == 402:
+        out["error"] = "The server asks for payment (402): add credit or check the billing for this key."
     elif last_status == 429:
         out["error"] = "The server is limiting requests right now (429). Try again in a moment."
     elif last_status:
@@ -310,8 +430,9 @@ def current() -> dict:
             "default_model": (C.read().get("MH_MODEL") or os.environ.get("MH_MODEL") or "").strip(),
             "key_set": bool(k), "key_hint": k[-4:] if len(k) >= 8 else "",
             "provider": (C.read().get("MH_PROVIDER") or os.environ.get("MH_PROVIDER") or "meshpool"),
-            "host": PV.host(PV.key_base()), "kind": kind, "label": EP.caps(kind)["label"],
+            "host": PV.host(PV.key_base()), "azure": EP.is_azure(kind) or PV.is_azure(PV.key_base()), "kind": kind, "label": EP.caps(kind)["label"],
             "api_version": PV.key_api_version(), "deployment": EP.caps(kind)["deployment"],
+            "auth_header": PV._ecfg("MH_AUTH_HEADER"), "auth_scheme": PV._ecfg("MH_AUTH_SCHEME"),
             "agent_notes": {h: PV.direct_agent_ok(h) for h in ("codex",) if PV.direct_agent_ok(h)}}
 
 
@@ -320,7 +441,16 @@ def catalog() -> list[dict]:
 
 
 def save(base_url: str, api_key=None, wire: str = "auto", default_model: str = "", allow_custom: bool = False,
-         env: str = "", confirm_env: bool = False, api_version: str = "", kind: str = "") -> dict:
+         env: str = "", confirm_env: bool = False, api_version: str = "", kind: str = "",
+         auth_header: str | None = None, auth_scheme: str | None = None) -> dict:
+    if auth_header is not None:
+        auth_header = auth_header.strip()
+        if auth_header and not PV._HEADER_NAME.match(auth_header):
+            raise SetupError("The key header name may only hold letters, digits and - _ . (for example api-key).")
+    if auth_scheme is not None:
+        auth_scheme = auth_scheme.strip().lower()
+        if auth_scheme not in PV.SCHEMES:
+            raise SetupError("The key scheme must be bearer, basic, token or raw.")
     pp = parse(base_url, kind, api_version)
     base, kind = pp.base, pp.kind
     ver = (api_version or pp.api_version or "").strip()
@@ -346,7 +476,8 @@ def save(base_url: str, api_key=None, wire: str = "auto", default_model: str = "
     wire = (wire or "auto").lower()
     if wire not in ("openai", "anthropic"):
         wire = "anthropic" if PV.host(base).endswith("anthropic.com") else EP.wire_of(kind)
-    changed = (not _same_endpoint(base, PV.key_base())) or (key and key != PV.key())
+    moved = not _same_endpoint(base, PV.key_base())
+    changed = moved or (key and key != PV.key())
     # The kind and api-version belong to this address only: saved for an Azure endpoint, blanked for any other, so
     # an old api-version never follows the user to another host.
     vals = {"MESHPOOL_BASE_URL": base, "MH_API_WIRE": wire, "MH_MODEL": model,
@@ -355,14 +486,23 @@ def save(base_url: str, api_key=None, wire: str = "auto", default_model: str = "
             "MH_API_VERSION": ver if kind in ("azure-classic", "azure-foundry") else ""}
     if key:
         vals["MESHPOOL_API_KEY"] = key
+    else:                                                # a keyless local endpoint: the old endpoint's key goes
+        vals["MESHPOOL_API_KEY"] = ""                    # with it, never to this server
+    for k, v in (("MH_AUTH_HEADER", auth_header), ("MH_AUTH_SCHEME", auth_scheme)):
+        if v is not None:
+            vals[k] = v
+        elif moved:                                      # the old endpoint's header and scheme belong to it alone,
+            vals[k] = ""                                 # like its api-version: never sent with another key
     if changed and (C.read().get("MH_SUBAGENT_MODEL") or "").strip():
         vals["MH_SUBAGENT_MODEL"] = ""                  # named a model of the old endpoint
     C.write(vals)                                        # one atomic replace of the settings file
-    for k, v in vals.items():
-        if v:
-            os.environ[k] = v
+    for k, v in vals.items():                            # Meshpool's own copy from now on: a later
+        if v:                                            # load_into_env(override=True) must not take these
+            os.environ[k] = v                            # for values the user's shell set
+            C._INJECTED.add(k)
         else:
             os.environ.pop(k, None)
+            C._INJECTED.discard(k)
     try:                                                 # the picker's cached list belonged to the old endpoint
         from meshpool_harness.ui import workbench as W
         W._MODELS.update(t=0, key="", rows=[], error="")
@@ -396,6 +536,10 @@ def chatgpt_login() -> dict:
     tok = d.get("tokens") if isinstance(d.get("tokens"), dict) else {}
     if not (tok.get("access_token") and tok.get("refresh_token")):
         out["note"] = "Codex is signed in with an API key, not a ChatGPT account. Sign in with ChatGPT instead."
+        return out
+    st = CG.signin_state()
+    if not st["ok"]:
+        out["note"] = st["reason"]              # e.g. ChatGPT refused the refresh token: sign in again
         return out
     out["usable"] = True
     idc = _claims(tok.get("id_token", ""))

@@ -25,6 +25,18 @@ def _store() -> Path:
 
 
 def _load() -> dict:
+    d = _load_own()
+    try:                                                  # folders trusted with /trust before 0.0.17 (one list)
+        old = json.loads((C.home() / "trusted_projects.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        old = []
+    for f in old if isinstance(old, list) else []:
+        if isinstance(f, str) and f:
+            d["folders"].setdefault(_norm(f), {"at": 0})
+    return d
+
+
+def _load_own() -> dict:
     try:
         d = json.loads(_store().read_text(encoding="utf-8"))
         return d if isinstance(d, dict) and isinstance(d.get("folders"), dict) else {"folders": {}}
@@ -102,6 +114,15 @@ def revoke(root) -> bool:
     gone = d["folders"].pop(_norm(root), None) is not None
     if gone:
         _save(d)
+    old_f = C.home() / "trusted_projects.json"            # and from the list /trust kept before 0.0.17
+    try:
+        old = json.loads(old_f.read_text(encoding="utf-8"))
+        if isinstance(old, list):
+            keep = [x for x in old if not (isinstance(x, str) and _norm(x) == _norm(root))]
+            if len(keep) != len(old):
+                old_f.write_text(json.dumps(keep, indent=1), encoding="utf-8")
+    except (OSError, ValueError):
+        pass
     return gone
 
 

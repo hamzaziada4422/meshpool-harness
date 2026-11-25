@@ -91,26 +91,21 @@ def test_ctrl_c_stops_the_agent_and_later_questions_are_refused(monkeypatch):
 
 
 def test_print_mode_exits_non_zero_when_the_turn_failed(monkeypatch, tmp_path):
-    import meshpool_harness.harnesses as HR
+    """The terminal runs the app's chat engine; a turn that ends in an error event exits 1."""
     import meshpool_harness.agent.core as core
+    monkeypatch.setenv("MESHPOOL_API_KEY", "sk-test-key-123456")
+    monkeypatch.setenv("MH_RUNS_DIR", str(tmp_path / "runs"))
 
-    class FakeAgent:
-        def __init__(self, wd, emit=None, **kw):
-            self.emit, self.root, self.messages, self.mode = emit, wd, [], "auto"
-
-        def send(self, text):
-            self.emit({"type": "error", "text": "Couldn't reach the model."})
-    monkeypatch.setattr(HR, "ready", lambda: True)
-    monkeypatch.setattr(HR, "default_for", lambda kind: "meshpool")
-    monkeypatch.setattr(HR, "get", lambda hid: {"id": "meshpool", "type": "builtin", "ready": True})
-    monkeypatch.setattr(core, "Agent", FakeAgent)
-    monkeypatch.setattr(T, "_context", lambda: "")
+    def failing(self, turn):
+        self.emit({"type": "error", "text": "Couldn't reach the model."})
+        return {"role": "assistant", "content": "x"}, False
+    monkeypatch.setattr(core.Agent, "_chat", failing)
     assert T.main(str(tmp_path), prompt="hi", no_mcp=True) == 1
 
 
 def test_context_is_the_apps_context_block(monkeypatch):
     from meshpool_harness import assistant as AS
-    monkeypatch.setattr(AS, "context_block", lambda: "Today is X.\n\nNotes from Meshpool: ...")
+    monkeypatch.setattr(AS, "context_block", lambda **k: "Today is X.\n\nNotes from Meshpool: ...")
     assert T._context() == "Today is X.\n\nNotes from Meshpool: ..."
 
 

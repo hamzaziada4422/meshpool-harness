@@ -60,15 +60,9 @@ def _read() -> dict:
 
 
 def _write(d: dict) -> None:
-    f = _file()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    tmp = f.with_name(f".{f.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-    tmp.write_text(json.dumps(d, indent=1), encoding="utf-8")
-    try:
-        os.chmod(tmp, 0o600)                            # writing samples can be personal: only the user reads it
-    except OSError:
-        pass
-    C.replace_file(tmp, f)                              # never a half-written file
+    from meshpool_harness import fsio
+    # Writing samples can be personal: owner-only from the first byte, and never a half-written file.
+    fsio.atomic_write_text(_file(), json.dumps(d, indent=1), private=True)
 
 
 def _clean_custom(rows) -> list[dict]:

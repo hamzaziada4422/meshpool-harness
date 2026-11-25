@@ -138,18 +138,20 @@ def _log_to_file() -> None:
     log = C.runs_dir() / "app.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     try:
-        if log.exists() and log.stat().st_size > 2_000_000:
-            log.replace(log.with_suffix(".old.log"))
-        f = open(log, "a", encoding="utf-8", errors="replace", buffering=1)
+        from meshpool_harness.logfiles import PipedLog, RotatingFile   # H-23: the app log rotates by size while it runs
+        if os.name != "nt":
+            f = PipedLog(log)                  # native output (fd 1 and 2) goes through the same rotating file
+            sys.stdout = sys.stderr = f.sink
+            try:
+                os.dup2(f.fileno(), 1)
+                os.dup2(f.fileno(), 2)
+            except OSError:
+                pass
+            f.release()
+        else:
+            sys.stdout = sys.stderr = RotatingFile(log)
     except OSError:
         return
-    sys.stdout = sys.stderr = f
-    if os.name != "nt":
-        try:
-            os.dup2(f.fileno(), 1)
-            os.dup2(f.fileno(), 2)
-        except OSError:
-            pass
 
 
 def _mac_environment() -> None:
@@ -334,7 +336,14 @@ def run() -> int:
     C.load_into_env()
     _bundled_tools()
     ensure_cli()
+    import time
     url = _running_instance()
+    restarted = os.environ.pop("MESHPOOL_RESTARTED", None)
+    if url and restarted:                                      # started by an update restart: the old app is closing
+        end = time.time() + 90
+        while url and time.time() < end:
+            time.sleep(0.5)
+            url = _running_instance()
     if url:
         if not _show_running(url):
             open_window(url)
@@ -360,7 +369,7 @@ def run() -> int:
         if not ready.wait(60):
             print("The Meshpool server did not start. See the lines above.")
             return 1
-        url = f"http://127.0.0.1:{box['port']}/"
+        url = SV.app_url(box["port"])                  # the launch key: only this window gets the API token
         if os.name == "nt":
             shown = _window_process(url) == "closed"    # blocks until the window closes
         else:
@@ -387,8 +396,12 @@ def has_folder_picker() -> bool:
     return WINDOW[0] is not None or sys.platform == "darwin" or os.name == "nt" or bool(shutil.which("zenity"))
 
 
+class PickerUnavailable(Exception):
+    """The native folder dialog could not open at all (no display, no helper): not the same as the user cancelling."""
+
+
 def choose_folder(start: str = "") -> str:
-    """Native folder picker. Returns '' when cancelled or not available."""
+    """Native folder picker. Returns '' when cancelled; raises PickerUnavailable when the dialog cannot open (F-05)."""
     start = start if start and Path(start).is_dir() else str(Path.home())
     w = WINDOW[0]
     if w is not None:                          # the app's own window: a native sheet attached to it
@@ -399,8 +412,9 @@ def choose_folder(start: str = "") -> str:
             pass
     try:
         if sys.platform == "darwin":
+            q = str(start).replace("\\", "\\\\").replace('"', '\\"')
             script = (f'POSIX path of (choose folder with prompt "Choose a project folder for Meshpool" '
-                      f'default location (POSIX file "{start}"))')
+                      f'default location (POSIX file "{q}"))')
             r = subprocess.run(["osascript", "-e", "activate", "-e", script], capture_output=True, text=True,
                                timeout=600)
             return r.stdout.strip().rstrip("/") if r.returncode == 0 else ""
@@ -408,18 +422,22 @@ def choose_folder(start: str = "") -> str:
             ps = ("Add-Type -AssemblyName System.Windows.Forms;"
                   "$f = New-Object System.Windows.Forms.FolderBrowserDialog;"
                   "$f.Description = 'Choose a project folder for Meshpool';"
-                  f"$f.SelectedPath = '{start}';"
+                  "$f.SelectedPath = $env:MESHPOOL_PICK_START;"
                   "$owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true};"
                   "if ($f.ShowDialog($owner) -eq 'OK') { Write-Output $f.SelectedPath }")
             r = subprocess.run(["powershell", "-NoProfile", "-STA", "-Command", ps], capture_output=True, text=True,
-                               timeout=600, creationflags=NO_WINDOW)
+                               timeout=600, creationflags=NO_WINDOW, env=dict(os.environ, MESHPOOL_PICK_START=str(start)))
             return r.stdout.strip()
         if shutil.which("zenity"):
             r = subprocess.run(["zenity", "--file-selection", "--directory", f"--filename={start}/"],
                                capture_output=True, text=True, timeout=600)
+            if r.returncode != 0 and r.stderr.strip() and not r.stdout.strip():     # a cancel prints nothing
+                raise PickerUnavailable(r.stderr.strip()[:200])
             return r.stdout.strip()
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
         return ""
+    except OSError as e:
+        raise PickerUnavailable(str(e)) from None
     return ""
 
 
@@ -451,7 +469,10 @@ def reveal(path: Path) -> None:
     elif os.name == "nt":
         os.startfile(str(path))  # noqa: S606
     else:
-        subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            raise ValueError(f"No file manager is installed here. The folder is {path}") from None
 
 
 def _cli_path() -> str:
@@ -545,9 +566,9 @@ def install_cli(admin: bool = False) -> dict:
     _link(bindir / "meshpool", cli)
     added = []
     line = 'export PATH="$HOME/.local/bin:$PATH"  # added by Meshpool'
-    for rc in (Path.home() / ".zshrc", Path.home() / ".bashrc", Path.home() / ".bash_profile"):
-        if rc.name != ".zshrc" and not rc.exists():
-            continue
+    shell = Path(os.environ.get("SHELL") or ("/bin/zsh" if sys.platform == "darwin" else "")).name
+    mine = {"zsh": (".zshrc",), "bash": (".bashrc",)}.get(shell, ())       # only the user's own shell's start-up file
+    for rc in (Path.home() / n for n in mine):
         txt = rc.read_text(encoding="utf-8", errors="replace") if rc.exists() else ""
         if ".local/bin" not in txt:
             with open(rc, "a", encoding="utf-8") as f:

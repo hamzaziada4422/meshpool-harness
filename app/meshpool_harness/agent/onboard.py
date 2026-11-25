@@ -106,13 +106,24 @@ def _check_model(custom: bool) -> str:
     return m or "deepseek-v4.1-flash"
 
 
+def _key_title(custom: bool) -> str:
+    return "Connect your provider" if custom else "Connect your Meshpool account"
+
+
+def _checking_text(base: str, custom: bool) -> str:
+    """The key is checked against the endpoint it was typed for: name that host when it is not Meshpool."""
+    from urllib.parse import urlparse
+    h = (urlparse(base).hostname or "").lower()
+    return f"    Checking your key with {h}..." if custom and h and "meshpool" not in h else "    Checking your key..."
+
+
 def _key_step(st, header: bool, n: int | None, custom: bool) -> bool:
     from meshpool_harness.cli import ping
     if header:
         _p()
         for row in B.banner(st.depth):
             _p(row)
-    title = "Connect your provider" if custom else "Connect your Meshpool account"
+    title = _key_title(custom)
     where = "Your key stays on this computer, in " + _short(C.config_path())
     if n:
         _step(st, n, title, where)
@@ -188,15 +199,27 @@ def _key_step(st, header: bool, n: int | None, custom: bool) -> bool:
                 _p(st.dim(f"    Open {KEY_URL} in your browser, copy your key, then paste it here."))
             continue
         os.environ["MESHPOOL_API_KEY"] = key
-        _p(st.dim("    Checking your key..."))
+        _p(st.dim(_checking_text(os.environ["MESHPOOL_BASE_URL"], custom)))
         # the typed endpoint and key, not the saved ones (those win over the environment and went to the new host)
         r = ping(_check_model(custom), base=os.environ["MESHPOOL_BASE_URL"], key=key,
                  kind=os.environ.get("MH_API_KIND", ""), api_version=os.environ.get("MH_API_VERSION", ""))
+        if custom and not r["ok"] and (r.get("status") == 404 or "HTTP 404" in r["detail"]) and EP.caps(os.environ.get("MH_API_KIND") or "generic")["wire"] == "openai" \
+                and not EP.is_azure(os.environ.get("MH_API_KIND") or "generic"):     # a server that serves /v1 only
+            from meshpool_harness import provider_setup as PS
+            for cand in PS._candidates(os.environ["MESHPOOL_BASE_URL"])[1:]:
+                r2 = ping(_check_model(custom), base=cand, key=key)
+                if r2["ok"] or "HTTP 404" not in r2["detail"]:
+                    r = r2
+                    os.environ["MESHPOOL_BASE_URL"] = cand
+                    break
         save = {"MESHPOOL_API_KEY": key, **reset}
         if custom:
             save.update(MESHPOOL_BASE_URL=os.environ["MESHPOOL_BASE_URL"], MH_MODEL=os.environ["MH_MODEL"],
                         MH_API_KIND=os.environ.get("MH_API_KIND", ""), MH_API_VERSION=os.environ.get("MH_API_VERSION", ""))
             save["MH_API_WIRE"] = EP.wire_of(os.environ.get("MH_API_KIND") or EP.detect(os.environ["MESHPOOL_BASE_URL"]))
+        meshpool = "https://llm.meshpool.ai/v1"
+        if ((save.get("MESHPOOL_BASE_URL", saved_base) or meshpool).rstrip("/") != (saved_base or meshpool)):
+            save.update(MH_AUTH_HEADER="", MH_AUTH_SCHEME="")   # the old endpoint's key header is not this one's
         if r["ok"]:
             C.write(save)
             _use("custom" if custom else "meshpool")
@@ -205,6 +228,13 @@ def _key_step(st, header: bool, n: int | None, custom: bool) -> bool:
         msg = r["detail"]
         if "rejected the API key" in msg or "401" in msg or "403" in msg:
             _p(st.red("    That key did not work. Check you copied all of it, then paste it again."))
+            continue
+        import re
+        m = re.search(r"HTTP (\d{3})", msg)
+        if m and m.group(1) != "000" and int(m.group(1)) != 0:
+            # The endpoint answered, so the network is fine: a wrong model id or address, or no quota. Do not save it.
+            _p(st.red(f"    The endpoint answered with an error (HTTP {m.group(1)}): {msg[:200]}"))
+            _p(st.dim("    Check the model name and address, then try again."))
             continue
         # The key may be fine and the network is the problem: keep it, say what happened.
         C.write(save)
@@ -336,6 +366,8 @@ def _where_step(st, start: Path) -> Path | None:
             v = _ask(st, "Folder path")
             if v is None:
                 return None
+            if not v.strip():
+                continue                                  # nothing typed: ask again, do not pick the current folder
             folder = Path(os.path.expandvars(v.strip().strip("'\""))).expanduser()
             if folder.is_dir():
                 break
@@ -348,10 +380,10 @@ def _where_step(st, start: Path) -> Path | None:
     _p()
     _p(f"  {st.bold('What can it do without asking?')}")
     _p()
-    modes = [("ask", "Ask me first", "before it changes a file or runs a command (recommended)"),
-             ("edits", "Edit files freely", "ask only before running commands"),
+    modes = [("ask", "Ask", "before it changes a file or runs a command (recommended)"),
+             ("edits", "Accept edits", "edit files freely, ask only before running commands"),
              ("auto", "Full access", "never ask")]
-    cur = os.environ.get("MH_AGENT_PERMISSIONS", "ask")
+    cur = C.permission_mode()
     d = next((i for i, m in enumerate(modes, 1) if m[0] == cur), 1)
     c = _choose(st, [(m[1], m[2]) for m in modes], d)
     if c is None:

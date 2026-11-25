@@ -58,8 +58,15 @@ def _ready(kind: str) -> dict:
     # provider the user chose, and otherwise only after the user allowed it.
     subs_ok = (C.read().get("MH_AUTO_SUBSCRIPTIONS") or os.environ.get("MH_AUTO_SUBSCRIPTIONS", "0")) == "1"
     chosen = HR.provider()
+    try:                                            # agents whose process could not start lately (hrouter/health.py)
+        from meshpool_harness.hrouter import health
+        down = health.broken()
+    except Exception:  # noqa: BLE001
+        down = {}
+    # A chat's mode decides its agents: a Code chat is never routed to Work or Hermes, nor a Work chat to a code agent.
     return {h["id"]: h for h in HR.load_all()
             if h.get("available") and not h.get("error") and h.get("type") != "auto" and h.get("ready", True)
+            and (kind not in ("code", "cowork") or h.get("mode", "any") in (kind, "any")) and h["id"] not in down
             and (not h.get("plan") or h["plan"] == chosen or subs_ok)}
 
 
@@ -102,7 +109,8 @@ def route(text: str, kind: str = "cowork", category: str | None = None, model: s
     scored = {h: q for h, q in quality.items() if h in ready}
     if not scored:
         hid = HR.default_for(kind if kind in HR.MODES else "cowork")
-        return {"harness": hid, "name": ready.get(hid, {}).get("name", hid), "category": cat,
+        _nm = ready.get(hid, {}).get("name") or next((d.get("name") for d in HR.load_all() if d.get("id") == hid), hid)
+        return {"harness": hid, "name": _nm, "category": cat,
                 "reason": "No ranked agent is ready, so the mode's default is used.", "ranking": []}
     best = max(scored.values())
     band = float(t.get("quality_band", DEFAULT_BAND))

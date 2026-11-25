@@ -79,6 +79,8 @@ def _jwrite(p: Path, data) -> None:
 
 def _state() -> dict:
     s = _jread(folder() / "state.json", {})
+    if not isinstance(s, dict):
+        s = {}
     s.setdefault("types", {})
     s.setdefault("mutes", [])                  # [{id, ts, type, card_id, title, active}] "show me less like this"
     s.setdefault("osn", {})                    # {"2026-11-22": 1}

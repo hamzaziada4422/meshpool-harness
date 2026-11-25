@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sys
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -187,8 +188,8 @@ def _servers(agent: dict, base: Path, root: Path) -> list[tuple[str, dict]]:
                     found += [(f"{n} ({Path(proj).name})", s) for n, s in conf["mcpServers"].items()]
     for fname in agent.get("mcp_toml", []):
         try:
-            import tomllib
-            found += list((tomllib.loads(_read(base / fname) or "").get("mcp_servers") or {}).items())
+            from meshpool_harness.importer import toml_loads
+            found += list((toml_loads(_read(base / fname) or "").get("mcp_servers") or {}).items())
         except Exception:  # noqa: BLE001 - a broken file is skipped
             pass
     for fname in agent.get("mcp_yaml", []):
@@ -232,7 +233,8 @@ def _existing_facts() -> set:
 def _existing_mcp() -> set:
     try:
         from meshpool_harness.agent import mcp as M
-        return {json.dumps(_norm_server(v) or {}, sort_keys=True) for v in M.load_config().values() if isinstance(v, dict)}
+        return {json.dumps(_norm_server({k: x for k, x in v.items() if k not in ("disabled", "enabled")}) or {}, sort_keys=True)
+                for v in M.load_config().values() if isinstance(v, dict)}
     except Exception:  # noqa: BLE001
         return set()
 
@@ -284,8 +286,10 @@ def scan(only: list[str] | None = None) -> dict:
             sig = json.dumps(clean, sort_keys=True)
             what = ("Connects to " + urlparse(clean["url"]).netloc) if clean.get("url") else \
                 "Runs " + " ".join([clean.get("command", "")] + clean.get("args", []))[:80]
+            broken = bool(clean.get("command")) and not shutil.which(str(clean["command"]))
             items.append({"key": f"mcp:{aid}:{name}", "kind": "mcp", "name": str(name), "spec": clean, "preview": what,
-                          "stripped": gone, "exists": sig in have_m})
+                          "stripped": gone, "exists": sig in have_m,
+                          "default": not (broken or gone), "broken": broken})
         for f in _files(base, a["instructions"]):
             t = _read(f).strip()
             if t:
@@ -293,8 +297,12 @@ def scan(only: list[str] | None = None) -> dict:
                               "path": str(f), "preview": t[:200].replace("\n", " "), "chars": len(t),
                               "exists": False})
         for f in _files(base, a["memories"]):
+            try:
+                rel = f.relative_to(base).as_posix()           # the path, not just the name: several MEMORY.md files
+            except ValueError:
+                rel = f.name
             for i, fact in enumerate(_facts(_read(f))):
-                items.append({"key": f"memory:{aid}:{f.name}:{i}", "kind": "memory", "name": fact[:60],
+                items.append({"key": f"memory:{aid}:{rel}:{i}", "kind": "memory", "name": fact[:60],
                               "path": str(f), "text": fact, "preview": fact, "exists": _fold(fact) in have_f})
         have_h = _existing_hooks()
         for i, (ev, hook, _) in enumerate(_hooks(a, base)):
@@ -396,6 +404,18 @@ def _fold(t: str) -> str:
     return MS.norm(t)
 
 
+def _scan_text(text: str) -> tuple[str, int]:
+    """Instruction text without lines that hold a secret value or something the memory filter refuses."""
+    from meshpool_harness import assistant as AS
+    keep, dropped = [], 0
+    for ln in text.splitlines():
+        if AS.BAD.search(ln) or any(SECRET_VALUE.match(w.strip("\"'`,;:()[]")) for w in ln.split()):
+            dropped += 1
+        else:
+            keep.append(ln)
+    return "\n".join(keep), dropped
+
+
 # ---------- apply ------------------------------------------------------------------------------------------------------
 def apply(keys: list[str], dry_run: bool = False, only: list[str] | None = None) -> dict:
     """Write the chosen items (or, with dry_run, say what would be written). Returns the report."""
@@ -419,7 +439,7 @@ def apply(keys: list[str], dry_run: bool = False, only: list[str] | None = None)
                     if it["stripped"]:
                         rep["stripped"].append({"server": it["name"], "agent": a["name"], "names": it["stripped"]})
                     rep["mcp"].append(it["name"] if dry_run else IM.import_mcp(
-                        it["name"], it["spec"], f"Imported from {a['name']}. Add any keys it needs in Settings."))
+                        it["name"], it["spec"], f"Imported from {a['name']}. Switched off until you review it: add any keys it needs, then turn it on in Settings."))
                 elif it["kind"] == "memory":
                     if not dry_run:
                         from meshpool_harness import memstore as MS
@@ -437,7 +457,11 @@ def apply(keys: list[str], dry_run: bool = False, only: list[str] | None = None)
                 elif it["kind"] == "instructions":
                     if not dry_run:
                         from meshpool_harness import assistant as AS
-                        body = _read(Path(it["path"])).strip()[:MAX_INSTRUCTIONS]
+                        body, dropped = _scan_text(_read(Path(it["path"])).strip()[:MAX_INSTRUCTIONS])
+                        if dropped:
+                            rep["skipped"].append(f"{it['name']}: {dropped} line(s) that looked like secrets were left out")
+                        if not body.strip():
+                            continue
                         cur = AS.instructions()
                         head = f"From {a['name']} ({it['name']}):"
                         if head not in cur:
@@ -458,6 +482,9 @@ def cli(args: list[str]) -> int:
     for i, a in enumerate(args):
         if a == "--from" and i + 1 < len(args):
             only = [x.strip() for x in args[i + 1].split(",") if x.strip()]
+    bad = [x for x in (only or []) if x not in AGENTS]
+    if bad:
+        raise ValueError(f"unknown agent {', '.join(bad)} in --from; choose from {', '.join(AGENTS)}")
     found = scan(only)
     if not found["agents"]:
         print("No other agents found on this computer.")

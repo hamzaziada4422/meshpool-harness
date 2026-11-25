@@ -129,7 +129,10 @@ def test_update_task_validates_and_reschedules_a_fired_once_task(tmp_path, monke
     _home(tmp_path, monkeypatch)
     import pytest
     from meshpool_harness import assistant as AS
-    t = AS.add_task("ping", "Say hi", "once", at="2020-01-01T09:00")
+    t = AS.add_task("ping", "Say hi", "once", at="2098-01-01T09:00")      # a past time is refused now (F-28)
+    rows = AS.tasks()
+    rows[0]["next_run"] = 1.0                                       # the time came
+    AS._save_tasks(rows)
     assert [x["id"] for x in AS.due()] == [t["id"]]                # fires once and switches off
     assert AS.due() == []
     u = AS.update_task(t["id"], at="2099-01-01T09:00", enabled=True)

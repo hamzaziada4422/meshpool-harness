@@ -282,6 +282,10 @@ def app_code(dst: Path):
     for name in ("meshpool_harness", "engines", "profiles", "defaults"):
         shutil.copytree(APP_SRC / name, dst / name, ignore=IGN)
     shutil.copy2(ROOT / "THIRD_PARTY_NOTICES.md", dst / "THIRD_PARTY_NOTICES.md")
+    # Start-up recovery of an interrupted in-place update (M11-06): beside the code folders, not inside them, so it
+    # still works when meshpool_harness/ is missing. sitecustomize.py runs it when the app folder is on PYTHONPATH.
+    for name in ("meshpool_recover.py", "sitecustomize.py"):
+        shutil.copy2(APP_SRC / name, dst / name)
     shutil.copy2(APP_SRC / "requirements.txt", dst / "requirements.txt")
     # The package list the bundled runtime is built from (docs/BUILDING.md); the in-app update compares it.
     shutil.copy2(PKG / "requirements-cli.txt", dst / "requirements-cli.txt")
@@ -391,11 +395,12 @@ if __name__ == "__main__":
     if "--check-pins" in sys.argv[1:]:
         check_pins()
         sys.exit(0)
-    check_winres()
+    only = next((x.split("=", 1)[1] for x in sys.argv[1:] if x.startswith("--only=")), "mac-arm64,mac-x64,win")
+    if "win" in only.split(","):         # only the Windows job runs --winres to repair it, so only it can be held up by it
+        check_winres()
     if OUT.exists():
         shutil.rmtree(OUT)
     OUT.mkdir()
-    only = next((x.split("=", 1)[1] for x in sys.argv[1:] if x.startswith("--only=")), "mac-arm64,mac-x64,win")
     for a in ("mac-arm64", "mac-x64"):
         if a in only.split(","):
             mac_app(a)

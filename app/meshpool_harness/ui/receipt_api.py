@@ -20,10 +20,16 @@ def handle(method: str, u, body: bytes = b""):
         return 200, {"receipt": RC.receipt_for(chat) if chat else None}
     if u.path == "/api/receipt/feedback" and method == "POST":
         b = json.loads(body.decode("utf-8")) if body else {}
+        if not isinstance(b, dict):
+            return 400, {"error": "The request must be a JSON object."}
         chat, outcome = str(b.get("chat") or ""), str(b.get("outcome") or "")
         if not chat or outcome not in OUTCOMES:
             return 400, {"error": "Say which chat and whether it was up, down or retry."}
+        from meshpool_harness.ui import agent_api as A
+        if not A.exists(chat):
+            return 404, {"error": "That chat no longer exists."}
         from meshpool_harness.hrouter import outcomes as OUT
-        OUT.mark(chat, outcome)
+        t = b.get("turn")
+        OUT.mark(chat, outcome, t if isinstance(t, int) and not isinstance(t, bool) and 0 < t < 10**6 else None)
         return 200, {"ok": True}
     return 404, {"error": "not found"}

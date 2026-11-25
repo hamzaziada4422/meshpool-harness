@@ -48,3 +48,18 @@ deps/
 /insights/
 /summaries/
 /artifacts/
+# secrets and local env files
+.env
+.env.*
+!.env.example
+# Pi's generated home (settings, auth, mcp.json with connector tokens, skill copies) when the app runs from source
+/pi/
+# test and run debris
+.pytest-cache/
+app/.pytest-cache/
+app/sessions/
+app/Meshpool outputs/
+Meshpool outputs/
+
+# runtime caches written when MESHPOOL_HOME is unset (C-90 stops writing them into the source tree)
+mcp-tools-cache.json

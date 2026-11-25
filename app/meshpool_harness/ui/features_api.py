@@ -2,8 +2,6 @@
 
   GET  /api/trust?root=PATH        {"root", "trusted", "risky": [files that run code or skip questions]}
   POST /api/trust {"root", "action": "trust" | "revoke"}
-  GET  /api/worktree?root=PATH     {"worktrees": [{name, path, branch, dirty, unpushed}]}
-  POST /api/worktree {"root", "action": "create", "name"} | {"root", "action": "remove", "path", "force"}
   GET  /api/office                 the Excel, PowerPoint and Word add-in: certificate, manifest, sideloaded, running
   POST /api/office {"action": "install" | "uninstall", "apps": [...]}
 """
@@ -37,30 +35,6 @@ def trust_post(b: dict) -> tuple[int, dict]:
     else:
         raise ValueError("action is trust or revoke")
     return 200, TR.status(root)
-
-
-def worktree_get(q: dict) -> tuple[int, dict]:
-    from meshpool_harness import worktrees as WT
-    try:
-        return 200, {"worktrees": WT.listing(_root((q.get("root") or [""])[0]))}
-    except WT.WorktreeError as e:
-        raise ValueError(str(e))
-
-
-def worktree_post(b: dict) -> tuple[int, dict]:
-    from meshpool_harness import worktrees as WT
-    root = _root(b.get("root"))
-    try:
-        if (b.get("action") or "create") == "create":
-            return 200, WT.create(root, str(b.get("name") or ""))
-        if b.get("action") == "remove":
-            return 200, WT.remove(_root(b.get("path")), force=bool(b.get("force")))
-    except WT.WorktreeError as e:
-        raise ValueError(str(e))
-    raise ValueError("action is create or remove")
-
-
-RULE_LISTS = ("allow", "ask", "deny")
 
 
 def _rules_file() -> Path:
@@ -161,8 +135,6 @@ ROUTES = {("GET", "/api/rules"): lambda u, b: rules_get(),
           ("POST", "/api/rules"): lambda u, b: rules_post(json.loads(b.decode("utf-8")) if b else {}),
           ("GET", "/api/office"): lambda u, b: office_get(),
           ("POST", "/api/office"): lambda u, b: office_post(json.loads(b.decode("utf-8")) if b else {}),
-          ("GET", "/api/worktree"): lambda u, b: worktree_get(parse_qs(u.query)),
-          ("POST", "/api/worktree"): lambda u, b: worktree_post(json.loads(b.decode("utf-8")) if b else {}),
           ("GET", "/api/trust"): lambda u, b: trust_get(parse_qs(u.query)),
           ("POST", "/api/trust"): lambda u, b: trust_post(json.loads(b.decode("utf-8")) if b else {})}
 

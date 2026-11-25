@@ -52,7 +52,7 @@ function shell() {
         <div class="composer" id="composer">
           <div class="attach-row" id="attachRow"></div>
           <label class="sr" for="input">Message</label>
-          <textarea id="input" rows="1" placeholder="Message Meshpool"></textarea>
+          <textarea id="input" dir="auto" rows="1" placeholder="Message Meshpool"></textarea>
           <div class="cbar" id="cbar"></div>
           <input type="file" id="fileIn" multiple hidden>
         </div>
@@ -60,7 +60,7 @@ function shell() {
         <div class="hintline" id="hintline"><span class="hl-status" id="statusSlot"></span><span class="hl-hint" id="hintTxt"></span></div>
       </div>
     </main>
-    <aside class="panel" id="panel" aria-label="Side panel" ${S.panel ? "" : "hidden"}><div class="rz" id="rz"></div><div class="ptabs" id="ptabs" role="tablist"></div><div class="pbody" id="pbody"></div></aside>
+    <aside class="panel" id="panel" aria-label="Side panel" ${S.panel ? "" : "hidden"}><div class="rz" id="rz"></div><div class="ptabs" id="ptabs"></div><div class="pbody" id="pbody"></div></aside>
   </div>`;
   $("#updBar").onclick = e => e.currentTarget.dataset.act === "apply" ? applyUpdate() : openSettings("about");
   $("#hideSide").onclick = toggleSide;
@@ -150,7 +150,8 @@ async function pickProject() {
 }
 async function loadThreads() {
   const was = new Map((S.threads || []).map(t => [t.id, t.state]));
-  S.threads = (await api("/api/agent")).sessions;
+  const pg = await api(`/api/agent?limit=${S.threadLimit || 300}`);        // P-07: the newest chats; "Load more" widens the window
+  S.threads = pg.sessions; S.threadsMore = !!pg.more; S.threadsTotal = pg.total || S.threads.length;
   for (const t of S.threads) {
     const w = was.get(t.id);
     if (w === "working" && t.state === "waiting") window.notifyEvent?.("wait", t.title);
@@ -254,6 +255,7 @@ function renderSide() {
     html += `<div class="sec"><button class="sechd" id="togArch" aria-expanded="${!!S.showArchived}"><span>Archived</span><span class="cnt">${arch.length}</span><span class="chev">${ICON.chev}</span></button></div>`;
     if (S.showArchived) html += `<ul class="threads">${arch.map(t => thHTML(t, {})).join("")}</ul>`;
   }
+  if (S.threadsMore) html += `<button class="linkbtn moreproj" id="moreThreads">Load more chats (${Math.max(0, (S.threadsTotal || 0) - S.threads.length)} older)</button>`;
   // Rewriting identical HTML drops hover, eats a click that lands mid-rewrite, and flickers: skip it. When only the status
   // dots changed, patch them in place.
   if (el._html === html) return;
@@ -299,6 +301,7 @@ function bindSide() {
     const sec = e.target.closest("[data-sec]"); if (sec) { const k = sec.dataset.sec; S.collapsed.has(k) ? S.collapsed.delete(k) : S.collapsed.add(k); store("collapsed", [...S.collapsed]); return renderSide(); }
     if (e.target.closest("#codeFilter")) return codeFilterMenu(e.target.closest("#codeFilter"));
     if (e.target.closest("#togArch")) { S.showArchived = !S.showArchived; return renderSide(); }
+    if (e.target.closest("#moreThreads")) { S.threadLimit = (S.threadLimit || 300) + 300; S.allRecents = true; loadThreads(); return; }
     if (e.target.closest("#moreRecents")) { S.allRecents = !S.allRecents; return renderSide(); }
     const va = e.target.closest("[data-vall]"); if (va) return openProject(va.dataset.vall);
     if (e.target.closest(".rn")) return;
@@ -369,7 +372,10 @@ async function prCard(ic) {
 }
 
 /* ================================== pages ================================== */
+/* The Memory and Project pages bind handlers on the persistent #col; drop them whenever the column is reused. */
+function clearColHandlers() { const c = $("#col"); if (c) for (const k of ["onclick", "onkeydown", "ondrop", "ondragover", "ondragleave", "ondragstart"]) c[k] = null; c?.classList.remove("drag"); const i = $("#input"); if (i) i.disabled = false; }
 function goPage(name) {
+  clearColHandlers(); window.navPush?.("page:" + name);
   leaveChat(S.cur); S.cur = null; setWorking(null);
   S.view = "page"; S.page = name; S.pjId = "";
   S.attachments = []; renderAttach?.();
@@ -485,7 +491,7 @@ function renderTop() {
     ${folderChat ? `<button class="chip" id="projChip" data-tip="${esc(isMgd(root) ? projName(root) : root)}" data-tip-pos="below">${ICON.dir}<span class="cl">${esc(projName(root))}</span></button>` : ""}
     <span id="branchChip">${v && curMode() !== "cowork" && !v.scratch ? (S.branchHTML || {})[root] || "" : ""}</span>
     <span class="sp"></span>
-    ${v ? `<button class="tbtn stepbtn" id="panelBtn" aria-pressed="${open}" data-tip="${open ? "Hide" : "Show"} progress" data-kbd="${MOD}." data-tip-pos="below">${ICON.list}<span id="stepLbl">${esc(stepLabel())}</span></button><button class="tbtn" id="shareBtn" data-tip="Copy or save this chat" data-tip-pos="below" aria-haspopup="menu">${ICON.share}<span>Export</span></button>` : ""}
+    ${v ? `<button class="tbtn stepbtn" id="panelBtn" aria-label="${open ? "Hide" : "Show"} progress" aria-pressed="${open}" data-tip="${open ? "Hide" : "Show"} progress" data-kbd="${MOD}." data-tip-pos="below">${ICON.list}<span id="stepLbl">${esc(stepLabel())}</span></button><button class="tbtn" id="shareBtn" aria-label="Export chat" data-tip="Copy or save this chat" data-tip-pos="below" aria-haspopup="menu">${ICON.share}<span>Export</span></button>` : ""}
     ${!v && !onPage && !onProject ? `<button class="tbtn" id="flagBtn" data-tip="Report a problem" data-tip-pos="below" aria-label="Report a problem">${ICON.flag}</button>` : ""}`;
   if (!setHTML($("#topbar"), topHTML, true)) { renderBranch(); return; }      // nothing changed: leave the header alone
   $("#showSide")?.addEventListener("click", toggleSide);
@@ -520,26 +526,10 @@ function chatMenu(e) {
     {label: inPj ? "Move to project" : "Add to project", icon: ICON.stack, sub: projects},
     {label: "Export chat", icon: ICON.share, fn: () => exportMenu({type: "click", currentTarget: $("#shareBtn") || $("#ttl")})},
     {label: "Show every step", icon: ICON.list, checked: !!S.steps, kbd: `${MOD}E`, fn: toggleSteps},
-    ...(v.scratch ? [] : [/[\\/]\.meshpool[\\/]worktrees[\\/][^\\/]+$/.test(v.workdir || "")
-      ? {label: "Move back to the main checkout", icon: ICON.branch, sub: [
-          {label: "Bring the uncommitted changes", fn: () => moveCheckout(v.id, "main", true)},
-          {label: "Leave them in the worktree", fn: () => moveCheckout(v.id, "main", false)}]}
-      : {label: "Move to a new worktree", icon: ICON.branch, sub: [
-          {label: "Bring the uncommitted changes", desc: "Your checkout is left clean", fn: () => moveCheckout(v.id, "worktree", true)},
-          {label: "Leave them here", fn: () => moveCheckout(v.id, "worktree", false)}]}]),
     {sep: true},
     {label: "Archive", icon: ICON.archive, key: "a", kbd: "A", fn: () => threadAct(v.id, "archive")},
     {label: "Delete", icon: ICON.trash, danger: true, key: "d", kbd: "D", fn: () => confirmDelete(v.id)},
   ]);
-}
-/* Hand the open chat to a new worktree of its repository, or back to the main checkout; the conversation goes along. */
-async function moveCheckout(id, to, carry) {
-  try {
-    const r = await post(`/api/agent/${id}/checkout`, {to, carry, since: 1e9});
-    if (S.cur?.view?.id === id) { S.cur.view.workdir = r.workdir; S.cur.view.turns = r.turns; }
-    renderTop(); renderBar();
-    toast((to === "main" ? "This chat now works in the main checkout." : "This chat now works in a new worktree.") + (r.moved?.note ? " " + r.moved.note : ""), 6000);
-  } catch (e) { toast(e.message, 6000); }
 }
 function renameTop() {
   const v = S.cur?.view, ttl = $("#ttl"); if (!v || !ttl) return;
@@ -578,7 +568,7 @@ function exportMenu(e) {
   if (!S.cur) return;
   ctxMenu({type: "click", currentTarget: e.currentTarget}, [
     {label: "Copy as Markdown", icon: ICON.copy, fn: () => navigator.clipboard.writeText(chatMarkdown()).then(() => toast("Chat copied"), () => toast("Could not copy. Save it as a file instead."))},
-    {label: "Save as a file", icon: ICON.dl, fn: () => { const a = Object.assign(document.createElement("a"), {href: URL.createObjectURL(new Blob([chatMarkdown()], {type: "text/markdown"})), download: (S.cur.view.title || "chat").replace(/[^\w -]+/g, "").trim().slice(0, 60) + ".md"}); document.body.appendChild(a); a.click(); a.remove(); }},
+    {label: "Save as a file", icon: ICON.dl, fn: () => { const a = Object.assign(document.createElement("a"), {href: URL.createObjectURL(new Blob([chatMarkdown()], {type: "text/markdown"})), download: ((S.cur.view.title || "chat").replace(/[\\/:*?"<>|\x00-\x1f]+/g, "").trim().slice(0, 60) || "chat") + ".md"}); document.body.appendChild(a); a.click(); a.remove(); }},
   ]);
 }
 async function renderBranch() {
@@ -608,6 +598,58 @@ const PANELS = {cowork: ["session", "progress", "outputs", "browser"], code: ["s
 function curMode() { return S.cur?.view?.kind || "cowork"; }
 // A chat with its own private folder has no repository, so it gets the simple tabs; a chat in a real folder gets
 // the developer tabs when it is a code chat.
-function panelSet() { const v = S.cur?.view; return !v || v.scratch ? PANELS.cowork : PANELS[curMode()]; }
+function panelSet() { const v = S.cur?.view; return !v || v.scratch ? PANELS.cowork : v.worktree ? ["worktree", ...PANELS[curMode()]] : PANELS[curMode()]; }
 function linkOf(pid) { return (S.pj.find(p => p.id === pid) || {}).link || null; }
 function curRoot() { return S.cur?.view?.workdir || S.draft.project || linkOf(S.draft.pid)?.path || ""; }
+
+/* ---------- modal focus: Tab stays inside the open dialog, and focus goes back to what opened it ---------- */
+(() => {
+  const FOC = 'a[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+  const top = () => { const all = document.querySelectorAll("body > .scrim"); return all[all.length - 1] || null; };
+  const openers = new WeakMap();
+  // B9: while a modal is open the page behind it is inert: no focus, no clicks, hidden from screen readers.
+  const syncInert = () => {
+    const app = document.getElementById("app"); if (!app) return;
+    const modal = top();
+    if (modal) {
+      app.inert = true;
+      if (!modal.contains(document.activeElement)) { const t = modal.querySelector('[autofocus],.modal,[role=dialog]'); if (t) { if (!t.hasAttribute("tabindex") && !/^(BUTTON|INPUT|A)$/.test(t.tagName)) t.setAttribute("tabindex", "-1"); t.focus?.({preventScroll: true}); } }
+    } else app.inert = false;
+  };
+  new MutationObserver(ms => {
+    syncInert();
+    for (const m of ms) {
+      for (const n of m.addedNodes) if (n.nodeType === 1 && n.classList?.contains("scrim")) openers.set(n, m.target === document.body ? lastFocus : null);
+      for (const n of m.removedNodes) if (n.nodeType === 1 && n.classList?.contains("scrim")) { const o = openers.get(n); if (o && o.isConnected && !top()) setTimeout(() => { if (document.activeElement === document.body || !document.activeElement) o.focus?.({preventScroll: true}); }, 0); }
+    }
+  }).observe(document.body, {childList: true});
+  let lastFocus = null;
+  document.addEventListener("focusin", e => { if (!e.target.closest?.(".scrim")) lastFocus = e.target; }, true);
+  document.addEventListener("keydown", e => {
+    if (e.key !== "Tab") return;
+    const sc = top(); if (!sc) return;
+    const f = [...sc.querySelectorAll(FOC)].filter(x => x.offsetParent !== null || x === document.activeElement);
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1], a = document.activeElement;
+    if (!sc.contains(a)) { e.preventDefault(); first.focus(); }
+    else if (e.shiftKey && a === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
+  }, true);
+})();
+
+/* ---------- Back / Forward move between pages and chats ---------- */
+(() => {
+  let restoring = false, lastKey = "";
+  window.navPush = key => {
+    if (restoring || key === lastKey) return; lastKey = key;
+    try { history.pushState({mp: key}, "", location.pathname + location.search + (/^#settings/.test(location.hash) ? "" : location.hash)); } catch (e) { /* sandboxed frames */ }
+  };
+  addEventListener("popstate", e => {
+    const k = e.state?.mp; if (!k || typeof k !== "string") return;
+    restoring = true; lastKey = k;
+    try {
+      const [t, id] = [k.slice(0, k.indexOf(":")), k.slice(k.indexOf(":") + 1)];
+      if (t === "chat") openThread(id); else if (t === "page") goPage(id); else if (t === "project") openProject(id); else if (t === "new") newThread();
+    } finally { setTimeout(() => { restoring = false; }, 0); }
+  });
+})();

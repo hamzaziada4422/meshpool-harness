@@ -109,6 +109,32 @@ def _read_lines(p: Path) -> list[dict]:
     return out
 
 
+def _load_rw() -> list[dict]:
+    """The facts for a read-modify-write. Unlike load() it never treats an unreadable file as empty (a sharing
+    violation or antivirus lock would otherwise make the next save wipe every fact): it raises OSError instead. A line
+    that does not parse is kept: the file is copied once to facts.jsonl.bak before the next save drops it."""
+    ensure()
+    p = facts_path()
+    try:
+        text = p.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    out, bad = [], False
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                bad = True
+    if bad:
+        with contextlib.suppress(OSError):
+            bak = p.with_name(p.name + ".bak")
+            if not bak.exists():
+                shutil.copy2(p, bak)
+    return out
+
+
 def _append(p: Path, row: dict) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a", encoding="utf-8") as f:
@@ -402,7 +428,7 @@ def add(fact: str, kind: str = "stated", category: str | None = None, scope: str
     if status is None:
         status = "pending" if kind == "noticed" else "active"
     with _lock():
-        rows = load()
+        rows = _load_rw()
         key = norm(text)
         for f in rows:
             if f["scope"] == scope and norm(f["text"]) == key and f["status"] != "archived":
@@ -430,7 +456,7 @@ def update(fid: str, by: str = "you", reason: str = "", **fields) -> dict:
     """Change one fact: text, category, scope, pinned, valid_until, status, kind."""
     allowed = {"text", "category", "scope", "pinned", "valid_until", "status"}
     with _lock():
-        rows = load()
+        rows = _load_rw()
         f = next((x for x in rows if x["id"] == fid), None)
         if f is None:
             raise KeyError("That memory does not exist.")
@@ -493,7 +519,7 @@ def reject(fid: str) -> dict:
 def delete(fid: str, by: str = "you") -> None:
     """Remove a fact for good. The timeline keeps a copy so Undo can bring it back."""
     with _lock():
-        rows = load()
+        rows = _load_rw()
         f = next((x for x in rows if x["id"] == fid), None)
         if f is None:
             return
@@ -506,7 +532,7 @@ def undelete(fid: str) -> dict:
         for r in reversed(_read_lines(log_path())):
             if r.get("id") == fid and r.get("action") == "deleted" and r.get("before"):
                 f = r["before"]
-                rows = load()
+                rows = _load_rw()
                 if not any(x["id"] == fid for x in rows):
                     f["history"].append({"ts": now(), "text": f["text"], "by": "you", "reason": "Restored after delete"})
                     rows.append(f)
@@ -574,6 +600,31 @@ def replace_scope_text(scope: str, text: str, kind: str = "stated") -> None:
             if norm(t) not in have:
                 with contextlib.suppress(ValueError):
                     add(t, kind=kind, scope=scope, source={"type": "manual"}, check=False)
+
+
+def patch_scope_text(scope: str, base: str, text: str, kind: str = "stated") -> None:
+    """Apply what a person changed in a memory text box: lines present in `text` but not in `base` are added, lines in
+    `base` but not in `text` are archived. Facts that are in neither (saved meanwhile) are never touched (M19-01)."""
+    A = _A()
+
+    def lines_of(t: str) -> dict:
+        out: dict = {}
+        for l in (t or "").splitlines():
+            c = _clean(l)
+            if c:
+                out.setdefault(norm(c), c[:MAX_TEXT])
+        return out
+    was, want = lines_of(base), lines_of(text)
+    with _lock():
+        for key in was.keys() - want.keys():
+            for f in list(load()):
+                if f["scope"] == scope and f["status"] == "active" and norm(f["text"]) == key:
+                    archive(f["id"], reason="Removed when the memory text was edited")
+        have = {norm(f["text"]) for f in load() if f["scope"] == scope and f["status"] != "archived"}
+        for key in want.keys() - was.keys():
+            if key not in have and not A.BAD.search(want[key]):
+                with contextlib.suppress(ValueError):
+                    add(want[key], kind=kind, scope=scope, source={"type": "manual"}, check=False)
 
 
 # ---------- noticed-fact rejections (teach the detector) ---------------------------------------------------------------
@@ -797,7 +848,7 @@ def record_given(chat_id: str, turn: int, fact_ids: list[str], context: str = ""
         return
     try:
         with _lock():
-            rows = load()
+            rows = _load_rw()
             ids = set(fact_ids)
             t = now()
             for f in rows:
@@ -855,7 +906,7 @@ def attribute_since(ts: float, chat_id: str, quote: str = "") -> int:
     n = 0
     try:
         with _lock():
-            rows = load()
+            rows = _load_rw()
             for f in rows:
                 s = f["source"]
                 if f["created"] >= ts and s.get("type") == "chat" and not s.get("chat_id"):
@@ -972,7 +1023,7 @@ def history(limit: int = 200) -> list[dict]:
 def still_true(fid: str) -> dict:
     """Yes on a "Still true?" card: kept, not asked again for a while; an expired fact stops expiring."""
     with _lock():
-        rows = load()
+        rows = _load_rw()
         f = next((x for x in rows if x["id"] == fid), None)
         if f is None:
             raise KeyError("That memory does not exist.")

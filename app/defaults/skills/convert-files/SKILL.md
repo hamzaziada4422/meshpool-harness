@@ -1,6 +1,6 @@
 ---
 name: convert-files
-description: "Convert files between formats: Word, PDF, Excel, CSV, Markdown, HTML, images, audio and video. Use when the user asks to convert or export something."
+description: 'Convert files between formats: Word, PDF, Excel, CSV, Markdown, HTML, images, audio and video. Use when the user asks to convert or export something.'
 ---
 
 # Convert files

@@ -1,7 +1,9 @@
 """Workbook QA: LibreOffice recalculation, error scan, circular refs, hardcoded numbers, structure."""
 from __future__ import annotations
 
+import atexit
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -12,24 +14,168 @@ ERRORS = ("#REF!", "#DIV/0!", "#VALUE!", "#NAME?", "#N/A", "#NUM!", "#NULL!", "E
 CALC_SHEETS = re.compile(r"calc|model|output|summary|dashboard|p&l|pnl|forecast|valuation", re.I)
 INPUT_SHEETS = re.compile(r"input|assumption|data|source|raw", re.I)
 FINANCE_SHEETS = re.compile(r"comps|precedent|dcf|valuation", re.I)
+RECALC_TIMEOUT_S = 180
 
 
 def recalc(xlsx_path: str, out_dir: str | None = None) -> str:
-    """Round-trip through LibreOffice headless so every formula gets a computed cached value."""
-    from meshpool_harness.office_runtime import find_soffice, missing_reason
+    """Round-trip through LibreOffice headless so every formula gets a computed cached value. Without out_dir the copy
+    goes to a scratch folder the caller removes (recalc_values does it for you); it is also removed at exit."""
+    from engines.forge.common import _run_tree
+    from meshpool_harness.office_runtime import Unavailable, find_soffice
     soffice = find_soffice()
     if not soffice:
-        raise RuntimeError(f"LibreOffice not installed ({missing_reason()})")
-    out = Path(out_dir or tempfile.mkdtemp(prefix="recalc_"))
+        raise Unavailable()                          # says why: not installed, or a system copy Meshpool does not use
+    if out_dir:
+        out = Path(out_dir)
+    else:
+        out = Path(tempfile.mkdtemp(prefix="recalc_"))
+        atexit.register(shutil.rmtree, str(out), True)      # the converted copy is scratch: do not leave it in /tmp
     out.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as profile:
-        subprocess.run([soffice, f"-env:UserInstallation={Path(profile).as_uri()}", "--headless", "--calc",
-                        "--convert-to", "xlsx:Calc MS Excel 2007 XML", "--outdir", str(out), xlsx_path],
-                       check=True, capture_output=True, timeout=180)
+        # its own process group, killed whole on a timeout: soffice.bin outlives a plain kill of soffice
+        r = _run_tree([soffice, f"-env:UserInstallation={Path(profile).as_uri()}", "--headless", "--calc",
+                       "--convert-to", "xlsx:Calc MS Excel 2007 XML", "--outdir", str(out), xlsx_path],
+                      RECALC_TIMEOUT_S)
+    if r.returncode:
+        raise subprocess.CalledProcessError(r.returncode, r.args, r.stdout, r.stderr)
     return str(out / (Path(xlsx_path).stem + ".xlsx"))       # converted to .xlsx, whatever it came in as (.xlsm)
 
 
+def recalc_values(xlsx_path: str):
+    """The workbook with values (data_only) after a LibreOffice recalculation. The recalculated copy is removed as
+    soon as it is read, so a killed run leaves no scratch folder behind."""
+    out = tempfile.mkdtemp(prefix="recalc_")
+    try:
+        return load_workbook(recalc(xlsx_path, out), data_only=True)
+    finally:
+        shutil.rmtree(out, True)
+
+
+MAX_SCAN_ROWS = 20000
 PLACEHOLDER = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
+CHECK_SHEETS = re.compile(r"\bchecks?\b", re.I)          # Checks, Check, Error checks (not Checklist)
+FAILING = ("ERROR", "FAIL", "FAILED", "NOT OK", "MISMATCH", "DOES NOT TIE")
+_CELLREF = re.compile(r"^(\$?[A-Za-z]{1,3}\$?\d+(:\$?[A-Za-z]{1,3}\$?\d+)?|\$?[A-Za-z]{1,3}:\$?[A-Za-z]{1,3}|"
+                      r"\$?\d+:\$?\d+)$")
+_MAX_REF_CELLS = 20000
+
+
+def formula_refs(formula: str) -> list[tuple[str | None, str]]:
+    """(sheet or None, reference) for every reference in a formula; a defined name comes back as (None, name)."""
+    from openpyxl.formula.tokenizer import Token, Tokenizer
+    out = []
+    for t in Tokenizer(formula).items:
+        if t.type == Token.OPERAND and t.subtype == Token.RANGE:
+            if "!" in t.value:
+                sh, _, ref = t.value.rpartition("!")
+                if len(sh) >= 2 and sh[0] == sh[-1] == "'":
+                    sh = sh[1:-1].replace("''", "'")
+                out.append((sh, ref))
+            else:
+                out.append((None, t.value))
+    return out
+
+
+def _ref_cells(ws, ref: str):
+    """The cells a reference covers, without creating any (openpyxl creates a cell on access); None when the extent
+    cannot be judged (whole columns or rows, a huge range, a malformed reference)."""
+    from openpyxl.utils.cell import range_boundaries
+    try:
+        c0, r0, c1, r1 = range_boundaries(ref.replace("$", ""))
+    except (ValueError, TypeError):
+        return None
+    store = getattr(ws, "_cells", None)                      # a chartsheet has none
+    if store is None or None in (c0, r0, c1, r1) or (c1 - c0 + 1) * (r1 - r0 + 1) > _MAX_REF_CELLS:
+        return None
+    return [store.get((r, c)) for r in range(r0, r1 + 1) for c in range(c0, c1 + 1)]
+
+
+def _blank(cell) -> bool:
+    return cell is None or cell.value is None or (isinstance(cell.value, str) and not cell.value.strip())
+
+
+def hollow_checks(wb) -> list[dict]:
+    """Check formulas that cannot be checking anything, on every Checks tab of a formula workbook (data_only=False):
+    - every cell they reference is empty (=B12-SUM(B10:G10) written on the Checks tab reads its own blank cells and
+      always shows OK);
+    - every cell they reference is a typed value on the Checks tab itself, so they never look at the figures they are
+      meant to check.
+    References through defined names are followed. A formula with a reference that cannot be judged (a whole column,
+    a name bound to a constant, an unknown sheet) is left alone. Returns [{"cell", "formula", "kind", "detail"}]."""
+    names: dict[str, list] = {}
+    try:
+        items = list(wb.defined_names.items())
+    except AttributeError:
+        items = [(d.name, d) for d in wb.defined_names.definedName]
+    for n, dn in items:
+        try:
+            names[n.lower()] = list(dn.destinations)
+        except Exception:  # noqa: BLE001 - a name bound to a constant or an expression
+            names[n.lower()] = []
+    out = []
+    for ws in wb.worksheets:
+        if not CHECK_SHEETS.search(ws.title):
+            continue
+        local = {}
+        try:
+            for n, dn in ws.defined_names.items():
+                local[n.lower()] = list(dn.destinations)
+        except Exception:  # noqa: BLE001
+            pass
+        for row in ws.iter_rows(max_row=min(ws.max_row, MAX_SCAN_ROWS)):
+            for c in row:
+                v = c.value
+                if not (isinstance(v, str) and v.startswith("=")):
+                    continue
+                try:
+                    refs = formula_refs(v)
+                except Exception:  # noqa: BLE001 - a formula the tokenizer cannot read: not judged here
+                    continue
+                cells, judged = [], bool(refs)
+                for sh, ref in refs:
+                    if sh is None and not _CELLREF.match(ref):
+                        targets = local.get(ref.lower()) or names.get(ref.lower())
+                        if not targets:
+                            judged = False
+                            break
+                    else:
+                        targets = [(sh or ws.title, ref)]
+                    for tsh, tref in targets:
+                        got = _ref_cells(wb[tsh], tref) if tsh in wb.sheetnames else None
+                        if got is None:
+                            judged = False
+                            break
+                        cells += [(tsh, x) for x in got]
+                    if not judged:
+                        break
+                if not judged or not cells:
+                    continue
+                where = f"{ws.title}!{c.coordinate}"
+                if all(_blank(x) for _, x in cells):
+                    out.append({"cell": where, "formula": v, "kind": "check_refs_empty", "detail": (
+                        f"{v[:80]} points only at empty cells, so it reads 0 and the check shows OK without checking "
+                        "anything. Reference the tab that holds the figures, e.g. ='Budget'!B12-SUM('Budget'!B10:G10) "
+                        "(B.add_check(..., sheet='Budget') does this)")})
+                elif all(tsh == ws.title for tsh, _ in cells) and not any(
+                        isinstance(x.value, str) and x.value.startswith("=") for _, x in cells if x is not None):
+                    out.append({"cell": where, "formula": v, "kind": "check_refs_own_sheet", "detail": (
+                        f"{v[:80]} only reads typed values on the {ws.title} tab itself, not the figures it is meant "
+                        "to check. Reference the tab that holds them, e.g. ='Budget'!B12-SUM('Budget'!B10:G10)")})
+    return out
+
+
+def _row_label(ws, c) -> str:
+    """The plain-words label of a check cell: the nearest text to its left that is not a status word."""
+    for col in range(c.column - 1, 0, -1):
+        lab = ws.cell(row=c.row, column=col).value
+        if isinstance(lab, str) and lab.strip() and not lab.startswith("=") and lab.strip().upper() not in FAILING \
+                and lab.strip().upper() != "OK":
+            return lab.strip()
+    return c.coordinate
+
+
+def _failing(value) -> bool:
+    return value is False or (isinstance(value, str) and value.strip().upper() in FAILING)
 
 
 def check(xlsx_path: str, expect_sheets: list[str] | None = None, allow_hardcoded: bool = False) -> dict:
@@ -37,21 +183,25 @@ def check(xlsx_path: str, expect_sheets: list[str] | None = None, allow_hardcode
     issues = []
     wb_f = load_workbook(xlsx_path, data_only=False)
     try:
-        recalced = recalc(xlsx_path)
-        wb_v = load_workbook(recalced, data_only=True)
+        wb_v = recalc_values(xlsx_path)
     except RuntimeError as e:
-        if "not installed" not in str(e):
+        from meshpool_harness.office_runtime import is_unavailable
+        if not is_unavailable(e):
             raise
-        recalced, wb_v = None, None                  # no LibreOffice: structure checks only
+        wb_v = None                                  # no LibreOffice: structure checks only
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-        recalced, wb_v = None, None                  # recalculation failed: structure checks, and say so
-        issues.append(f"Could not recalculate the workbook to check its values ({type(e).__name__}); formulas and "
-                      "structure were checked, values were not.")
+        wb_v = None                                  # recalculation failed: structure checks, and say so
+        issues.append({"check": "recalc_failed", "cell": "",
+                       "detail": f"Could not recalculate the workbook to check its values ({type(e).__name__}); "
+                                 "formulas and structure were checked, values were not."})
     n_formula = n_numeric_const = n_ph = 0
-    for ws in wb_f.worksheets:
-        wv = wb_v[ws.title] if wb_v is not None else None
+    for si, ws in enumerate(wb_f.worksheets):
+        wv = None
+        if wb_v is not None:                          # LibreOffice truncates long sheet names: fall back to position
+            wv = wb_v[ws.title] if ws.title in wb_v.sheetnames else wb_v.worksheets[si]
         is_calc = bool(CALC_SHEETS.search(ws.title)) and not INPUT_SHEETS.search(ws.title)
-        for row in ws.iter_rows():
+        is_checks = bool(CHECK_SHEETS.search(ws.title))
+        for row in ws.iter_rows(max_row=min(ws.max_row, MAX_SCAN_ROWS)):   # huge data tabs are sampled
             for c in row:
                 v = c.value
                 if v is None:
@@ -68,12 +218,16 @@ def check(xlsx_path: str, expect_sheets: list[str] | None = None, allow_hardcode
                                                      "from a plain string, not an f-string, so Excel shows #N/A. "
                                                      "Write it with f'...' so the row number goes in."})
                         continue
-                    if cv is None and wv is not None:
+                    if cv is None and wv is not None and '""' not in v:   # ="" results read back as None
                         issues.append({"check": "formula_no_value", "cell": f"{ws.title}!{c.coordinate}",
                                        "detail": v[:80]})
                     if isinstance(cv, str) and cv.startswith(ERRORS):
                         kind = "circular_ref" if "522" in cv or "523" in cv else "formula_error"
                         issues.append({"check": kind, "cell": f"{ws.title}!{c.coordinate}", "detail": f"{cv} <- {v[:80]}"})
+                    elif is_checks and _failing(cv):        # read from the recalculated copy, never the cached value
+                        issues.append({"check": "check_not_tying", "cell": f"{ws.title}!{c.coordinate}",
+                                       "detail": f"'{_row_label(ws, c)}' shows {cv} after recalculation: the figures "
+                                                 f"it compares do not tie ({v[:80]})"})
                 elif isinstance(v, str) and v.strip().startswith(ERRORS):
                     issues.append({"check": "error_literal", "cell": f"{ws.title}!{c.coordinate}", "detail": v})
                 elif isinstance(v, (int, float)) and not isinstance(v, bool):
@@ -84,6 +238,7 @@ def check(xlsx_path: str, expect_sheets: list[str] | None = None, allow_hardcode
                     if is_calc and not allow_hardcoded and c.column > 1 and not is_label:
                         issues.append({"check": "hardcoded_number", "cell": f"{ws.title}!{c.coordinate}",
                                        "detail": f"{v} typed into a calculation sheet; reference Inputs instead"})
+    issues += [{"check": h["kind"], "cell": h["cell"], "detail": h["detail"]} for h in hollow_checks(wb_f)]
     if n_ph > 5:
         issues.append({"check": "unformatted_placeholder", "cell": "", "detail": f"{n_ph} formulas in all hold "
                        "{name} placeholders; fix the code that writes them (use f-strings), then save again"})
@@ -94,19 +249,31 @@ def check(xlsx_path: str, expect_sheets: list[str] | None = None, allow_hardcode
             issues.append({"check": "missing_sheets", "cell": "", "detail": missing})
     if n_formula == 0:
         issues.append({"check": "no_formulas", "cell": "", "detail": "workbook has no live formulas"})
+    checks_status = None
+    if wb_v is not None and "Checks" in wb_f.sheetnames:
+        try:                                         # the master check cell, read from the recalculated values
+            checks_status = read_ref(wb_v, "Checks!F3")
+        except Exception:  # noqa: BLE001
+            pass
     return {"issues": issues, "stats": {"sheets": wb_f.sheetnames, "formulas": n_formula,
                                         "numeric_constants": n_numeric_const, "named_ranges": names,
-                                        "recalculated_copy": recalced, "recalculated": wb_v is not None}}
+                                        "checks_status": checks_status, "recalculated": wb_v is not None}}
 
 
 def value(xlsx_path: str, ref: str):
     """Computed value of 'Sheet!A1' or a named range after LibreOffice recalc (for gold-answer checks)."""
     try:
-        wb = load_workbook(recalc(xlsx_path), data_only=True)
+        wb = recalc_values(xlsx_path)
     except RuntimeError as e:
-        if "not installed" in str(e):
+        from meshpool_harness.office_runtime import is_unavailable
+        if is_unavailable(e):
             return None                              # no LibreOffice: value unknown, not a failure
         raise
+    return read_ref(wb, ref)
+
+
+def read_ref(wb, ref: str):
+    """Value of 'Sheet!A1' or a defined name in an already-loaded (recalculated) workbook."""
     if "!" in ref:
         sh, cell = ref.split("!", 1)
         return wb[sh.strip("'")][cell.replace("$", "")].value

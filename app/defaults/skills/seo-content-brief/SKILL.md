@@ -1,6 +1,6 @@
 ---
 name: seo-content-brief
-description: "Build an SEO content brief for a keyword or topic: search intent, what ranks, outline, questions to answer. Use before writing a page or post meant to rank."
+description: 'Build an SEO content brief for a keyword or topic: search intent, what ranks, outline, questions to answer. Use before writing a page or post meant to rank.'
 ---
 
 # SEO content brief

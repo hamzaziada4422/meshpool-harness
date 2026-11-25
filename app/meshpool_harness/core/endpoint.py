@@ -140,6 +140,10 @@ def _azure_family(host: str) -> str:
     for fam, rx in _AZURE_HOSTS:
         if re.search(rx, host):
             return fam
+    from meshpool_harness import providers as PV            # the shared suffix list (providers.is_azure) also counts
+    for suf in PV.AZURE_SUFFIXES:
+        if host == suf.lstrip(".") or host.endswith(suf if suf.startswith(".") else "." + suf):
+            return "foundry" if "services.ai" in suf else "cognitive" if "cognitiveservices" in suf else "classic"
     return ""
 
 
@@ -169,7 +173,15 @@ def _with_scheme(u: str) -> str:
     if not u:
         raise EndpointError("Enter the endpoint address, for example https://api.openai.com/v1.")
     if "://" not in u:
-        u = ("http://" if re.match(r"(localhost|127\.|\[?::1)", u) else "https://") + u
+        # Only this computer (localhost, 127.x, ::1) defaults to plain http: anything else, a LAN address, a *.internal
+        # or *.lan name or a bare host name included, is https unless the user types http:// themselves, so a key is
+        # never sent in the clear across a network on a guess.
+        from meshpool_harness.core import http as H
+        try:
+            h = urlparse("http://" + u).hostname or ""
+        except ValueError:
+            h = ""
+        u = ("http://" if re.match(r"(localhost|127\.|\[?::1)", u) or H._is_loopback(h) else "https://") + u
     return u
 
 
@@ -260,6 +272,8 @@ def adapt(kind: str, body: dict, api_version: str = "") -> dict:
     """A copy of the body with what this kind and model need: max_completion_tokens and no temperature for the
     reasoning models, no stream_options where the endpoint does not take them."""
     c, b = caps(kind), dict(body)
+    if kind == "azure-classic" and "max_tokens" in b and "max_completion_tokens" not in b:
+        b["max_completion_tokens"] = b.pop("max_tokens")   # the deployment route takes it for every current model
     if c["reasoning"] and reasoning_model(str(b.get("model") or "")):
         if "max_tokens" in b:
             b["max_completion_tokens"] = b.pop("max_tokens")
@@ -279,13 +293,18 @@ class Call(NamedTuple):
     anthropic: bool
 
 
+def _looks_jwt(k: str) -> bool:
+    return k.count(".") == 2 and k.startswith("eyJ")
+
+
 def auth_headers(kind: str, key: str) -> dict:
     c = caps(kind)
     h = {"Content-Type": "application/json"}
     if c["auth"] == "x-api-key":
         h["anthropic-version"] = ANTHROPIC_VERSION
     if key:
-        if c["auth"] == "bearer":
+        if c["auth"] == "bearer" or (is_azure(kind) and c["auth"] == "api-key" and _looks_jwt(key)):
+            # a Microsoft Entra ID token (a JWT) goes as a Bearer token; Azure resource keys go in api-key
             h["Authorization"] = f"Bearer {key}"
         else:
             h["api-key" if c["auth"] == "api-key" else "x-api-key"] = key
@@ -338,7 +357,8 @@ def chat_request(base: str, key: str, body: dict, *, kind: str = "", api_version
     if wire_of(k) == "anthropic":
         k = "generic"
     c = build(k, base, key, body, api_version=api_version or v, path=path)
-    return with_query(c.url), c.body, {**extra_headers(), **c.headers}
+    from meshpool_harness import providers as PV
+    return with_query(c.url), c.body, {**extra_headers(), **PV.custom_auth(c.headers, base, key)}   # the user's own key header wins
 
 
 _NEVER = {"authorization", "api-key", "x-api-key", "host", "content-length", "content-type", "cookie",
@@ -383,17 +403,32 @@ def with_query(url: str) -> str:
 
 # ---------- never follow a redirect with a key -----------------------------------------------------------------------
 
+def _keyed():
+    from meshpool_harness.core import http as _http          # the one keyed-request implementation
+    return _http
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *a, **k):
-        return None
+    """A handler that turns every redirect into an HTTPError (the strictest policy core.http offers)."""
+    http_error_308 = urllib.request.HTTPRedirectHandler.http_error_302      # 308 is unknown to Python 3.10's handler
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return _keyed()._KeyedRedirect(refuse=True).redirect_request(req, fp, code, msg, headers, newurl)
 
 
-OPENER = urllib.request.build_opener(_NoRedirect)
+def urlopen(req, timeout: float = 30, handlers=(), refuse_redirects: bool = True):
+    """urllib's urlopen for a request that carries a key: core.http.open (no redirect followed, no proxy for a
+    loopback server, the shared TLS context). A redirect surfaces as an HTTP error naming the target host."""
+    return _keyed().open(req, timeout, handlers, refuse_redirects=refuse_redirects)
 
 
-def urlopen(req, timeout: float = 30):
-    """urllib's urlopen, minus following redirects: a redirect would carry the key header to another host."""
-    return OPENER.open(req, timeout=timeout)
+class _Opener:
+    """OPENER.open(req, timeout): the setup test's opener. Every redirect is refused (core.http.open with
+    refuse_redirects), so a key is never carried to another address."""
+    def open(self, req, timeout: float = 30):
+        return urlopen(req, timeout, refuse_redirects=True)
+
+
+OPENER = _Opener()
 
 
 # ---------- plain-words errors ---------------------------------------------------------------------------------------
@@ -420,6 +455,8 @@ def _msg(body) -> tuple[str, str]:
             return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", s)).strip()[:200], ""
     if isinstance(d, list) and d:
         d = d[0]
+    if isinstance(d, dict) and set(d) == {"raw"} and isinstance(d["raw"], str):
+        return _msg(d["raw"])                    # a caller's wrapper around a body that was not JSON
     if not isinstance(d, dict):
         return "", ""
     e = d.get("error", d)
@@ -430,6 +467,16 @@ def _msg(body) -> tuple[str, str]:
     return str(d.get("message") or d.get("detail") or "")[:200], str(d.get("code") or "")
 
 
+def redact_key(text: str, key: str) -> str:
+    """`text` with every whole occurrence of `key` replaced by ***. A key of 8+ characters only, and only where it is
+    not part of a longer word of letters and digits (a short key must not mangle ordinary words); punctuation next to
+    it (a full stop, a dash, an underscore, a quote) does not hide it."""
+    key = str(key or "")
+    if not isinstance(text, str) or len(key) < 8:
+        return text
+    return re.sub(r"(?<![A-Za-z0-9])" + re.escape(key) + r"(?![A-Za-z0-9])", "***", text)
+
+
 def explain(status: int, body=None, *, kind: str = "generic", host: str = "", model: str = "", key: str = "",
             api_version: str = "") -> str:
     """A failed call in words the user can act on: what to check, not the raw reply."""
@@ -438,8 +485,7 @@ def explain(status: int, body=None, *, kind: str = "generic", host: str = "", mo
     c = caps(kind)
     who = c["label"] if kind != "generic" else (host or "The endpoint")
     az = is_azure(kind)
-    if key:
-        msg = msg.replace(key, "***")
+    msg = redact_key(msg, key)
     if status == 401 or (status == 403 and "invalid" in low and "key" in low):
         out = [f"The key was rejected ({status})."]
         owner = key_owner(key)
@@ -493,6 +539,8 @@ def explain(status: int, body=None, *, kind: str = "generic", host: str = "", mo
         out = [f"{who} says the account is out of credit (402). Add credit with the provider."]
     elif status >= 500 or status == 0:
         out = [f"{who} had a problem on its side ({status or 'no answer'}). Try again in a moment."]
+    elif 300 <= status < 400 and "did not send your key" in msg:
+        return msg                               # a refused redirect (core.http): names the host and what to set
     else:
         out = [f"{who} answered {status}."]
     if msg and status not in (401, 429, 402) and status < 500:

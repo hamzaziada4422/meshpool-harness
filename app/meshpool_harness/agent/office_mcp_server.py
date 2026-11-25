@@ -6,7 +6,7 @@ Tools
   make_spreadsheet(request, files?)   -> .xlsx with live formulas, checked by the sheets engine
   analyze_data(request, files)        -> charts, tables and a written analysis from data files
   make_document(markdown, filename)   -> .docx from Markdown (headings, lists, tables, bold, code)
-  make_pdf(markdown, filename)        -> .pdf from Markdown
+  make_pdf(markdown, filename)        -> .pdf from Markdown (```chart blocks, images)
   convert_document(path, to)          -> docx/pptx/xlsx to PDF, and PDF to Word (docx, odt, rtf) or a picture, through LibreOffice
   read_document(path, sheet?, pages?) -> text of a PDF, Word, PowerPoint, Excel, CSV or Power BI file
   office_job_status(job_id)           -> result of a job that was still running
@@ -40,7 +40,19 @@ WAIT = float(os.environ.get("OFFICE_WAIT_S", "100"))   # under the common 120 s 
                                                        # a job id for office_job_status instead of timing out
 
 
+_CALL = threading.local()                    # the folder of the chat whose call this thread is running
+
+
 def _project() -> Path:
+    """The folder this call works in: the one the call names (``_project``: the caller's chat, or a sub-agent's
+    isolated copy), else the server's own. A named folder that is gone is an error, never a silent switch to the
+    server's folder (that is the real project, and a sub-agent's files would land there)."""
+    named = getattr(_CALL, "project", None)
+    if named:
+        p = Path(named).expanduser()
+        if not p.is_dir():
+            raise ValueError(f"The folder this call works in is gone: {p}")
+        return p
     p = Path(os.environ.get("MESHPOOL_PROJECT") or os.getcwd()).expanduser()
     return p if p.is_dir() else Path.cwd()
 
@@ -62,23 +74,67 @@ def _readable(p: Path) -> bool:
     return any(q == r or r in q.parents for r in ok)
 
 
-def _run_job(jid: str):
-    OJ.run(jid)
+def _run_job(jid: str, should_stop=None):
+    OJ.run(jid, should_stop=should_stop)
 
 
-def _report(jid: str) -> tuple[str, bool]:
-    return OJ.report(jid)
+SAVE_AS: dict[str, str] = {}   # job id -> the file name the user asked for (save_as)
 
 
-def _engine(engine: str, request: str, files: list | None) -> tuple[str, bool]:
+def _report(jid: str, reused: str = "") -> tuple[str, bool]:
+    text, failed = OJ.report(jid, reused=reused)
+    want = SAVE_AS.get(jid)
+    if want and not failed and OJ.JOBS.get(jid, {}).get("done"):
+        text += _save_copy(jid, want)
+    return text, failed
+
+
+def _save_copy(jid: str, want: str) -> str:
+    """Copy the job's file to the name the user asked for (save_as), in the project folder. office3 trace (pptx_chart):
+    the deck stayed at "Meshpool outputs/<job>/deck.pptx", the user's ./deck.pptx never existed and the task failed.
+    An existing file is not replaced (_dest picks "name (2).ext"); the same job is copied once."""
+    import shutil
+    ext = Path(want).suffix.lower()
+    made = [m for m in OJ._made(OJ.JOBS[jid]) if m.suffix.lower() == ext]
+    if not ext or not made:
+        return f"\nNot saved as {want}: the job made no {ext or 'such'} file."
+    done = OJ.JOBS[jid].get("saved_as")
+    if not done:
+        dest = _dest(want, made[0].name, ext, named=True)
+        shutil.copy2(made[0], dest)
+        done = OJ.JOBS[jid]["saved_as"] = str(dest)
+    try:
+        shown = str(Path(done).relative_to(_project()))
+    except ValueError:
+        shown = done
+    return f"\nSaved as: {shown} (the file the user asked for; the job folder keeps the build)."
+
+
+def _scope() -> str:
+    """The chat this server serves (the app passes MH_CHAT_ID), else this server process: builds are counted per chat."""
+    return os.environ.get("MH_CHAT_ID") or f"pid{os.getpid()}"
+
+
+def _engine(engine: str, request: str, files: list | None, save_as: str | None = None) -> tuple[str, bool]:
     paths, missing = OJ.resolve_files(_project(), files)
     if missing:
         return f"Input file not found: {missing}", True
     why = OJ.check_request(engine, request)
     if why:                                      # before the job folder: nothing is built
         return f"Refused, nothing was built: {why}", True
-    jid = OJ.new_job(engine, request, paths, _project())
-    t = threading.Thread(target=_run_job, args=(jid,), daemon=True)
+    jid, reused = OJ.start(engine, request, paths, _project(), scope=_scope(),
+                           model=getattr(_CALL, "model", None) or None)   # the chat's model, as office_task passes it
+    if reused == "refused":
+        return OJ.refusal_text(jid), False
+    if save_as and str(save_as).strip():
+        SAVE_AS[jid] = str(save_as).strip()
+    if reused == "done":
+        return _report(jid, reused=reused)
+    if reused == "running":
+        OJ.JOBS[jid]["event"].wait(WAIT)
+        return _report(jid)
+    from meshpool_harness.agent.mcp_stdio import cancel_check
+    t = threading.Thread(target=_run_job, args=(jid, cancel_check()), daemon=True)   # the client's Stop ends the job
     t.start()
     t.join(WAIT)
     return _report(jid)
@@ -87,7 +143,7 @@ def _engine(engine: str, request: str, files: list | None) -> tuple[str, bool]:
 def make_deck(request: str, files: list | None = None, audience: str | None = None, purpose: str | None = None,
               density: str | None = None, slides: int | None = None, theme: str | None = None,
               opening: str | None = None, closing: str | None = None, sources: str | None = None,
-              brief_ok: bool = False, icon_set: str | None = None):
+              brief_ok: bool = False, icon_set: str | None = None, save_as: str | None = None):
     """Settle the brief first (engines/forge/brief.py): if the request and fields leave audience, density, length
     or look open, return the questions (BRIEF NEEDED) instead of building. brief_ok, "use defaults" in the request,
     or a headless run (MH_ASK_AUTO=1) builds with the recommended answers."""
@@ -100,11 +156,11 @@ def make_deck(request: str, files: list | None = None, audience: str | None = No
             sys.path.insert(0, str(APP))
         from engines.forge import brief as BR
     except Exception:  # noqa: BLE001  engines not shipped: build from the request as it is
-        return _engine("slides", request, files)
+        return _engine("slides", request, files, save_as)
     qs = BR.questions(request, files, fields)
     if qs and not (brief_ok or BR.wants_defaults(request) or os.environ.get("MH_ASK_AUTO") == "1"):
         return BR.needed_text(qs, "make_deck"), False
-    return _engine("slides", BR.complete(request, files, fields), files)
+    return _engine("slides", BR.complete(request, files, fields), files, save_as)
 
 
 def add_slides(deck: str, request: str, slides: int = 1, files: list | None = None):
@@ -115,8 +171,8 @@ def add_slides(deck: str, request: str, slides: int = 1, files: list | None = No
                    [deck] + [f for f in files or [] if f != deck])
 
 
-def make_spreadsheet(request: str, files: list | None = None):
-    return _engine("sheets", request, files)
+def make_spreadsheet(request: str, files: list | None = None, save_as: str | None = None):
+    return _engine("sheets", request, files, save_as)
 
 
 def analyze_data(request: str, files: list | None = None):
@@ -161,6 +217,25 @@ def _clean(text: str | None) -> str:
     return dashless(_CTRL.sub("", (text or "").replace("\x0c", "\n\n")))
 
 
+def _clean_md(text: str | None) -> str:
+    """_clean for markdown: the dash rule applies to prose lines only. Fenced code stays as written and a table row
+    keeps its cells (a lone dash cell, the "n/a" placeholder, becomes a hyphen)."""
+    out, fenced = [], False
+    for ln in _CTRL.sub("", (text or "").replace("\x0c", "\n\n")).split("\n"):
+        st = ln.strip()
+        if st.startswith("```"):
+            fenced = not fenced
+            out.append(ln)
+        elif fenced:
+            out.append(ln)
+        elif st.startswith("|"):
+            out.append("|".join(c.replace("\u2014", "-").replace("\u2013", "-") if c.strip() in ("\u2014", "\u2013") else c
+                                for c in ln.split("|")))
+        else:
+            out.append(_clean(ln))
+    return "\n".join(out)
+
+
 def _safe_name(filename: str, default: str, ext: str) -> str:
     """A file name that every file system takes: unsafe characters replaced, at most 150 bytes (non-Latin names were
     over the 255-byte limit and the save failed), with its extension."""
@@ -169,6 +244,30 @@ def _safe_name(filename: str, default: str, ext: str) -> str:
     while len(stem.encode("utf-8")) > 150:
         stem = stem[:-1]
     return (stem.strip() or Path(default).stem) + ext
+
+
+def _dest(filename: str | None, default: str, ext: str, named: bool | None = None) -> Path:
+    """Where a file made for `filename` goes. A name the user gave (not the tool's default) is written exactly there
+    when it is a plain name or a path inside the project folder, so "make report.pdf" gives ./report.pdf; with no
+    name (or one outside the project) it goes to "<project>/Meshpool outputs". Either way an existing file is never
+    replaced: a free "name (2).ext" is used."""
+    name = _safe_name(filename or "", default, ext)
+    given = str(filename or "").strip()
+    if named is None:
+        named = bool(given) and Path(given).name.lower() != default.lower()
+    if named:
+        try:
+            proj = _project().resolve()
+            rel = Path(given).expanduser()
+            d = (rel.parent if rel.is_absolute() else proj / rel.parent).resolve()
+            if d == proj or proj in d.parents:
+                d.mkdir(parents=True, exist_ok=True)
+                return _free(d / name)
+        except OSError:
+            pass
+    out = _project() / "Meshpool outputs"
+    out.mkdir(parents=True, exist_ok=True)
+    return _free(out / name)
 
 
 def _pdf_font(text: str) -> tuple[str, str]:
@@ -216,13 +315,37 @@ def _free(p: Path) -> Path:
     return p
 
 
-def make_document(markdown: str, filename: str = "document.docx", title: str | None = None, _clarity: bool = True):
+def _new_number_list(doc) -> int:
+    """A new numbering instance (starting at 1) of the "List Number" style, so a second numbered list restarts."""
+    from docx.oxml import parse_xml
+    from docx.oxml.ns import nsdecls, qn
+    numbering = doc.part.numbering_part.element
+    ppr = doc.styles["List Number"].element.pPr
+    base = ppr.numPr.numId.val if ppr is not None and ppr.numPr is not None and ppr.numPr.numId is not None else None
+    if base is None:
+        return 0
+    abstract = next(n for n in numbering.findall(qn("w:num")) if int(n.get(qn("w:numId"))) == int(base)
+                    ).find(qn("w:abstractNumId")).get(qn("w:val"))
+    new = max(int(n.get(qn("w:numId"))) for n in numbering.findall(qn("w:num"))) + 1
+    numbering.append(parse_xml(
+        f'<w:num {nsdecls("w")} w:numId="{new}"><w:abstractNumId w:val="{abstract}"/>'
+        '<w:lvlOverride w:ilvl="0"><w:startOverride w:val="1"/></w:lvlOverride></w:num>'))
+    return new
+
+
+def _set_num(par, num_id: int):
+    if not num_id:
+        return
+    ppr = par._p.get_or_add_pPr()
+    ppr.get_or_add_numPr().get_or_add_numId().val = num_id
+    ppr.numPr.get_or_add_ilvl().val = 0
+
+
+def make_document(markdown: str, filename: str = "document.docx", title: str | None = None, _clarity: bool = True,
+                  _named: bool | None = None):
     from docx import Document
     from docx.shared import Pt
-    name = _safe_name(filename, "document.docx", ".docx")
-    markdown, title = _clean(markdown), _clean(title) or None
-    out = _project() / "Meshpool outputs"
-    out.mkdir(parents=True, exist_ok=True)
+    markdown, title = _clean_md(markdown), _clean(title) or None
     doc = Document()
     doc.styles["Normal"].font.name = "Calibri"
     doc.styles["Normal"].font.size = Pt(11)
@@ -244,9 +367,12 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
             pass
     lines = markdown.replace("\r\n", "\n").split("\n")
     i = 0
+    num_id = None                                          # numbering instance of the numbered list being written
     while i < len(lines):
         ln = lines[i]
         s = ln.strip()
+        if s and not re.match(r"^\d+[.)]\s+", s):
+            num_id = None                                  # the next "1." starts a new list
         if s.startswith("```"):
             block = []
             i += 1
@@ -290,7 +416,11 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
         elif m := re.match(r"^[-*+]\s+(.*)", s):
             _runs(doc.add_paragraph(style="List Bullet"), m.group(1))
         elif m := re.match(r"^\d+[.)]\s+(.*)", s):
-            _runs(doc.add_paragraph(style="List Number"), m.group(1))
+            if num_id is None:
+                num_id = _new_number_list(doc)
+            par = doc.add_paragraph(style="List Number")
+            _set_num(par, num_id)
+            _runs(par, m.group(1))
         elif s.startswith(">"):
             _runs(doc.add_paragraph(style="Quote"), s.lstrip("> "))
         elif s in ("---", "***"):
@@ -298,7 +428,7 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
         elif s:
             _runs(doc.add_paragraph(), s)
         i += 1
-    path = _free(out / name)
+    path = _dest(filename, "document.docx", ".docx", _named)
     doc.save(path)
     return f"Saved the Word document: {path}.{clarity_note}", False
 
@@ -315,6 +445,13 @@ def read_document(path: str, sheet: str | None = None, pages: str | None = None,
     return docread.extract(p, sheet=sheet, pages=pages, lang=language or "auto", ocr=ocr or "auto"), False
 
 
+XLSX_OPS = "set_cell, add_row, add_comment, clear_cell, set_range, delete_rows, add_sheet, delete_sheet, freeze_panes"
+# names models reach for (seen in office1-3 transcripts: set_formula 58x, delete_rows 34x, set_value 30x, clear_cell 28x)
+_XLSX_ALIASES = {"set_formula": "set_cell", "set_value": "set_cell", "write_cell": "set_cell", "delete_row": "delete_rows",
+                 "remove_rows": "delete_rows", "clear": "clear_cell", "clear_range": "clear_cell", "remove_sheet": "delete_sheet",
+                 "create_sheet": "add_sheet", "write_range": "set_range", "append_row": "add_row"}
+
+
 def edit_office_file(path: str, operations: list, output: str | None = None, in_place: bool = False):
     """Change an existing .docx, .xlsx or .pptx without rebuilding it: styles, formulas and layout stay. Works without
     LibreOffice. By default the result is a copy '<name> (edited).<ext>'; in_place=true changes the file itself."""
@@ -326,8 +463,13 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
     if ext not in (".docx", ".xlsx", ".pptx"):
         return "This edits .docx, .xlsx and .pptx files.", True
     if not isinstance(operations, list) or not operations:
-        return "Give `operations`: a list of {op, ...} steps.", True
-    out = p if in_place else (_resolve(output) if output else p.with_name(f"{p.stem} (edited){ext}"))
+        return ("Give `operations`: a list of {op, ...} steps. Word: replace_text{find,replace}, "
+                "tracked_replace{find,replace}, tracked_delete{find}, tracked_insert_after{find,text}, "
+                "append_paragraph{text}, add_comment{find,text}. Excel: set_cell{sheet,cell,value or =formula}, "
+                "add_row{values}, add_comment{sheet,cell,text}, clear_cell{sheet,cell or range}, set_range{sheet,start,values[[...]]}, "
+                "delete_rows{sheet,row,count}, add_sheet{name}, delete_sheet{sheet}, freeze_panes{sheet,cell}. PowerPoint: replace_text{find,replace}, "
+                "set_notes{slide,text}."), True
+    out = p if in_place else (_resolve(output) if output else _free(p.with_name(f"{p.stem} (edited){ext}")))
     if out != p:
         shutil.copyfile(p, out)
     done, errors = [], []
@@ -336,14 +478,21 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
             from docx import Document
             doc = Document(str(out))
             for o in operations:
-                op = o.get("op")
+                op = {"replace": "replace_text", "find_replace": "replace_text"}.get(o.get("op"), o.get("op"))
+                if op == "replace_text" and o.get("tracked") in (True, "true", "yes", 1):
+                    op = "tracked_replace"                  # replace_text{tracked: true} asks for a tracked change
                 if op == "replace_text":
                     n = _replace_in_paragraphs(_docx_paragraphs(doc), o.get("find", ""), o.get("replace", ""))
                     (done if n else errors).append(f"replace_text {o.get('find', '')[:30]!r}: {n} place(s)" if n else f"text not found: {o.get('find', '')[:40]!r}")
                 elif op in ("tracked_replace", "tracked_delete", "tracked_insert_after"):
-                    ok = _tracked(_docx_paragraphs(doc), op, o.get("find", ""), o.get("replace", o.get("text", "")), o.get("author") or "Meshpool")
-                    (done if ok else errors).append(f"{op}: tracked change made" if ok else
-                                                    f"{op}: {o.get('find', '')[:40]!r} not found inside one piece of formatted text (use replace_text, or a shorter phrase)")
+                    n = 0                                   # every place, like replace_text (insert_after: the first)
+                    while n < 1000 and _tracked(_docx_paragraphs(doc), op, o.get("find", ""),
+                                                o.get("replace", o.get("text", "")), o.get("author") or "Meshpool"):
+                        n += 1
+                        if op == "tracked_insert_after":
+                            break
+                    (done if n else errors).append(f"{op} {o.get('find', '')[:30]!r}: tracked change in {n} place(s)" if n else
+                                                   f"{op}: {o.get('find', '')[:40]!r} not found inside one piece of formatted text (use a shorter phrase)")
                 elif op == "append_paragraph":
                     doc.add_paragraph(o.get("text", ""), style=o.get("style") or None)
                     done.append("appended a paragraph")
@@ -355,7 +504,8 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                     doc.add_comment(hit.runs, text=o.get("text", ""), author=o.get("author") or "Meshpool")
                     done.append("added a comment")
                 else:
-                    errors.append(f"unknown op {op!r} (replace_text, append_paragraph, add_comment)")
+                    errors.append(f"unknown op {op!r} (replace_text, tracked_replace, tracked_delete, "
+                                  "tracked_insert_after, append_paragraph, add_comment)")
             doc.save(str(out))
         elif ext == ".xlsx":
             import openpyxl
@@ -368,9 +518,55 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                 except KeyError:
                     errors.append(f"no sheet {o.get('sheet')!r}: sheets are {wb.sheetnames}")
                     continue
+                op = _XLSX_ALIASES.get(op, op)
                 if op == "set_cell":
-                    ws[o["cell"]] = o.get("value")
+                    v = o.get("value", o.get("formula"))
+                    if isinstance(v, str) and o.get("formula") is not None and not v.startswith("="):
+                        v = "=" + v
+                    ws[o["cell"]] = v
                     done.append(f"{ws.title}!{o['cell']} set")
+                elif op == "clear_cell":
+                    refs = [r for r in (o.get("cells") or [o.get("cell") or o.get("range")]) if r]
+                    if not refs:
+                        errors.append("clear_cell needs cell, range or cells")
+                        continue
+                    for ref in refs:
+                        rows = ws[ref] if ":" in str(ref) else ((ws[ref],),)
+                        for row in rows:
+                            for cell in row:
+                                cell.value = None
+                    done.append(f"cleared {', '.join(map(str, refs))} on {ws.title}")
+                elif op == "set_range":
+                    start = openpyxl.utils.cell.coordinate_from_string(o.get("start") or o.get("cell") or str(o.get("range", "A1")).split(":")[0])
+                    c0, r0 = openpyxl.utils.column_index_from_string(start[0]), start[1]
+                    for i, vals in enumerate(o.get("values") or []):
+                        for j, v in enumerate(vals if isinstance(vals, list) else [vals]):
+                            ws.cell(row=r0 + i, column=c0 + j, value=v)
+                    done.append(f"{ws.title}: {len(o.get('values') or [])} row(s) written from {start[0]}{start[1]}")
+                elif op == "delete_rows":
+                    first = int(o.get("row") or o.get("start") or o.get("idx") or 0)
+                    n = int(o.get("count") or o.get("amount") or 1)
+                    if first < 1:
+                        errors.append("delete_rows needs row (1-based) and optional count")
+                        continue
+                    ws.delete_rows(first, n)
+                    done.append(f"deleted {n} row(s) from row {first} on {ws.title}")
+                elif op == "add_sheet":
+                    name = o.get("name") or o.get("title") or o.get("new_sheet")
+                    if not name or name in wb.sheetnames:
+                        errors.append(f"add_sheet needs a new name (sheets are {wb.sheetnames})")
+                        continue
+                    wb.create_sheet(name)
+                    done.append(f"added sheet {name!r}")
+                elif op == "delete_sheet":
+                    if len(wb.sheetnames) < 2:
+                        errors.append("cannot delete the only sheet")
+                        continue
+                    wb.remove(ws)
+                    done.append(f"deleted sheet {ws.title!r}")
+                elif op == "freeze_panes":
+                    ws.freeze_panes = o.get("cell") or "A2"
+                    done.append(f"froze panes at {ws.freeze_panes} on {ws.title}")
                 elif op == "add_row":
                     ws.append(o.get("values") or [])
                     done.append(f"row added to {ws.title}")
@@ -378,13 +574,13 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                     ws[o["cell"]].comment = Comment(o.get("text", ""), o.get("author") or "Meshpool")
                     done.append(f"comment on {ws.title}!{o['cell']}")
                 else:
-                    errors.append(f"unknown op {op!r} (set_cell, add_row, add_comment)")
+                    errors.append(f"unknown op {op!r} ({XLSX_OPS})")
             wb.save(str(out))
         else:
             from pptx import Presentation
             prs = Presentation(str(out))
             for o in operations:
-                op = o.get("op")
+                op = {"replace": "replace_text", "find_replace": "replace_text"}.get(o.get("op"), o.get("op"))
                 if op == "replace_text":
                     paras = [pp for sl in prs.slides for sh in sl.shapes if sh.has_text_frame for pp in sh.text_frame.paragraphs]
                     n = _replace_in_paragraphs(paras, o.get("find", ""), o.get("replace", ""))
@@ -405,6 +601,9 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
     return msg + (("\nNot done: " + "; ".join(errors)) if errors else ""), bool(errors) and not done
 
 
+_REV_ID = [0]
+
+
 def _tracked(paragraphs, op: str, find: str, new: str, author: str) -> bool:
     """A real Word revision (w:del and w:ins) inside one run, so Word shows it as a tracked change to accept or reject."""
     import copy
@@ -415,7 +614,8 @@ def _tracked(paragraphs, op: str, find: str, new: str, author: str) -> bool:
     if not find:
         return False
     stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    rid = int(_dt.datetime.now().timestamp() * 1000) % 100000000
+    _REV_ID[0] += 10                                 # unique revision ids across calls in the same millisecond
+    rid = (int(_dt.datetime.now().timestamp() * 1000) % 100000000) + _REV_ID[0]
     for pp in paragraphs:
         for r in pp.runs:
             if find not in r.text:
@@ -480,8 +680,12 @@ def _replace_in_paragraphs(paragraphs, find: str, replace: str) -> int:
         return 0
     n = 0
     for pp in paragraphs:
-        while find in pp.text:
-            runs, pos, start = pp.runs, 0, pp.text.index(find)
+        search = 0                                           # continue after the last replacement: a replacement
+        while True:                                          # that contains `find` must not be matched again
+            start = pp.text.find(find, search)
+            if start < 0:
+                break
+            runs, pos = pp.runs, 0
             first = None
             for r in runs:
                 a, b = pos, pos + len(r.text)
@@ -499,6 +703,7 @@ def _replace_in_paragraphs(paragraphs, find: str, replace: str) -> int:
             if first is None:
                 break
             n += 1
+            search = start + len(replace)
     return n
 
 
@@ -511,16 +716,83 @@ def _md_inline(s: str) -> str:
     return re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"<link href='\2' color='#1A56DB'>\1</link>", s)
 
 
-def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = None):
+def _pdf_chart(spec_text: str, font: str):
+    """A ```chart block as a native vector chart. JSON: {"type": "bar"|"line"|"pie", "title": str,
+    "labels": [...], "values": [...]} or "series": {"name": [...], ...} for several bar or line series."""
+    import json as _json
+    from reportlab.graphics.charts.barcharts import VerticalBarChart
+    from reportlab.graphics.charts.legends import Legend
+    from reportlab.graphics.charts.linecharts import HorizontalLineChart
+    from reportlab.graphics.charts.piecharts import Pie
+    from reportlab.graphics.shapes import Drawing, String
+    from reportlab.lib import colors
+    try:
+        spec = _json.loads(spec_text)
+    except ValueError as e:
+        raise ValueError(f"chart block is not JSON: {e}") from None
+    labels = [str(x) for x in spec.get("labels") or []]
+    series = spec.get("series") or ({"": spec["values"]} if "values" in spec else {})
+    if not labels or not series:
+        raise ValueError('chart block needs "labels" and "values" (or "series")')
+    data = [[float(v) for v in vals] for vals in series.values()]
+    if any(len(d) != len(labels) for d in data):
+        raise ValueError("every chart series needs one value per label")
+    kind = str(spec.get("type") or "bar").lower()
+    palette = [colors.HexColor(c) for c in ("#1A56DB", "#E3A008", "#0E9F6E", "#E02424", "#7E3AF2", "#6B7280")]
+    w, h = 440, 230
+    d = Drawing(w, h)
+    if spec.get("title"):
+        d.add(String(w / 2, h - 14, str(spec["title"]), fontName=font, fontSize=11, textAnchor="middle"))
+    if kind == "pie":
+        c = Pie()
+        c.x, c.y, c.width, c.height = 140, 15, 170, 170
+        c.data, c.labels = data[0], labels
+        for k in range(len(labels)):
+            c.slices[k].fillColor = palette[k % len(palette)]
+    else:
+        c = HorizontalLineChart() if kind == "line" else VerticalBarChart()
+        c.x, c.y, c.width, c.height = 50, 35, w - 80, h - 70
+        c.data = data
+        c.categoryAxis.categoryNames = labels
+        c.categoryAxis.labels.fontName = c.valueAxis.labels.fontName = font
+        c.valueAxis.valueMin = min(0, min(min(x) for x in data))
+        for k in range(len(data)):
+            if kind == "line":
+                c.lines[k].strokeColor = palette[k % len(palette)]
+                c.lines[k].strokeWidth = 2
+            else:
+                c.bars[k].fillColor = palette[k % len(palette)]
+        if len(data) > 1:
+            lg = Legend()
+            lg.x, lg.y, lg.fontName = w - 10, h - 30, font
+            lg.alignment = "right"
+            lg.colorNamePairs = [(palette[k % len(palette)], n) for k, n in enumerate(series)]
+            d.add(lg)
+    d.add(c)
+    return d
+
+
+def _pdf_image(src: str, max_w: float):
+    from reportlab.lib.utils import ImageReader
+    from reportlab.platypus import Image
+    path = _resolve(src)
+    if not path.exists():
+        raise ValueError(f"image not found: {src}")
+    if not _readable(path):
+        raise ValueError(f"{src} is outside the project folder")
+    iw, ih = ImageReader(str(path)).getSize()
+    scale = min(1.0, max_w / iw)
+    return Image(str(path), width=iw * scale, height=ih * scale)
+
+
+def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = None, _named: bool | None = None):
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet
     from reportlab.lib.units import cm
     from reportlab.platypus import ListFlowable, ListItem, Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle
     name = _safe_name(filename, "document.pdf", ".pdf")
-    markdown, title = _clean(markdown), _clean(title) or None
-    out = _project() / "Meshpool outputs"
-    out.mkdir(parents=True, exist_ok=True)
+    markdown, title = _clean_md(markdown), _clean(title) or None
     st = getSampleStyleSheet()
     reg, bold = _pdf_font(markdown + (title or ""))
     for k in ("Title", "BodyText", "Heading1", "Heading2", "Heading3", "Heading4", "Code"):
@@ -544,7 +816,14 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
             while i < len(lines) and not lines[i].strip().startswith("```"):
                 block.append(lines[i])
                 i += 1
-            flow.append(Preformatted("\n".join(block), st["Code"]))
+            lang = s[3:].strip().lower()
+            if lang == "chart":
+                try:
+                    flow += [_pdf_chart("\n".join(block), reg), Spacer(1, 8)]
+                except (ValueError, KeyError, TypeError) as e:
+                    return f"Could not draw the chart: {e}. Nothing was saved.", True
+            else:
+                flow.append(Preformatted("\n".join(block), st["Code"]))
         elif s.startswith("|") and i + 1 < len(lines) and re.match(r"^\s*\|?\s*:?-{3,}", lines[i + 1]):
             flush()
             rows = []
@@ -560,6 +839,13 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
                                    ("VALIGN", (0, 0), (-1, -1), "TOP")]))
             flow += [t, Spacer(1, 8)]
             continue
+        elif re.match(r"^!\[[^\]]*\]\([^)]+\)\s*$", s):
+            flush()
+            src = re.match(r"^!\[[^\]]*\]\(([^)]+)\)", s).group(1).strip()
+            try:
+                flow += [_pdf_image(src, A4[0] - 4 * cm), Spacer(1, 8)]
+            except ValueError as e:
+                return f"Could not add the image: {e}. Nothing was saved.", True
         elif re.match(r"^#{1,6}\s", s):
             flush()
             lvl = len(s) - len(s.lstrip("#"))
@@ -584,7 +870,7 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
             flush()
         i += 1
     flush()
-    path = _free(out / name)
+    path = _dest(filename, "document.pdf", ".pdf", _named)
     SimpleDocTemplate(str(path), pagesize=A4, leftMargin=2 * cm, rightMargin=2 * cm, topMargin=2 * cm,
                       bottomMargin=2 * cm, title=title or name).build(flow)
     return f"Saved the PDF: {path}", False
@@ -595,7 +881,7 @@ def _soffice() -> str | None:
     return office_runtime.find_soffice()
 
 
-def convert_document(path: str, to: str = "pdf"):
+def convert_document(path: str, to: str = "pdf", output: str | None = None):
     src = _resolve(path)
     if not src.exists():
         return f"File not found: {src}", True
@@ -603,8 +889,10 @@ def convert_document(path: str, to: str = "pdf"):
     if src.suffix.lower() in (".md", ".txt") and to in ("pdf", "docx"):
         text = src.read_text(encoding="utf-8", errors="replace")      # a conversion keeps the words as they are:
         if to == "pdf":                                                # no clarity rewrite
-            return make_pdf(text, src.stem + ".pdf")
-        return make_document(text, src.stem + ".docx", _clarity=False)
+            return make_pdf(text, output, _named=True) if output else make_pdf(text, src.stem + ".pdf", _named=False)
+        if output:
+            return make_document(text, output, _clarity=False, _named=True)
+        return make_document(text, src.stem + ".docx", _clarity=False, _named=False)
     infilter: list[str] = []
     if src.suffix.lower() == ".pdf":
         # LibreOffice opens a PDF in Draw, which has no Word export ("no export filter"). Opened as a text document
@@ -620,8 +908,6 @@ def convert_document(path: str, to: str = "pdf"):
         return (f"Converting Office files needs Meshpool's LibreOffice, which is not available: "
                 f"{office_runtime.missing_reason()}. Or build the file directly with make_pdf, make_document, "
                 "make_deck or make_spreadsheet."), True
-    out = _project() / "Meshpool outputs"
-    out.mkdir(parents=True, exist_ok=True)
     kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
     import shutil
     import tempfile
@@ -631,7 +917,7 @@ def convert_document(path: str, to: str = "pdf"):
         made = Path(tmp) / (src.stem + "." + to)
         if r.returncode != 0 or not made.exists():
             return f"LibreOffice could not convert {src.name}: {(r.stderr or r.stdout)[-500:]}", True
-        dst = _free(out / made.name)
+        dst = _dest(output, made.name, "." + to, bool(output))
         shutil.move(str(made), str(dst))
     return f"Saved: {dst}", False
 
@@ -662,90 +948,71 @@ def find_icon(query: str = "", set: str | None = None, limit: int = 8, style: st
 
 
 S = {"type": "string"}
-FILES = {"type": "array", "items": S, "description": "Input files, relative to the project folder or absolute"}
+FILES = {"type": "array", "items": S, "description": "Input files (project-relative or absolute)"}
+# Descriptions stay short: they ride in every request. Option lists (themes, icon sets, edit operations) are in the
+# BRIEF NEEDED answer, in an error message or in find_icon list_sets, which the model reaches only when it needs them.
 TOOLS = {
-    "add_slides": (add_slides, "Add slides to a PowerPoint deck the user already has (the deck in `deck`). The "
-                   "slides engine builds them in that deck's own look (fonts, colours, master) to the same standard "
-                   "as make_deck, and appends them in a copy saved next to it as '<name> (updated).pptx'; the "
-                   "original is never changed. Use this for any new or changed slide in an existing deck: never "
-                   "write slides with python-pptx code. Describe what the slides must show in `request` (with the "
-                   "numbers, or the files that hold them in `files`). Takes 2 to 5 minutes.",
-                   {"deck": S, "request": S, "slides": {"type": "integer", "description": "How many slides to add (1-12)"},
+    "add_slides": (add_slides, "Add slides to an existing .pptx in its own look; saves '<name> (updated).pptx' and "
+                   "never changes the original. Never hand-write slides with python-pptx. 2 to 5 minutes.",
+                   {"deck": S, "request": S, "slides": {"type": "integer", "description": "1-12"},
                     "files": FILES}, ["deck", "request"]),
-    "make_deck": (make_deck, "Build a finished PowerPoint deck (.pptx) with Meshpool's slides engine, which plans "
-                  "the storyline, lays out charts and checks the result. Describe the content in `request` and give "
-                  "the brief as fields (audience, purpose, density, slides, theme, opening, closing, sources). If "
-                  "audience, density, length or look is left open, it does not build: it answers BRIEF NEEDED with "
-                  "questions, options and a recommendation for each. Ask the user, then call again with the answers, "
-                  "or pass brief_ok=true to build with the recommendations. Takes 2 to 6 minutes.",
-                  {"request": S, "files": FILES,
-                   "audience": {"type": "string", "description": "Who the deck is for, e.g. the board, investors"},
-                   "purpose": {"type": "string", "description": "What it should achieve, e.g. approve the budget"},
-                   "density": {"type": "string", "enum": ["present", "balanced", "read"],
-                               "description": "present: visual, few words, to present live; balanced; read: a dense "
-                                              "pre-read"},
-                   "slides": {"type": "integer", "description": "Number of slides"},
-                   "theme": {"type": "string", "description": "navy, ocean, forest, burgundy, graphite or mono"},
-                   "icon_set": {"type": "string", "description": "One icon set for the whole deck, e.g. phosphor, "
-                                "phosphor-light, material, carbon, heroicons (find_icon list_sets=true lists them); "
-                                "default lucide"},
-                   "opening": {"type": "string", "description": "Opening slides, e.g. title and agenda"},
-                   "closing": {"type": "string", "description": "Closing slides, e.g. next steps, questions"},
-                   "sources": {"type": "string", "description": "Sources to use or leave out"},
-                   "brief_ok": {"type": "boolean", "description": "Build now: recommended answers for anything not "
-                                                                  "given"}}, ["request"]),
-    "make_spreadsheet": (make_spreadsheet, "Build a finished Excel workbook (.xlsx) with live formulas, such as a "
-                         "model, budget or tracker, with Meshpool's sheets engine (it recalculates and checks the "
-                         "formulas). Takes 2 to 6 minutes.", {"request": S, "files": FILES}, ["request"]),
-    "analyze_data": (analyze_data, "Analyze CSV or Excel data and produce charts, tables and a written summary "
-                     "with Meshpool's data engine.", {"request": S, "files": FILES}, ["request", "files"]),
-    "make_document": (make_document, "Save Markdown as a Word document (.docx). Supports headings, bullet and "
-                      "numbered lists, tables, bold, italic, quotes and code blocks.",
+    "make_deck": (make_deck, "Build a finished .pptx with the slides engine (storyline, charts, checks). If the brief "
+                  "is open it answers BRIEF NEEDED with questions and recommendations: ask the user, or pass "
+                  "brief_ok=true. 2 to 6 minutes.",
+                  {"request": S, "files": FILES, "audience": S, "purpose": S,
+                   "density": {"type": "string", "enum": ["present", "balanced", "read"]},
+                   "slides": {"type": "integer"}, "theme": S, "icon_set": S, "opening": S, "closing": S,
+                   "sources": S, "brief_ok": {"type": "boolean", "description": "Build with the recommendations"},
+                   "save_as": {"type": "string", "description": "The file name the user asked for, e.g. deck.pptx"}},
+                  ["request"]),
+    "make_spreadsheet": (make_spreadsheet, "Build a new .xlsx with live formulas (model, budget, tracker). Not for "
+                         "changing a file that exists: use edit_office_file. 2 to 6 minutes.",
+                         {"request": S, "files": FILES, "save_as": {"type": "string", "description": "The file name the user asked for, e.g. deck.pptx"}}, ["request"]),
+    "analyze_data": (analyze_data, "Analyze CSV or Excel data into charts, tables and a summary.",
+                     {"request": S, "files": FILES}, ["request", "files"]),
+    "make_document": (make_document, "Save Markdown as a .docx. Saved as `filename` in the project folder.",
                       {"markdown": S, "filename": S, "title": S}, ["markdown"]),
-    "read_document": (read_document, "Read a PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx, .xls), CSV, Power BI "
-                      "(.pbix, .pbit: pages, visuals, tables, DAX measures, Power Query and sample rows), OpenDocument, "
-                      "notebook, email or HTML file as text, and reads the text in images and scanned PDFs with OCR "
-                      "(Arabic, Chinese, English, Japanese, Korean, Cyrillic, Hindi, Thai, Greek and Latin-script "
-                      "languages). `sheet` picks one Excel sheet; `pages` picks PDF pages such as \"1-3,7\"; "
-                      "`language` (optional, e.g. ar, ru, ko, hi) forces an OCR language; `ocr` is auto (scanned pages and "
-                      "pictures), always (also pages that mix text and scans) or never.",
+    "read_document": (read_document, "Read a PDF, Word, PowerPoint, Excel, CSV, Power BI, OpenDocument, notebook, "
+                      "email, HTML or image file as text (OCR for scans). `sheet`, `pages` (\"1-3,7\"), `language`, "
+                      "`ocr` (auto, always, never) are optional.",
                       {"path": S, "sheet": S, "pages": S, "language": S, "ocr": S}, ["path"]),
-    "edit_office_file": (edit_office_file, "Change an existing Word, Excel or PowerPoint file in place of rebuilding it: "
-                         "formatting, formulas and layout stay as they are, and LibreOffice is not needed. `operations` is a "
-                         "list. Word: {op:replace_text, find, replace}, {op:tracked_replace, find, replace} and "
-                         "{op:tracked_delete, find} and {op:tracked_insert_after, find, text} (real Word tracked changes "
-                         "the user accepts or rejects), {op:append_paragraph, text}, {op:add_comment, find, text}. Excel: {op:set_cell, sheet, cell, value (or a formula like =SUM(A1:A9))}, {op:add_row, "
-                         "values}, {op:add_comment, sheet, cell, text}. PowerPoint: {op:replace_text, find, replace}, "
-                         "{op:set_notes, slide, text}. Saved as '<name> (edited)' next to the file unless in_place is true.",
+    "edit_office_file": (edit_office_file, "Change an existing .docx, .xlsx or .pptx; formatting and formulas stay. "
+                         "Saves '<name> (edited)' unless in_place=true. operations: [{op,...}]. Word: replace_text, "
+                         "tracked_replace{find,replace}, tracked_delete, tracked_insert_after, add_comment. Excel: "
+                         "set_cell{sheet,cell,value; =formula}, set_range{start,values}, clear_cell, add_row, "
+                         "delete_rows{row,count}, add_sheet, delete_sheet, freeze_panes.",
                          {"path": S, "operations": {"type": "array", "items": {"type": "object"}}, "output": S,
                           "in_place": {"type": "boolean"}}, ["path", "operations"]),
-    "make_pdf": (make_pdf, "Save Markdown as a PDF (headings, paragraphs, lists, tables, code, links).",
+    "make_pdf": (make_pdf, "Save Markdown as a PDF. Saved as `filename` in the project folder. Charts: a fenced "
+                 "```chart block with JSON {\"type\": \"bar\"|\"line\"|\"pie\", \"title\", \"labels\": [...], "
+                 "\"values\": [...]} (or \"series\": {name: [...]}) is drawn as a real chart; ![caption](file.png) "
+                 "embeds an image. Never draw a chart with text characters.",
                  {"markdown": S, "filename": S, "title": S}, ["markdown"]),
-    "convert_document": (convert_document, "Convert a document to another format, for example .docx, .pptx or .xlsx "
-                         "to PDF, a PDF to Word (words and tables, approximate layout), or Markdown to PDF or Word. `to` is the target "
-                         "extension.",
-                         {"path": S, "to": S}, ["path", "to"]),
-    "find_icon": (find_icon, "Find icons for a slide or document by meaning (e.g. \"money\", \"supply chain\", "
-                  "\"M&A\", \"datacentre\"). Searches the bundled open-licence sets (Lucide, Tabler, Phosphor, "
-                  "Iconoir, Heroicons, Bootstrap, Material Symbols, IBM Carbon; no company logos) by name, tags and "
-                  "synonyms, and returns set:name, style, licence and the SVG path, best first. `set` keeps a deck to "
-                  "one set (e.g. lucide, phosphor, phosphor-fill, material, carbon); `style` (outline, filled, "
-                  "duotone) searches that style of every family; `list_sets` lists the sets with counts, licences "
-                  "and styles; `limit` is the number of results (default 8).",
+    "convert_document": (convert_document, "Convert a document to another format (docx, pptx, xlsx, md to pdf; pdf to "
+                         "docx). `to` is the target extension; `output` names the result.",
+                         {"path": S, "to": S, "output": S}, ["path", "to"]),
+    "find_icon": (find_icon, "Find icons by meaning in the open-licence sets; returns set:name and the SVG path. "
+                  "list_sets=true lists the sets.",
                   {"query": S, "set": S, "style": {"type": "string", "enum": ["outline", "filled", "duotone"]},
                    "limit": {"type": "integer"}, "list_sets": {"type": "boolean"}}, []),
-    "office_job_status": (office_job_status, "Get the result of an office job that was still running.",
+    "office_job_status": (office_job_status, "Result of an office job that was still running.",
                           {"job_id": S}, ["job_id"]),
 }
 
-
 def _forge_tool(name):
-    def call(path: str, **kw):
+    def call(path: str | None = None, **kw):
         from engines.forge import tools as FT
+        if path is None:                        # tools that take no file (slide_layouts: message, kind)
+            return getattr(FT, name)(**kw)
         p = _resolve(path)
         if not _readable(p):                    # they run without asking too: the same fence as read_document
             return (f"{path} is outside the project. Ask the user to attach it (or open the folder it is in as "
                     "the project) and check it from there."), True
+        if kw.get("data_files"):                # check_deck's source data: the same fence, resolved per file
+            df = [_resolve(f) for f in ([kw["data_files"]] if isinstance(kw["data_files"], str) else kw["data_files"])]
+            if not all(_readable(f) for f in df):
+                return "A data file is outside the project. Ask the user to attach it and check from there.", True
+            kw["data_files"] = [str(f) for f in df]
         return getattr(FT, name)(str(p), **kw)
     return call
 
@@ -766,8 +1033,15 @@ def _as_mcp(fn, props: dict):
     from meshpool_harness.agent.mcp_stdio import ToolFailed
 
     def call(**args):
+        from meshpool_harness.agent.mcp_stdio import private_args
+        priv = private_args()                            # one server process for every chat: the caller's folder
+        _CALL.project = args.pop("_project", None) or priv.get("_project")
+        _CALL.model = args.pop("_model", None) or priv.get("_model")    # and its model (else the engine uses MH_MODEL)
         extra = sorted(k for k in args if k not in props) if props else []
-        text, err = fn(**{k: v for k, v in args.items() if k not in extra})
+        try:
+            text, err = fn(**{k: v for k, v in args.items() if k not in extra})
+        finally:
+            _CALL.project = _CALL.model = None
         if extra:
             text = f"(Ignored unknown argument(s): {', '.join(extra)}.)\n{text}"
         if err:
@@ -776,9 +1050,15 @@ def _as_mcp(fn, props: dict):
     return call
 
 
+EDIT_TOOLS = ("edit_office_file", "read_document", "convert_document", "check_deck", "check_workbook", "check_document")
+
+
 def tools() -> dict:
+    """Every office tool; with MH_OFFICE_TOOLS=edit only those that read, change and check a file the user has (an
+    outside agent that was asked to change a file, not to make one, pays for six schemas, not sixteen)."""
     from meshpool_harness.agent.mcp_stdio import Tool
-    return {k: Tool(_as_mcp(fn, p or {}), d, p, r) for k, (fn, d, p, r) in TOOLS.items()}
+    only = EDIT_TOOLS if os.environ.get("MH_OFFICE_TOOLS", "") == "edit" else None
+    return {k: Tool(_as_mcp(fn, p or {}), d, p, r) for k, (fn, d, p, r) in TOOLS.items() if only is None or k in only}
 
 
 def handle(msg: dict, wait_s: float = 900) -> dict | None:
@@ -801,6 +1081,11 @@ def handle(msg: dict, wait_s: float = 900) -> dict | None:
 
 
 def main():
+    import signal
+    try:                                     # the app ends the server with SIGTERM: exit, so atexit ends the jobs
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    except (ValueError, OSError, AttributeError):
+        pass
     sys.path.insert(0, str(APP))
     try:
         from meshpool_harness import config as C
@@ -808,8 +1093,10 @@ def main():
     except Exception:
         pass
     from meshpool_harness.agent import mcp_stdio
-    mcp_stdio.serve("meshpool-office", tools())
-
+    try:
+        mcp_stdio.serve("meshpool-office", tools())
+    finally:                                 # the client went away (chat closed, app quit): its jobs go too
+        OJ.kill_jobs()
 
 if __name__ == "__main__":
     main()

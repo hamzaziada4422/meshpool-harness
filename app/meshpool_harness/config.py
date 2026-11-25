@@ -6,6 +6,7 @@ The config file is plain KEY=VALUE lines. Values already set in the shell enviro
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -17,11 +18,24 @@ FIELDS = [
     ("MESHPOOL_API_KEY", "API key", "", "Your Meshpool key (or any OpenAI-compatible key)."),
     ("MESHPOOL_BASE_URL", "Endpoint", "https://llm.meshpool.ai/v1", "OpenAI-compatible base URL."),
     ("MH_MODEL", "Model", "deepseek-v4.1-flash", "Any model id the endpoint serves."),
+    ("MH_AUTH_HEADER", "Key header", "", "Optional. The header that carries the key when it is not Authorization: "
+     "Bearer: api-key (Azure OpenAI), x-api-key, Authorization. Empty picks the right one for the endpoint."),
+    ("MH_AUTH_SCHEME", "Key scheme", "", "Optional. How the key is sent: bearer, basic, token or raw (the key alone)."),
+    ("MESHPOOL_AZURE_API_VERSION", "Azure api-version", "", "Optional. The api-version sent to an Azure OpenAI "
+     "endpoint. Empty uses the current GA version."),
     ("MH_PROVIDER", "Provider", "meshpool", "What the models run on: meshpool (your Meshpool key), custom (another "
      "OpenAI-compatible key) or chatgpt (your ChatGPT sign-in)."),
+    ("MH_REASONING_EFFORT", "Reasoning effort", "", "How hard models that take an effort level think: off, low, medium, "
+     "high or xhigh. Empty: each model's own default. A chat can override it (/effort, --effort)."),
+    ("MH_OTEL", "OpenTelemetry export", "0", "1 sends spans and metrics (ids, names, counts, durations, cost; no text) to "
+     "the endpoint below. Off by default; nothing is sent without an endpoint."),
+    ("MH_OTEL_ENDPOINT", "OpenTelemetry endpoint", "", "An OTLP/HTTP collector, e.g. http://localhost:4318. "
+     "OTEL_EXPORTER_OTLP_ENDPOINT also works."),
+    ("MH_OTEL_CONTENT", "OpenTelemetry: include text", "0", "1 adds prompt, reply and tool-argument text (cut to 2 KB) "
+     "to the exported spans. Off by default."),
     ("MH_AGENT_PERMISSIONS", "What agents may do without asking", "ask",
-     "Supervised asks before every change and command. Auto-accept edits changes files without asking but asks "
-     "before commands. Full access never asks."),
+     "Ask asks before every change and command. Accept edits changes files without asking but asks before "
+     "commands. Full access never asks."),
     ("MH_COMMIT_TRAILER", "Line at the end of the agent's commits", "", "For example Co-Authored-By: meshpool "
      "<noreply@example.com>. The agent ends its own commit messages and pull request descriptions with it. Empty: "
      "nothing is added."),
@@ -46,6 +60,8 @@ FIELDS = [
     ("MH_FETCH_DENY", "Web pages: never these sites", "", "Comma-separated domains agents never read, even when allowed above."),
     ("MH_BUDGET_USD", "Spending limit per task (USD)", "0", "A task stops when it reaches this. 0 means no limit. It "
      "needs a cost: the endpoint's own figure per request, or your prices (MH_PRICE_IN and MH_PRICE_OUT)."),
+    ("MH_MAX_STEPS", "Max steps per reply", "200", "The most tool steps the agent takes for one message. At the limit it "
+     "stops and keeps its work; send a message to continue. 0 means no limit."),
     ("MH_HOOKS", "Run hooks", "1", "On: commands in hooks.json run at set moments (yours, and a trusted folder's). "
      "Off: no hook runs."),
     ("MH_ONBOARDED", "Setup finished", "0", "Set when the first-run steps are done."),
@@ -62,7 +78,7 @@ FIELDS = [
      "the chat's turn, so Undo covers what they change and Stop stops them. Sub-agents started from Hermes, Codex "
      "or Pi only read."),
     ("MH_SUBAGENT_AUTO_APPROVE", "Sub-agents approve their own actions", "0", "On: what would need your yes in the "
-     "chat (a command in Supervised, say) is allowed once for a sub-agent. Off: it is refused and the sub-agent "
+     "chat (a command in Ask, say) is allowed once for a sub-agent. Off: it is refused and the sub-agent "
      "reports it."),
     ("MH_SUBAGENT_PARALLEL", "Sub-agents at the same time", "4", "1 to 10."),
     ("MH_SUBAGENT_STEPS", "Steps per sub-agent", "50", "The most tool steps one sub-agent takes before it reports "
@@ -71,8 +87,10 @@ FIELDS = [
      "report what they have. 0: no limit."),
     ("MH_SUBAGENT_DEPTH", "Sub-agent levels", "1", "1: sub-agents do their part themselves. 2 or 3: they may hand "
      "parts on to sub-agents of their own."),
-    ("MH_MAX_INFLIGHT", "Model calls at the same time", "4", "Per key, across all chats and sub-agents. While the "
-     "endpoint is recovering from an outage, calls go one at a time."),
+    ("MH_MAX_INFLIGHT", "Model calls at the same time", "", "Per endpoint and key, across all chats and sub-agents. "
+     "Blank: automatic. Meshpool sizes it to the provider (16 on the Meshpool gateway, 32 on the major cloud APIs, 2 "
+     "on a local server, 8 on others) and lowers it when the provider answers too many requests. A number sets a "
+     "fixed cap. While the endpoint is recovering from an outage, calls go one at a time."),
     ("MH_BROWSER_USE", "Browser use: which browser", "meshpool",
      "meshpool: Meshpool's own browser window (default). installed: the Chrome, Edge or Brave on this computer, with a "
      "profile folder that belongs to Meshpool (Chrome does not allow automation of your everyday profile). attach: "
@@ -91,35 +109,45 @@ FIELDS = [
     ("SERPER_API_KEY", "Serper API key", "", "Optional. Google results through serper.dev."),
     ("SEARXNG_URL", "SearXNG address", "", "Optional. Your own SearXNG search server, for example http://localhost:8888."),
     ("INSTANTLY_API_KEY", "Instantly API key", "", "Set from Settings, Connectors."),
-    ("MH_SANDBOX", "Sandbox for commands", "", "Optional. 1 = commands can write only in the project and temporary folders (Linux needs bubblewrap; macOS has it built in)."),
+    ("MH_SANDBOX", "Sandbox for commands", "", "On by default where available (Linux needs bubblewrap; macOS has it built in; "
+     "not available on Windows) except in Full access. 1 = always on, 0 = off. Commands can write only in the project and temporary folders."),
+    ("MH_SANDBOX_NETWORK", "Network for sandboxed commands", "", "Empty or 1 = commands may use the network. 0 = no network inside the sandbox."),
+    ("MH_SHELL_ENV_ALLOW", "Secrets the agent's commands may see", "", "Optional. Comma-separated variable names (for example OPENAI_API_KEY) kept in the "
+     "environment of the agent's commands. Everything named like a key, token, secret, password or credential is removed otherwise."),
+    ("MH_AUTO_CHECK", "Check after edits", "off", "off, lint, test or both: after a Code chat edits files, run the project's linter and/or the tests "
+     "for the touched files, and give failures back to the agent once."),
+    ("MH_ACP_IDLE_S", "Agent idle limit (seconds)", "300", "A connected coding agent that sends nothing for this long during a turn is stopped and restarted."),
 ]
 SECRET = {"MESHPOOL_API_KEY", "GITHUB_TOKEN", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY",
           "INSTANTLY_API_KEY"}
 
 
-def replace_file(src, dst) -> None:
+def replace_file(src, dst, keep_src: bool = False) -> None:
     """os.replace that survives Windows: a reader, the search indexer or antivirus holding the target or the fresh
-    file for a moment makes the rename fail with PermissionError, so try again briefly before giving up."""
+    file for a moment makes the rename fail with PermissionError, so try again briefly before giving up. A temp file
+    the caller just wrote is removed on failure; `keep_src` keeps it (a finished download worth retrying later)."""
     import time
-    for i in range(20 if os.name == "nt" else 1):
+    n = (100 if keep_src else 20) if os.name == "nt" else 1
+    for i in range(n):
         try:
             os.replace(src, dst)
             return
         except PermissionError:
-            if i == (19 if os.name == "nt" else 0):
-                try:
-                    os.unlink(src)
-                except OSError:
-                    pass
+            if i == n - 1:
+                if not keep_src:
+                    try:
+                        os.unlink(src)
+                    except OSError:
+                        pass
                 raise
             time.sleep(0.05)
 
 
 def home() -> Path:
-    """Where settings, MCP config and runs live. The zip install uses its own folder; the desktop apps set
-    MESHPOOL_HOME to the user's app-data folder."""
+    """Where settings, MCP config and runs live: MESHPOOL_HOME when set (the desktop apps and the launchers set
+    it), else the per-user data folder. Never the source tree: a checkout must stay clean (C-02, C-90)."""
     h = os.environ.get("MESHPOOL_HOME")
-    return Path(h).expanduser() if h else APP.parent
+    return Path(h).expanduser() if h else user_home_default()
 
 
 def runs_dir() -> Path:
@@ -132,13 +160,48 @@ def user_home_default() -> Path:
         return Path.home() / "Library" / "Application Support" / "Meshpool"
     if os.name == "nt":
         return Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming") / "Meshpool"
-    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "meshpool"
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "meshpool"
+
+
+# What lives in the data folder. An older layout kept it in the source tree (or, on Linux, under ~/.config).
+_HOME_ITEMS = ("meshpool.config", "mcp.json", "mcp-auth.json", "connectors.json", "projects.json", "runs", "skills",
+               "memory", "brand", "harnesses", "mcp-health.json", "mcp-tools-cache.json")
+
+
+def _legacy_homes() -> list:
+    out = [APP.parent]
+    if sys.platform != "darwin" and os.name != "nt":
+        out.append(Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "meshpool")
+    return out
+
+
+def _migrate_legacy_home(h: Path) -> None:
+    """Copy (never move) the settings and data an older layout kept elsewhere into the new data folder, once."""
+    if os.environ.get("MESHPOOL_HOME") or (h / "meshpool.config").exists() or (h / ".migrated").exists():
+        return
+    for old in _legacy_homes():
+        try:
+            if old.resolve() == h.resolve() or not (old / "meshpool.config").exists():
+                continue
+            for name in _HOME_ITEMS:
+                src, dst = old / name, h / name
+                if dst.exists() or not src.exists():
+                    continue
+                if src.is_dir():
+                    shutil.copytree(src, dst, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(src, dst)
+            (h / ".migrated").write_text(str(old), encoding="utf-8")
+            return
+        except OSError:
+            continue
 
 
 def ensure_home() -> Path:
     """Create the data folder and copy the default settings and MCP list into it the first time."""
     h = home()
     h.mkdir(parents=True, exist_ok=True)
+    _migrate_legacy_home(h)
     for name in ("meshpool.config", "mcp.json"):
         src, dst = APP / "defaults" / name, h / name
         if not dst.exists() and src.exists():
@@ -209,13 +272,43 @@ def config_path() -> Path:
     return Path(p) if p else home() / "meshpool.config"
 
 
+def decode_settings(raw: bytes) -> tuple[str, bool]:
+    """Settings text from raw bytes, and whether it was UTF-16 (PowerShell's `>` writes that): a byte-order mark, or
+    NUL bytes in every other position, means UTF-16. utf-8-sig drops a Notepad BOM; errors=replace keeps an ANSI "é"
+    from breaking every save."""
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return raw.decode("utf-16", errors="replace"), True
+    if len(raw) >= 4 and raw.count(b"\x00") * 3 >= len(raw):
+        return raw.decode("utf-16-le" if raw[1] == 0 else "utf-16-be", errors="replace"), True
+    return raw.decode("utf-8-sig", errors="replace"), False
+
+
+def read_text(path: Path) -> str:
+    """The settings file as text; a UTF-16 file is decoded and put back as UTF-8 (C-01)."""
+    raw = path.read_bytes()
+    text, wide = decode_settings(raw)
+    text = text.replace("\ufeff", "")
+    if wide:
+        try:
+            with _WRITE_LOCK, _file_lock(path.with_name(path.name + ".lock")):
+                if path.read_bytes() == raw:
+                    _store(path, text)
+        except OSError:
+            pass
+    return text
+
+
 def read(path: Path | None = None) -> dict:
     path = path or config_path()
     out = {}
     if not path.exists():
         return out
-    # utf-8-sig: a byte-order mark (Notepad) hid the first key; errors=replace: an ANSI "é" broke every save
-    for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+    return _parse(read_text(path))
+
+
+def _parse(text: str) -> dict:
+    out = {}
+    for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -227,6 +320,51 @@ def read(path: Path | None = None) -> dict:
     return out
 
 
+# One set of names for what an agent may do without asking: Ask, Accept edits, Full access. Stored as ask, edits,
+# auto. Earlier spellings stay as aliases everywhere a name is read (F-19).
+MODE_ALIASES = {"ask": "ask", "manual": "ask", "supervised": "ask", "default": "ask",
+                "edits": "edits", "accept edits": "edits", "accept-edits": "edits", "accept_edits": "edits",
+                "acceptedits": "edits", "auto-accept edits": "edits", "auto-accept-edits": "edits",
+                "auto-accept": "edits", "edit": "edits",
+                "auto": "auto", "full": "auto", "full access": "auto", "full-access": "auto", "full_access": "auto",
+                "fullaccess": "auto", "bypass": "auto"}
+
+
+def normalize_mode(v, default: str | None = "ask") -> str | None:
+    """ask / edits / auto from any accepted spelling; `default` for anything else (plan is not an access level)."""
+    return MODE_ALIASES.get(str(v or "").strip().lower(), default)
+
+
+def permission_mode() -> str:
+    """The access mode a NEW chat starts in (C-08): one setting, MH_AGENT_PERMISSIONS, read from the settings file at
+    that moment so an edit made by hand or by another process reaches the next chat; `MH_PERMISSION_MODE` (what
+    `meshpool --permission-mode` sets) is the same setting for one process and wins when it is set."""
+    one_off = normalize_mode(os.environ.get("MH_PERMISSION_MODE"), None)
+    if one_off:
+        return one_off
+    try:
+        vals = read()
+    except OSError:
+        vals = {}
+    for v in (vals.get("MH_AGENT_PERMISSIONS"), vals.get("MH_PERMISSION_MODE"), os.environ.get("MH_AGENT_PERMISSIONS")):
+        m = normalize_mode(v, None)
+        if m:
+            return m
+    return "ask"
+
+
+def clean_key(k) -> str:
+    """A key the way people paste it: in quotes, with a header name or "Bearer " in front, or with line breaks and
+    zero-width characters in it. Nothing else is touched: dashes, dots, =, _ and any prefix (or none) stay."""
+    k = str(k or "").strip()
+    for _ in range(3):
+        if len(k) >= 2 and (k[0], k[-1]) in {('"', '"'), ("'", "'"), ("`", "`"), ("\u201c", "\u201d"), ("\u2018", "\u2019")}:
+            k = k[1:-1].strip()
+    k = re.sub(r"^(?:(?:authorization|api-key|x-api-key|ocp-apim-subscription-key)\s*[:=]\s*)", "", k, flags=re.I)
+    k = re.sub(r"^(?:bearer|token)\s+", "", k, flags=re.I)
+    return re.sub(r"[\s\u200b-\u200f\u2060\ufeff]", "", k)
+
+
 _WRITE_LOCK = __import__("threading").Lock()
 
 
@@ -234,12 +372,104 @@ def write(values: dict, path: Path | None = None) -> Path:
     """Update keys in place, keeping comments and unknown keys. One writer at a time, and the file is replaced in one
     step: two saves at once (two favourite stars clicked quickly) used to lose the API key."""
     path = path or config_path()
-    with _WRITE_LOCK:
-        return _write(values, path)
+    with _WRITE_LOCK, _file_lock(path.with_name(path.name + ".lock")):
+        out = _write(values, path)
+    _settle_endpoint(values, path)
+    return out
+
+
+def update(fn, path: Path | None = None) -> Path:
+    """Read-modify-write under the same lock as write(): `fn(current_values)` returns the keys to set. Two favourites
+    starred together, or a star and a save, can no longer undo each other (M16-03)."""
+    path = path or config_path()
+    with _WRITE_LOCK, _file_lock(path.with_name(path.name + ".lock")):
+        cur = _parse(decode_settings(path.read_bytes())[0].replace("\ufeff", "")) if path.exists() else {}
+        changes = fn(cur) or {}
+        out = _write(changes, path) if changes else path
+    _settle_endpoint(changes, path)
+    return out
+
+
+# The key and its address are one endpoint: saving either one decides both, so a saved key is never sent to an
+# address the shell gave for another key, and a shell key never to an address saved for another.
+ENDPOINT_PAIR = ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL")
+
+
+def _is_live(path: Path) -> bool:
+    try:
+        return Path(path).resolve() == config_path().resolve()
+    except OSError:
+        return False
+
+
+def _settle_endpoint(values: dict, path: Path) -> None:
+    """After an explicit save, the endpoint names it wrote come from the settings file, not the shell: what the shell
+    once gave for them is forgotten (the key and the address together, never one alone), and the process environment
+    takes the saved values, marked as Meshpool's own copy, so the new key works on this first save and a later
+    load_into_env(override=True) never records them as the shell's."""
+    names = {k for k in values if k in ENDPOINT_NAMES}
+    if names & set(ENDPOINT_PAIR):
+        names |= set(ENDPOINT_PAIR)
+    if not names:
+        return
+    for k in names:
+        SHELL.pop(k, None)               # an explicit save replaces what the shell once gave for this name
+    if not _is_live(path):
+        return
+    try:
+        saved = read(path)
+    except OSError:
+        return
+    for k in names:
+        v = (saved.get(k) or "").strip()
+        if v:
+            os.environ[k] = v
+            _INJECTED.add(k)
+        else:                            # nothing saved: the shell's old value must not stand in for it
+            os.environ.pop(k, None)
+            _INJECTED.discard(k)
+
+
+@__import__("contextlib").contextmanager
+def _file_lock(lock: Path):
+    """An exclusive lock across processes for one read-modify-write (the app, `meshpool login`, MCP servers)."""
+    import time
+    try:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(lock, "a+b")
+    except OSError:
+        yield                                             # no lock file possible: same as before
+        return
+    with fh:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                while True:
+                    try:
+                        fh.seek(0)
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+                        break
+                    except OSError:
+                        time.sleep(0.05)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        except OSError:
+            pass
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                import msvcrt
+                try:
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
 
 
 def _write(values: dict, path: Path) -> Path:
-    lines = path.read_text(encoding="utf-8-sig", errors="replace").splitlines() if path.exists() else []
+    lines = decode_settings(path.read_bytes())[0].replace("\ufeff", "").splitlines() if path.exists() else []
     done = set()
     for i, line in enumerate(lines):
         s = line.strip()
@@ -251,40 +481,124 @@ def _write(values: dict, path: Path) -> Path:
     for k, v in values.items():
         if k not in done:
             lines.append(f"{k}={v}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    try:
-        os.chmod(tmp, 0o600)                     # it holds API keys: readable by this user only
-    except OSError:
-        pass
-    replace_file(tmp, path)
+    _store(path, "\n".join(lines) + "\n")
     return path
 
 
+def _store(path: Path, text: str) -> None:
+    from meshpool_harness import fsio
+    fsio.atomic_write_text(path, text, private=True)    # it holds API keys: owner-only from its first byte
+
+
+_SECRET_NAME = re.compile(r"(API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|PRIVATE_KEY|CONNECTION_STRING|DATABASE_URL)$", re.I)
 _INJECTED: set = set()          # names Meshpool itself copied into the environment from its saved settings
+# The endpoint names exactly as the user's own shell had them, kept apart from what load_into_env copies in from the file,
+# so a key and the address it was set for can be told from a key and an address that came from different places.
+ENDPOINT_NAMES = ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_API_WIRE", "MH_AUTH_HEADER", "MH_AUTH_SCHEME",
+                  "MESHPOOL_AZURE_API_VERSION", "MH_API_KIND", "MH_API_VERSION",
+                  "OPENAI_API_KEY", "OPENAI_BASE_URL")
+SHELL: dict = {k: os.environ[k].strip() for k in ENDPOINT_NAMES if os.environ.get(k, "").strip()}
+
+
+# S-06/G-03: names whose value is a credential. Like Codex's shell_environment_policy (openai/codex, Apache-2.0), every
+# variable matching one of these is dropped from what the agent's commands start with, unless MH_SHELL_ENV_ALLOW lists it.
+_SECRET_WORDS = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)", re.I)
+_PROVIDER_ENV = frozenset({
+    "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY",
+    "MISTRAL_API_KEY", "DEEPSEEK_API_KEY", "XAI_API_KEY", "TOGETHER_API_KEY", "COHERE_API_KEY", "PERPLEXITY_API_KEY",
+    "HF_TOKEN", "HUGGINGFACE_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GITLAB_TOKEN", "NPM_TOKEN", "PYPI_TOKEN",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AZURE_OPENAI_API_KEY", "DATABASE_URL",
+    "SLACK_BOT_TOKEN", "STRIPE_SECRET_KEY", "SENTRY_AUTH_TOKEN", "NETLIFY_AUTH_TOKEN", "VERCEL_TOKEN"})
+_SAFE_NAMES = frozenset({"SSH_AUTH_SOCK", "GPG_AGENT_INFO", "XAUTHORITY", "KEYBOARD", "TERM_SESSION_ID",
+                         "SSH_AGENT_PID", "DBUS_SESSION_BUS_ADDRESS", "XDG_SESSION_ID"})
+
+
+_SAFE_RX = re.compile(r"^(GIT_CONFIG_(KEY|VALUE)_\d+|GIT_(AUTHOR|COMMITTER)_\w+|\w*_TOKENS|\w*PUBLIC_?KEY\w*|\w*KEYBOARD\w*)$", re.I)
+
+
+def is_secret_name(name: str) -> bool:
+    n = str(name)
+    if n.upper() in _PROVIDER_ENV:
+        return True
+    return n.upper() not in _SAFE_NAMES and not _SAFE_RX.match(n) and bool(_SECRET_WORDS.search(n))
+
+
+def _shell_allow() -> set:
+    raw = os.environ.get("MH_SHELL_ENV_ALLOW", "")
+    if not raw:
+        try:
+            raw = str(read().get("MH_SHELL_ENV_ALLOW", ""))
+        except Exception:  # noqa: BLE001
+            raw = ""
+    return {x.strip().upper() for x in re.split(r"[,\s;]+", raw) if x.strip()}
 
 
 def scrub_env(env: dict) -> dict:
-    """The environment for a command the agent runs: without the keys Meshpool saved, so `env` or a script the model
-    writes cannot read them and send them to the model provider or into a log. Keys the user set in their own shell stay."""
+    """The environment for a command the agent runs: without any variable whose name looks like a credential (KEY,
+    TOKEN, SECRET, PASSWORD, CREDENTIAL, AUTH, or a known provider's key), so `env` or a script the model writes cannot
+    read them and send them to the model provider or into a log. MH_SHELL_ENV_ALLOW (comma separated names) lists the
+    ones to keep (S-06, G-03). MCP servers do not pass through here: they get what their own config gives them."""
+    allow = _shell_allow()
     for k in list(env):
-        if k == "MESHPOOL_API_KEY" or (k in SECRET and k in _INJECTED):
+        if k.upper() in allow:
+            continue
+        if k == "MESHPOOL_API_KEY" or is_secret_name(k) or (k in _INJECTED and (k in SECRET or _SECRET_NAME.search(k))):
             env.pop(k, None)
     return env
 
 
+_KEY_SHAPES = re.compile(r"\b(?:sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
+                         r"xox[abprs]-[A-Za-z0-9\-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_\-]{30,}|"
+                         r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,})")
+_SECRET_ASSIGN = re.compile(r"\b([A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)[A-Za-z0-9_]*)"
+                            r"(\s*[=:]\s*)(?!\[redacted\])([A-Za-z0-9_\-+/=]{8,})(?![\w(\[])")
+
+
+def redact_key_shapes(text):
+    """Only the well-known key shapes (sk-..., ghp_..., AKIA...): safe to run over a whole JSON document."""
+    return _KEY_SHAPES.sub("[redacted]", text) if isinstance(text, str) and len(text) >= 20 else text
+
+
+def redact_secrets(text):
+    """OSS-29: secret-looking values replaced by [redacted] before text is stored in a session file or a log."""
+    if not isinstance(text, str) or len(text) < 8:
+        return text
+    text = _KEY_SHAPES.sub("[redacted]", text)
+    return _SECRET_ASSIGN.sub(lambda m: m.group(1) + m.group(2) + "[redacted]", text)
+
+
+# Names that belong to the running process, not to the settings: a line in the file must never replace them (C-09).
+PROCESS_OWNED = frozenset({
+    "PATH", "PATHEXT", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "TMPDIR", "SHELL", "USER",
+    "LOGNAME", "COMSPEC", "SYSTEMROOT", "WINDIR", "PYTHONPATH", "PYTHONHOME", "PYTHONIOENCODING", "VIRTUAL_ENV",
+    "LD_LIBRARY_PATH", "LD_PRELOAD", "DYLD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES", "MESHPOOL_HOME", "MESHPOOL_CONFIG",
+    "MH_RUNS_DIR", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"})
+
+
 def load_into_env(override: bool = False) -> dict:
-    """Copy config values into os.environ (shell values win unless override). Empty values are skipped."""
+    """Copy config values into os.environ (shell values win unless override). An empty value clears what this
+    function copied in before (so a cleared setting really is cleared (M16-01)."""
     vals = read()
     for k, v in vals.items():
-        if v == "":
+        if k.upper() in PROCESS_OWNED:
             continue
+        if v == "":
+            if k in _INJECTED:
+                os.environ.pop(k, None)
+                _INJECTED.discard(k)
+            continue
+        if override and k in ENDPOINT_NAMES and os.environ.get(k) and k not in _INJECTED:
+            SHELL[k] = os.environ[k].strip()           # the shell's own value, before the file's replaces it
         if override or k not in os.environ:
             os.environ[k] = v
             _INJECTED.add(k)
     from meshpool_harness import bundled
     bundled.use_bundled_tools()               # packaged app: its own Node and Git come first on PATH (idempotent)
+    try:
+        from meshpool_harness.core import http as _h
+        _h.install_tls()                      # CA trust fallback (python.org macOS, a company proxy's CA)
+    except Exception:  # noqa: BLE001 - never block start-up
+        pass
     return vals
 
 
@@ -375,6 +689,12 @@ def system_check() -> list[dict]:
     rows.extend(_bundled_program_rows(bundled))
     rows.append({"name": "Slide icons", "optional": True, "ok": True, "detail": "built in",
                  "fix": "Not needed: icons ship pre-rendered with Meshpool."})
+    try:                                    # the model's context window and where that number came from
+        from meshpool_harness.core import context as _ctx
+        rows.append({"name": "Context window", "optional": True, "ok": True, "detail": _ctx.describe(),
+                     "fix": "Set MESHPOOL_CONTEXT_WINDOW (tokens) if this is wrong for your model."})
+    except Exception:  # noqa: BLE001 - a check must report, not crash
+        pass
     return rows
 
 

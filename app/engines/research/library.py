@@ -177,17 +177,25 @@ def split_passages(text: str) -> list[tuple[str, int | None, str | None]]:
         t = re.sub(r"[ \t]+", " ", buf).strip()
         while len(t) > PASSAGE_CHARS[1]:
             cut = t.rfind(". ", PASSAGE_CHARS[0], PASSAGE_CHARS[1])
-            cut = cut + 1 if cut > 0 else PASSAGE_CHARS[1]
+            if cut > 0:
+                cut += 1
+            else:                                   # no sentence end: cut on a line break or space, never mid-word
+                lo, hi = PASSAGE_CHARS[0], PASSAGE_CHARS[1]
+                cut = max(t.rfind("\n", lo, hi), t.rfind(" ", lo, hi))
+                if cut <= 0:
+                    cut = hi
             out.append((t[:cut].strip(), page, sect))
             t = t[cut:].strip()
         if t:
             out.append((t, page, sect))
         buf = ""
-    for para in re.split(r"\n\s*\n", text or ""):
+    # docread writes "## Page N" with the page's text on the next line: make each marker its own paragraph
+    text = re.sub(r"(?im)^(#+\s*Page\s+\d+\b[^\n]*)$", r"\n\n\1\n\n", text or "")
+    for para in re.split(r"\n\s*\n", text):
         para = para.strip()
         if not para:
             continue
-        m = re.match(r"^#+\s*Page\s+(\d+)\s*$", para, re.I)
+        m = re.match(r"^#+\s*Page\s+(\d+)\b[^\n]*$", para, re.I)
         if m:
             flush()
             page = int(m.group(1))
@@ -294,12 +302,26 @@ class Corpus:
         self._search, self._fetch = search_fn, fetch_fn
         self.now = now or time.strftime("%Y-%m-%d")
         self._sh: dict[str, set[int]] = {}
+        self.load_error: str | None = None
         if self.path.exists():
             self.load()
 
     # ---- persistence
     def load(self):
-        d = json.loads(self.path.read_text(encoding="utf-8"))
+        from meshpool_harness import fsio
+        self.load_error = None
+        try:
+            d = fsio.read_json(self.path, {})
+            if not isinstance(d, dict):
+                raise ValueError("not a JSON object")
+        except (fsio.CorruptFile, ValueError) as e:
+            cause = getattr(e, "cause", e)
+            if isinstance(cause, OSError):     # locked or unreadable for now (Windows sharing violation): the file
+                raise                          # may be fine, so it is never moved aside
+            # A damaged file (older version, killed save): keep it for inspection, start empty, say why.
+            moved = fsio.quarantine(self.path)
+            self.load_error = f"{self.path} was damaged ({cause}); moved to {moved or 'nowhere (could not move it)'}"
+            d = {}
         self.sources = {s["id"]: Source(**s) for s in d.get("sources", [])}
         self.passages = {}
         for p in d.get("passages", []):
@@ -314,10 +336,11 @@ class Corpus:
 
     def save(self) -> str:
         self.folder.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps({
+        from meshpool_harness import fsio
+        fsio.atomic_write_text(self.path, json.dumps({
             "created": self.now, "queries": self.queries, "failures": self.failures[-50:],
             "sources": [asdict(s) for s in self.sources.values()],
-            "passages": [p.to_json() for p in self.passages.values()]}, indent=1), encoding="utf-8")
+            "passages": [p.to_json() for p in self.passages.values()]}, indent=1))
         return str(self.path)
 
     # ---- adding sources
@@ -569,7 +592,7 @@ class Corpus:
         self._index = (docs, df, avg)
 
     def find(self, query: str, k: int = 8, per_source: int = 2, min_tier: int = 4, prefer_recent: bool = True,
-             include_duplicates: bool = False) -> list[Passage]:
+             include_duplicates: bool = False, source_ids=None) -> list[Passage]:
         """Best passages for a question: BM25 relevance x authority tier x recency, at most per_source passages per
         source, duplicates of an already-used source skipped."""
         if not self.passages:
@@ -582,6 +605,8 @@ class Corpus:
         scored = []
         for pid, toks in docs.items():
             p = self.passages[pid]
+            if source_ids is not None and p.source_id not in source_ids:
+                continue                                        # ranked inside the allowed sources only
             s = p.source or self.sources.get(p.source_id)
             if s is None or s.tier > min_tier or (s.duplicate_of and not include_duplicates):
                 continue
@@ -668,7 +693,8 @@ def finalize(report_path: str, corpus: Corpus, docx: bool = True) -> dict:
     text = split_sources(p.read_text(encoding="utf-8"))[0].rstrip() + "\n"
     cited = {c.split(".")[0] for c in citations_in(text)}
     text += "\n## Sources\n" + corpus.bibliography(cited) + "\n"
-    p.write_text(text, encoding="utf-8")
+    from meshpool_harness import fsio
+    fsio.atomic_write_text(p, text)
     corpus.save()
     out = {"report": str(p), "cited": sorted(cited, key=lambda x: int(x[1:]))}
     if docx:
@@ -679,22 +705,62 @@ def finalize(report_path: str, corpus: Corpus, docx: bool = True) -> dict:
     return out
 
 
+def _runs(par, text: str) -> None:
+    """Add text to a paragraph, rendering **bold** as bold runs (no literal asterisks)."""
+    for i, part in enumerate(re.split(r"\*\*(.+?)\*\*", text)):
+        if part:
+            par.add_run(part).bold = bool(i % 2)
+
+
+def _is_row(line: str) -> bool:
+    t = line.strip()
+    return t.startswith("|") and t.endswith("|") and len(t) > 1
+
+
+def _cells(line: str) -> list[str]:
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
 def _to_docx(md: str, path: Path) -> str:
     import docx
     d = docx.Document()
-    for block in md.split("\n"):
-        line = block.rstrip()
+    lines = md.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i].rstrip()
+        i += 1
         if not line:
+            continue
+        if _is_row(line):                                      # a markdown pipe table becomes a docx table
+            rows = [line]
+            while i < len(lines) and _is_row(lines[i]):
+                rows.append(lines[i].rstrip())
+                i += 1
+            body = [_cells(r) for r in rows if not re.fullmatch(r"[\s|:\-]+", r)]
+            width = max(len(r) for r in body)
+            t = d.add_table(rows=len(body), cols=width)
+            try:
+                t.style = "Table Grid"
+            except Exception:                                  # noqa: BLE001 - template without that style
+                pass
+            for ri, r in enumerate(body):
+                for ci in range(width):
+                    cell = t.cell(ri, ci)
+                    cell.text = ""
+                    _runs(cell.paragraphs[0], r[ci] if ci < len(r) else "")
+                    if ri == 0:
+                        for run in cell.paragraphs[0].runs:
+                            run.bold = True
             continue
         m = re.match(r"^(#{1,4})\s+(.*)", line)
         if m:
-            d.add_heading(m.group(2), level=len(m.group(1)))
+            d.add_heading(m.group(2).replace("**", ""), level=len(m.group(1)))
         elif re.match(r"^\s*[-*]\s+", line):
-            d.add_paragraph(re.sub(r"^\s*[-*]\s+", "", line), style="List Bullet")
+            _runs(d.add_paragraph(style="List Bullet"), re.sub(r"^\s*[-*]\s+", "", line))
         elif re.match(r"^\s*\d+\.\s+", line):
-            d.add_paragraph(re.sub(r"^\s*\d+\.\s+", "", line), style="List Number")
+            _runs(d.add_paragraph(style="List Number"), re.sub(r"^\s*\d+\.\s+", "", line))
         else:
-            d.add_paragraph(line)
+            _runs(d.add_paragraph(), line)
     d.save(str(path))
     return str(path)
 

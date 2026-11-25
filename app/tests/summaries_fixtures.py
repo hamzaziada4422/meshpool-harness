@@ -28,7 +28,7 @@ def chat(tmp_path, sid, users, replies=(), title=None, updated=None, files=(), h
     d.mkdir(parents=True, exist_ok=True)
     wd = tmp_path / ("wd-" + sid)
     wd.mkdir(exist_ok=True)
-    msgs = [{"role": "system", "content": "x"}]
+    msgs = []                      # Agent.save() stores the messages without the system prompt
     for i, u in enumerate(users):
         msgs.append({"role": "user", "content": u})
         if i < len(replies):

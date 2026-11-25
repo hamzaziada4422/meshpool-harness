@@ -149,7 +149,8 @@ def main():
     from meshpool_harness.agent import office_mcp_server as O
     for fn, name in ((O.make_document, "smoke.docx"), (O.make_pdf, "smoke.pdf")):
         out, bad = fn("# Smoke test\n\nRevenue grew 12% to $4.2m.\n\n| a | b |\n|---|---|\n| 1 | 2 |", name)
-        if bad or not (proj / "Meshpool outputs" / name).stat().st_size:
+        made = proj / name            # a name the user gives is saved where they asked (the project folder)
+        if bad or not made.exists() or not made.stat().st_size:
             raise SystemExit(f"smoke: FAILED, {name}: {out}")
 
     bundled_media(proj)
@@ -162,10 +163,19 @@ def main():
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)]
     log = open(tmp / "ui.log", "w")
     procs.append(subprocess.Popen(launch + ["-m", "meshpool_harness", "ui", "--no-browser", "--port", str(uport)],
-                                  env=dict(env, MESHPOOL_HOME=str(home)), stdout=log, stderr=subprocess.STDOUT))
+                                  env=dict(env, MESHPOOL_HOME=str(home), PYTHONUNBUFFERED="1"), stdout=log, stderr=subprocess.STDOUT))
     try:
         base = f"http://127.0.0.1:{uport}"
-        page = wait_http(base + "/")
+        # The page carries the API token only for the launch key the app prints at startup (?k=...)
+        end, key = time.time() + 90, ""
+        while time.time() < end and not key:
+            m = re.search(r"\?k=([\w-]+)", (tmp / "ui.log").read_text(errors="replace"))
+            key = m.group(1) if m else ""
+            if not key:
+                time.sleep(0.5)
+        if not key:
+            raise SystemExit("smoke: FAILED, the app printed no launch address: " + (tmp / "ui.log").read_text()[-600:])
+        page = wait_http(f"{base}/?k={key}")
         tok = re.search(r'token: "([^"]+)"', page).group(1)
 
         def api(path, body=None):

@@ -5,6 +5,8 @@ links to other sheets in green; Inputs / Calc / Outputs sheets; named ranges for
 """
 from __future__ import annotations
 
+import re
+
 from openpyxl.worksheet.properties import PageSetupProperties
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference
@@ -22,7 +24,23 @@ HEADER_FILL = PatternFill("solid", fgColor="1B2333")
 TITLE_FONT = Font(name=FONT, bold=True, size=14)
 TOTAL_BORDER = Border(top=Side(style="thin"))
 FMT = {"usd": '$#,##0;($#,##0);"-"', "usd2": '$#,##0.00;($#,##0.00)', "pct": '0.0%', "int": '#,##0;(#,##0)',
-       "x": '0.0"x";(0.0"x")', "num": '#,##0.0;(#,##0.0)'}
+       "x": '0.0"x";(0.0"x")', "num": '#,##0.0;(#,##0.0)',
+       # names a model reaches for by analogy with the ones above
+       "num0": '#,##0;(#,##0)', "num2": '#,##0.00;(#,##0.00)', "pct2": '0.00%', "usd0": '$#,##0;($#,##0);"-"',
+       "text": "@", "date": "yyyy-mm-dd", "general": "General"}
+_TOKEN = re.compile(r"^[A-Za-z]+\d*$")
+
+
+def fmt_code(fmt: str) -> str:
+    """The Excel number format for a token (usd, num2, pct, ...) or a format string given as is. An unknown bare word
+    is refused: written as a format code, "num3" made Excel show every amount as a date (it reads the m as month)."""
+    f = str(fmt)
+    if f in FMT or f.lower() in FMT:
+        return FMT.get(f) or FMT[f.lower()]
+    if _TOKEN.match(f) and f.lower() != "general" and not re.fullmatch(r"[ymdhsYMDHS]+", f):   # yyyy, mmm: real codes
+        raise ValueError(f"unknown number format {f!r}: use one of {', '.join(FMT)} or an Excel format string "
+                         "such as '#,##0.00'")
+    return f
 
 
 class _Book(Workbook):
@@ -44,7 +62,26 @@ class _Book(Workbook):
         return super().save(filename)
 
 
+def _q(title: str) -> str:
+    """A sheet title quoted for a formula or defined name: 'Bob''s Inputs'."""
+    return "'" + str(title).replace("'", "''") + "'"
+
+
+_BAD_SHEET_CHARS = re.compile(r"[\[\]:*?/\\]")
+
+
+def check_sheet_title(name: str) -> str:
+    """Excel's limits: 1-31 characters, none of [ ] : * ? / \\. LibreOffice truncates longer names on recalc and
+    Excel repairs the file, so refuse them here."""
+    if not name or len(name) > 31 or _BAD_SHEET_CHARS.search(name) or name.startswith("'") or name.endswith("'"):
+        raise ValueError(f"invalid sheet name {name!r}: use 1-31 characters, none of [ ] : * ? / \\ , and no "
+                         "leading or trailing apostrophe")
+    return name
+
+
 def new_workbook(sheets=("Inputs", "Calc", "Outputs")) -> Workbook:
+    for _n in sheets:
+        check_sheet_title(_n)
     wb = _Book()
     wb.active.title = sheets[0]
     for s in sheets[1:]:
@@ -71,14 +108,21 @@ def input_cell(ws, ref, value, fmt=None, name=None):
     c.value = value
     c.font, c.fill = INPUT_FONT, INPUT_FILL
     if fmt:
-        c.number_format = FMT.get(fmt, fmt)
+        c.number_format = fmt_code(fmt)
     if name:
-        define_name(ws.parent, name, f"'{ws.title}'!${c.column_letter}${c.row}")
+        define_name(ws.parent, name, f"{_q(ws.title)}!${c.column_letter}${c.row}")
     return c
+
+
+_VALID_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+_CELLREF_NAME = re.compile(r"^(?:[A-Za-z]{1,3}\d+|[Rr]\d*[Cc]\d*|[Rr]|[Cc])$")
 
 
 def define_name(wb, name: str, attr_text: str):
     """Workbook-level named range (replaces an existing one with the same name)."""
+    if not _VALID_NAME.match(name or "") or _CELLREF_NAME.match(name):
+        raise ValueError(f"invalid defined name {name!r}: use letters, digits, underscores and dots, starting with "
+                         "a letter or underscore, and not looking like a cell reference (Q1, TAX2, R1C1)")
     dn = DefinedName(name, attr_text=attr_text)
     try:
         wb.defined_names[name] = dn
@@ -100,7 +144,7 @@ def formula(ws, ref, expr, fmt=None, link=False, total=False):
     c.value = expr if expr.startswith("=") else "=" + expr
     c.font = LINK_FONT if link else CALC_FONT
     if fmt:
-        c.number_format = FMT.get(fmt, fmt)
+        c.number_format = fmt_code(fmt)
     if total:
         c.border = TOTAL_BORDER
         c.font = Font(name=FONT, bold=True, color=c.font.color.rgb if c.font.color else "000000")
@@ -128,7 +172,7 @@ def chart(ws, kind, data_ref, cats_ref, anchor, title_text="", y_fmt=None, heigh
     ch.add_data(data, titles_from_data=True)
     ch.set_categories(cats)
     if y_fmt and kind != "pie":
-        ch.y_axis.numFmt = FMT.get(y_fmt, y_fmt)
+        ch.y_axis.numFmt = fmt_code(y_fmt)
     ws.add_chart(ch, anchor)
     return ch
 
@@ -164,7 +208,7 @@ def banker_workbook(title_text: str, purpose: str, author: str = "", date: str =
             "Outputs": "Summary tables and charts for review.",
             "Checks": "Error checks. All must show OK before the file is shared."}
     for i, s in enumerate(sheets[1:], start=9):
-        c.cell(row=i, column=2, value=s).hyperlink = f"#'{s}'!A1"
+        c.cell(row=i, column=2, value=s).hyperlink = f"#{_q(s)}!A1"
         c.cell(row=i, column=2).font = Font(name=FONT, color="2557D6", underline="single")
         c.cell(row=i, column=3, value=desc.get(s, ""))
     r = 9 + len(sheets)
@@ -191,9 +235,45 @@ def section(ws, row, text, ncols=6):
     ws.cell(row=row, column=1, value=text).font = SECTION_FONT
 
 
-def add_check(wb, label: str, diff_formula: str, tol: float = 0.01):
-    """Append a check row: difference formula must be ~0. Status shows OK / ERROR. Returns the status cell ref."""
+_BARE_REF = re.compile(r"^(\$?[A-Za-z]{1,3}\$?\d+(:\$?[A-Za-z]{1,3}\$?\d+)?|\$?[A-Za-z]{1,3}:\$?[A-Za-z]{1,3}|"
+                       r"\$?\d+:\$?\d+)$")
+
+
+def qualify_refs(expr: str, sheet: str | None) -> tuple[str, list[str]]:
+    """(formula, bare refs). Every cell reference in expr without a sheet name (B12, B10:G10, $C$4) gets sheet's
+    name in front when sheet is given; names, functions and already-qualified references are left alone."""
+    from openpyxl.formula.tokenizer import Token, Tokenizer, TokenizerError
+    expr = expr if expr.startswith("=") else "=" + expr
+    try:
+        tok = Tokenizer(expr)
+    except TokenizerError:                     # not parseable here: left as written; the workbook QA still reads it
+        return expr, []
+    bare = []
+    for t in tok.items:
+        if t.type == Token.OPERAND and t.subtype == Token.RANGE and "!" not in t.value and _BARE_REF.match(t.value):
+            bare.append(t.value)
+            if sheet:
+                t.value = f"{_q(sheet)}!{t.value}"
+    return tok.render(), bare
+
+
+def add_check(wb, label: str, diff_formula: str, tol: float = 0.01, sheet: str | None = None):
+    """Append a check row: difference formula must be ~0. Status shows OK / ERROR. Returns the status cell ref.
+
+    The formula is written on the Checks tab, so a reference without a sheet name (=B12-SUM(B10:G10)) would point at
+    the Checks tab's own empty cells and the check would always show OK. Name the tab holding the figures: either in
+    the formula (='Budget'!B12-SUM('Budget'!B10:G10)) or with sheet="Budget", which puts it in front of every bare
+    reference. A bare reference without sheet= is refused."""
     ch = wb["Checks"]
+    if sheet is not None and sheet not in wb.sheetnames:
+        raise ValueError(f"add_check({label!r}): no sheet named {sheet!r}; sheets are {wb.sheetnames}")
+    diff_formula, bare = qualify_refs(diff_formula, sheet)
+    if bare and sheet is None:
+        raise ValueError(
+            f"add_check({label!r}): {', '.join(bare)} in {diff_formula} has no sheet name, so on the Checks tab it "
+            "would read the Checks tab's own empty cells and the check would show OK without checking anything. "
+            f"Name the tab that holds the figures: B.add_check(wb, {label!r}, {diff_formula!r}, sheet='<tab>'), or "
+            "write the sheet into each reference, e.g. ='Budget'!B12-SUM('Budget'!B10:G10).")
     if "check_tolerance" not in wb.defined_names:          # the tolerance is a labelled input, not a typed literal
         ch["H3"] = "Tolerance"
         ch["H3"].font = Font(name=FONT, bold=True)
@@ -201,7 +281,13 @@ def add_check(wb, label: str, diff_formula: str, tol: float = 0.01):
     r = max(4, max((c.row for c in ch["A"] if c.value is not None), default=3) + 1)
     ch.cell(row=r, column=1, value=label)
     formula(ch, f"B{r}", diff_formula if diff_formula.startswith("=") else "=" + diff_formula, "num", link=True)
-    formula(ch, f"C{r}", f'=IF(ABS(B{r})<=check_tolerance,"OK","ERROR")')
+    stored = ch["I3"].value
+    if isinstance(stored, (int, float)) and abs(float(stored) - tol) > 1e-12:
+        # a check with its own tolerance: kept in a labelled input beside the row, not silently dropped
+        input_cell(ch, f"D{r}", tol, "num")
+        formula(ch, f"C{r}", f'=IF(ABS(B{r})<=D{r},"OK","ERROR")')
+    else:
+        formula(ch, f"C{r}", f'=IF(ABS(B{r})<=check_tolerance,"OK","ERROR")')
     ch["E3"] = "All checks"
     ch["E3"].font = Font(name=FONT, bold=True)
     # ISERROR too: COUNTIF does not count error values, so a #DIV/0! check read "All checks OK"
@@ -224,14 +310,14 @@ BOOK_COLS = ["Assumption", "Value", "Source", "Evidence / rationale", "Low", "Hi
 
 def _abs(ws, coord: str) -> str:
     col, row = _re.match(r"([A-Z]+)(\d+)", coord.replace("$", "")).groups()
-    return f"'{ws.title}'!${col}${row}"
+    return f"{_q(ws.title)}!${col}${row}"
 
 
 def _name_sheet(wb, name: str):
     for k, dn in wb.defined_names.items():
         if k.lower() == name.lower():
             dest = str(dn.attr_text)
-            return dest.rpartition("!")[0].strip("'") if "!" in dest else None
+            return dest.rpartition("!")[0].strip("'").replace("''", "'") if "!" in dest else None
     return None
 
 
@@ -245,7 +331,7 @@ def _crosses(ws, expr: str) -> bool:
         if t.type == _Token.OPERAND and t.subtype == _Token.RANGE:
             v = t.value
             if "!" in v:
-                if v.rpartition("!")[0].strip("'") != ws.title:
+                if v.rpartition("!")[0].strip("'").replace("''", "'") != ws.title:
                     return True
             else:
                 sh = _name_sheet(ws.parent, v)
@@ -462,6 +548,9 @@ def dcf_block(ws, row, years, drivers, revenue=None, margin="ebitda_margin", nam
             k, prev = m.group(1), m.group(2)
             if k not in rows:
                 raise ValueError(f"dcf_block: unknown row {{{k}}} in {expr}")
+            if prev and i == 0:
+                raise ValueError(f"dcf_block: {{{k}@prev}} in {expr!r} has no prior column in the first forecast "
+                                 "year; give the driver a start value (growth/step) instead of a formula with @prev")
             return f"{cols[i - 1] if prev else cols[i]}{rows[k]}"
         return _re.sub(r"\{(\w+)(@prev)?\}", rep, expr)
 
@@ -644,24 +733,24 @@ def _dcf_tail(ws, r, hdr, rows, cols, N, prefix, width, title_text, extra_grid=F
                 ev_x = pv_x(w) + f"+${L}${er_}*{m}/(1+{w})^${L}${tr_}"
                 _f(ws, f"{c}{rr}", f'=IF({N["shares"]}=0,0,({ev_x}-{N["debt"]}+{N["cash"]}{other})/{N["shares"]})',
                    "usd2")
-        out_extra = {"grid_exit": f"'{ws.title}'!B{xh + 1}:F{xh + 5}",
-                     "grid_exit_centre": f"'{ws.title}'!{gcols[2]}{xh + 3}"}
+        out_extra = {"grid_exit": f"{_q(ws.title)}!B{xh + 1}:F{xh + 5}",
+                     "grid_exit_centre": f"{_q(ws.title)}!{gcols[2]}{xh + 3}"}
         if "Checks" in wb.sheetnames:
             add_check(wb, f"{title_text}: exit-multiple grid centre equals exit-multiple value per share",
-                      f"='{ws.title}'!{gcols[2]}{xh + 3}-{P('per_share_exit')}")
+                      f"={_q(ws.title)}!{gcols[2]}{xh + 3}-{P('per_share_exit')}")
         r = xh + 6
     if "Checks" in wb.sheetnames:
-        add_check(wb, f"{title_text}: terminal growth is below WACC", f"=IF({P('wacc')}>'{ws.title}'!{g},0,1)")
+        add_check(wb, f"{title_text}: terminal growth is below WACC", f"=IF({P('wacc')}>{_q(ws.title)}!{g},0,1)")
         add_check(wb, f"{title_text}: sensitivity centre equals base value per share",
-                  f"='{ws.title}'!{centre}-{P('per_share')}")
+                  f"={_q(ws.title)}!{centre}-{P('per_share')}")
     if ws.freeze_panes is None:
         ws.freeze_panes = f"B{hdr + 1}"
     ws.column_dimensions["A"].width = max(ws.column_dimensions["A"].width or 0, 46)
     for c in cols + gcols:
         ws.column_dimensions[c].width = max(ws.column_dimensions[c].width or 0, 13)
     return {"header_row": hdr, "rows": rows, "cols": cols, "sheet_name": ws.title,
-            "grid": f"'{ws.title}'!B{gh + 1}:F{gh + 5}",
-            "grid_centre": f"'{ws.title}'!{centre}", "names": {k: P(k) for k in
+            "grid": f"{_q(ws.title)}!B{gh + 1}:F{gh + 5}",
+            "grid_centre": f"{_q(ws.title)}!{centre}", "names": {k: P(k) for k in
             ("wacc", "ev", "ev_exit", "tv_share", "equity", "per_share", "per_share_exit")}, "next_row": r + 1,
             **out_extra}
 
@@ -689,7 +778,7 @@ def football_field(ws, row, methods, fmt="usd2", marker=None, title_text="Valuat
         r += 1
         ws.cell(row=r, column=1, value=marker["label"]).font = Font(name=FONT, bold=True)
         _f(ws, f"B{r}", marker["value"], fmt)
-        out["marker"] = f"'{ws.title}'!B{r}"
+        out["marker"] = f"{_q(ws.title)}!B{r}"
     from openpyxl.chart.shapes import GraphicalProperties
     from openpyxl.drawing.line import LineProperties
     ch = BarChart()
@@ -702,11 +791,11 @@ def football_field(ws, row, methods, fmt="usd2", marker=None, title_text="Valuat
     ch.series[0].graphicalProperties = GraphicalProperties(noFill=True, ln=LineProperties(noFill=True))
     ch.series[1].graphicalProperties = GraphicalProperties(solidFill="2557D6")
     ch.legend = None
-    ch.y_axis.numFmt = FMT.get(fmt, fmt)
+    ch.y_axis.numFmt = fmt_code(fmt)
     ws.add_chart(ch, anchor or f"F{row}")
     if "Checks" in wb.sheetnames:
         add_check(wb, "Football field: every low is at or below its high",
-                  f"=SUMPRODUCT(--('{ws.title}'!B{first}:B{last}>'{ws.title}'!C{first}:C{last}))")
+                  f"=SUMPRODUCT(--({_q(ws.title)}!B{first}:B{last}>{_q(ws.title)}!C{first}:C{last}))")
     ws.column_dimensions["A"].width = max(ws.column_dimensions["A"].width or 0, 40)
     for c in "BCD":
         ws.column_dimensions[c].width = max(ws.column_dimensions[c].width or 0, 16)
@@ -1135,7 +1224,7 @@ def three_statement(ws, row, years, segments, opex=None, capex_growth=None, name
     flush()
 
     P = lambda k: f"{prefix}{k}"  # noqa: E731
-    rng = lambda k, first=F0: f"'{ws.title}'!${first}${rows[k]}:${L}${rows[k]}"  # noqa: E731
+    rng = lambda k, first=F0: f"{_q(ws.title)}!${first}${rows[k]}:${L}${rows[k]}"  # noqa: E731
     define_name(wb, P("revenue_final"), _abs(ws, f"{L}{rows['revenue']}"))
     define_name(wb, P("ebitda_margin_final"), _abs(ws, f"{L}{rows['ebitda_margin']}"))
     define_name(wb, P("net_income_final"), _abs(ws, f"{L}{rows['net_income']}"))
@@ -1614,7 +1703,7 @@ def valuation_summary(ws, row, methods, profile, marker=None, tv_share_name="dcf
         ws.cell(row=r, column=1, value=lab).font = Font(name=FONT, bold=True)
         _f(ws, f"B{r}", f"=SUMPRODUCT({W},${col}${first}:${col}${last})", "usd2", total=True)
         define_name(wb, key, _abs(ws, f"B{r}"))
-        res[key] = f"'{ws.title}'!B{r}"
+        res[key] = f"{_q(ws.title)}!B{r}"
         r += 1
     ws.cell(row=r, column=1, value="Largest gap between weight used and rule-based weight (%)")
     _f(ws, f"B{r}", f"=SUMPRODUCT(MAX(ABS(L{first}:L{last}-K{first}:K{last})))", "pct")
@@ -1630,7 +1719,7 @@ def valuation_summary(ws, row, methods, profile, marker=None, tv_share_name="dcf
                 ).font = Font(name=FONT, bold=True, color="C00000")
         r += 1
     if "Checks" in wb.sheetnames:
-        add_check(wb, "Valuation weights used sum to 100%", f"='{ws.title}'!L{tot_row}-1")
+        add_check(wb, "Valuation weights used sum to 100%", f"={_q(ws.title)}!L{tot_row}-1")
     r += 1
     ff_methods = [{"label": ws.cell(row=rr, column=1).value, "low": f"=B{rr}", "high": f"=C{rr}"}
                   for rr in range(first, last + 1)]
@@ -1679,7 +1768,7 @@ def diluted_shares(ws, row, basic="basic_shares", price="share_price", options=(
     ws.cell(row=r, column=1, value="Diluted shares (m)").font = Font(name=FONT, bold=True)
     _f(ws, f"B{r}", f"=SUM(B{first}:B{r - 1})", "num", total=True)
     define_name(wb, name, _abs(ws, f"B{r}"))
-    return {"cell": f"'{ws.title}'!B{r}", "next_row": r + 2}
+    return {"cell": f"{_q(ws.title)}!B{r}", "next_row": r + 2}
 
 
 def alerts(wb, model: dict, dcf: dict | None = None, sheet: str = "Alerts") -> dict:
@@ -1879,9 +1968,9 @@ def lbo(ws, row, model: dict, tranches: list[dict], names: dict | None = None, t
                  f"=IF({N['shares']}=0,0,({mx}-{N['debt']}+{N['cash']})/{N['shares']})", "usd2")
         define_name(wb, f"lbo_floor_{key}", _abs(ws, ps))
     if "Checks" in wb.sheetnames:
-        add_check(wb, f"{title_text}: sources equal uses", f"='{ws.title}'!B{rows['sources']}-'{ws.title}'!B{rows['uses']}")
+        add_check(wb, f"{title_text}: sources equal uses", f"={_q(ws.title)}!B{rows['sources']}-{_q(ws.title)}!B{rows['uses']}")
         add_check(wb, f"{title_text}: no tranche below zero",
-                  "=" + "+".join(f"SUMPRODUCT(--('{ws.title}'!{F0}{closing[i]}:{L}{closing[i]}<0))" for i in closing)
+                  "=" + "+".join(f"SUMPRODUCT(--({_q(ws.title)}!{F0}{closing[i]}:{L}{closing[i]}<0))" for i in closing)
                   if closing else "=0")
     if ws.freeze_panes is None:
         freeze(ws, f"B{hdr + 1}")
@@ -1985,11 +2074,11 @@ def merger(ws, row, names: dict | None = None, title_text="Merger: accretion / d
         add_check(wb, f"{title_text}: stock and debt shares within 100% of the price",
                   f"=MAX(0,{N['pct_stock']}+{N['pct_debt']}-1)")
         add_check(wb, f"{title_text}: grid centre equals the base accretion",
-                  f"='{ws.title}'!{gcols[2]}{gh + 3}-ma_accretion")
+                  f"={_q(ws.title)}!{gcols[2]}{gh + 3}-ma_accretion")
     ws.column_dimensions["A"].width = max(ws.column_dimensions["A"].width or 0, 50)
     if ws.freeze_panes is None:
         freeze(ws, "B4")
-    return {"cells": cell, "grid": f"'{ws.title}'!B{gh + 1}:F{gh + 5}", "grid_header_row": gh, "next_row": gh + 7}
+    return {"cells": cell, "grid": f"{_q(ws.title)}!B{gh + 1}:F{gh + 5}", "grid_header_row": gh, "next_row": gh + 7}
 
 
 # --------------------------------------------------------------------------- capital allocation
@@ -2062,7 +2151,7 @@ def capital_allocation(ws, row, years, names=None, prefix="ca_", growth_step=0.0
     r += 1
     for i, c in enumerate(cols[1:], 1):    # now that closing cash exists, link each later opening balance to it
         _f(ws, f"{c}{rows['open']}", f"={cols[i - 1]}{rows['close']}", "usd")
-    line("retired", "Shares retired", "={c}{buyback}/-" + N["price"], fmt="num")
+    line("retired", "Shares retired", "=IF(" + N["price"] + "=0,0,{c}{buyback}/-" + N["price"] + ")", fmt="num")
     rows["sh_close"] = r
     ws.cell(row=r, column=1, value="Closing shares")
     for c in cols:

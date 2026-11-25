@@ -21,9 +21,9 @@ function routeMenu(anchor) {
   anchor.appendChild(m);
   const close = e => { if (!m.contains(e.target)) { m.remove(); document.removeEventListener("mousedown", close); } };
   setTimeout(() => document.addEventListener("mousedown", close), 0);
-  m.addEventListener("keydown", e => { if (e.key === "Escape") m.remove(); });
+  m.addEventListener("keydown", e => { if (e.key === "Escape") { m.remove(); document.removeEventListener("mousedown", close); } });
   m.querySelectorAll("button").forEach(b => b.onclick = async () => {
-    m.remove();
+    m.remove(); document.removeEventListener("mousedown", close);
     const c = S.cur; if (!c) return;
     try { await post(`/api/agent/${c.id}/route`, {spec: b.dataset.spec, since: 1e9}); clearTimeout(c.pollT); poll(); }
     catch (e) { toast(e.message); }
@@ -59,7 +59,13 @@ const PROV_PREFIX = ["chatgpt"];
 function provOf(id) { const [h, ...r] = String(id || "").split(":"); return r.length && PROV_PREFIX.includes(h) ? h : "key"; }
 function bareModel(id) { const p = provOf(id); return p === "key" ? String(id || "") : String(id).slice(p.length + 1); }
 function modelLabel(id, list) {                 // the name, plus the id when another model in the list shares it
-  const n = modelName(id); return (list || []).filter(m => modelName(m.id || m) === n).length > 1 ? `${n} · ${bareModel(id)}` : n;
+  // F-20: the same model name from two providers or endpoints also shows where it comes from
+  const n = modelName(id), same = (list || []).filter(m => modelName(m.id || m) === n);
+  if (same.length < 2) return n;
+  const label = `${n} · ${bareModel(id)}`;
+  const twin = same.some(m => (m.id || m) !== id && `${modelName(m.id || m)} · ${bareModel(m.id || m)}` === label);
+  const src = provOf(id) === "key" ? ((list || []).find(m => (m.id || m) === id) || {}).provider || "your endpoint" : provOf(id);
+  return twin ? `${label} (${src})` : label;
 }
 function modelName(id) {
   const known = {deepseek: "DeepSeek", gpt: "GPT", qwen: "Qwen", glm: "GLM", kimi: "Kimi", llama: "Llama", mistral: "Mistral", grok: "Grok", openai: "OpenAI", minimax: "MiniMax"};
@@ -180,14 +186,24 @@ function toast(text, ms = 5000, action) {
 
 
 /* In-app confirm and prompt: native webviews do not always show window.confirm or window.prompt. */
-function ask({title, text = "", value, ok = "OK", cancel = "Cancel", danger = false}) {
+// Grow the message box with its text. Reading scrollHeight forces a layout of the whole page, so a single short line
+// (the common keystroke) skips it, and the rest is done at most once per frame.
+let fitRaf = 0;
+function fitInput(inp) {
+  const v = inp.value;
+  if (v.length < 40 && v.indexOf("\n") < 0) { if (inp.dataset.fit !== "1") { inp.dataset.fit = "1"; inp.style.height = ""; } return; }
+  inp.dataset.fit = "";
+  if (fitRaf) return;
+  fitRaf = requestAnimationFrame(() => { fitRaf = 0; inp.style.height = "auto"; inp.style.height = Math.min(260, inp.scrollHeight) + "px"; });
+}
+function ask({title, text = "", value, ok = "OK", cancel = "Cancel", danger = false, allowEmpty = false, check = ""}) {
   return new Promise(res => {
     const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
     const input = value !== undefined;
-    sc.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3>${esc(title)}</h3>${text ? `<p>${esc(text)}</p>` : ""}${input ? `<input id="dlgIn" value="${esc(value)}" spellcheck="false">` : ""}<div class="row"><button class="btn" data-a="0">${esc(cancel)}</button><button class="btn ${danger ? "danger" : "primary"}" data-a="1">${esc(ok)}</button></div></div>`;
+    sc.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3>${esc(title)}</h3>${text ? `<p>${esc(text)}</p>` : ""}${input ? `<input id="dlgIn" value="${esc(value)}" spellcheck="false">` : ""}${check ? `<label class="dlgck"><input type="checkbox" id="dlgCk" checked> ${esc(check)}</label>` : ""}<div class="row"><button class="btn" data-a="0">${esc(cancel)}</button><button class="btn ${danger ? "danger" : "primary"}" data-a="1">${esc(ok)}</button></div></div>`;
     document.body.appendChild(sc);
     const done = v => { sc.remove(); document.removeEventListener("keydown", key, true); res(v); };
-    const val = () => input ? ($("#dlgIn", sc).value.trim() || null) : true;
+    const val = () => check ? {checked: $("#dlgCk", sc).checked} : input ? ($("#dlgIn", sc).value.trim() || (allowEmpty ? "" : null)) : true;
     const key = e => { if (e.key === "Escape") { e.stopPropagation(); done(input ? null : false); } if (e.key === "Enter") { e.preventDefault(); done(document.activeElement?.dataset?.a === "0" ? (input ? null : false) : val()); } };
     document.addEventListener("keydown", key, true);
     sc.addEventListener("mousedown", e => { if (e.target === sc) done(input ? null : false); });
@@ -217,12 +233,17 @@ const S = {
   page: "",                          // the open gallery page when view is "page" (projects, artifacts, scheduled, plugins)
   // draft: what the next new chat will use. project is a folder the user picked for this chat (usually none: a chat
   // gets its own private folder), pid a Meshpool project, harness "meshpool-auto" (Meshpool picks the agent).
-  draft: {project: "", pid: "", harness: "meshpool-auto", model: store("model") || "", mode: store("mode") || "ask", plan: false, style: ""},
+  draft: {project: "", pid: "", harness: "meshpool-auto", model: store("model") || "", mode: "", plan: false, style: ""},
   panel: store("panel") || null, steps: store("steps") ?? false, attachments: [], showArchived: false,
   collapsed: new Set(store("collapsed") || []),
 };
 // What a chat may do without asking. The keys are what the server stores; the words are for people.
-const MODES = {ask: ["Manual", "Asks before it edits files or runs commands"], edits: ["Auto", "Edits files on its own; still asks before running commands"], auto: ["Full access", "Edits files and runs commands without asking"]};
+const MODES = {ask: ["Ask", "Asks before it edits files or runs commands"], edits: ["Accept edits", "Edits files on its own; still asks before running commands"], auto: ["Full access", "Edits files and runs commands without asking"]};
+// Earlier spellings of the three levels still read as these three.
+const MODE_ALIAS = {manual: "ask", supervised: "ask", ask: "ask", edits: "edits", "accept edits": "edits", "accept-edits": "edits", "auto-accept edits": "edits", full: "auto", "full access": "auto", "full-access": "auto", auto: "auto"};
+function normMode(v) { return MODE_ALIAS[String(v || "").trim().toLowerCase()] || "ask"; }
+// New chats start from the saved setting (Settings, Capabilities). Changing the access for one chat never changes it.
+function defaultMode() { return normMode(get0("MH_AGENT_PERMISSIONS")); }
 
 function isDark() { const t = store("theme") || "system"; return t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches); }
 function logoSrc() { return isDark() ? "/brand/logo-dark.png" : "/brand/logo-light.png"; }
@@ -363,13 +384,16 @@ function projMenu(e, pid) {
   ]);
 }
 async function threadAct(id, action) {
-  if (action === "delete") {                         // hidden at once, deleted after a few seconds unless undone
+  if (action === "delete") {                         // the server does the delete (and its grace period) itself
     S.pendingDelete = new Set([...(S.pendingDelete || []), id]);
-    if (["working", "waiting"].includes(S.threads.find(t => t.id === id)?.state)) post(`/api/agent/${id}/stop`, {}).catch(() => {});
+    try { await post(`/api/threads/${id}`, {action: "delete"}); }
+    catch (e) { S.pendingDelete.delete(id); renderSide(); return toast(e.message); }
     if (S.cur?.id === id) newThread();
     renderSide();
-    const t = setTimeout(async () => { S.pendingDelete.delete(id); try { await post(`/api/threads/${id}`, {action}); } catch (e) { toast(e.message); } await loadThreads(); }, 6000);
-    toast("Chat deleted", 6000, {label: "Undo", fn: () => { clearTimeout(t); S.pendingDelete.delete(id); renderSide(); toast("Chat restored"); }});
+    toast("Chat deleted", 6000, {label: "Undo", fn: async () => {
+      try { await post(`/api/threads/${id}`, {action: "undelete"}); S.pendingDelete.delete(id); await loadThreads(); toast("Chat restored"); }
+      catch (e) { toast(e.message); }
+    }});
     return;
   }
   try { await post(`/api/threads/${id}`, {action}); } catch (e) { return toast(e.message); }
@@ -458,7 +482,7 @@ function setupComposer() {
   const inp = $("#input");
   inp.addEventListener("input", () => { try { sessionStorage.setItem("mp_draft_" + (S.cur?.id || "new"), inp.value); } catch (e) {} });
   inp.addEventListener("input", () => { clearTimeout(S.suggT); S.suggT = setTimeout(suggestNow, 450); });
-  inp.addEventListener("input", () => { inp.style.height = "auto"; inp.style.height = Math.min(260, inp.scrollHeight) + "px"; menuFromInput(); const ib = $("#intrBtn"); if (ib && !S.stopping) ib.disabled = !inp.value.trim() && !S.attachments.length; });
+  inp.addEventListener("input", () => { fitInput(inp); menuFromInput(); const ib = $("#intrBtn"); if (ib && !S.stopping) ib.disabled = !inp.value.trim() && !S.attachments.length; });
   inp.addEventListener("keydown", e => {
     const pop = $("#pop.inline");
     if (pop && ["ArrowDown", "ArrowUp", "Enter", "Tab"].includes(e.key)) { e.preventDefault(); popKey(e.key); return; }
@@ -487,7 +511,7 @@ function setupComposer() {
 function cfg() { // the settings that apply to the next message: the open thread's, or the draft's
   const v = S.cur?.view;
   if (v) return {harness: v.harness?.id, model: v.model, mode: v.mode, plan: v.plan, style: v.style, effort: v.effort, busy: ["working", "waiting"].includes(v.state), starting: v.state === "starting"};
-  return {harness: S.draft.harness, model: S.draft.model || S.models?.default, mode: S.draft.mode, plan: S.draft.plan, style: S.draft.style, effort: S.draft.effort || "auto", busy: false};
+  return {harness: S.draft.harness, model: S.draft.model || S.models?.default, mode: S.draft.mode || defaultMode(), plan: S.draft.plan, style: S.draft.style, effort: S.draft.effort || "", busy: false};
 }
 async function chooseDraftFolder() {
   const path = await browseFolder(S.draft.project || "");
@@ -506,7 +530,7 @@ async function setEffort(e) {
 }
 async function setMode(m) {
   if (S.cur) { try { await post(`/api/agent/${S.cur.id}/mode`, {mode: m, since: 1e9}); S.cur.view.mode = m; } catch (e) { return toast(e.message); } }
-  else { S.draft.mode = m; store("mode", m); }
+  else S.draft.mode = m;                       // this draft only: the default for later chats is the saved setting
   renderBar();
 }
 async function setModel(id) {
@@ -560,35 +584,40 @@ async function sendNow(interrupt) {
   // Doherty threshold: answer the press at once, before the server does
   const sb = $("#sendBtn"); if (sb) { sb.classList.remove("go"); void sb.offsetWidth; sb.classList.add("go"); }
   S.sendHold = Date.now() + 2500; setWorking("Sending"); scrollConv(true);
+  let created = null; const draft0 = {project: S.draft.project, pid: S.draft.pid};
   try {
     if (!S.cur) {
-      const v = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, style: styleId(), task: text, incognito: !!S.draft.incognito, memory_exclude: S.draft.exclude || [], effort: S.draft.effort || "auto"});
-      S.draft.style = ""; S.draft.incognito = false; S.draft.exclude = []; S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
+      const v = created = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode || defaultMode(), plan: S.draft.plan, style: styleId(), task: text, incognito: !!S.draft.incognito, memory_exclude: S.draft.exclude || [], ...(S.draft.effort ? {effort: S.draft.effort} : {}), ...(S.mode === "code" && S.draft.worktree ? {worktree: true} : {})});
+      S.draft.style = ""; S.draft.incognito = false; S.draft.worktree = false; S.draft.exclude = []; S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
       openThread(v.id, true);
     }
-    const cur = S.cur, root = curRoot();          // before any wait: the user may open another chat meanwhile
-    for (const a of atts.filter(a => a.pasted)) text += `\n\n[${a.name}]\n\`\`\`\n${a.text}\n\`\`\``;
-    const files = atts.filter(a => !a.image && !a.pasted);
-    if (files.length) {
-      const saved = [];
-      for (const f of files) { const r = await post("/api/attach", {root, name: f.name, data: f.data}); saved.push(r.path); }
-      text += `\n\nAttached files (in ${S.cur?.view?.scratch ? "this chat's folder" : "the project folder"}): ${saved.join(", ")}`;
-    }
+    const cur = S.cur;                              // before any wait: the user may open another chat meanwhile
+    for (const a of atts.filter(a => a.pasted)) text += `\n\n[${a.name}]\n\`\`\`\n${a.text}\n\`\`\``;   // a long paste
+    const files = atts.filter(a => !a.image && !a.pasted).map(a => ({name: a.name, data: a.data}));   // saved by the server, in the chat's own folder
     const images = atts.filter(a => a.image).map(a => ({name: a.name, mime: a.mime, data: a.data}));
+    const wasStopping = S.stopping;               // Stop is still finishing: stopNow's wait loop owns the flag
     if (interrupt) { S.stopping = true; renderBar(); }
     if (S.pendingGoal) { const g = S.pendingGoal; S.pendingGoal = null; await setGoal(g, cur); }
-    const r = await post(`/api/agent/${cur.id}/send`, {text, images, since: 1e9, interrupt: !!interrupt});
-    S.stopping = false;
+    const r = await post(`/api/agent/${cur.id}/send`, {text, images, files, since: 1e9, interrupt: !!interrupt});
+    if (interrupt && !wasStopping) S.stopping = false;
     if (S.cur !== cur) { setTimeout(loadThreads, 500); return; }        // the user moved on: the sent chat keeps running
-    if (busy && !interrupt && r.sent?.queued) toast(`${harness(cfg().harness).name} gets this when the current step finishes.`);
+    if (!interrupt && (r.sent?.after_stop || wasStopping)) toast("Sent. It runs as soon as the current request stops.");
+    else if (busy && !interrupt && r.sent?.queued) toast(`${harness(cfg().harness).name} gets this when the current step finishes.`);
     if (cur.view) cur.view.state = "working";
     renderBar();
     clearTimeout(cur.pollT); poll(); setTimeout(loadThreads, 500);
   } catch (e) {
     S.pendingGoal = null;
-    S.stopping = false; renderBar();
+    if (interrupt) S.stopping = false; S.sendHold = 0; setWorking(null); renderBar();
     if (!inp.value.trim()) { inp.value = typed; inp.dispatchEvent(new Event("input")); }
     if (!S.attachments.length) { S.attachments = atts; renderAttach(); }
+    if (created) {                                  // a brand-new chat whose first message failed: no empty chat is left behind
+      try { await post(`/api/threads/${created.id}`, {action: "discard"}); } catch (e2) { /* it may already be gone */ }
+      if (S.cur?.id === created.id) newThread();
+      S.draft.project = draft0.project; S.draft.pid = draft0.pid;
+      const i2 = $("#input"); if (i2) { i2.value = typed; i2.dispatchEvent(new Event("input")); }
+      S.attachments = atts; renderAttach(); loadThreads();
+    }
     toast(e.message, 4000);
   }
 }
@@ -597,7 +626,7 @@ async function sendNow(interrupt) {
 const SLASH = [
   ["/new", "Start a new chat", () => newThread()],
   ["/model", "Choose the model", () => modelPop($("#mPill"))],
-  ["/agent", "Choose the agent", () => harnessPop($("#oPill"))],
+  ["/agent", "Choose the agent", () => harnessPop($("#mPill"))],
   ["/plan", "Turn plan mode on or off", () => setPlan(!cfg().plan)],
   ["/goal", "Set a goal: the agent keeps going until it is done (/goal clear ends it)", arg => goalCmd(arg)],
   ["/usage", "Usage, by model and by chat", () => openSettings("usage")],
@@ -896,12 +925,14 @@ function restoreDraft() {
 // folder. With {pid}: a chat in that project (its page, with the message box at the bottom).
 function newThread(opt) {
   if (opt && typeof opt === "object" && opt.pid) return openProject(opt.pid, {focus: true});
+  clearColHandlers(); window.navPush?.("new:");
   leaveChat(S.cur);
   S.view = "chat"; S.pjId = "";
   S.draft.project = typeof opt === "string" ? opt : "";
-  S.draft.pid = "";
+  S.draft.pid = ""; S.draft.incognito = false; S.draft.exclude = [];
+  { const i = $("#input"); if (i && !(opt && typeof opt === "object")) { i.value = ""; i.style.height = "auto"; } }
   S.cur = null; S.attachments = []; renderAttach(); setWorking(null); $("#col").classList.remove("loading");
-  S.draft.harness = modeHarness();
+  S.draft.harness = modeHarness(); S.draft.mode = "";
   renderTop(); renderBar(); renderHero(); renderSide(); renderPanel();
   restoreDraft(); $("#input").focus();
 }
@@ -921,7 +952,7 @@ const STARTERS = [
 const CACHE = new Map();                         // chat id -> {log, total, next, epoch, view}: reopening replays it, then fetches only what is new
 const colEl = () => S.cur?.stage || $("#col");
 function stashChat(cur) {
-  if (!cur || cur.stage || !cur.log || !cur.log.length || cur.log.length > 4000) return;
+  if (!cur || cur.stage || !cur.log || !cur.log.length || cur.log.length > 12000) return;
   try { flushQ(cur); } catch (e) { return; }
   const view = Object.assign({}, cur.view); delete view.events; delete view.prefill;
   CACHE.delete(cur.id); CACHE.set(cur.id, {log: cur.log.slice(), total: cur.total, next: cur.next || 0, epoch: cur.epoch, view, turn: cur.turn});
@@ -945,6 +976,7 @@ function commitStage(cur) {
   if (cur.live) easeStart(cur.live);
 }
 function openThread(id, fresh) {
+  clearColHandlers(); window.navPush?.("chat:" + id);
   const seen = S.threads.find(t => t.id === id);
   if (seen?.unread) { seen.unread = false; post(`/api/threads/${id}`, {action: "seen"}).catch(() => {}); }
   store("last_chat", id);
@@ -954,7 +986,7 @@ function openThread(id, fresh) {
   const known = S.threads.find(t => t.id === id);
   if (known) { const m = isCodeThread(known) ? "code" : "chat"; if (S.mode !== m) { S.mode = m; store("appmode", m); syncMode(); } }
   const hit = !fresh && CACHE.get(id);
-  S.cur = {id, total: 0, view: fresh ? {id, state: "starting", harness: {id: S.draft.harness}, model: S.draft.model || S.models?.default, mode: S.draft.mode, events: []} : null, epoch: -1, groups: null, live: null, tools: {}, pollT: null, turn: 0, log: [], q: []};
+  S.cur = {id, total: 0, view: fresh ? {id, state: "starting", harness: {id: S.draft.harness}, model: S.draft.model || S.models?.default, mode: S.draft.mode || defaultMode(), events: []} : null, epoch: -1, groups: null, live: null, tools: {}, pollT: null, turn: 0, log: [], q: []};
   if (!fresh && known) S.cur.view = {id, title: known.title, state: known.state, kind: known.kind, workdir: known.workdir, scratch: known.scratch, project_id: known.project_id || "", pinned: known.pinned, harness: harness(known.harness), events: [], prefill: true};
   const cur = S.cur;
   S.pinned = true; setWorking(null);
@@ -980,17 +1012,23 @@ async function poll() {
     if (/not found/i.test(e.message)) { colEl().insertAdjacentHTML("beforeend", `<div class="note bad">This chat is gone.</div>`); commitStage(cur); return; }
     cur.fails = (cur.fails || 0) + 1;            // keep trying: one dropped request must not freeze a running chat
     let n = $("#pollErr"); if (!n && cur.fails > 1) { colEl().insertAdjacentHTML("beforeend", `<div class="note bad" id="pollErr"></div>`); n = $("#pollErr"); }
-    if (n) n.textContent = `${e.message} Retrying…`;
+    if (n) { n.textContent = `${e.message} Retrying… `; if (!$("button", n)) { const b = document.createElement("button"); b.className = "linkbtn"; b.textContent = "Reload"; b.onclick = () => location.reload(); n.appendChild(b); } }
+    if (cur.fails > 1 && S.stopping) { S.stopping = false; renderBar(); }
     cur.pollT = setTimeout(poll, Math.min(15000, 500 * 2 ** cur.fails));
     return;
   }
   if (S.cur !== cur) return;
   if (cur.fails) { cur.fails = 0; $("#pollErr")?.remove(); }
+  const before = cur.total;
   const again = ingest(cur, v);
   if (again) return poll();
   const busy = ["starting", "working", "waiting"].includes(v.state);
   if (busy) startStream(cur);
-  cur.pollT = setTimeout(poll, cur.es && cur.es.readyState === 1 ? 4000 : busy ? 400 : document.hidden ? 15000 : 3000);
+  // A chat that is not running changes only when someone else touches it: look rarely, and less often the longer it stays quiet.
+  cur.quiet = busy || cur.total !== before ? 0 : (cur.quiet || 0) + 1;
+  const delay = busy ? (document.hidden ? 2000 : (cur.es && cur.es.readyState === 1) || cur.relay ? 4000 : 400)
+    : document.hidden ? 60000 : Math.min(30000, 5000 * (1 + cur.quiet));
+  cur.pollT = setTimeout(poll, delay);
 }
 // Take one view of the chat (from a poll or the stream): queue its new events and update the chrome around them.
 function ingest(cur, v) {
@@ -1008,8 +1046,10 @@ function ingest(cur, v) {
     if (ev.type === "tool_start") { const raw = ev.name || ""; const nm = ev.mcp ? raw.split("__").slice(2).join("__") : raw; ev.label = TOOL_LABEL[nm] || nm.replace(/_/g, " "); }
     cur.q.push(ev); got++;
   }
+  if (got) wakeFrame();
   if (cur.stage || document.hidden) { flushQ(cur); }          // history, or a hidden tab (no animation frames): apply at once
   if (cur.stage) commitStage(cur);
+  if (!cur.q.length) reconcileOpen(cur, v);
   if (got || prevState !== v.state) progressSoon();
   const busy = ["starting", "working", "waiting"].includes(v.state);
   cur.busy = busy; cur.working = v.state === "working";
@@ -1036,13 +1076,55 @@ function renderTrust(cur) {
   };
   $("#trustNo", d).onclick = () => { cur.trustHidden = true; d.remove(); };
 }
+// What the server says it still waits on is the truth: a card, step or spinner it no longer waits on is closed here (a reopened chat, an old transcript).
+function reconcileOpen(cur, v) {
+  try {
+    const total = v.total || 0, fresh = total >= (cur.next || 0);      // an older poll must not close what a newer event showed
+    const seen = d => { const n = d.dataset.i === undefined ? NaN : Number(d.dataset.i); return !isNaN(n) && n >= total; };
+    const op = v.open;
+    if (op) {
+      const ids = new Set((op.approvals || []).map(i => "appr-" + i));
+      for (const d of $$(".appr:not(.done)", colEl())) if (!ids.has(d.id) && !seen(d)) applyEv({type: "approval_done", id: d.id.slice(5), decision: "stopped", closed: true});
+      const qid = op.question == null ? null : qId({id: op.question});
+      for (const d of $$(".qcard:not(.done)", colEl())) if (d.id !== qid && !seen(d)) questionDone({id: d.id.slice(2), source: "stopped", answers: [], text: ""});
+    }
+    if (fresh && !["starting", "working", "waiting"].includes(v.state)) {
+      settleSteps("");
+      for (const g of $$(".work:not([data-done])", colEl())) bumpGroup(g, true);
+      cur.group = null;
+    }
+  } catch (e) { console.error(e); }
+}
 // ---- Server-Sent Events: the open chat's events pushed as they happen
+// P-11: browsers allow six connections per site, and every tab used to hold its own stream: twenty tabs on a running chat
+// starved each other. One tab per chat (the one that holds a Web Lock) keeps the EventSource and relays what arrives to the
+// other tabs over a BroadcastChannel; when it closes, the next tab takes over. An idle tab holds no stream at all.
 function startStream(cur) {
-  if (cur.es || cur.sseOff || !window.EventSource || S.cur !== cur) return;
-  let es; try { es = new EventSource(`/api/agent/${cur.id}/events?since=${cur.total}&t=${encodeURIComponent(MP.token)}`); } catch (e) { cur.sseOff = true; return; }
+  if (cur.es || cur.relay || cur.sseOff || !window.EventSource || S.cur !== cur) return;
+  if (!(window.BroadcastChannel && navigator.locks)) return openStream(cur);
+  const name = "mp-sse-" + cur.id;
+  let ch, ac;
+  try { ch = new BroadcastChannel(name); ac = new AbortController(); } catch (e) { return openStream(cur); }
+  const r = cur.relay = {ch, ac, leader: false, release: null};
+  ch.onmessage = e => {                              // a follower: what the leader's stream delivered
+    if (r.leader || cur.relay !== r || S.cur !== cur) return;
+    const d = e.data || {};
+    if (d.end) { poll(); return; }
+    let v; try { v = JSON.parse(d.data); } catch (err) { return; }
+    const first = (v.events || []).find(x => typeof x.i === "number");
+    if (first && first.i > (cur.next || 0)) { poll(); return; }     // a gap (this tab joined late): fetch what it missed
+    if (ingest(cur, v)) poll();
+  };
+  navigator.locks.request(name, {signal: ac.signal}, () => new Promise(done => {
+    if (cur.relay !== r || S.cur !== cur) return done();
+    r.leader = true; r.release = done; openStream(cur);
+  })).catch(() => {});
+}
+function openStream(cur) {
+  let es; try { es = new EventSource(`/api/agent/${cur.id}/events?since=${cur.total}&t=${encodeURIComponent(MP.token)}`); } catch (e) { cur.sseOff = true; stopStream(cur); return; }
   cur.es = es;
-  es.onmessage = m => { let v; try { v = JSON.parse(m.data); } catch (e) { return; } cur.esFails = 0; if (S.cur === cur && ingest(cur, v)) { stopStream(cur); poll(); } };
-  es.addEventListener("end", () => { stopStream(cur); if (S.cur === cur) poll(); });
+  es.onmessage = m => { let v; try { v = JSON.parse(m.data); } catch (e) { return; } cur.esFails = 0; try { cur.relay?.ch.postMessage({data: m.data}); } catch (e) { /* closed */ } if (S.cur === cur && ingest(cur, v)) { stopStream(cur); poll(); } };
+  es.addEventListener("end", () => { try { cur.relay?.ch.postMessage({end: true}); } catch (e) { /* closed */ } stopStream(cur); if (S.cur === cur) poll(); });
   es.onerror = () => {                           // fall back to polling; try the stream again a few times
     stopStream(cur); cur.esFails = (cur.esFails || 0) + 1;
     if (cur.esFails >= 4) { cur.sseOff = true; return; }
@@ -1050,7 +1132,10 @@ function startStream(cur) {
     if (S.cur === cur) { clearTimeout(cur.pollT); cur.pollT = setTimeout(poll, 100); }
   };
 }
-function stopStream(cur) { if (cur?.es) { try { cur.es.close(); } catch (e) {} cur.es = null; } }
+function stopStream(cur) {
+  if (cur?.es) { try { cur.es.close(); } catch (e) {} cur.es = null; }
+  const r = cur?.relay; if (r) { cur.relay = null; try { r.release?.(); r.ac.abort(); r.ch.close(); } catch (e) { /* already gone */ } }
+}
 // ---- the paced drain: events leave the queue in order; text goes a few characters per frame
 function drainQ(cur, all) {
   const q = cur.q; if (!q || !q.length) return;
@@ -1066,18 +1151,31 @@ function drainQ(cur, all) {
     cur.log.push(ev); applyEv(ev);
   }
 }
-function flushLive(cur) { if (cur.live && cur.liveDirty) { mdRender(cur.live, cur.liveText); cur.liveDirty = false; } }
+function flushLive(cur) {
+  if (!(cur.live && cur.liveDirty)) return;
+  cur.liveDirty = false;                          // cleared first: a reply that cannot be drawn must not be retried every frame
+  try { mdRender(cur.live, cur.liveText); }
+  catch (e) { console.warn("meshpool: could not draw the reply", e); try { cur.live.textContent = cur.liveText; } catch (_) {} }
+}
 function flushQ(cur) { drainQ(cur, true); flushLive(cur); }
+// The frame loop only runs at display rate while there is something to animate (queued events, a reply easing open).
+// Otherwise it ticks slowly (the elapsed-time label needs about once a second), and not at all while the tab is hidden.
+let frameR = 0, frameT = 0;
+function wakeFrame() { if (frameT) { clearTimeout(frameT); frameT = 0; } if (!frameR) frameR = requestAnimationFrame(frame); }
 function frame() {
-  requestAnimationFrame(frame);
+  frameR = 0; frameT = 0;
   const cur = S.cur;
-  if (cur && !cur.stage) { if (cur.q.length) drainQ(cur); flushLive(cur); }
-  easeAll(); workTick(cur);
+  // Never let one bad event or reply stop the loop: the live reply, the easing and the timer all run from here.
+  try { if (cur && !cur.stage) { if (cur.q.length) drainQ(cur); flushLive(cur); } } catch (e) { console.warn("meshpool: frame", e); }
+  try { easeAll(); workTick(cur); } catch (e) { console.warn("meshpool: frame", e); }
+  const active = !document.hidden && cur && !cur.stage && (cur.q.length || cur.liveDirty) || EASE.size;
+  if (active && !document.hidden) frameR = requestAnimationFrame(frame);
+  else frameT = setTimeout(frame, document.hidden ? 2000 : cur?.working || S.sendHold > Date.now() ? 250 : 1000);
 }
 // The reply grows by easing its box open to the height of its text (a line is revealed in a few frames), so the page
 // scrolls with it smoothly instead of stepping a whole line at a time.
 const EASE = new Set();
-function easeStart(node) { if (!node || EASE.has(node)) return; node.classList.add("rv"); if (!node.style.height) node.style.height = Math.round(node.firstElementChild?.offsetHeight || 0) + "px"; EASE.add(node); }
+function easeStart(node) { wakeFrame(); if (!node || EASE.has(node)) return; node.classList.add("rv"); if (!node.style.height) node.style.height = Math.round(node.firstElementChild?.offsetHeight || 0) + "px"; EASE.add(node); }
 function easeEnd(node) { if (node) node.dataset.done = "1"; }
 function easeAll() {
   for (const n of EASE) {
@@ -1100,7 +1198,7 @@ function setWorking(text, secs) {
 function workTick(cur) {
   if (!cur) return;
   const g = cur.group; if (g && g.isConnected && !g.dataset.done && g._t0) { const el = $(".gel", g), s = Math.round((Date.now() - g._t0) / 1000) + "s"; if (el && el.textContent !== s) el.textContent = s; }
-  const waiting = cur.working && ($(".appr:not(.done)") || $(".qcard:not(.done)"));
+  const waiting = cur.view?.state === "waiting";   // the server says what it waits on; a stale card in the column must not hide Working
   const pd = cur.working ? planData() : null;
   if (cur.working && !waiting) setWorking(pd ? planLine(pd) : cur.live ? "Writing" : String(cur.activity || "Working").split(" ").slice(0, 3).join(" ").replace(/[:,]$/, ""), Math.round((Date.now() - (cur.since || Date.now())) / 1000));
   else if (cur.view?.state !== "starting" && Date.now() > (S.sendHold || 0)) setWorking(null);
@@ -1114,7 +1212,7 @@ function setupScroll() {
   jd.onclick = () => { S.pinned = true; conv.scrollTop = conv.scrollHeight; jd.hidden = true; $("#input")?.focus({preventScroll: true}); };
   conv.addEventListener("scroll", () => { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; S.pinned = gap < 80; jd.hidden = gap < 160 || S.view !== "chat" || !S.cur; }, {passive: true});
   if (window.ResizeObserver) new ResizeObserver(() => { if (S.view !== "chat" || !S.cur) { jd.hidden = true; return; } if (S.pinned) conv.scrollTop = conv.scrollHeight; else { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; jd.hidden = gap < 160; } }).observe(col);
-  requestAnimationFrame(frame);
+  wakeFrame();
 }
 
 /* ---------- markdown ---------- */
@@ -1149,7 +1247,17 @@ function mdRender(node, text) {
 function inline(s) {
   return s.replace(/`([^`\n]+)`/g, "<code>$1</code>").replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>")
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    .replace(/\[([^\]]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+// Base64 of a string's UTF-8 bytes (decoded by unb64 in chat010.js). A lone surrogate (half of an emoji cut by the model,
+// or typed in maths) is not valid UTF-16: encodeURIComponent threw URIError on it and the live reply stopped drawing.
+// It becomes U+FFFD instead.
+function b64utf8(t) {
+  let s = String(t || "").trim();
+  s = typeof s.toWellFormed === "function" ? s.toWellFormed() : s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD");
+  const u = new TextEncoder().encode(s); let bin = "";
+  for (let i = 0; i < u.length; i += 0x8000) bin += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+  return btoa(bin);
 }
 /* Code blocks in replies: coloured with the editor's tokenizer (editor.js), with a Copy button. */
 const CODE_EXT = {python: "py", py: "py", javascript: "js", js: "js", jsx: "js", typescript: "ts", ts: "ts", tsx: "ts", json: "json",
@@ -1192,8 +1300,8 @@ function md(src) {
       const prev = (lang === "html" || lang === "svg") && closed ? `<button class="pvbtn" type="button" data-pvcode="${lang}" title="Preview this ${lang.toUpperCase()}">Preview</button>` : "";
       return `<div class="codewrap"><div class="codehd"><span>${esc(CODE_LABEL[lang] || lang || "text")}</span><span class="codeacts">${prev}<button class="pvbtn" type="button" data-copycode="1" title="Copy this code" aria-label="Copy this code">Copy</button></span></div>${pre}</div>`;
     }
-    const b64 = t => btoa(unescape(encodeURIComponent(t.trim())));
-    p = p.replace(/\$\$([\s\S]+?)\$\$/g, (_, t) => `\u0001M${b64(t)}\u0002`).replace(/\\\[([\s\S]+?)\\\]/g, (_, t) => `\u0001M${b64(t)}\u0002`)
+    const b64 = b64utf8;
+    p = p.replace(/(^|\n)([ \t]*)\$\$([\s\S]+?)\$\$/g, (_, pre, sp, t) => `${pre}${sp}\u0001M${b64(t)}\u0002`).replace(/\\\[([\s\S]+?)\\\]/g, (_, t) => `\u0001M${b64(t)}\u0002`)
       .replace(/\\\(([^\n]+?)\\\)/g, (_, t) => `\u0001m${b64(t)}\u0002`);
     const lines = esc(p).split("\n"); let out = "", list = null, para = [], table = [];
     const flushP = () => { if (para.length) { out += `<p>${inline(para.join("<br>"))}</p>`; para = []; } };
@@ -1244,14 +1352,24 @@ function closeGroup() { const g = S.cur.group; if (g && g.isConnected) bumpGroup
 const GOAL_NEXT = "Continue working toward the goal.";
 const RESUME_NEXT = "Continue where you left off.";
 const stripGoal = t => String(t || "").replace(/\n*^\W*GOAL:\s*(DONE|CONTINUE)\b.*$/gim, "").trimEnd();
+const RETRY_RX = /Trying again \(\d+ of \d+\)|^Rate limited by the endpoint|^Trying again without streaming/;   // old transcripts have no retry flag
+const clearRetry = () => $$(".note.retry", colEl()).forEach(n => n.remove());   // the call went through: the "trying again" notes are history
+// OSS-12: one event that cannot be drawn must not break the page or the rest of a saved chat.
+function safe(fn) { try { return fn(); } catch (e) { try { console.warn("meshpool: could not draw part of this chat", e); } catch (_) {} } }
 function applyEv(ev) {
+  try { return applyEvRaw(ev); }
+  catch (e) {
+    try { console.warn("meshpool: could not show an item", ev && ev.type, e); const d = document.createElement("div"); d.className = "note"; d.textContent = "Could not show this item."; colEl().appendChild(d); } catch (_) {}
+  }
+}
+function applyEvRaw(ev) {
   const cur = S.cur, col = colEl();
-  const add = (html, cls) => { const d = document.createElement("div"); if (cls) d.className = cls; d.innerHTML = html; col.appendChild(d); return d; };
+  const add = (html, cls) => { const d = document.createElement("div"); if (cls) d.className = cls; if (cls === "msg-ai" || cls === "msg-user") d.dir = "auto"; d.innerHTML = html; col.appendChild(d); return d; };
   if (questionEv(ev, add)) return;
   switch (ev.type) {
     case "queued": {
       const box = $("#attachRow"); $("#queuedChip")?.remove();
-      if (ev.n) box.insertAdjacentHTML("afterbegin", `<span class="att-chip" id="queuedChip">${ICON.list}<span>Queued: ${esc(ev.text.slice(0, 60))}${ev.n > 1 ? ` and ${ev.n - 1} more` : ""}</span><button class="linkbtn" data-takeback title="Put it back in the message box">Take back</button></span>`);
+      if (ev.n) box.insertAdjacentHTML("afterbegin", `<span class="att-chip" id="queuedChip">${ICON.list}<span>${ev.after_stop ? "Runs after the stop: " : "Queued: "}${esc(ev.text.slice(0, 60))}${ev.n > 1 ? ` and ${ev.n - 1} more` : ""}</span><button class="linkbtn" data-takeback title="Put it back in the message box">Take back</button></span>`);
       break; }
     case "unsteer": {                                    // a message added while working, taken back before it was read
       const b = [...col.querySelectorAll(".msg-user.steer:not(.taken)")].pop();
@@ -1259,23 +1377,26 @@ function applyEv(ev) {
       break; }
     case "steer_read": { col.querySelectorAll(".msg-user.steer [data-takeback]").forEach(x => x.remove()); break; }
     case "user": {
+      if (!ev.steer) { cur.turnPlan = !!ev.plan; for (const x of col.querySelectorAll(".buildplan")) x.remove(); }   // the card belongs to a turn sent in plan mode
       if (String(ev.text).trim() === RESUME_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Picking up where it left off</span>`, "goalturn"); break; }
       if (String(ev.text).trim() === GOAL_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Continuing toward the goal</span>`, "goalturn"); break; }
       if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span> <button class="linkbtn" data-takeback title="Take it back before the agent reads it">Take back</button><br><span class="stx">${esc(ev.text)}</span></div>`, "msg-user steer"); $("#queuedChip")?.remove(); break; }
       closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; cur.tpaths = []; cur.lastAi = null; cur.lastText = "";
-      add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user");
+      { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button><button class="iconbtn" data-ma="rewind" data-tip="Rewind to here" data-tip-pos="below" aria-label="Rewind to here">${ICON.undo}</button><button class="iconbtn" data-ma="fork" data-tip="Fork from here" data-tip-pos="below" aria-label="Fork from here">${ICON.branch}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.ei = ev.i; cur.turnEi = ev.i; cur.lastFoot = null; }
       break; }
     case "text_delta":
       if (!cur.live) { closeGroup(); cur.live = add("", "msg-ai"); cur.liveText = ""; mdRoot(cur.live); if (!cur.stage) easeStart(cur.live); }
       cur.liveText += ev.text; cur.liveDirty = true; cur.activity = "Writing"; break;
     case "stream_reset": if (cur.live) { cur.live.remove(); cur.live = null; cur.liveDirty = false; } break;
+    case "retry_ok": clearRetry(); break;
     case "assistant":
-      { const txt = stripGoal(ev.text);
+      { const txt = stripGoal(ev.text); if (txt) clearRetry();
       if (cur.live) { if (txt) { mdRender(cur.live, txt); easeEnd(cur.live); cur.lastAi = cur.live; } else cur.live.remove(); cur.live = null; cur.liveDirty = false; }
       else if (txt) { closeGroup(); cur.lastAi = add("", "msg-ai"); mdRender(cur.lastAi, txt); } }
-      cur.lastText = ev.text || cur.lastText;
+      cur.lastText = stripGoal(ev.text || "") || cur.lastText;
       break;
     case "tool_start": {
+      clearRetry();
       const g = workGroup();
       const raw = ev.name || "";
       const name = ev.mcp ? raw.split("__").slice(2).join("__") : raw;
@@ -1297,7 +1418,7 @@ function applyEv(ev) {
       const d = cur.tools[ev.id] || document.getElementById("tool-" + ev.id); if (!d) break;
       d.dataset.done = "1"; $("pre.live", d)?.remove(); if (d.dataset.autoOpen) { d.open = false; delete d.dataset.autoOpen; }
       // A step the user stopped, or one Plan mode blocked, did not fail: label it for what happened.
-      const out = String(ev.output || ""), stopped = /not run: stopped by the user|^\[exit 130\]|stopped by the user|sub-agents were stopped by stop/i.test(out);
+      const out = String(ev.output || ""), stopped = ev.stopped || /not run: stopped by the user|^\[exit 130\]|stopped by the user|sub-agents were stopped by stop/i.test(out);
       const planned = !ev.ok && (/plan mode/i.test(out) || (cur.view?.plan && ["write", "edit", "write_file", "bash", "bash_many", "delete", "move"].includes(d.dataset.name)));
       const st = $(".st", d); st.className = "st " + (ev.ok || stopped || planned || ev.denied ? "" : "bad");
       st.textContent = ev.denied ? "not run" : ev.ok ? "" : stopped ? "stopped" : planned ? "not allowed in Plan mode" : "failed";
@@ -1312,12 +1433,12 @@ function applyEv(ev) {
       closeGroup();
       const OPT = {allow_once: "Allow", allow_always: "Allow for this chat", reject_once: "Deny", reject_always: "Always deny"};
       const opts = ev.options && ev.options.length ? ev.options.map(o => `<button class="btn ${o.kind === "allow_once" ? "primary" : String(o.kind).startsWith("reject") ? "danger" : ""}" data-d="${esc(o.id)}">${esc(OPT[o.kind] || o.label)}</button>`).join("")
-        : `<button class="btn primary" data-d="yes">Allow</button><button class="btn" data-d="always">Allow ${ev.kind === "edit" ? "all edits" : ev.kind === "bash" ? "all commands" : "this tool"} in this chat</button>${["edit", "bash", "mcp"].includes(ev.kind) ? `<button class="btn" data-d="save" title="Saves a rule for this folder in your own settings: this command and its subcommand with any arguments, file edits, or this tool. A test or build command that runs project code then runs whatever that code holds.">Always in this folder</button>` : ""}<button class="btn danger" data-d="no">Deny</button><input placeholder="Note for the agent (optional)" aria-label="Note for the agent">`;
+        : `<button class="btn primary" data-d="yes">Allow</button>${ev.scope === "once" ? "" : `<button class="btn" data-d="always">Allow ${ev.scope ? esc(ev.scope) : ev.kind === "edit" ? "all edits" : ev.kind === "bash" ? "all commands" : "this tool"} in this chat</button>`}${ev.scope !== "once" && ["edit", "bash", "mcp"].includes(ev.kind) ? `<button class="btn" data-d="save" title="Saves a rule for this folder in your own settings: this command and its subcommand with any arguments, file edits, or this tool. A test or build command that runs project code then runs whatever that code holds.">Always in this folder</button>` : ""}<button class="btn danger" data-d="no">Deny</button><input placeholder="Note for the agent (optional)" aria-label="Note for the agent">`;
       const title = String(ev.title || "").replace(/^(run a command|execute terminal|terminal)\s*:.*$/is, "Run this command?").replace(/^Approve edit:\s*(.+)$/i, "Change $1?");
       const g0 = gKeep;
       const d = add(`<b>${esc(title)}</b>${ev.detail ? (ev.kind === "doc" ? `<div class="docprev">${md(ev.detail)}</div>` : `<pre>${ev.kind === "edit" ? diffLines(ev.detail) : esc(ev.detail)}</pre>`) : ""}<div class="acts">${opts}</div>`, "appr");
       if (g0) { $(".rows", g0).appendChild(d); cur.group = g0; bumpGroup(g0); g0.open = true; }   // the Allow buttons must stay visible
-      d.id = "appr-" + ev.id;
+      d.id = "appr-" + ev.id; if (typeof ev.i === "number") d.dataset.i = ev.i;
       $$("button", d).forEach(b => b.onclick = async () => {
         d.dataset.note = $("input", d)?.value || "";
         $$("button", d).forEach(x => x.disabled = true);
@@ -1325,8 +1446,8 @@ function applyEv(ev) {
         catch (e) { $$("button", d).forEach(x => x.disabled = false); toast(e.message); }
       });
       scrollConv(true); break; }
-    case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /waiting/.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
-      const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.decision === "stopped" ? "Stopped before running." : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "save" ? "Allowed, and saved for this folder." : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
+    case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /approval|waiting/i.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
+      const d = cardEl("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.closed ? "Closed when Meshpool restarted." : ev.decision === "stopped" ? "Stopped before running." : ev.decision === "timeout" ? "No answer in time." : ev.reason ? esc(ev.reason) : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "save" ? "Allowed, and saved for this folder." : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
         const g = d.previousElementSibling; if (g?.classList.contains("work") && d === col.lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
       if (ev.final && cur.thoughtLive) { cur.thoughtLive = false; break; }   // the saved copy of what streamed live
@@ -1352,14 +1473,28 @@ function applyEv(ev) {
     case "receipt": { closeGroup(); const t = String(ev.text || ""), first = t.split("\n").map(x => x.replace(/^[#*\s-]+|[*]+/g, "").trim()).find(Boolean) || "Reviewed";
       add(`<details><summary>${ICON.check2}<span>${esc(clip(first.replace(/:$/, ""), 80))}</span></summary><div class="rcbody">${md(t)}</div></details>`, "note receipt"); sessionSoon(); break; }   // details: here when opened, and in the Session panel
     case "status": {
-      if (ev.using) { cur.using = ev.text; if (ev.auto) cur.auto = ev.auto; add(`<span>${esc(ev.text)}</span>`, "note using"); sessionSoon(); break; }   // one neutral line; the reason is in the Session panel
+      if (ev.using) { cur.using = ev.text; if (ev.auto) cur.auto = ev.auto;
+        const why = ev.auto && ev.auto.reason ? ` <small class="why">${esc(ev.auto.reason)}</small>` : "";
+        const un = add(`<span>${esc(ev.text)}</span>${why}` + (ev.back ? ` <button class="linkbtn" data-back="1">Use ${esc(ev.back.name)} instead</button>` : ""), "note using");
+        $("[data-back]", un)?.addEventListener("click", async () => {   // one click back to the mode's own agent, history kept
+          try { const v = await post(`/api/agent/${cur.id}/harness`, {harness: ev.back.harness, since: 1e9}); cur.view.harness = v.harness || harness(ev.back.harness); $("[data-back]", un)?.remove(); renderBar(); }
+          catch (e) { toast(e.message); } });
+        sessionSoon(); break; }   // one short line; the reason also stays in the Session panel
       // Housekeeping stays out of the transcript: which agent was picked and why, connector start-up, "ready". It is in the Session panel.
       if (ev.route) { cur.route = {label: String(ev.text || "").replace(/^(Harness|Working as): /, "").replace(/ \(.*$/, "").replace(/\.$/, ""), why: ""}; sessionSoon(); break; }
       if (/^Starting MCP|^MCP:|^MCP did not start|^No MCP servers/.test(ev.text || "")) { cur.mcpNote = ev.text; sessionSoon(); break; }
       if (/ is ready\. ?/.test(ev.text || "") && !cur.turn) break;
-      { const nn = add(esc(ev.text), "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); } break; }
+      { const nn = add(esc(ev.text), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); } break; }
+    case "gate": {                                      // all model slots busy: say so while it waits, drop the line once it runs
+      if (cur.gateEl && !cur.gateEl.isConnected) cur.gateEl = null;
+      if (ev.state === "waiting") {
+        const t = `Waiting for a free model slot (${ev.inflight ?? "?"} of ${ev.limit ?? "?"} in use)...`;
+        if (cur.gateEl) cur.gateEl.innerHTML = esc(t); else cur.gateEl = add(esc(t), "note gate");
+      } else if (cur.gateEl) { cur.gateEl.remove(); cur.gateEl = null; }
+      break; }
     case "error": { closeGroup(); const n = add(esc(ev.text) + (/settings/i.test(ev.text || "") ? ` <button class="linkbtn" data-os="1">Open Settings</button>` : "") + ` <button class="linkbtn" data-rp="1" title="Opens a GitHub issue with this error, your version and system. Your chat is not included.">Report this</button>`, "note bad"); $("[data-os]", n)?.addEventListener("click", () => openSettings("general")); $("[data-rp]", n)?.addEventListener("click", () => reportProblem(ev.text)); break; }
     case "interrupted": {
+      cur.gateEl?.remove(); cur.gateEl = null;
       settleSteps("stopped"); closeGroup();
       const n = add(esc(ev.text) + (ev.restarted ? ` <button class="linkbtn" data-cont="1">Continue</button>` : "") + (ev.resend ? ` <button class="linkbtn" data-resend="1">Put it back in the message box</button>` : ""), "note warn");
       $("[data-cont]", n)?.addEventListener("click", () => { if (cfg().busy) return; const inp = $("#input"); inp.value = RESUME_NEXT; inp.dispatchEvent(new Event("input")); sendNow(false); });
@@ -1367,22 +1502,18 @@ function applyEv(ev) {
       break; }
     case "checkpoint": {
       const t = (ev.turns || [])[0];
-      if (t && cur.lastFoot && t.changed && t.changed.length && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; pvTurnCards(cur, cur.lastFoot, t.n); cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button><button data-undomore="${t.n}" aria-label="More undo choices" title="Undo only the files, or only the conversation">${ICON.chev || "▾"}</button>`); bindFoot(cur.lastFoot); }
+      if (t && cur.lastFoot && t.changed && t.changed.length && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; safe(() => pvTurnCards(cur, cur.lastFoot, t.n)); cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }
       break; }
     case "turn_end": {
+      cur.gateEl?.remove(); cur.gateEl = null;
       settleSteps("");
       closeGroup();
+      if (ev.synthetic) break;                  // a turn that never ran (or one cut short by a restart): no footer, no Build this plan
       const u = ev.turn || {};
       const foot = add("", "turnfoot"); if (u.calls) foot.title = `${u.calls} model call${u.calls === 1 ? "" : "s"} · ${fmt(u.in)} tokens in · ${fmt(u.out)} out`;
       cur.lastFoot = foot;
-      const t = (cur.view?.turns || []).find(x => x.n === cur.turn);
-      pvTurnCards(cur, foot, cur.turn);
-      if (cur.turn && !$("[data-fork]", foot)) {
-        foot.insertAdjacentHTML("beforeend", `<button data-fork="${cur.turn}" title="A new chat with the conversation up to here; this one stays as it is">${ICON.branch} Branch</button>`);
-        const fb = $("[data-fork]", foot); fb.onclick = () => forkChat(+fb.dataset.fork);
-      }
-      if (t && t.changed && t.changed.length && !$("[data-diff]", foot)) { foot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button><button data-undomore="${t.n}" aria-label="More undo choices" title="Undo only the files, or only the conversation">${ICON.chev || "▾"}</button>`); bindFoot(foot); }
-      if (cur.view?.plan && cur.lastText) {
+      safe(() => pvTurnCards(cur, foot, 0));                     // the files it changed arrive with its checkpoint event
+      if (cur.turnPlan && cur.lastText) {
         const b = add(`<button class="btn primary">Build this plan</button><button class="btn">Keep planning</button>`, "buildplan");
         $$("button", b)[0].onclick = async () => { b.remove(); await setPlan(false); $("#input").value = "Go ahead and implement the plan above."; sendNow(); };
         $$("button", b)[1].onclick = () => { b.remove(); $("#input").focus(); };
@@ -1414,7 +1545,7 @@ function questionCard(ev, add) {
       </div></fieldset>`;
   }).join("");
   const d = add(`<div class="qin">${html}<div class="qfoot"><span class="qnote">${ev.timeout_s ? "Or type a reply in the message box." : ""}</span><button type="button" class="btn primary qsend">${many ? "Send answers" : "Continue"}</button></div></div>`, "qcard");
-  d.id = cid; d.setAttribute("role", "group"); d.setAttribute("aria-label", "A question from the agent"); d.dataset.n = qs.length;
+  d.id = cid; if (typeof ev.i === "number") d.dataset.i = ev.i; d.setAttribute("role", "group"); d.setAttribute("aria-label", "A question from the agent"); d.dataset.n = qs.length;
   const sync = () => {
     $$(".qq", d).forEach(fs => { const inp = $("input", fs), oth = $(".qother", fs); oth.setAttribute("aria-checked", inp.value.trim() ? "true" : "false"); });
     const ok = $$(".qq", d).every(fs => $$(".qopt[aria-checked=true]", fs).length);
@@ -1469,8 +1600,11 @@ document.addEventListener("keydown", e => {            // from an empty message 
   if (e.key === "Enter") { if ($(".qsend", d).disabled) return; e.preventDefault(); e.stopPropagation(); d._submit(); return; }
   qKeys(e, d);
 }, true);
+// A card by id in the chat column, also while a reopened chat's history is replayed into the off-screen column
+// (document.getElementById cannot see it there, so a closing event left the card live).
+function cardEl(id) { const c = colEl(); return (c && c.querySelector("#" + CSS.escape(String(id)))) || document.getElementById(id); }
 function questionDone(ev) {
-  const d = document.getElementById(qId(ev)); if (!d || d.classList.contains("done")) return;
+  const d = cardEl(qId(ev)); if (!d || d.classList.contains("done")) return;
   const src = ev.source, ans = ev.answers || [], typed = src === "user" && /^You replied/.test(ev.text || "");
   const qs = $$(".qq", d).map(fs => $(".qtext", fs)?.textContent || "");
   const how = src === "stopped" ? "Stopped" : src === "timeout" ? "No answer in time, went with" : src === "user" || src === "replay" ? "" : "Went with";
@@ -1493,17 +1627,6 @@ function settleSteps(label) {
 function bindFoot(foot) {
   $$("[data-diff]", foot).forEach(b => b.onclick = () => { S.diffTurn = +b.dataset.diff; togglePanel(curMode() === "cowork" ? "outputs" : "diff", true); });
   $$("[data-undo]", foot).forEach(b => b.onclick = () => undoTurn(+b.dataset.undo));
-  $$("[data-undomore]", foot).forEach(b => b.onclick = e => ctxMenu(e, [{head: "Undo this reply and the ones after it"},
-    {label: "Only the files", desc: "Files go back; the chat stays and Meshpool is told", fn: () => undoPart(+b.dataset.undomore, "code")},
-    {label: "Only the conversation", desc: "The chat goes back; files stay as they are", fn: () => undoPart(+b.dataset.undomore, "chat")}]));
-}
-async function forkChat(n) {                       // a new chat from this one's history up to reply n
-  if (!S.cur) return;
-  try {
-    const v = await post(`/api/agent/${S.cur.id}/fork`, {turn: n});
-    await loadThreads(); openThread(v.id);
-    toast("Branched into a new chat. The original is unchanged.");
-  } catch (e) { toast(e.message, 5000); }
 }
 /* Settings, Permissions: every saved rule, with Remove, and a way to add one. */
 async function drawRules(box, r) {
@@ -1518,26 +1641,47 @@ async function drawRules(box, r) {
   $$("[data-rrm]", box).forEach(x => x.onclick = () => act({action: "remove", list: x.dataset.rrm, rule: x.dataset.rule, folder: x.dataset.folder || ""}));
   $("#ruleAdd", box).onclick = () => act({action: "add", list: $("#ruleList", box).value, rule: $("#ruleText", box).value});
 }
-async function undoPart(n, what) {                 // files only, or the conversation only
-  if (!S.cur || S.cur.busy) return toast("Wait for it to finish, or stop it first.");
-  if (!await ask(what === "code" ? {title: "Undo only the files?", text: "Files Meshpool changed in this reply and the ones after it go back to how they were. The conversation stays.", ok: "Undo files"}
-                                 : {title: "Undo only the conversation?", text: "The chat goes back to before this reply. Files stay as they are.", ok: "Undo conversation"})) return;
-  const asked = threadLog().filter(e => e.type === "user" && !e.steer)[n - 1]?.text || "";
-  try {
-    await post(`/api/agent/${S.cur.id}/revert`, {turn: n, what, since: 1e9});
-    const inp = $("#input"); if (what === "chat" && asked && !inp.value.trim()) { inp.value = asked; inp.dispatchEvent(new Event("input")); }
-    renderBranch(); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel();
-  } catch (e) { toast(e.message); }
+// Put a message back into the box (Undo, Rewind, Edit) without losing what is typed there: a draft stays first, the
+// message goes after it, unless the draft already is that message.
+function fillInput(text) {
+  const inp = $("#input"); if (!inp || !text) return;
+  const draft = inp.value;
+  if (!draft.trim()) inp.value = text;
+  else if (draft.trim() !== String(text).trim()) inp.value = draft.replace(/\s+$/, "") + "\n\n" + text;
+  inp.dispatchEvent(new Event("input")); inp.focus();
 }
 async function undoTurn(n) {
   if (!await ask({title: "Undo this reply?", text: "Files Meshpool changed go back to how they were before it, and the conversation goes back to that point. Replies after it are undone too.", ok: "Undo changes", danger: true})) return;
-  const asked = threadLog().filter(e => e.type === "user" && !e.steer)[n - 1]?.text || "";
-  try { await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); const inp = $("#input"); if (asked && !inp.value.trim()) { inp.value = asked; inp.dispatchEvent(new Event("input")); } renderBranch(); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel(); }
+  const t = (S.cur.view?.turns || []).find(x => x.n === n) || {};
+  const ue = threadLog().find(e => e.type === "user" && (t.message_index != null && e.mi === t.message_index)) ||
+    threadLog().find(e => e.type === "user" && t.event_index != null && e.i === t.event_index);
+  const asked = ue?.text || "";
+  try { await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); if (asked) fillInput(asked); renderBranch(); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel(); }
   catch (e) { toast(e.message); }
 }
 
+// "Rewind to here" / "Fork from here" under one of your messages (the server finds the message from the event number).
+async function rewindFork(kind, el) {
+  const cur = S.cur, ei = el && el.dataset.ei !== undefined ? +el.dataset.ei : -1;
+  if (!cur || ei < 0) return;
+  if (["working", "waiting"].includes(cur.view?.state)) { toast(kind === "rewind" ? "Stop the agent before rewinding." : "Wait for the reply, or stop it, then fork."); return; }
+  try {
+    if (kind === "fork") {
+      const r = await post(`/api/agent/${cur.id}/fork`, {event_index: ei});
+      await loadThreads(); openThread(r.id); toast("Forked into a new chat. Nothing changed in your files.", 4000); return;
+    }
+    const a = await ask({title: "Rewind to here?", text: "The conversation goes back to just before this message, and the reply and everything after it are removed. The message goes back into the box so you can change it.",
+      ok: "Rewind", danger: true, check: "Also undo the file changes Meshpool made from here on"});
+    if (!a) return;
+    const r = await post(`/api/agent/${cur.id}/rewind`, {event_index: ei, files: a.checked, since: 1e9});
+    if (r.forked) { await loadThreads(); openThread(r.forked); toast("This agent cannot go back in place, so the conversation up to there is a new chat.", 5000); return; }
+    if (r.text) fillInput(r.text);
+    renderBranch(); clearTimeout(cur.pollT); resetChat(cur); poll(); if (S.panel === "diff") renderPanel();
+  } catch (e) { toast(e.message); }
+}
+
 /* ================================== right panel ================================== */
-const PTABS_ALL = {session: "Session", progress: "Progress", outputs: "Artifacts", diff: "Changes", files: "Files", term: "Terminal", git: "Git and CI", preview: "Preview", browser: "Browser"};
+const PTABS_ALL = {session: "Session", progress: "Progress", outputs: "Artifacts", diff: "Changes", files: "Files", term: "Terminal", git: "Git and CI", preview: "Preview", browser: "Browser", worktree: "Isolated copy"};
 function togglePanel(name, force) {
   if (!panelSet().includes(name)) name = panelSet()[0];
   if (S.panel === name && !force && curMode() === "cowork") store("cw_panel_closed", true);
@@ -1553,7 +1697,7 @@ function setupPanelResize() {
   });
 }
 function fitPanel() {
-  const want = (!!S.panel || (typeof PVX !== "undefined" && PVX.open)) && innerWidth < 1180 && innerWidth > 980 && !S.keepSide;   // only where both cannot fit
+  const want = (!!S.panel || (typeof PVX !== "undefined" && PVX.open)) && innerWidth < 1180 && innerWidth > 760 && !S.keepSide;   // only where both cannot fit
   if ($("#app").classList.contains("autoside") !== want) { $("#app").classList.toggle("autoside", want); renderTop(); }
 }
 function renderPanel() {
@@ -1563,13 +1707,13 @@ function renderPanel() {
   fitPanel(); if (S.panel !== "browser") brwStop();
   if (!S.panel) { p.hidden = true; return; }
   p.hidden = false;
-  $("#ptabs").innerHTML = panelSet().map(k => [k, PTABS_ALL[k]]).map(([k, lb]) => `<button role="tab" aria-selected="${S.panel === k}" data-t="${k}">${lb}</button>`).join("") + `<span class="sp"></span><button class="iconbtn" id="pclose" aria-label="Close panel">${ICON.x}</button>`;
+  $("#ptabs").innerHTML = `<div class="pstrip" role="tablist" aria-label="Side panel tabs">` + panelSet().map(k => [k, PTABS_ALL[k]]).map(([k, lb]) => `<button role="tab" aria-selected="${S.panel === k}" data-t="${k}">${lb}</button>`).join("") + `</div><span class="sp"></span><button class="iconbtn" id="pclose" aria-label="Close panel">${ICON.x}</button>`;
   $$("#ptabs [data-t]").forEach(b => b.onclick = () => togglePanel(b.dataset.t, true));
   $("#pclose").onclick = () => togglePanel(S.panel);
   const body = $("#pbody"); body.innerHTML = "";
   if (!S.cur && S.panel !== "session" && S.panel !== "browser") { body.innerHTML = `<div class="pnote">Start a chat and what it makes, changes or runs shows up here.</div>`; return; }
   ({session: panelSession, progress: panelProgress, outputs: panelOutputs, diff: panelDiff, files: panelFiles, term: panelTerm, git: panelGit,
-    preview: panelPreview, browser: panelBrowser})[S.panel](body);
+    preview: panelPreview, browser: panelBrowser, worktree: panelWorktree})[S.panel](body);
 }
 
 /* ---------- Cowork: progress, files made, context ---------- */
@@ -1774,12 +1918,11 @@ async function panelGit(body) {
       <div class="row" style="margin-top:6px"><input id="gnew" placeholder="New branch name"><button class="btn" id="gcreate">Create</button></div>
       <div class="stat" style="margin-top:6px">${g.upstream ? `${g.ahead} to push, ${g.behind} to pull` : "Not pushed yet"}${g.remote ? ` · ${esc(g.github || g.remote)}` : " · no remote"}</div></div>
     <div><h4>Changes (${g.dirty})${g.staged ? ` · ${g.staged} staged` : ""}</h4><ul class="flist" style="border:1px solid var(--line-2);border-radius:var(--r-s);margin-top:6px;max-height:180px;overflow:auto">${g.files.map((f, i) => `<li><span class="badge modified">${esc(GIT_WORD[String(f.status).trim()] || f.status)}</span><span class="p">${esc(f.path)}</span>${f.unstaged ? `<button class="linkbtn" data-gst="${i}" title="Stage this file for the next commit">Stage</button>` : ""}${f.staged ? `<button class="linkbtn" data-gun="${i}" title="Take it out of the next commit; the change stays">Unstage</button>` : ""}</li>`).join("") || `<li class="pnote" style="padding:6px 10px">Nothing to commit.</li>`}</ul></div>
-    <div><h4>Commit</h4><textarea id="gmsg" rows="2" placeholder="What changed and why" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px">${g.staged ? `<button class="btn primary" id="gcommitst">Commit staged (${g.staged})</button>` : ""}<button class="btn ${g.staged ? "" : "primary"}" id="gcommit" ${g.dirty ? "" : "disabled"}>Commit all</button><button class="btn" id="gpush" ${g.remote ? "" : "disabled"}>Push</button><button class="btn" id="gpull" ${g.upstream ? "" : "disabled"}>Pull</button></div></div>
+    <div><h4>Commit</h4><textarea id="gmsg" rows="2" placeholder="What changed and why" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px">${g.staged ? `<button class="btn primary" id="gcommitst">Commit staged (${g.staged})</button>` : ""}<button class="btn ${g.staged ? "" : "primary"}" id="gcommit" ${g.dirty ? "" : `disabled title="Nothing to commit: no files have changed."`}>Commit all</button><button class="btn" id="gpush" ${g.remote ? "" : `disabled title="This folder has no remote to push to."`}>Push</button><button class="btn" id="gpull" ${g.upstream ? "" : `disabled title="This branch is not linked to a remote branch yet."`}>Pull</button></div></div>
     <div id="chgBox"></div>
     ${g.log?.length ? `<details class="cil"><summary><b>Recent commits</b> <span class="stat">${g.log.length}</span></summary><ul class="flist glog">${g.log.map(c => `<li title="${esc(c.author)}"><code>${esc(c.hash)}</code> <span class="cn">${esc(c.subject)}</span> <span class="stat">${esc(c.when)}</span></li>`).join("")}</ul></details>` : ""}
-    <div id="wtBox"></div>
     <div id="ciBox"><h4>Pull request, checks and deployments</h4><div class="pnote" style="padding:6px 0">Loading from GitHub...</div></div>
-    <div><h4>Open a pull request</h4><input id="gprt" placeholder="Title (defaults to the last commit)" style="margin-top:6px"><textarea id="gprb" rows="3" placeholder="Description" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px"><button class="btn" id="gpr" ${g.github ? "" : "disabled"}>Open pull request</button>${g.github ? "" : `<span class="stat">Needs a GitHub remote.</span>`}</div><div class="stat" id="gres"></div></div>
+    <div><h4>Open a pull request</h4><input id="gprt" placeholder="Title (defaults to the last commit)" style="margin-top:6px"><textarea id="gprb" rows="3" placeholder="Description" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px"><button class="btn" id="gpr" ${g.github ? "" : `disabled title="Needs a GitHub remote."`}>Open pull request</button>${g.github ? "" : `<span class="stat">Needs a GitHub remote.</span>`}</div><div class="stat" id="gres"></div></div>
   </div>`;
   $("#gbr").onchange = () => gitAct({action: "checkout", branch: $("#gbr").value});
   $("#gcreate").onclick = () => gitAct({action: "checkout", branch: $("#gnew").value, create: true});
@@ -1791,32 +1934,7 @@ async function panelGit(body) {
   $("#gpull").onclick = () => gitAct({action: "pull"});
   $("#gpr").onclick = () => gitAct({action: "pr", title: $("#gprt").value, body: $("#gprb").value});
   api("/api/git/changes?root=" + encodeURIComponent(root)).then(ch => { const b = $("#chgBox"); if (b) b.innerHTML = changesHTML(ch, g.branch); }).catch(() => {});
-  drawWorktrees(root);
   if (g.github) drawCI(root); else $("#ciBox").innerHTML = `<h4>Pull request, checks and deployments</h4><div class="stat">Pull requests, checks and deployments show here for repositories on GitHub.</div>`;
-}
-/* Worktrees meshpool made for this repository: a second checkout on its own branch, so a task never edits this one. */
-async function drawWorktrees(root) {
-  const box = $("#wtBox"); if (!box) return;
-  let r; try { r = await api("/api/worktree?root=" + encodeURIComponent(root)); } catch (e) { box.innerHTML = ""; return; }
-  const ws = r.worktrees || [];
-  const trim = x => String(x || "").replace(/[\\/]+$/, "");
-  const here = w => trim(curRoot()) === trim(w.path);
-  const state = w => w.missing ? "folder missing" : [w.dirty ? "uncommitted changes" : "", w.unpushed ? `${w.unpushed} commit${w.unpushed === 1 ? "" : "s"} not on another branch` : ""].filter(Boolean).join(", ") || "no changes";
-  box.innerHTML = `<h4>Worktrees (${ws.length})</h4>
-    ${ws.length ? `<ul class="flist wtl" style="border:1px solid var(--line-2);border-radius:var(--r-s);margin-top:6px">${ws.map((w, i) => `<li data-wt="${i}"><span class="cn"><b>${esc(w.name)}</b> <span class="dir">${esc(w.branch || "detached")}</span><br><span class="stat">${esc(state(w))}${here(w) ? " · this chat works here" : ""}</span></span>
-      <span class="row" style="gap:4px">${w.missing || here(w) ? "" : `<button class="linkbtn" data-wto="${i}">New chat here</button>`}<button class="linkbtn" data-wtr="${i}">Remove</button></span></li>`).join("")}</ul>`
-      : `<div class="stat" style="margin-top:6px">None. A worktree is a second checkout of this repository on its own branch, so a task can work there without touching this one.</div>`}
-    <div class="row" style="margin-top:6px"><button class="btn" id="wtNew">New worktree</button></div>`;
-  $("#wtNew").onclick = async () => { try { const w = await post("/api/worktree", {root, action: "create"}); toast(`Made ${w.name} on branch ${w.branch}`); drawWorktrees(root); } catch (e) { toast(e.message, 5000); } };
-  $$("[data-wto]", box).forEach(b => b.onclick = () => newThread(ws[+b.dataset.wto].path));
-  $$("[data-wtr]", box).forEach(b => b.onclick = async () => {
-    const w = ws[+b.dataset.wtr];
-    const lose = w.dirty ? " Its uncommitted changes are lost." : "";
-    const keep = w.unpushed ? ` Its branch ${w.branch} stays, with its commits.` : ` The branch ${w.branch} goes too when nothing would be lost.`;
-    if (!await ask({title: `Remove the worktree ${w.name}?`, text: `This deletes its folder.${lose}${keep}`, ok: w.dirty ? "Remove and discard changes" : "Remove"})) return;
-    try { const x = await post("/api/worktree", {root, action: "remove", path: w.path, force: !!(w.dirty || w.unpushed)}); toast(`Removed ${w.name}` + (x.branch_deleted ? "" : `; branch ${x.branch} kept`)); drawWorktrees(root); }
-    catch (e) { toast(e.message, 6000); }
-  });
 }
 const CK = {success: ["ok", "Passed"], failure: ["bad", "Failed"], timed_out: ["bad", "Timed out"], cancelled: ["bad", "Cancelled"],
   action_required: ["bad", "Needs action"], skipped: ["", "Skipped"], neutral: ["", "Neutral"]};
@@ -2008,7 +2126,7 @@ function openGithubPicker(opts = {}) {
     <input id="ghQ" placeholder="Search your repositories, or type owner/name" spellcheck="false" autocomplete="off" aria-label="Search repositories">
     <ul class="fblist" id="ghList" role="listbox"><li class="pnote">Loading...</li></ul>
     <div id="ghBr" class="ghbr" hidden><label>Branch<select id="ghSel"></select></label><label class="chk"><input type="checkbox" id="ghNewOn"> New branch from it</label><input id="ghNewName" placeholder="New branch name" hidden></div>
-    <div class="row"><span class="fbsel" id="ghMsg"></span><button class="btn" data-a="0">Cancel</button><button class="btn primary" id="ghGo" disabled>${esc(opts.cta || "Start chat")}</button></div></div>`;
+    <div class="row"><span class="fbsel" id="ghMsg"></span><button class="btn" data-a="0">Cancel</button><button class="btn primary" id="ghGo" disabled title="Choose a repository first">${esc(opts.cta || "Start chat")}</button></div></div>`;
   document.body.appendChild(sc);
   let repo = null, qT = null;
   const done = () => { sc.remove(); document.removeEventListener("keydown", key, true); };
@@ -2087,8 +2205,11 @@ async function renderSection(sec) {
     $("#paMemPage").onclick = () => { closeSettings?.(); goPage("memory"); };
     $("#paSave").onclick = async () => {
       try {
-        await post("/api/assistant", {action: "instructions", text: $("#paIns").value});
-        await post("/api/assistant", {action: "settings", memory_on: $("#paMemOn").checked, instructions_on: $("#paInsOn").checked, learn_from_edits: $("#paEdits").checked});
+        // Send only what this person changed on the page, never the whole snapshot it loaded (M19-01).
+        if ($("#paIns").value !== a.instructions) await post("/api/assistant", {action: "instructions", text: $("#paIns").value, base: a.instructions});
+        const sw = {}; for (const [k, id] of [["memory_on", "paMemOn"], ["instructions_on", "paInsOn"], ["learn_from_edits", "paEdits"]]) if ($("#" + id).checked !== !!a.settings[k]) sw[k] = $("#" + id).checked;
+        if (Object.keys(sw).length) await post("/api/assistant", {action: "settings", ...sw});
+        a.instructions = $("#paIns").value; Object.assign(a.settings, sw);
         RES("paRes").className = "res ok"; RES("paRes").textContent = "Saved. New chats use it.";
       } catch (e) { RES("paRes").className = "res bad"; RES("paRes").textContent = e.message; }
     };
@@ -2191,7 +2312,7 @@ async function renderSection(sec) {
       $$("[data-cncat]", b).forEach(x => x.onclick = () => { S.cnCat = x.dataset.cncat; filter(); });
       filter();
       $("#cxAdd").onclick = async () => {
-        const url = $("#cxUrl").value.trim(); if (!url) { $("#cxUrl").focus(); return; }
+        const url = $("#cxUrl").value.trim(); if (!url) { say("Paste the address of the app's MCP server first.", "bad"); $("#cxUrl").setAttribute("aria-invalid", "true"); $("#cxUrl").focus(); return; }
         $("#cxAdd").disabled = true; say("Checking the server...");
         const r = await act({action: "custom", name: $("#cxName").value.trim(), url, token: $("#cxTok").value.trim(), client_id: $("#cxCid").value.trim(), client_secret: $("#cxSec").value.trim()}); $("#cxAdd").disabled = false;
         if (!r) return;
@@ -2235,7 +2356,7 @@ async function renderSection(sec) {
           let q; try { q = await post("/api/connectors", {action: "github_poll", id: "github"}); } catch (e) { return; }
           if (q.status === "done") { S.connCache = q.connectors; draw(q.connectors); RES("cnRes").className = "res ok"; RES("cnRes").textContent = `Connected to GitHub${q.login ? " as " + q.login : ""}.`; return; }
           if (q.status === "failed") { RES("cnRes").className = "res bad"; RES("cnRes").textContent = q.error; return; }
-          setTimeout(tick, (r.interval || 5) * 1000);
+          setTimeout(tick, (q.interval || r.interval || 5) * 1000);
         };
         setTimeout(tick, (r.interval || 5) * 1000);
       });
@@ -2304,7 +2425,7 @@ async function renderSection(sec) {
     const ex = S.hInfo.examples || [];
     b.innerHTML = `${close}<h3>Agents</h3><p class="lead">The agent is who does the work in a chat. What it runs on is your provider (Settings, Account): ${esc((S.settings.providers || {})[S.settings.provider || "meshpool"] || "")}. Meshpool Auto picks a good agent for each task. Each agent runs on the provider of the model you pick in the message box: your API key or your ChatGPT sign-in. Other agents can be added too.</p>
       <div class="dflt">${[["cowork", "Work"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error && h.ready !== false).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name)}${h.mode !== m && h.type !== "auto" ? " · made for " + (h.mode === "code" ? "Code" : "Work") : ""}</option>`).join("")}</select><small>${m === "code" ? "Meshpool Code and Pi both solve most coding tasks; Pi is a little faster and cheaper, Meshpool Code has the full toolset (browser, connectors, skills)." : "Meshpool Work makes Word, Excel and PowerPoint files and does research. Hermes adds long-term memory for ongoing work."}</small></label>`).join("")}</div>
-      <ul class="rows2">${S.harnesses.filter(h => !h.hidden).map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.mode === "cowork" ? "Work" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">${h.unsupported ? "Not available" : "Not installed"}</span>` : h.ready === false ? ` <span class="badge deleted">Needs setup</span>` : ""}<small>${esc(h.description || "")}</small>${h.runs_on && h.ready !== false ? `<small>Runs on ${esc(h.runs_on)}.</small>` : ""}${h.ready === false && h.setup ? `<small>${esc(h.setup)}</small>` : ""}${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}</span>${h.login ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}" ${h.available === false ? "disabled" : ""}>Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
+      <ul class="rows2">${S.harnesses.filter(h => !h.hidden).map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.mode === "cowork" ? "Work" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">${h.unsupported ? "Not available" : "Not installed"}</span>` : h.ready === false ? ` <span class="badge deleted">Needs setup</span>` : ""}<small>${esc(h.description || "")}</small>${h.runs_on && h.ready !== false ? `<small>Runs on ${esc(h.runs_on)}.</small>` : ""}${h.ready === false && h.setup ? `<small>${esc(h.setup)}</small>` : ""}${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}</span>${h.login ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}" ${h.available === false ? `disabled title="Not available on this computer."` : ""}>Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
       ${ex.length ? `<h3 style="font-size:16px;margin:18px 0 8px">Add one</h3><div style="display:flex;gap:6px;flex-wrap:wrap">${ex.map(e => `<button class="btn" data-ex="${esc(e.id)}">${esc(e.name)}</button>`).join("")}</div>` : ""}
       <div class="dropzone" id="hDrop" style="margin-top:14px" tabindex="0" role="button">Or drop an agent's .json file here<input type="file" id="hFile" accept=".json" hidden></div><div class="res" id="hRes"></div>`;
     const act = async body => { try { await post("/api/harnesses", body); await loadHarnesses(); renderSection("harnesses"); renderBar(); } catch (e) { RES("hRes").className = "res bad"; RES("hRes").textContent = e.message; } };
@@ -2333,7 +2454,7 @@ async function renderSection(sec) {
     $("#mEdit").onclick = () => $("#mEd").hidden = !$("#mEd").hidden;
     $("#mImp").onclick = () => importPanel($("#mImpBox"), r => { if (r) setTimeout(() => renderSection("mcp"), 1500); });
     $("#mSave").onclick = async () => { try { await post("/api/mcp", {text: $("#mText").value}); renderSection("mcp"); } catch (e) { RES("mRes").className = "res bad"; RES("mRes").textContent = e.message; } };
-    $("#mTest").onclick = async () => { RES("mRes").className = "res"; RES("mRes").textContent = "Starting each server..."; try { const r = await post("/api/mcp/test", {workdir: curRoot()}); const rows = r.status.filter(s => s.status !== "disabled"); RES("mRes").className = "res " + (rows.some(s => s.status === "error") ? "bad" : "ok"); RES("mRes").innerHTML = rows.map(s => `${esc(s.name)}: ${s.status === "connected" ? `connected, ${s.tools.length} tools` : esc(s.error)}`).join("<br>") || "No servers are on."; } catch (e) { RES("mRes").className = "res bad"; RES("mRes").textContent = e.message; } };
+    $("#mTest").onclick = async () => { RES("mRes").className = "res"; RES("mRes").textContent = "Starting each server..."; try { const r = await post("/api/mcp/test", {workdir: curRoot()}); const rows = r.status.filter(s => s.status !== "disabled"); RES("mRes").className = "res"; /* each server has its own colour: one broken server does not paint the working ones red */ RES("mRes").innerHTML = rows.map(s => `<div class="srv ${s.status === "connected" ? "ok" : s.status === "starting" ? "wait" : "bad"}">${esc(s.name)}: ${s.status === "connected" ? `connected, ${s.tools.length} tools` : esc(s.error || s.status)}</div>`).join("") || "No servers are on."; } catch (e) { RES("mRes").className = "res bad"; RES("mRes").textContent = e.message; } };
     drawMcpLibrary(b);
   } else if (sec === "permissions") {
     const draw = async body => {
@@ -2343,7 +2464,20 @@ async function renderSection(sec) {
         <ul class="rows2">${r.rows.map(x => `<li><span class="dot ${x.ok === true ? "" : "wait"}" style="margin-top:7px;${x.ok === true ? "background:var(--add)" : ""}"></span><span class="tg"><b>${esc(x.name)}</b><small>${x.ok === true ? "Allowed. " : x.ok === false ? "Not allowed yet. " : ""}${esc(x.why)}</small></span>${x.ok === true || r.platform !== "darwin" ? "" : `<button class="btn" data-perm="${esc(x.id)}">${x.ok === false ? "Allow" : "Open settings"}</button>`}</li>`).join("")}</ul>
         <h3 style="font-size:16px;margin:18px 0 8px">Folders Meshpool works in</h3>
         <ul class="rows2">${S.projects.map(p => `<li><span class="tg"><b>${esc(p.name)}</b><small>${esc(p.managed ? "GitHub" : p.path)}</small></span><button class="iconbtn" data-rmp="${esc(p.path)}" aria-label="Remove">${ICON.x}</button></li>`).join("") || `<li class="pnote">No folders yet.</li>`}</ul>
-        <button class="btn" id="addP">${ICON.folder} Add a folder</button>`;
+        <button class="btn" id="addP">${ICON.folder} Add a folder</button>
+        <h3 style="font-size:16px;margin:18px 0 8px">Rules</h3>
+        <p class="lead">Rules decide without asking. Deny wins over allow. A rule is a tool name or <code>bash:</code> and a command pattern. Examples: <code>bash:npm test*</code>, <code>bash:git status*</code>, <code>edit</code>, <code>mcp__github__*</code>. An allow rule covers a command only when every part of it matches.</p>
+        <div id="rulesBox"></div>
+        <div class="row" style="margin-top:8px;gap:6px"><input id="ruleIn" placeholder="bash:npm test*" aria-label="New rule" style="flex:1"><button class="btn" id="ruleAllow">Allow</button><button class="btn danger" id="ruleDeny">Deny</button></div>
+        <div class="res" id="ruleRes"></div>`;
+      const drawRules = r => {
+        const li = (k, x) => `<li><span class="tg"><b>${esc(x)}</b><small>${k}</small></span><button class="iconbtn" data-rk="${k}" data-rr="${esc(x)}" aria-label="Remove rule">${ICON.x}</button></li>`;
+        $("#rulesBox", b).innerHTML = `<ul class="rows2">${r.allow.map(x => li("allow", x)).join("")}${r.deny.map(x => li("deny", x)).join("")}${r.allow.length + r.deny.length ? "" : `<li class="pnote">No saved rules.</li>`}</ul>`;
+        $$("[data-rk]", b).forEach(x => x.onclick = async () => drawRules(await post("/api/rules", {action: "remove", kind: x.dataset.rk, rule: x.dataset.rr})));
+      };
+      const addRule = async kind => { try { const r = await post("/api/rules", {action: "add", kind, rule: $("#ruleIn", b).value}); $("#ruleIn", b).value = ""; $("#ruleRes", b).textContent = ""; drawRules(r); } catch (e) { $("#ruleRes", b).className = "res bad"; $("#ruleRes", b).textContent = e.message; } };
+      drawRules(await api("/api/rules"));
+      $("#ruleAllow").onclick = () => addRule("allow"); $("#ruleDeny").onclick = () => addRule("deny");
       done();
       $$("[data-perm]", b).forEach(x => x.onclick = () => draw({id: x.dataset.perm}));
       $("#permAll")?.addEventListener("click", () => draw({id: "all"}));
@@ -2354,9 +2488,19 @@ async function renderSection(sec) {
     await draw(); return;
   } else if (sec === "usage") {
     const u = await api("/api/usage"); const t = u.total;
-    b.innerHTML = `${close}<h3>Usage</h3><p class="lead">How much Meshpool's own agents used on this computer. What it cost is on your <a href="https://meshpool.ai" target="_blank" rel="noopener">Meshpool account</a>.</p>
-      <div class="statgrid"><div><b>${fmt(t.in)}</b><span>Input tokens</span></div><div><b>${t.in ? Math.round(100 * t.cached / t.in) : 0}%</b><span>Served from cache</span></div><div><b>${fmt(t.out)}</b><span>Output tokens</span></div><div><b>${fmt(t.calls)}</b><span>Model calls</span></div></div>
-      <h3 style="font-size:16px;margin:0 0 8px">By model</h3><table class="t"><tr><th>Model</th><th>Chats</th><th>In</th><th>Cached</th><th>Out</th></tr>${Object.entries(u.by_model).map(([m, r]) => `<tr><td title="${esc(m)}">${esc(modelName(m))}</td><td class="n">${r.threads}</td><td class="n">${fmt(r.in)}</td><td class="n">${fmt(r.cached)}</td><td class="n">${fmt(r.out)}</td></tr>`).join("")}</table>`;
+    // Cost: "$0.42" when every call was priced, "$0.42 + 3 unpriced calls" when some were not, "unpriced" when none were. Never $0.00 for unpriced.
+    const usd = x => x < 0.01 && x > 0 ? "$" + x.toFixed(4) : "$" + x.toFixed(2);
+    const money = r => !r.calls ? "-" : r.unpriced_calls >= r.calls ? "unpriced" : usd(r.cost || 0) + (r.unpriced_calls ? ` + ${r.unpriced_calls} unpriced call${r.unpriced_calls === 1 ? "" : "s"}` : "");
+    const SRC = [["Chat", /^chat$/], ["Engines", /^engine:/], ["Reviewers and grader", /^(review|grader)/], ["Helpers", /^helper:/], ["Sub-agents", /^subagent/], ["External agents", /^external:/], ["Background", /^background/]];
+    const bySrc = {}; for (const [k, r] of Object.entries(u.by_source || {})) { const name = (SRC.find(([, re]) => re.test(k)) || ["Other"])[0]; const b = bySrc[name] || (bySrc[name] = {in: 0, cached: 0, out: 0, calls: 0, cost: 0, unpriced_calls: 0}); for (const f in b) b[f] += r[f] || 0; }
+    const srcRows = [...SRC.map(x => x[0]), "Other"].filter(n => bySrc[n]);
+    const gw = (u.gateway || []).filter(g => g.inflight || g.waiting);
+    b.innerHTML = `${close}<h3>Usage</h3><p class="lead">Every model call Meshpool's own agents made on this computer, including the ones its tools, checks and sub-agents made. A cost shows only where the model's price is known.</p>
+      <div class="statgrid"><div><b>${fmt(t.in)}</b><span>Input tokens</span></div><div><b>${t.in ? Math.round(100 * t.cached / t.in) : 0}%</b><span>Served from cache</span></div><div><b>${fmt(t.out)}</b><span>Output tokens</span></div><div><b>${fmt(t.calls)}</b><span>Model calls</span></div><div><b>${esc(money(t))}</b><span>Cost</span></div></div>
+      ${t.unreported_calls ? `<p class="pnote">${fmt(t.unreported_calls)} call${t.unreported_calls === 1 ? "" : "s"} did not report their tokens, so those are estimated.</p>` : ""}
+      ${gw.map(g => `<p class="pnote">Model calls running: ${g.inflight} of ${g.limit} on ${esc(g.endpoint)}${g.waiting ? `, ${g.waiting} waiting` : ""}</p>`).join("")}
+      <h3 style="font-size:16px;margin:0 0 8px">By model</h3><table class="t"><tr><th>Model</th><th>Chats</th><th>In</th><th>Cached</th><th>Out</th><th>Cost</th></tr>${Object.entries(u.by_model).map(([m, r]) => `<tr><td title="${esc(m)}">${esc(modelName(m))}</td><td class="n">${r.threads}</td><td class="n">${fmt(r.in)}</td><td class="n">${fmt(r.cached)}</td><td class="n">${fmt(r.out)}</td><td class="n">${esc(money(r))}</td></tr>`).join("")}</table>
+      <h3 style="font-size:16px;margin:18px 0 8px">By source</h3><table class="t"><tr><th>Source</th><th>Calls</th><th>In</th><th>Cached</th><th>Out</th><th>Cost</th></tr>${srcRows.map(n => { const r = bySrc[n]; return `<tr><td>${esc(n)}</td><td class="n">${fmt(r.calls)}</td><td class="n">${fmt(r.in)}</td><td class="n">${fmt(r.cached)}</td><td class="n">${fmt(r.out)}</td><td class="n">${esc(money(r))}</td></tr>`; }).join("")}</table>`;
   } else if (sec === "terminal") {
     const c = S.settings.cli || {};
     b.innerHTML = `${close}<h3>Terminal command</h3><p class="lead">The same agent works in any terminal. Go to a project folder and type <code>meshpool</code>. Use <code>meshpool -p "..."</code> for one answer, and <code>meshpool acp</code> to plug Meshpool into Zed, JetBrains or other ACP apps.</p>
@@ -2383,7 +2527,7 @@ async function renderSection(sec) {
     $("#ofRemove").onclick = e => act("uninstall", e.currentTarget);
     api("/api/office").then(show).catch(e => { $("#ofRes").className = "res bad"; $("#ofRes").textContent = e.message; });
   } else if (sec === "advanced") {
-    const CH = {MH_AGENT_PERMISSIONS: [["ask", "Supervised"], ["edits", "Auto-accept edits"], ["auto", "Full access"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]], MH_SUBAGENTS: [["1", "On"], ["0", "Off"]], MH_SUBAGENT_ACCESS: [["inherit", "Same as the chat"], ["edit", "Read and edit files, no commands"], ["read", "Read and research"]], MH_SUBAGENT_AUTO_APPROVE: [["0", "Off"], ["1", "On"]], MH_SUBAGENT_DEPTH: [["1", "1"], ["2", "2"], ["3", "3"]]};
+    const CH = {MH_AGENT_PERMISSIONS: [["ask", "Ask"], ["edits", "Accept edits"], ["auto", "Full access"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]], MH_SUBAGENTS: [["1", "On"], ["0", "Off"]], MH_SUBAGENT_ACCESS: [["inherit", "Same as the chat"], ["edit", "Read and edit files, no commands"], ["read", "Read and research"]], MH_SUBAGENT_AUTO_APPROVE: [["0", "Off"], ["1", "On"]], MH_SUBAGENT_DEPTH: [["1", "1"], ["2", "2"], ["3", "3"]]};
     // Search keys and the GitHub token have their own pages (Web search, Connectors).
     const keys = F.filter(x => !["MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL", "MH_PROVIDER", "GITHUB_TOKEN", "MH_ONBOARDED", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "SEARXNG_URL", "INSTANTLY_API_KEY"].includes(x.key));
     b.innerHTML = `${close}<h3>Advanced</h3><p class="lead">Most people never need to change these.</p>
@@ -2471,9 +2615,8 @@ function showOnboarding() {
     }
     $("#oGo").disabled = true; res.className = "res"; res.textContent = "Checking your key…";
     try {
-      const r = await post("/api/test", {values: prov === "custom" ? values : {MESHPOOL_API_KEY: key, MESHPOOL_BASE_URL: "https://llm.meshpool.ai/v1"}});   // check first; save only a key that works
+      const r = await post("/api/onboard", {provider: prov, key, base_url: values.MESHPOOL_BASE_URL, model: values.MH_MODEL || ""});   // one request: checks the key, and only a key that works is saved, with the provider
       if (!r.ok) { res.className = "res bad"; res.textContent = connMsg(r.detail); $("#oGo").disabled = false; return; }
-      await post("/api/settings", {values}); await post("/api/provider", {provider: prov});
       store("harness_code", null); store("harness_cowork", null);
       await finish();
     } catch (e) { res.className = "res bad"; res.textContent = e.message; $("#oGo").disabled = false; }
@@ -2521,7 +2664,9 @@ async function contextPanel(box) {
     try {
       const r = await api("/api/import-file?chats=1&context=1", {method: "POST", body: f, headers: {"Content-Type": "application/zip"}});
       await refresh();
-      res(`${r.kind === "claude" ? "Assistant" : "ChatGPT"} export: ${n(r.imported)} chat${r.imported === 1 ? "" : "s"} imported${r.skipped ? ` (${n(r.skipped)} already here)` : ""}.` + (r.context_pending ? " Facts about you will appear in Memory to review." : ""), false, true);
+      res(`${r.kind === "claude" ? "Assistant" : "ChatGPT"} export: ${r.summary || ""}` + (r.context_pending ? " Reading it for facts about you…" : ""), false, true);
+      if (r.imported && r.ids?.[0]) toast(`${n(r.imported)} chat${r.imported === 1 ? "" : "s"} imported.`, 9000, {label: "Open", fn: () => { try { closeSettings(); } catch (e) { /* onboarding */ } openThread(r.ids[0]); }});
+      if (r.context_pending) { const t0 = Date.now(); const poll = async () => { try { const st = await api("/api/import-status"); if (st.state === "failed") return res(`${r.summary} Could not read facts about you from it: ${st.error}`, true); if (st.state === "done") return res(`${r.summary} ${n(st.memory)} fact${st.memory === 1 ? "" : "s"} to review in Memory.`, false, true); } catch (e) { return; } if (Date.now() - t0 < 180000) setTimeout(poll, 3000); }; setTimeout(poll, 3000); }
     } catch (e) { res(e.message, true); }
   };
   const dz = $("#ctxDrop", box);
@@ -2533,7 +2678,8 @@ async function contextPanel(box) {
     x.disabled = true; res(`Importing ${local[x.dataset.local].name} sessions…`);
     try {
       const r = await post("/api/import-chats", {sources: [x.dataset.local]}); await refresh();
-      res(`Imported ${n(r.imported)} ${local[x.dataset.local].name} session${r.imported === 1 ? "" : "s"} as chats${r.skipped ? ` (${n(r.skipped)} already here)` : ""}.`, false, true);
+      res(`${local[x.dataset.local].name}: ${r.summary}`, false, true);
+      if (r.imported && r.ids?.[0]) toast(`${n(r.imported)} session${r.imported === 1 ? "" : "s"} imported.`, 9000, {label: "Open", fn: () => { try { closeSettings(); } catch (e) { /* onboarding */ } openThread(r.ids[0]); }});
       x.textContent = "Imported";
     } catch (e) { x.disabled = false; res(e.message, true); }
   });
@@ -2619,7 +2765,7 @@ async function importPanel(box, onDone) {
   const agents = f.agents.filter(a => a.items.length);
   if (!agents.length) { box.innerHTML = `<span></span>`; onDone?.(null); return; }
   const KIND = {skill: "Skill", mcp: "Tool", memory: "Memory", instructions: "Instructions", hook: "Hook"};
-  const item = it => `<label class="imp ${it.exists ? "have" : ""}"><input type="checkbox" data-key="${esc(it.key)}" ${it.exists ? "disabled" : it.kind === "instructions" || it.kind === "hook" ? "" : "checked"}><span class="tg"><b>${esc(it.name)}</b> <span class="badge modified">${KIND[it.kind]}</span>${it.exists ? ` <span class="badge">Already here</span>` : ""}${it.kind === "memory" ? "" : `<small>${esc((it.preview || "").slice(0, 140))}</small>`}${(it.stripped || []).length ? `<small>Left out: ${esc(it.stripped.join(", "))}</small>` : ""}${(it.risks || []).length ? `<small class="bad">Check first: ${esc(it.risks.slice(0, 3).join("; "))}</small>` : ""}</span></label>`;
+  const item = it => `<label class="imp ${it.exists ? "have" : ""}"><input type="checkbox" data-key="${esc(it.key)}" ${it.exists ? "disabled" : (it.kind === "instructions" || it.kind === "hook" || it.default === false) ? "" : "checked"}><span class="tg"><b>${esc(it.name)}</b> <span class="badge modified">${KIND[it.kind]}</span>${it.exists ? ` <span class="badge">Already here</span>` : ""}${it.kind === "memory" ? "" : `<small>${esc((it.preview || "").slice(0, 140))}</small>`}${(it.stripped || []).length ? `<small>Left out: ${esc(it.stripped.join(", "))}</small>` : ""}${(it.risks || []).length ? `<small class="bad">Check first: ${esc(it.risks.slice(0, 3).join("; "))}</small>` : ""}</span></label>`;
   const sum = a => ["skill", "mcp", "memory", "instructions", "hook"].filter(k => a.counts[k]).map(k => `${a.counts[k]} ${({skill: "skill", mcp: "tool", memory: "memor", instructions: "instruction file", hook: "hook"})[k]}${k === "memory" ? (a.counts[k] === 1 ? "y" : "ies") : a.counts[k] === 1 ? "" : "s"}`).join(", ");
   box.innerHTML = `<h3 class="onb-h">Agents on this computer</h3>
     ${agents.map(a => `<details class="impag" open><summary><b>${esc(a.name)}</b> <small class="muted">${esc(sum(a))}</small></summary><div class="impl">${a.items.map(item).join("")}</div></details>`).join("")}${agents.some(a => a.credentials_not_read.length) ? `<small class="muted">Logins are never read.</small>` : ""}
@@ -2656,7 +2802,7 @@ function permStep(host) {
     <div class="scope" role="radiogroup" aria-label="Where Meshpool can work">
       <button class="scopeopt" data-scope="pick" role="radio"><b>Folders I choose</b><small>Add one or more folders now.</small></button>
       <button class="scopeopt" data-scope="home" role="radio"><b>My whole home folder</b><small>Documents, Desktop, Downloads and everything else in your user folder.</small></button>
-      <button class="scopeopt" data-scope="later" role="radio"><b>Start in Meshpool Projects</b><small>A folder Meshpool made for you. Add your own folders any time.</small></button>
+      <button class="scopeopt" data-scope="later" role="radio"><b>Start without a folder</b><small>Each chat keeps its files in its own folder. Open it from the chat's Files panel.</small></button>
     </div><div class="res" id="oScope"></div>
     <div id="oPermH"><h3 class="onb-h">What Meshpool can do</h3>
     <ul class="rows2" id="oPerms"></ul></div>
@@ -2678,14 +2824,16 @@ function permStep(host) {
     try {
       if (x.dataset.scope === "pick") { await pickProject(); res.className = S.projects.length ? "res ok" : "res"; res.textContent = S.projects.length ? `Added ${S.projects.map(x => x.name || projName(x.path)).join(", ")}. Add more any time from the sidebar.` : "No folder added yet."; }
       else if (x.dataset.scope === "home") { const r = await post("/api/projects", {action: "home"}); S.projects = r.projects; renderSide(); newThread(r.picked); res.className = "res ok"; res.textContent = "Meshpool can work anywhere in your home folder. It still asks before changing files unless you allow edits."; }
-      else { res.className = "res"; res.textContent = "Tasks start in your Meshpool Projects folder. Add your own folders any time from the sidebar."; }
+      else { res.className = "res"; res.textContent = "Each chat keeps its files in its own folder; open it from the chat's Files panel. Add your own folders any time from the sidebar."; }
       if (mac && x.dataset.scope !== "later") draw({id: "folders"});
     } catch (e) { res.className = "res bad"; res.textContent = e.message; }
   });
   $("#oAll", card).onclick = async () => { $("#oAll", card).disabled = true; await draw({id: "all"}); $("#oAll", card).disabled = false; $("#oAll", card).textContent = "Ask again"; };
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && $("#onbPerm")) draw(); });
+  if (window._permVis) document.removeEventListener("visibilitychange", window._permVis);
+  window._permVis = () => { if (!document.hidden && $("#onbPerm")) draw(); };
+  document.addEventListener("visibilitychange", window._permVis);
   $("#oDone", card).onclick = () => setupStep(o, card);
-  if (!S.projects.length) { const later = $("[data-scope=later]", card); later.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Tasks start in your Meshpool Projects folder. Add your own folders any time from the sidebar."; }
+  if (!S.projects.length) { const later = $("[data-scope=later]", card); later.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Each chat keeps its files in its own folder; open it from the chat's Files panel. Add your own folders any time from the sidebar."; }
   draw();
 }
 
@@ -2696,13 +2844,18 @@ function setupStep(o, prev) {
     ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. You can skip this.</p>
     <div id="oImport"></div>
     <div id="oContext"></div>
+    <label class="switchrow" id="oLocalRow" hidden><input type="checkbox" id="oLocal" checked> <span id="oLocalTxt"></span></label>
     <div class="onb-go"><button class="bigbtn" id="oFinish">Start using Meshpool</button></div>`;
   importPanel($("#oImport", card)).then(() => { const b = $("#impGo", card); if (b) b.hidden = true; });
   contextPanel($("#oContext", card));
+  let found = {};
+  api("/api/import-chats").then(l => { found = l; const n = Object.values(l).filter(v => v.default).reduce((a, v) => a + v.found - v.imported, 0); if (n) { $("#oLocalTxt", card).textContent = `Bring in my ${Object.values(l).filter(v => v.default).map(v => v.name).join(" and ")} chats (${n.toLocaleString()})`; $("#oLocalRow", card).hidden = false; } }).catch(() => {});
   store("onbStep", 3);
   $("#oFinish", card).onclick = async () => {
     store("onbDone", 1); post("/api/settings", {values: {MH_ONBOARDED: "1"}}).catch(() => {});        // ticked items are imported on the way out; no extra click
     const box = $("#oImport", card);
+    const srcs = Object.entries(found).filter(([, v]) => v.default).map(([k]) => k);
+    if (srcs.length && $("#oLocal", card)?.checked && !$("#oLocalRow", card).hidden) { try { const r = await post("/api/import-chats", {sources: srcs}); if (r.imported) toast(`${r.imported.toLocaleString()} chats imported.`, 9000, {label: "Open", fn: () => openThread(r.ids[0])}); await loadThreads(); } catch (e) { /* the page can import later */ } }
     if (box?._import && !box.dataset.done && $$("[data-key]", box).some(x => x.checked)) { $("#oFinish", card).disabled = true; $("#oFinish", card).textContent = "Importing…"; await box._import(); }
     o.remove(); renderBar(); renderHero();
   };
@@ -2714,78 +2867,130 @@ async function checkUpdate(force) {
   await updStatus();
   return S.upd;
 }
-/* The background updater's state: downloading, ready ("Restart to update"), or an error. Polled quickly while it works. */
+/* The background updater's state: downloading, ready ("Restart to update"), installing, or an error. Polled quickly while it works. */
 async function updStatus() {
   try { S.ust = await post("/api/update/status", {}); } catch (e) { S.ust = null; }
-  renderUpdBar(); if ($("#updMore")) updatePanel(S.upd);
+  const c = S.ust?.check;       // a release only the background check found shows without a reload
+  if (c && (!S.upd || !S.upd.ok || (c.checked_at || 0) > (S.upd.checked_at || 0))) S.upd = Object.assign({}, c, {ok: true});
+  renderUpdBar(); if ($("#updMore") && !S.updBusy) updatePanel(curUpd());
   const r = S.ust?.last_result;
   if (r) toast(r.message || (r.ok ? "Meshpool was updated." : "The update did not finish."), r.ok ? 5000 : 12000);
   clearTimeout(S.ustT);
-  S.ustT = setTimeout(updStatus, ["downloading", "verifying", "staging", "checking"].includes(S.ust?.state) ? 3000 : 60000);
+  S.ustT = setTimeout(updStatus, ["downloading", "verifying", "staging", "checking", "installing"].includes(S.ust?.state) ? 3000 : 60000);
   return S.ust;
 }
 function updPct(s) { return s && s.total ? Math.min(99, Math.floor(100 * s.done / s.total)) : 0; }
+/* The release to talk about: the last check, or the one the updater's own state names. */
+function curUpd() {
+  const u = S.upd, s = S.ust;
+  if (s?.state === "available" && !(u?.ok && u.newer)) return {ok: true, newer: true, latest: s.latest || s.tag, current: s.current, url: s.url, kind: s.kind, pending_restart: false};
+  return u;
+}
+const updKind = () => curUpd()?.kind || S.ust?.kind || S.ust?.check?.kind || "";
+const updWhen = t => { if (!t) return ""; const d = new Date(t > 1e12 ? t : t * 1000); return isNaN(d) ? "" : d.toLocaleString([], {dateStyle: "medium", timeStyle: "short"}); };
 function renderUpdBar() {
   const bar = $("#updBar"); if (!bar) return;
-  const s = S.ust, u = S.upd;
-  if (s?.state === "ready") { bar.hidden = false; bar.dataset.act = "apply"; bar.innerHTML = `<span class="dot"></span>Update ready<span class="go">Restart</span>`; }
+  const s = S.ust, u = curUpd();
+  if (updKind() === "dev") bar.hidden = true;           // a git checkout updates with git pull, not from here
+  else if (s?.state === "installing") { bar.hidden = false; bar.dataset.act = "about"; bar.innerHTML = `<span class="dot"></span>Installing update...`; }
+  else if (s?.state === "ready") { bar.hidden = false; bar.dataset.act = "apply"; bar.innerHTML = `<span class="dot"></span>Update ready<span class="go">Restart</span>`; }
   else if (["downloading", "verifying", "staging"].includes(s?.state)) { bar.hidden = false; bar.dataset.act = "about"; bar.innerHTML = `<span class="dot"></span>Downloading update${s.state === "downloading" && s.total ? " " + updPct(s) + "%" : "..."}`; }
   else if (u?.ok && u.newer) { bar.hidden = false; bar.dataset.act = "about"; bar.innerHTML = `<span class="dot"></span>Meshpool ${esc(u.latest || "")} is available<span class="go">Update</span>`; }
   else bar.hidden = true;
 }
+async function bootId() {
+  try { const r = await fetch("/healthz", {cache: "no-store"}); if (r.ok) return (await r.json()).boot || null; } catch (e) {}
+  return null;
+}
+/* Wait for a new server process (a different boot id on /healthz), then reload. Never reloads on the old server. */
+function waitForNewServer(oldBoot, out) {
+  const t0 = Date.now(); let down = false;
+  const say = t => { if (out) out.textContent = t; else toast(t, 12000); };
+  return new Promise(resolve => {
+    const tick = async () => {
+      let b = null;
+      try { const r = await fetch("/healthz", {cache: "no-store"}); if (r.ok) b = (await r.json()).boot || null; else down = true; } catch (e) { down = true; }
+      if (b && (oldBoot ? b !== oldBoot : down)) { location.reload(); resolve(true); return; }
+      if (Date.now() - t0 < 90000) setTimeout(tick, 1000);
+      else { say("Meshpool closed. Open it again to use the new version."); resolve(false); }
+    };
+    setTimeout(tick, 1000);
+  });
+}
 async function applyUpdate() {
+  const before = await bootId();
   let r; try { r = await post("/api/update/apply", {}); } catch (e) { r = {ok: false, error: e.message}; }
   if (!r.ok) { toast(r.error || "Could not restart to update.", 8000); return; }
-  if (r.mode === "code") { restartApp(); return; }
+  if (r.mode === "code") { toast("Restarting Meshpool...", 60000); waitForNewServer(r.boot || before); return; }
   toast("Updating Meshpool. It reopens in a moment.", 60000);
 }
 function updatePanel(u) {
   const res = RES("updRes"), more = $("#updMore"); if (!res || !more) return;
   const s = S.ust || {}, st = s.settings || {};
-  const opts = `<div style="margin-top:12px"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="updAuto" ${st.auto_download === false ? "" : "checked"}> Download updates automatically</label><small style="color:var(--ink-3)">An update that is ready installs when you quit Meshpool, or when you press Restart.</small></div>`;
+  const cerr = s.check_error ? `<div><small style="color:var(--ink-3)">The last check for updates did not work: ${esc(s.check_error)}</small></div>` : "";
+  const opts = `<div style="margin-top:12px"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="updAuto" ${st.auto_download === false ? "" : "checked"}> Download updates automatically</label><small style="color:var(--ink-3)">An update that is ready installs when you quit Meshpool, or when you press Restart.</small></div>${cerr}`;
   const bindOpts = () => { const c = $("#updAuto"); if (c) c.onchange = () => post("/api/update/settings", {auto_download: c.checked}).catch(() => {}); };
-  if (s.state === "ready") { res.className = "res ok"; res.textContent = `Meshpool ${s.latest} is ready to install.`;
-    more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="updGo">Restart to update</button><a class="btn" href="${esc(s.url || "")}" target="_blank" rel="noopener">What's new</a></div>${opts}`;
+  const ver = s.latest || s.tag || u?.latest || "";
+  const link = url => url ? `<a class="btn" href="${esc(url)}" target="_blank" rel="noopener">What's new</a>` : "";
+  if (s.state === "installing") { res.className = "res"; res.textContent = `Installing Meshpool ${ver}. Meshpool restarts when it is done.`; more.innerHTML = opts; bindOpts(); return; }
+  if (s.state === "ready") {
+    const err = s.error || s.fail?.error || "";
+    if ((s.install_failures || 0) > 0) { res.className = "res bad"; res.textContent = `${err || "The last install did not finish."} It will not install automatically when you quit. Press Restart to try again.`; }
+    else { res.className = "res ok"; res.textContent = s.manual ? `Meshpool ${ver} is ready. It installs when you press Restart.` : `Meshpool ${ver} is ready to install.`; }
+    more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="updGo">Restart to update</button>${link(s.url)}</div>${opts}`;
     $("#updGo").onclick = applyUpdate; bindOpts(); return; }
-  if (["downloading", "verifying", "staging"].includes(s.state)) { res.className = "res"; res.textContent = s.state === "downloading" ? `Downloading Meshpool ${s.latest}${s.total ? " (" + updPct(s) + "%)" : ""}. You can keep working.` : `Checking Meshpool ${s.latest}...`; more.innerHTML = opts; bindOpts(); return; }
-  if (s.state === "error" && s.error && u?.newer !== false) { res.className = "res bad"; res.textContent = s.error;
-    more.innerHTML = `<div style="display:flex;gap:8px;margin-top:10px"><button class="btn" id="updGo">Try again</button>${s.url ? `<a class="btn" href="${esc(s.url)}" target="_blank" rel="noopener">Release page</a>` : ""}</div>${opts}`;
+  if (["downloading", "verifying", "staging"].includes(s.state)) { res.className = "res"; res.textContent = s.state === "downloading" ? `Downloading Meshpool ${ver}${s.total ? " (" + updPct(s) + "%)" : ""}. You can keep working.` : `Checking Meshpool ${ver}...`; more.innerHTML = opts; bindOpts(); return; }
+  if (s.state === "failed" || (s.state === "error" && s.error && u?.newer !== false)) {
+    const nt = updWhen(s.fail?.next_try || s.next_try);
+    res.className = "res bad"; res.textContent = s.error || s.fail?.error || "The update did not finish.";
+    more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn" id="updGo">Try again</button>${s.url ? `<a class="btn" href="${esc(s.url)}" target="_blank" rel="noopener">Release page</a>` : ""}${nt ? `<small id="updNext" style="color:var(--ink-3)">Meshpool tries again at ${esc(nt)}.</small>` : ""}</div>${opts}`;
     $("#updGo").onclick = async () => { await post("/api/update/download", {}).catch(() => {}); setTimeout(updStatus, 800); }; bindOpts(); return; }
-  if (!u) { res.textContent = ""; more.innerHTML = ""; return; }
-  if (!u.ok) { res.className = "res bad"; res.textContent = u.error; more.innerHTML = ""; return; }
+  if (s.state === "withdrawn") { res.className = "res bad"; res.textContent = s.error || `Meshpool ${ver} was withdrawn. Stay on your current version.`; more.innerHTML = opts; bindOpts(); return; }
+  if (!u) { res.textContent = ""; more.innerHTML = cerr; return; }
+  if (!u.ok) { res.className = "res bad"; res.textContent = u.error; more.innerHTML = cerr; return; }
   if (!u.newer) { res.className = "res ok"; res.textContent = `You have the latest version (${u.current}).`; more.innerHTML = opts; bindOpts(); return; }
+  const kind = u.kind || s.kind;
+  if (kind === "dev") {
+    res.className = "res"; res.textContent = `Meshpool ${u.latest} is available. This copy runs from a git checkout: run git pull in it to update.`;
+    more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn" id="updCopy">Copy</button>${link(u.url)}</div>${cerr}`;
+    $("#updCopy").onclick = () => { try { navigator.clipboard.writeText("git pull").then(() => toast("Copied: git pull"), () => toast("Could not copy.")); } catch (e) { toast("Could not copy."); } };
+    return; }
   res.className = "res"; res.textContent = `Meshpool ${u.latest} is available. You have ${u.current}.`;
-  const how = ["mac-app", "win-app"].includes(u.kind) ? "Downloads in the background; installs when you restart." : u.kind === "dev" ? "This is a git checkout: run git pull." : "Installs in place in under a minute, then restarts.";
-  more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px">${u.kind === "dev" ? "" : `<button class="btn primary" id="updGo">${["mac-app", "win-app"].includes(u.kind) ? "Download update" : "Update now"}</button>`}<a class="btn" href="${esc(u.url)}" target="_blank" rel="noopener">What's new</a><small style="color:var(--ink-3)">${esc(how)}</small></div><div class="res" id="updOut"></div>${["mac-app", "win-app"].includes(u.kind) ? opts : ""}`;
+  const how = ["mac-app", "win-app"].includes(kind) ? "Downloads in the background; installs when you restart." : "Installs in place in under a minute, then restarts.";
+  const busy = !!S.updBusy;
+  more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="updGo" ${busy ? `disabled title="Wait until the current work finishes."` : ""}>${busy ? "Installing..." : ["mac-app", "win-app"].includes(kind) ? "Download update" : "Update now"}</button>${link(u.url)}<small style="color:var(--ink-3)">${esc(how)}</small></div><div class="res" id="updOut"></div>${["mac-app", "win-app"].includes(kind) ? opts : cerr}`;
   bindOpts();
   const btn = $("#updGo"); if (!btn) return;
   btn.onclick = async () => {
-    const out = RES("updOut"); btn.disabled = true; btn.textContent = "Updating...";
+    const out = RES("updOut"); S.updBusy = true; btn.disabled = true; btn.textContent = "Installing...";
     out.className = "res"; out.textContent = "Starting the update.";
+    const before = await bootId();
     let r; try { r = await post("/api/update/install", {}); } catch (err) { r = {ok: false, error: err.message}; }
-    btn.disabled = false; btn.textContent = "Update now";
-    if (!r.ok) { out.className = "res bad"; out.textContent = r.error; return; }
-    out.className = "res ok"; out.textContent = r.message;
-    if (r.action === "downloading" || r.action === "ready") { btn.remove(); updStatus(); }
-    else if (r.action === "restart") { btn.textContent = "Restart now"; btn.onclick = restartApp; }
+    S.updBusy = false;
+    if (!r.ok) { btn.disabled = false; btn.textContent = ["mac-app", "win-app"].includes(kind) ? "Download update" : "Update now"; out.className = "res bad"; out.textContent = r.error; return; }
+    out.className = "res ok"; out.textContent = r.message || "Restarting Meshpool...";
+    if (r.action === "restarting") { btn.disabled = true; waitForNewServer(r.boot || before, out); }
+    else if (r.action === "downloading" || r.action === "ready") { btn.remove(); updStatus(); }
+    else if (r.action === "restart") { btn.disabled = false; btn.textContent = "Restart now"; btn.onclick = () => restartApp(); }
     else if (r.action !== "installer") btn.remove();
+    else { btn.disabled = false; btn.textContent = "Update now"; }
   };
 }
-async function restartApp() {
+async function restartApp(bootBefore) {
   const out = RES("updOut"); if (out) { out.className = "res"; out.textContent = "Restarting Meshpool..."; }
-  try { await post("/api/update/restart", {}); } catch (e) {}
-  const t0 = Date.now();
-  const wait = async () => { try { const r = await fetch("/healthz", {cache: "no-store"}); if (r.ok && Date.now() - t0 > 2500) { location.reload(); return; } } catch (e) {} if (Date.now() - t0 < 90000) setTimeout(wait, 1000); else if (out) out.textContent = "Meshpool closed. Open it again to use the new version."; };
-  setTimeout(wait, 1500);
+  const before = (typeof bootBefore === "string" && bootBefore) || await bootId();
+  let r = {}; try { r = await post("/api/update/restart", {}); } catch (e) {}
+  waitForNewServer(before || r.boot, out && out.id ? out : null);
 }
 
 /* ================================== boot ================================== */
 (async () => {
   shell();
   document.addEventListener("click", e => {          // the buttons that appear on hover under a message of yours
-    const ma = e.target.closest("[data-ma]"); const host = ma?.closest(".msg-user"); if (!host) return;   // other pages use data-ma too
-    const text = $(".b", host)?.innerText.replace(/^Plan mode\n?/, "").trim() || "";
+    const ma = e.target.closest("[data-ma]"); if (!ma || !ma.closest(".msg-user")) return;   // the MCP library's Add button also has data-ma
+    const text = $(".b", ma.closest(".msg-user"))?.innerText.replace(/^Plan mode\n?/, "").trim() || "";
     if (ma.dataset.ma === "copy") navigator.clipboard.writeText(text).then(() => toast("Copied"), () => toast("Could not copy."));
+    else if (ma.dataset.ma === "rewind" || ma.dataset.ma === "fork") rewindFork(ma.dataset.ma, ma.closest(".msg-user"));
     else { const i = $("#input"); i.value = text; i.focus(); i.dispatchEvent(new Event("input")); toast("Edit it and send to ask again.", 3500); }
   });
   document.addEventListener("click", e => { const b = e.target.closest(".flink, .outs [data-open]"); if (!b || !b.classList.contains("flink")) return;
@@ -2816,7 +3021,10 @@ async function restartApp() {
   window.addEventListener("focus", () => { loadPj().then(renderSide); });
   setupScroll();
   { const h = /^#settings\/([\w-]+)/.exec(location.hash); if (h && S.settings.ready) openSettings(h[1]); }      // a link to a settings page opens it
-  setInterval(() => { if (S.threads.some(t => ["working", "waiting"].includes(t.state))) loadThreads(); }, 4000);
+  // The sidebar list: every 4 s while something runs, every 20 s otherwise, never while the tab is hidden.
+  let thT = 0;
+  setInterval(() => { if (document.hidden) return; const run = S.threads.some(t => ["working", "waiting"].includes(t.state)); if (Date.now() - thT < (run ? 3500 : 20000)) return; thT = Date.now(); Promise.resolve(loadThreads()).catch(() => {}); }, 4000);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) return; thT = Date.now(); Promise.resolve(loadThreads()).catch(() => {}); wakeFrame(); const c = S.cur; if (c && !c.stage) { clearTimeout(c.pollT); c.quiet = 0; poll(); } });
 })();
 
 /* ---------- pull requests: the repository's pull requests, one in full with its diff, checks, runs and deployments ---------- */
@@ -2937,7 +3145,7 @@ async function prDetail() {
   $("#prvRev").onclick = () => { closePRView(); sendCmd(`Review pull request #${p.number} (${p.url}): ${p.head} into ${p.base}. Read its diff (git fetch, then git diff origin/${p.base}...origin/${p.head}, or the GitHub tools) and the changed files in full. Look for correctness bugs, security problems, missing tests and anything that would break on Mac or Windows. Report findings most severe first, each with file:line, what goes wrong and the fix. Do not change any files.`); };
   $("#prvAll").onclick = () => $$(".prv-file", M).forEach(d => d.open = true);
   $("#prvMerge")?.addEventListener("click", async () => {
-    if (!await ask({title: `Merge #${p.number}?`, text: `Squash and merge ${p.head} into ${p.base} on GitHub. Its checks passed.`, ok: "Merge"})) return;
+    if (!await ask({title: `Merge #${p.number}?`, text: `Squash and merge ${p.head} into ${p.base} on GitHub. ${p.verdict === "none" ? "No checks have run." : "Its checks passed."}`, ok: "Merge"})) return;
     try { await post("/api/git/pr", {root: PRV.root, action: "merge", pr: p.number}); toast("Pull request merged"); prLoad(true); } catch (e) { toast(e.message, 6000); }
   });
   $("#prvCmGo")?.addEventListener("click", async () => {

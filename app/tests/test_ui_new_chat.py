@@ -158,8 +158,11 @@ def test_a_folder_saved_as_a_click_event_by_an_earlier_version_is_ignored(app):
             localStorage.setItem('mp_project', JSON.stringify({isTrusted: true})); } catch (e) {}""")
         pg.goto(app["base"] + "/")
         pg.wait_for_function("() => typeof S === 'object' && S.projects && S.projects.length > 0", timeout=30000)
-        pg.wait_for_selector("#col .hero", timeout=30000)
+        # The app reopens a chat that is still working (the previous test's second chat, on a loaded machine) instead of
+        # showing the home screen: either way the page is up. New chat must reach the home screen from both.
+        pg.wait_for_selector("#col .hero, #col .msg-user", timeout=30000)
         pg.click("#newThread")
+        pg.wait_for_selector("#col .hero", timeout=30000)
         pg.wait_for_timeout(300)
         assert errors == [], errors
         assert pg.evaluate("typeof S.draft.project") == "string"   # the old click event is not used as a folder

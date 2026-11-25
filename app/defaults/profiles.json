@@ -1,5 +1,5 @@
 {
- "default": "codex",
+ "default": "core",
  "assign": {},
  "profiles": {
   "full-noplan": {
@@ -22,7 +22,15 @@
    "step_methods": false,
    "methods": "v2-stop",
    "engine_style": "codex"
+  },
+  "core": {
+   "extends": "codex",
+   "lean_core": true
+  },
+  "c171": {
+   "extends": "codex",
+   "codex171": true
   }
  },
- "_source": "Codex-design engine for every route: measured on the 52 eval tasks (runs-v2/codexengine-eval): 47/52, tie with Codex (47/52), $0.0034/task, median 19 s; 2x faster than the previous assignment. See docs/results/v3/CODEX_ENGINE_EVAL.md"
+ "_source": "Lean core for every code route (docs/design/lean-core.md): Codex's design with a short codex-tuned prompt, workspace preload, re-check on edit and no extra verification layers. Measured on the 52 eval tasks, paired against Codex 0.171 on the same model, 3 rounds (docs/results/final20-22, verified in docs/results/verify-final20-22.md): 294/312 vs 280/312 solved, cost per solved 0.77x (95% CI 0.64-0.89), median per-task time 0.74x. The previous default is kept as the \"codex\" profile (MH_PROFILE=codex)."
 }

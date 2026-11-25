@@ -17,6 +17,7 @@ data folder: delete projects/ to roll back.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -28,6 +29,7 @@ import uuid
 from pathlib import Path
 
 from meshpool_harness import config as C
+from meshpool_harness import fsio
 
 ID_RX = re.compile(r"p_[0-9a-f]{10}")
 NAME_MAX, DESC_MAX, INSTR_MAX = 80, 400, 8000
@@ -38,7 +40,38 @@ CHUNK = 1200
 CTX_FILES = 6000                          # characters of knowledge text put into a chat's first message
 CTX_WHOLE = 1500                          # a file this small goes in whole
 
-_LOCK = threading.RLock()
+class _XLock:
+    """The project store's lock: re-entrant inside a thread, and held across processes (the app, a second window, the
+    assistant's tools) on a lock file in the data folder (M20-05)."""
+
+    def __init__(self):
+        self._r = threading.RLock()
+        self._depth = 0
+        self._cm = None
+
+    def __enter__(self):
+        self._r.acquire()
+        try:
+            if self._depth == 0:
+                self._cm = fsio.file_lock(root() / ".store")
+                self._cm.__enter__()
+            self._depth += 1
+        except BaseException:
+            self._r.release()
+            raise
+        return self
+
+    def __exit__(self, *exc):
+        self._depth -= 1
+        try:
+            if self._depth == 0:
+                cm, self._cm = self._cm, None
+                cm.__exit__(*exc)
+        finally:
+            self._r.release()
+
+
+_LOCK = _XLock()
 
 
 # ---------- paths ----------------------------------------------------------------------------------------------------
@@ -71,17 +104,25 @@ def _read(p: Path) -> str:
 
 
 def _write(p: Path, text: str) -> None:
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(f".{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-    tmp.write_text(text, encoding="utf-8")
-    C.replace_file(tmp, p)
+    fsio.atomic_write_text(p, text, private=True)
 
 
 def _meta(d: Path) -> dict:
     try:
-        return json.loads((d / "project.json").read_text(encoding="utf-8"))
+        m = json.loads((d / "project.json").read_text(encoding="utf-8"))
+        return m if isinstance(m, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def _meta_rw(d: Path) -> dict:
+    """The project's record for a change: a damaged one raises instead of reading as empty, so a save never replaces a
+    project with a stub."""
+    try:
+        m = fsio.read_json(d / "project.json", default={})
+    except fsio.CorruptFile as e:
+        raise ValueError("This project's file is damaged, so it was not changed. Restore project.json from a backup.") from e
+    return m if isinstance(m, dict) else {}
 
 
 def _save_meta(d: Path, m: dict) -> None:
@@ -174,7 +215,7 @@ def detail(pid: str) -> dict:
 def update(pid: str, **kw) -> dict:
     with _LOCK:
         d = _exists(pid)
-        m = _meta(d)
+        m = _meta_rw(d)
         if "name" in kw and kw["name"] is not None:
             nm = " ".join(str(kw["name"]).split())[:NAME_MAX]
             if not nm:
@@ -215,10 +256,11 @@ def get_meta(pid: str) -> dict:
 
 def touch(pid: str) -> None:
     try:
-        d = _exists(pid)
-        m = _meta(d)
-        m["updated"] = time.time()
-        _save_meta(d, m)
+        with _LOCK:
+            d = _exists(pid)
+            m = _meta_rw(d)
+            m["updated"] = time.time()
+            _save_meta(d, m)
     except (KeyError, ValueError, OSError):
         pass
 
@@ -279,8 +321,19 @@ def _kdir(pid: str) -> Path:
     return _exists(pid) / "knowledge"
 
 
+_RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
+
+
 def _safe_name(name: str) -> str:
-    return re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", Path(name or "file").name).strip(". ") or "file"
+    n = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", Path(name or "file").name).rstrip(". ")
+    if n in (".", ".."):
+        n = ""
+    if n.partition(".")[0].lower() in _RESERVED:           # CON, NUL, PRN ... cannot be file names on Windows
+        n = "_" + n
+    if len(n) > 120:                                       # keep the extension, cut the middle
+        stem, dot, ext = n.rpartition(".")
+        n = (stem[:100] + dot + ext[:15]) if dot and len(ext) <= 15 and stem else n[:120]
+    return n or "file"
 
 
 def _index(d: Path) -> dict:
@@ -345,8 +398,7 @@ def knowledge_add(pid: str, name: str, data: bytes) -> dict:
             raise ValueError(f"A project holds up to {PROJECT_FILES_MAX} files. Remove one first.")
         k.mkdir(parents=True, exist_ok=True)
         p = k / name
-        with open(p, "wb") as f:
-            f.write(data)
+        fsio.atomic_write_bytes(p, data, private=True)
         text = _text_of(p)
         idx[name] = {"size": len(data), "hash": hashlib.sha1(data).hexdigest()[:16], "added": time.time(),
                      "chars": len(text), "chunks": _chunks(text)[:200], "head": " ".join(text[:240].split())}
@@ -482,6 +534,38 @@ def new_scratch(pid: str = "") -> str:
     return str(d.resolve())
 
 
+def rebind_chat(path: str, pid: str) -> None:
+    """A chat moved to another project (or out of one): its own folder points at the new project, and the old
+    project's knowledge copies are replaced by the new one's (M20-01). A linked folder is the person's own: untouched."""
+    if not path or not is_scratch(path):
+        return
+    d = Path(path).expanduser().resolve()
+    mark = d / ".project"
+    old = _read(mark).strip()
+    if old == (pid or ""):
+        return
+    if old and ID_RX.fullmatch(old):                        # copies made from the old project's knowledge go
+        try:
+            k = _kdir(old)
+            for n in list(_index(root() / old)):
+                if (d / "knowledge" / n).is_file() and (k / n).is_file():
+                    (d / "knowledge" / n).unlink()
+        except (OSError, KeyError, ValueError):
+            pass
+    if not pid:
+        with contextlib.suppress(OSError):
+            mark.unlink()
+        return
+    _exists(pid)
+    mark.write_text(pid, encoding="utf-8")
+    k = _kdir(pid)
+    for n in _index(_exists(pid)):
+        if (k / n).is_file():
+            (d / "knowledge").mkdir(exist_ok=True)
+            with contextlib.suppress(OSError):
+                shutil.copy2(k / n, d / "knowledge" / n)
+
+
 def is_scratch(path: str) -> bool:
     try:
         p = Path(path).expanduser().resolve()
@@ -535,9 +619,17 @@ def migrate(extra_paths=()) -> list[dict]:
                 names[r["path"]] = r.get("name") or Path(r["path"]).name
         except Exception:  # noqa: BLE001
             pass
+        listed = [Path(x).expanduser() for x in names]            # what the old app called a project
         for p in extra_paths:
-            if p and p not in names:
-                names[str(p)] = Path(p).name
+            # A chat's folder counts only when it sits in a folder the old app listed as a project; a plain folder
+            # a chat once worked in is not a project (M20-07).
+            try:
+                rp = Path(p).expanduser().resolve()
+            except (OSError, TypeError):
+                continue
+            hit = next((q for q in listed if q.resolve() == rp or q.resolve() in rp.parents), None)
+            if hit is not None and str(hit) not in names:
+                names[str(hit)] = hit.name
         made = []
         for path, name in names.items():
             try:
@@ -566,3 +658,28 @@ def migrate(extra_paths=()) -> list[dict]:
             made.append(proj)
         _write(_migrated_file(), json.dumps({"version": 1, "paths": seen}, indent=1))
         return made
+
+
+def api_action(pid: str, b: dict) -> dict:
+    """The /api/pj/<id> POST body (app and `meshpool projects`): update, delete, memory and knowledge actions."""
+    act = b.get("action", "update")
+    if act == "update":
+        kw = {k: b[k] for k in ("name", "description", "instructions", "link", "pinned") if k in b}
+        return update(pid, **kw)
+    if act == "delete":
+        delete(pid)
+        return {"ok": True}
+    if act == "memory_set":
+        memory_set(pid, b.get("text", ""))
+    elif act == "memory_add":
+        memory_add(pid, b.get("text", ""))
+    elif act == "memory_clear":
+        memory_clear(pid)
+    elif act == "knowledge_add":
+        import base64
+        knowledge_add(pid, b.get("name", ""), base64.b64decode(b.get("data", "")))
+    elif act == "knowledge_remove":
+        knowledge_remove(pid, b.get("name", ""))
+    else:
+        raise ValueError("Unknown project action.")
+    return detail(pid)

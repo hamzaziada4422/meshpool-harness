@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 from pathlib import Path
 
 from meshpool_harness import config as C
@@ -41,7 +42,7 @@ CODEX = {"id": "codex", "name": "Codex", "mode": "code", "type": "acp", "models"
          # Codex's read-only mode refuses to edit rather than asking; in Workspace access it edits the project and
          # asks before anything outside it. Meshpool's Undo covers every change.
          "modes": {"ask": "workspace-write", "edits": "workspace-write", "auto": "agent-full-access"},
-         "command": "npx", "args": ["-y", CODEX_ACP], "share_mcp": True, "install": NODE_NOTE,
+         "command": "npx", "args": ["-y", CODEX_ACP], "share_mcp": True, "lean": True, "install": NODE_NOTE,
          "tagline": "Terminal and command-line work, on GPT models",
          "description": ("Best for terminal and command-line work. OpenAI's open-source Codex agent, on your Meshpool "
                          "key, another API key or your ChatGPT sign-in. It edits files in your project without "
@@ -54,6 +55,7 @@ MODES = ("code", "cowork")
 # OpenCode: the open-source coding agent, over ACP (`opencode acp`). It runs on the same providers as Meshpool's own
 # agents: its config in the Meshpool data folder points it at the key endpoint or at the local ChatGPT relay.
 OPENCODE_PKG = "opencode-ai@1.19.5"
+CODEX_CLI = "@openai/codex@latest"          # only its `login` is used
 OPENCODE = {"id": "opencode", "name": "OpenCode", "mode": "code", "type": "acp", "models": "meshpool",
             "command": "npx", "args": ["-y", OPENCODE_PKG, "acp"], "share_mcp": True, "install": NODE_NOTE,
             "tagline": "The open-source coding agent, with its own tools and plans",
@@ -114,47 +116,100 @@ def user_codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 
 
-def prepare_codex(model: str | None = None) -> None:
-    """Point Codex at the API key endpoint and model (its own config.toml in the Meshpool data folder). Codex reads
-    the key from MESHPOOL_API_KEY in its own environment (set by _launch), never from the file."""
+def _chat_dir(base: Path, chat: str) -> Path:
+    import re
+    return base / "chats" / re.sub(r"[^\w.-]", "_", chat) if chat else base
+
+
+def prune_codex_homes(max_age_days: float = 30, now: float | None = None) -> list[str]:
+    """OSS-36: per-chat CODEX_HOME folders pile up (one per chat, forever). Remove those of chats that no longer exist
+    and those not touched for max_age_days. Returns the names removed. Called at start-up."""
+    import re
+    import shutil
+    import time
+    base = codex_home() / "chats"
+    if not base.is_dir():
+        return []
+    sess = C.runs_dir() / "sessions"
+    live = {re.sub(r"[^\w.-]", "_", d.name) for d in sess.iterdir()} if sess.is_dir() else None
+    cutoff = (now or time.time()) - max_age_days * 86400
+    gone = []
+    for d in base.iterdir():
+        try:
+            if d.is_dir() and ((live is not None and d.name not in live) or d.stat().st_mtime < cutoff):
+                shutil.rmtree(d, ignore_errors=True)
+                gone.append(d.name)
+        except OSError:
+            pass
+    return gone
+
+
+_SANDBOX_FAIL = (
+    "bwrap:", "No permissions to create new namespace", "creating new namespace", "unshare: ", "Can't mount proc",
+    "Failed RTM_NEWADDR", "sandbox setup", "sandbox failed", "failed to set up the sandbox", "CreateRestrictedToken",
+    "windows sandbox", "setup_refresh", "ACL", "landlock", "seccomp", "Sandbox(", "sandbox denied")
+
+
+def codex_sandbox_failure(text: str, platform: str | None = None) -> str | None:
+    """OSS-02: Codex's own sandbox could not start (Windows ACLs, bubblewrap inside a container or another bwrap, a
+    kernel without user namespaces). Returns the plain-language note for the user, or None when the text is something else."""
+    t = str(text or "")
+    low = t.lower()
+    if not any(k.lower() in low for k in _SANDBOX_FAIL) or ("sandbox" not in low and "bwrap" not in low and "namespace" not in low and "acl" not in low):
+        return None
+    win = (platform or sys.platform).startswith("win")
+    return ("Codex could not start its own sandbox on this computer" + (" (Windows file permissions block it)" if win else
+            " (it needs bubblewrap and user namespaces, which are not available here)") + ". Its commands did not run. "
+            + ("Switch this chat to Full access to run Codex without its sandbox, or use the Meshpool agent: the command sandbox "
+               "is not available on Windows either, so approvals and Undo are the safety net." if win else
+               "Switch this chat to Full access to run Codex without its sandbox (Meshpool's Undo still covers the edits), "
+               "or use the Meshpool agent, which runs commands in its own sandbox."))
+
+
+def prepare_codex(model: str | None = None, chat: str = "") -> dict:
+    """Point Codex at the API key endpoint and model: its own config.toml, in a folder of the chat's own (its
+    CODEX_HOME), so chats starting at once never run on each other's model. Codex reads the key from MESHPOOL_API_KEY
+    in its own environment (set by _launch), never from the file. Returns the environment that points Codex there."""
     from meshpool_harness import providers as PV
-    home = codex_home()
+    home = _chat_dir(codex_home(), chat)
     home.mkdir(parents=True, exist_ok=True)
     base = PV.key_base()
     prov, bare = PV.split(model or os.environ.get("MH_MODEL") or "")
     model = bare if prov == "key" and bare else "deepseek-v4.1-flash"
     q = lambda v: '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+    from meshpool_harness import fsio
     extra = ""
     if PV.key_kind() == "azure-classic":       # Codex's documented Azure provider: base .../openai and an api-version
         from meshpool_harness.core import endpoint as EP
         base = base.rstrip("/") + "/openai"
         extra = f"query_params = {{ api-version = {q(PV.key_api_version() or EP.AZURE_DEFAULT_VERSION)} }}\n"
-    (home / "config.toml").write_text(
+    fsio.atomic_write_text(home / "config.toml",
         f"model = {q(model)}\nmodel_provider = \"meshpool\"\nmodel_context_window = 128000\n"
         "\n"
         f"[model_providers.meshpool]\nname = \"Meshpool\"\nbase_url = {q(base)}\nenv_key = \"MESHPOOL_API_KEY\"\n"
-        f"{extra}wire_api = \"responses\"\nrequest_max_retries = 6\nstream_max_retries = 6\n", encoding="utf-8")
+        f"{extra}wire_api = \"responses\"\nrequest_max_retries = 6\nstream_max_retries = 6\n", fsync=False)
+    return {"CODEX_HOME": str(home)}
 
 
 def write_private(p: Path, text: str) -> None:
-    """Write a file only the user can read (it holds a key or tokens): created 0600, never readable by others first."""
+    """Write a file only the user can read (it holds a key or tokens): written to a 0600 temp file and moved into
+    place, so it is never readable by others and a reader never sees it half written."""
+    from meshpool_harness import fsio
+    fsio.atomic_write_text(p, text, fsync=False, private=True)       # 0600 from the first byte
     try:
-        if p.exists():
-            os.chmod(p, 0o600)               # narrow an older file before the new secret goes in
+        os.chmod(p, 0o600)
     except OSError:
         pass
-    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(text)
 
 
 def opencode_home() -> Path:
     return C.home() / "opencode"
 
 
-def prepare_opencode(model: str | None = None) -> dict:
-    """Write OpenCode's config for the thread's provider and model; returns the extra environment it needs. The key
-    stays in the environment ({env:...} in the config), never in the file."""
+def prepare_opencode(model: str | None = None, chat: str = "") -> dict:
+    """Write OpenCode's config for the thread's provider and model (a file of the chat's own, so chats starting at
+    once never read each other's); returns the extra environment it needs. The key stays in the environment
+    ({env:...} in the config), never in the file."""
     from meshpool_harness import providers as PV
     prov, bare = PV.split(model or os.environ.get("MH_MODEL") or "")
     env = {}
@@ -174,13 +229,22 @@ def prepare_opencode(model: str | None = None) -> dict:
                                      "options": {"baseURL": base, "apiKey": "{env:" + key_env + "}"},
                                      "models": {bare: {"name": bare}}}},
            "model": f"meshpool/{bare}"}
-    (home / "opencode.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
-    return env
+    path = (_chat_dir(home, chat) / "opencode.json") if chat else home / "opencode.json"
+    from meshpool_harness import fsio
+    fsio.atomic_write_text(path, json.dumps(cfg, indent=2), fsync=False)
+    return {**env, "OPENCODE_CONFIG": str(path)}
 
 
-def prepare_hermes(model: str | None = None) -> None:
-    """Point the bundled Hermes at the thread's provider (the key endpoint or the ChatGPT relay), model and key
-    (written to its own config in the Meshpool data folder, next to meshpool.config)."""
+HERMES_ENV = {"base_url": "MESHPOOL_HERMES_BASE_URL", "default": "MESHPOOL_HERMES_MODEL",
+              "api_key": "MESHPOOL_HERMES_API_KEY", "api_mode": "MESHPOOL_HERMES_API_MODE"}
+
+
+def prepare_hermes(model: str | None = None) -> dict:
+    """Point the bundled Hermes at the thread's provider (the key endpoint or the ChatGPT relay), model and key.
+    Every chat runs its own Hermes on one HERMES_HOME (its memory is shared across chats), and Hermes re-reads
+    config.yaml whenever the file changes. So the file names no provider: it holds ${VAR} references that each Hermes
+    resolves from its own environment, which this returns. The file is the same for every chat and is rewritten
+    (atomically) only when it changes."""
     from meshpool_harness import providers as PV
     import yaml
     home = hermes_home()
@@ -195,14 +259,13 @@ def prepare_hermes(model: str | None = None) -> None:
     prov = PV.for_harness("hermes", model or os.environ.get("MH_MODEL")) or "key"
     base, key = PV.agent_endpoint(prov)         # the key endpoint, or the local relay when it needs more than Bearer
     p_, bare = PV.split(model or os.environ.get("MH_MODEL") or "")
-    m.update({"provider": "custom", "base_url": base,
-              "default": bare if p_ == prov and bare else "deepseek-v4.1-flash",
-              "api_key": key})
+    env = {HERMES_ENV["base_url"]: base, HERMES_ENV["default"]: bare if p_ == prov and bare else "deepseek-v4.1-flash",
+           HERMES_ENV["api_key"]: key or "",
+           # an Anthropic Messages endpoint (Hermes strips the /v1 itself), else chat completions
+           HERMES_ENV["api_mode"]: "anthropic_messages" if prov == "key" and PV.key_wire() == "anthropic"
+           else "chat_completions"}
+    m.update({"provider": "custom", **{k: "${" + v + "}" for k, v in HERMES_ENV.items()}})
     m.pop("key_env", None)
-    if prov == "key" and PV.key_wire() == "anthropic":
-        m["api_mode"] = "anthropic_messages"    # an Anthropic Messages endpoint (Hermes strips the /v1 itself)
-    else:
-        m.pop("api_mode", None)                 # chat completions; never a mode left from an earlier endpoint
     cfg["model"] = m
     tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
     ts = tools.get("tool_search") if isinstance(tools.get("tool_search"), dict) else {}
@@ -223,13 +286,21 @@ def prepare_hermes(model: str | None = None) -> None:
     # write-ahead log the others still held, and Hermes then refused to open the database for every chat.
     db["journal_mode"] = "delete"
     cfg["database"] = db
+    from meshpool_harness import fsio
     try:
         from meshpool_harness import skills as SK
-        SK.sync_to(home / "skills" / "meshpool")           # the user's Meshpool skills, for Hermes too
+        with fsio.file_lock(home / "skills"):              # two launches must not copy over each other
+            SK.sync_to(home / "skills" / "meshpool")       # the user's Meshpool skills, for Hermes too
     except Exception:
         pass
     text = yaml.safe_dump(cfg, sort_keys=False)
-    write_private(p, text)
+    with fsio.file_lock(p):
+        try:
+            same = p.read_text(encoding="utf-8") == text
+        except OSError:
+            same = False
+        if not same:                                       # an unchanged file keeps its mtime: no re-read
+            write_private(p, text)
     # Hermes keeps a "last known good" copy of config.yaml and skips the copy when the newest one matches.
     # Writing it here keeps Hermes off shutil.copy2 at startup (CopyFile2 is missing on some Windows
     # compatibility layers) and keeps the backup folder from filling with one copy per launch.
@@ -245,6 +316,16 @@ def prepare_hermes(model: str | None = None) -> None:
                 stale.unlink(missing_ok=True)
     except OSError:
         pass
+    return env
+
+
+def hermes_model(env: dict) -> dict:
+    """The model section of Hermes's config.yaml as a Hermes started with env (prepare_hermes's result) reads it."""
+    import re
+    import yaml
+    m = (yaml.safe_load((hermes_home() / "config.yaml").read_text(encoding="utf-8")) or {}).get("model") or {}
+    return {k: re.sub(r"\$\{([^}]+)\}", lambda g: env.get(g.group(1), g.group(0)), v) if isinstance(v, str) else v
+            for k, v in m.items()}
 
 
 def folder() -> Path:
@@ -362,7 +443,8 @@ def signed_in(which: str) -> bool:
     """Whether the Codex (ChatGPT) sign-in already exists on this computer (it never reads the secret)."""
     try:
         if which == "codex":
-            return (user_codex_home() / "auth.json").is_file()
+            from meshpool_harness.core import chatgpt as CG
+            return bool(CG.signin_state()["ok"])      # a rejected or API-key sign-in is not a ready one
     except Exception:  # noqa: BLE001
         return False
     return False
@@ -372,17 +454,164 @@ def npx() -> str:
     return shutil.which("npx") or "npx"       # source checkouts only: the packaged app has no Codex
 
 
-def login(which: str) -> dict:
-    """Start the official ChatGPT sign-in (Codex's own login), which opens the browser by itself."""
+LOGIN_TIMEOUT_S = 600                     # an abandoned ChatGPT sign-in is stopped after this long
+_LOGIN: dict = {"proc": None}             # the `npx codex login` this process started
+_LOGIN_LOCK = threading.Lock()
+_LOGIN_ATEXIT = [False]
+
+
+def _login_file() -> Path:
+    return C.home() / "codex-login.json"
+
+
+def _pid_alive(pid: int) -> bool:
+    """Whether a process with this pid is running (a zombie is not)."""
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if os.name == "nt":
+        import subprocess
+        try:
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True,
+                                 timeout=10, creationflags=0x08000000).stdout
+        except Exception:  # noqa: BLE001
+            return False
+        return str(pid) in out
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as f:
+            return f.read().rsplit(b")", 1)[1].split()[0] != b"Z"
+    except (OSError, IndexError):
+        return True
+
+
+def _kill_tree(proc) -> None:
+    """Stop a sign-in and everything it started (npx -> node -> codex)."""
     import subprocess
+    pid = proc.pid
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, creationflags=0x08000000)
+    else:
+        import signal
+        import time
+        try:
+            os.killpg(pid, signal.SIGTERM)       # it is its own group leader (start_new_session)
+        except (ProcessLookupError, PermissionError):
+            pass
+        end = time.monotonic() + 2
+        while time.monotonic() < end:
+            try:
+                proc.wait(timeout=0.1)
+            except subprocess.TimeoutExpired:
+                continue
+            try:
+                os.killpg(pid, 0)                # leader gone: wait for the rest of the group too
+            except (ProcessLookupError, PermissionError):
+                break
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    try:
+        proc.wait(timeout=5)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _clear_login(proc) -> None:
+    """Forget this sign-in: the state and its pid file (only if the file is still ours)."""
+    from meshpool_harness import fsio
+    with _LOGIN_LOCK:
+        if _LOGIN["proc"] is proc:
+            _LOGIN["proc"] = None
+    try:
+        with fsio.file_lock(_login_file(), timeout=5):
+            rec = fsio.read_json(_login_file(), None)
+            if isinstance(rec, dict) and rec.get("pid") == proc.pid:
+                _login_file().unlink(missing_ok=True)
+    except (TimeoutError, OSError, ValueError, fsio.CorruptFile):
+        pass
+
+
+def _login_watchdog(proc) -> None:
+    """Wait for the sign-in; stop it after LOGIN_TIMEOUT_S; either way clear the state when it is over."""
+    import subprocess
+    try:
+        proc.wait(timeout=LOGIN_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+    except Exception:  # noqa: BLE001
+        pass
+    _clear_login(proc)
+
+
+def stop_login() -> None:
+    """Stop the ChatGPT sign-in this app started, with its whole process tree. Called when the app quits."""
+    with _LOGIN_LOCK:
+        proc, _LOGIN["proc"] = _LOGIN["proc"], None
+    if proc is None:
+        return
+    if proc.poll() is None:
+        _kill_tree(proc)
+    _clear_login(proc)
+
+
+def _login_running() -> bool:
+    """A sign-in is open: started by this process, or by another Meshpool (its pid file names a live process)."""
+    from meshpool_harness import fsio
+    proc = _LOGIN["proc"]
+    if proc is not None and proc.poll() is None:
+        return True
+    try:
+        rec = fsio.read_json(_login_file(), None)
+    except fsio.CorruptFile:                      # a damaged record names no sign-in
+        return False
+    # A record older than the timeout is stale even if its pid now belongs to an unrelated process.
+    import time
+    fresh = isinstance(rec, dict) and time.time() - float(rec.get("started") or 0) < LOGIN_TIMEOUT_S + 60
+    return fresh and _pid_alive(rec.get("pid"))
+
+
+def login(which: str) -> dict:
+    """Start the official ChatGPT sign-in (Codex's own login), which opens the browser by itself. One at a time: a
+    second click (or a second Meshpool) finds it running instead of fighting it for the sign-in port."""
+    import subprocess
+    import time
+    from meshpool_harness import fsio
     if which == "codex" and unsupported("codex"):      # Codex's sign-in is not part of the packaged app
         raise ValueError("Signing in with ChatGPT needs Codex, which is not part of the Meshpool app. Use the Meshpool "
                          "API key or another API key, or sign in once with `codex login` from a terminal "
                          "(npm install -g @openai/codex): Meshpool then uses that sign-in.")
     if which == "codex":
-        cmd = [npx(), "-y", "@openai/codex@latest", "login"]
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
-                         **({"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}))
+        if not shutil.which("npx"):
+            raise ValueError("Signing in with ChatGPT needs Node.js (npx), which was not found. Install Node.js, or use "
+                             "an API key instead.")
+        cmd = [npx(), "-y", CODEX_CLI, "login"]
+        try:
+            with _LOGIN_LOCK, fsio.file_lock(_login_file(), timeout=10):
+                if _login_running():
+                    return {"ok": True, "already": True,
+                            "message": "The ChatGPT sign-in is already open in your browser. Finish it there, or wait "
+                                       "a moment and try again."}
+                flags = {"creationflags": 0x08000000 | 0x00000200} if os.name == "nt" else {"start_new_session": True}
+                try:
+                    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                            stdin=subprocess.DEVNULL, **flags)
+                except OSError as e:
+                    raise ValueError(f"Could not start the sign-in: {e}")
+                _LOGIN["proc"] = proc
+                fsio.atomic_write_json(_login_file(), {"pid": proc.pid, "started": time.time()})
+        except TimeoutError:
+            raise ValueError("Another sign-in is starting. Try again in a moment.")
+        threading.Thread(target=_login_watchdog, args=(proc,), daemon=True).start()
+        if not _LOGIN_ATEXIT[0]:
+            import atexit
+            _LOGIN_ATEXIT[0] = True
+            atexit.register(stop_login)
         return {"ok": True, "message": "Your browser opens for the ChatGPT sign-in. Come back here when it says you "
                                        "are signed in."}
     raise ValueError("Unknown sign-in.")
@@ -427,7 +656,19 @@ def default_for(mode: str) -> str:
         return want
     # Meshpool's own harnesses are the defaults: they passed every task in the practical check (13 Nov 2026) and
     # need nothing else installed. Hermes and the others stay one click away in the harness picker.
+    return builtin_for(mode)
+
+
+def builtin_for(mode: str) -> str:
+    """The mode's own agent: the one place that names it (Auto's way back and default_for read it)."""
     return "meshpool-code" if mode == "code" else "meshpool-work"
+
+
+def own_for(mode: str) -> str:
+    """The agent a chat in this mode goes back to from an Auto pick: the user's default, or the mode's own agent when
+    that default is Auto itself."""
+    hid = default_for(mode)
+    return builtin_for(mode) if hid == AUTO["id"] else hid
 
 
 def add(text: str) -> dict:
@@ -528,9 +769,8 @@ def credentials(hid: str, model: str | None = None) -> dict:
     return out
 
 
-def use_provider(which: str) -> None:
-    """Save the provider chosen at sign-up and pick the defaults from it: its models become the default model, and
-    Meshpool Code and Work stay the default agents."""
+def provider_values(which: str) -> dict:
+    """What choosing a provider writes to the settings: the provider, the default agents and a model that fits it."""
     if which not in PROVIDER_NAMES:
         raise ValueError(f"Unknown provider: {which}")
     vals = {"MH_PROVIDER": which, "MH_HARNESS_CODE": "", "MH_HARNESS_COWORK": ""}
@@ -541,14 +781,24 @@ def use_provider(which: str) -> None:
             vals["MH_MODEL"] = "chatgpt:" + CG.default_model()
     elif which in ("meshpool", "custom") and cur.startswith("chatgpt:"):
         vals["MH_MODEL"] = ""                   # back to the key endpoint's default model
+    return vals
+
+
+def apply_env(vals: dict) -> None:
+    """Mirror settings just written into this process."""
+    for k, v in vals.items():
+        if v:
+            os.environ[k] = v
+        elif k != "MH_PROVIDER":
+            os.environ.pop(k, None)
+
+
+def use_provider(which: str) -> None:
+    """Save the provider chosen at sign-up and pick the defaults from it: its models become the default model, and
+    Meshpool Code and Work stay the default agents."""
+    vals = provider_values(which)
     C.write(vals)
-    os.environ["MH_PROVIDER"] = which
-    for k in ("MH_HARNESS_CODE", "MH_HARNESS_COWORK", "MH_MODEL"):
-        if k in vals:
-            if vals[k]:
-                os.environ[k] = vals[k]
-            else:
-                os.environ.pop(k, None)
+    apply_env(vals)
 
 
 def ready() -> bool:

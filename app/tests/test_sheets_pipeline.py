@@ -80,3 +80,15 @@ def test_the_pipeline_revises_its_inputs_with_the_reviewers_issues(tmp_path, mon
     out = E._pipeline("capital allocation model for Costco", ws, Model(), "m", "t", Review())
     assert len(asked) == 2 and "unsourced growth" in asked[1] and "anchor on the 3-year history" in asked[1]
     assert out["ok"] and "best round 2" in out["answer"]
+
+
+def test_dossier_brief_skips_a_csv_report_without_any_model_call(monkeypatch, tmp_path):
+    """Input workbook/csv and no valuation words: no identify call, no research (only the new gate stops it)."""
+    from engines.forge import research as RS
+    from engines.sheets import engine as E
+    from meshpool_harness.core.client import MockClient
+    monkeypatch.setattr(RS, "allowed", lambda *a, **k: (True, ""))
+    c = MockClient([])
+    out = E.dossier_brief("From sales.csv make a report workbook", str(tmp_path), c, "m", "t",
+                          files=[str(tmp_path / "sales.csv")])
+    assert out == "" and not c.requests
