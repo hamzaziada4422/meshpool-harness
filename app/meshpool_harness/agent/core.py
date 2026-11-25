@@ -774,6 +774,21 @@ def _budget_usd() -> float:
         return 0.0
 
 
+_RID_HEADERS = ("x-request-id", "request-id", "x-litellm-call-id", "openai-request-id", "x-amzn-requestid", "cf-ray")
+
+
+def _request_id(headers) -> str:
+    """The provider's id for a request, for support: the first of the usual headers that is there."""
+    try:
+        for h in _RID_HEADERS:
+            v = headers.get(h) if headers is not None else None
+            if v:
+                return str(v)[:120]
+    except (AttributeError, TypeError):
+        pass
+    return ""
+
+
 def _header_cost(r, resp: dict) -> None:
     """Copy the gateway's per-request cost header into the reply's usage, where _call_cost finds it."""
     try:
@@ -1577,6 +1592,15 @@ class Agent:
                 self.rotate_route()
             if msg != raw:
                 msg += f" ({raw[:120]})"               # the detail, for support and the command line
+            rid = getattr(self, "last_request_id", "")
+            if rid and rid not in msg:
+                msg += f" Request id: {rid}."
+            cut = getattr(self, "_partial_text", "") or ""
+            if cut.strip():                            # what arrived before the connection dropped: kept, marked
+                self._partial_text = ""
+                kept = cut.rstrip() + "\n\n(This reply was cut off: the connection dropped.)"
+                self.messages.append({"role": "assistant", "content": kept})
+                self.emit({"type": "assistant", "text": kept, "streamed": False, "has_tools": False})
             self.emit({"type": "error", "text": msg})
         finally:
             self._last_final = final
@@ -2564,6 +2588,7 @@ class Agent:
             c.connect = checked_connect
         try:
             with _urlopen(req, first, sink) as r:
+                self.last_request_id = _request_id(getattr(r, "headers", None)) or getattr(self, "last_request_id", "")
                 if not stream:
                     raw_body = r.read()
                     try:
@@ -2577,6 +2602,7 @@ class Agent:
                         raise RuntimeError(f"HTTP 0: the endpoint sent an unreadable reply ({raw_body[:80]!r})")
 
                 thought: list = []
+                parts: list = []
 
                 def tee(lines):
                     nonlocal got_text
@@ -2605,6 +2631,7 @@ class Agent:
                                     t = dl.get("content")
                                     if t:
                                         got_text = True
+                                        parts.append(t)      # kept if the stream drops (_partial_text)
                                         self._delta(t)
                             except ValueError:
                                 pass
@@ -2617,22 +2644,34 @@ class Agent:
                         not resp["choices"][0]["message"].get("content") and \
                         not resp["choices"][0]["message"].get("tool_calls"):
                     raise RuntimeError("HTTP 0: the stream ended before the reply")
+                self._partial_text = ""
                 return resp, got_text
         except RuntimeError:
             if got_text:                             # a reply cut short after some text: the retry starts clean
+                self._keep_partial(locals().get("parts"))
                 self.emit({"type": "stream_reset"})
             raise
         except urllib.error.HTTPError as e:
             ra = (e.headers or {}).get("Retry-After") if hasattr(e, "headers") else None
+            rid = _request_id(getattr(e, "headers", None))
+            if rid:
+                self.last_request_id = rid
             raise RuntimeError(f"HTTP {e.code}: {e.read()[:400].decode('utf-8', 'replace')}"
-                               + (f" [retry-after: {ra}]" if ra else ""))
+                               + (f" [retry-after: {ra}]" if ra else "") + (f" [request id: {rid}]" if rid else ""))
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, http.client.HTTPException) as e:
             if got_text:                             # HTTPException: e.g. IncompleteRead, the stream dropped mid-reply
+                self._keep_partial(locals().get("parts"))
                 self.emit({"type": "stream_reset"})
             raise RuntimeError(f"HTTP 0: connection problem ({e})")
         finally:
             if live and getattr(self, "_live", None) is live[-1]:   # never clear a newer call's handle
                 self._live = None
+
+    def _keep_partial(self, parts) -> None:
+        """The longest reply text a dropped stream got this turn, so it is not lost if every retry fails."""
+        text = "".join(parts or [])
+        if len(text) > len(getattr(self, "_partial_text", "") or ""):
+            self._partial_text = text
 
     # ---------- tools ------------------------------------------------------------------------------------------
     def _outside(self, name: str, args: dict) -> str:

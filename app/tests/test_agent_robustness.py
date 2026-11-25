@@ -683,7 +683,45 @@ def test_a_reply_cut_short_after_some_text_resets_the_stream(tmp_path, monkeypat
     with pytest.raises(RuntimeError, match="only keep-alives"):
         a._post(f"http://127.0.0.1:{srv.server_address[1]}", "k", {"model": "m", "messages": []}, True)
     assert any(e["type"] == "text_delta" for e in events) and events[-1]["type"] == "stream_reset"
+    assert a._partial_text == "Hello "                     # what arrived is kept for the turn's end
     srv.shutdown()
+
+
+def test_a_cut_off_reply_is_kept_and_the_request_id_shown(tmp_path, monkeypatch):
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(503)
+            self.send_header("x-request-id", "req_abc123")
+            self.end_headers()
+            self.wfile.write(b"overloaded")
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    a = Agent(str(tmp_path), mode="auto")
+    with pytest.raises(RuntimeError, match=r"\[request id: req_abc123\]"):
+        a._post(f"http://127.0.0.1:{srv.server_address[1]}", "k", {"model": "m", "messages": []}, False)
+    assert a.last_request_id == "req_abc123"
+    srv.shutdown()
+    events = []
+    b = Agent(str(tmp_path), mode="auto", emit=events.append)
+    b._partial_text = "Half of the answer"
+
+    def fail(*x, **k):
+        raise RuntimeError("HTTP 0: connection problem (timed out)")
+    monkeypatch.setattr(Agent, "_post", fail)
+    monkeypatch.setattr(Agent, "_await_endpoint", lambda *x, **k: False, raising=False)
+    import meshpool_harness.agent.core as K
+    monkeypatch.setattr(K.GW, "health", lambda *x, **k: type("H", (), {"check": lambda self, *a, **kw: "down"})())
+    b.send("go")
+    kept = [e for e in events if e["type"] == "assistant"]
+    assert kept and kept[-1]["text"].startswith("Half of the answer") and "cut off" in kept[-1]["text"]
+    assert b.messages[-1]["role"] == "assistant" and "Half of the answer" in b.messages[-1]["content"]
 
 
 def test_the_call_limit_holds_across_processes(tmp_path, monkeypatch):
