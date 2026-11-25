@@ -202,6 +202,15 @@ const results = []; const check = (name, ok, detail = "") => { results.push([nam
   const rv = await p.evaluate(() => [reviewPrompt("deep --max 3 the parser"), reviewPrompt(""), simplifyPrompt("")]);
   check("/review takes a depth and a findings cap; /simplify exists", /At most 3 findings/.test(rv[0]) && /tests/.test(rv[0]) &&
         /Focus on: the parser/.test(rv[0]) && /At most 10 findings/.test(rv[1]) && /without changing what it does/.test(rv[2]), rv[0]);
+  // a running command's output shows under its step as it comes, and folds away when it ends
+  await p.evaluate(dir => newThread(dir), proj); await p.waitForTimeout(500);
+  await p.fill("#input", "count slowly please"); await p.keyboard.press("Enter");
+  const al = await p.waitForSelector("text=Allow all commands in this chat", {timeout: 10000}).catch(() => null);
+  if (al) await al.click();
+  const lv = await p.waitForSelector("pre.live", {timeout: 15000}).then(() => true, () => false);
+  const lvText = lv ? await p.textContent("pre.live") : "";
+  await p.waitForFunction(() => S.cur?.view?.state === "idle", null, {timeout: 30000}).catch(() => {});
+  check("a running command's output shows live under its step", lv && /tick 1/.test(lvText) && !(await p.$("pre.live")), lvText);
   check("no page errors", !errs.length, errs.join(" | "));
   await b.close();
   const ok = results.filter(r => r[1]).length; console.log(`\n${ok}/${results.length} passed`);

@@ -508,6 +508,9 @@ def _parses_with_newer_python(path: Path, text: str) -> bool:
             continue
     return False
 
+_LIVE = threading.local()          # the tool call whose command is running in this thread
+
+
 class Workspace:
     """Executes tools inside workdir, tracks reads/writes/commands for guards."""
 
@@ -1108,6 +1111,7 @@ class Workspace:
             f"\nIt does not parse yet; fix it next:\n{bad}" if bad else "")
 
     should_stop = None          # set by the agent: a callable that says the user pressed Stop
+    on_output = None            # set by the agent: on_output(call id, text) while a command runs (live output)
 
     def _proc(self, args, env, timeout_s, shell=False, encoding=None, cwd=None):
         """Run a command the user can stop at any moment: the whole process tree is killed on Stop or timeout."""
@@ -1115,16 +1119,43 @@ class Workspace:
         kw = {"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True}
         p = subprocess.Popen(args, shell=shell, cwd=cwd or self.root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              stdin=subprocess.DEVNULL, text=True, errors="replace", encoding=encoding, **kw)
-        box: dict = {}
+        box: dict = {"out": [], "err": []}
+        cid, live = getattr(_LIVE, "cid", ""), self.on_output
+        seen = [0]
+
+        def read(stream, into):
+            try:
+                for line in iter(stream.readline, ""):
+                    into.append(line)
+            except (OSError, ValueError):
+                pass
+
+        readers = [threading.Thread(target=read, args=(p.stdout, box["out"]), daemon=True),
+                   threading.Thread(target=read, args=(p.stderr, box["err"]), daemon=True)]
+        for r in readers:
+            r.start()
 
         def pump():
-            box["out"], box["err"] = p.communicate()
+            for r in readers:
+                r.join()
+            p.wait()
         th = threading.Thread(target=pump, daemon=True)
         th.start()
         end = time.time() + timeout_s
         why = None
+        t_live = time.time() + 0.6                      # a quick command shows its output once, at the end
         while th.is_alive():
             th.join(0.2)
+            if live and cid and time.time() >= t_live:  # what arrived since the last look, for the step's card
+                got = box["out"] + box["err"]
+                n = len(got)
+                if n > seen[0]:
+                    try:
+                        live(cid, "".join(got[seen[0]:n])[-4000:])
+                    except Exception:  # noqa: BLE001 - showing progress must never break the command
+                        pass
+                    seen[0] = n
+                t_live = time.time() + 0.4
             if th.is_alive() and self.should_stop and self.should_stop():
                 why = "stopped"
             elif th.is_alive() and time.time() > end:
@@ -1140,7 +1171,7 @@ class Workspace:
                     p.kill()
                 th.join(5)
                 break
-        out, err = box.get("out") or "", box.get("err") or ""
+        out, err = "".join(box.get("out") or []), "".join(box.get("err") or [])
         if why == "timeout":
             raise subprocess.TimeoutExpired(args, timeout_s, output=out)
         rc = 130 if why == "stopped" else p.returncode

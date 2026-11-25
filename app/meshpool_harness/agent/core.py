@@ -1568,8 +1568,10 @@ class Agent:
         """Run a blocking call (a model request, an MCP tool, a web fetch) so Stop works within a fraction of a
         second instead of when the call returns. A call that is abandoned finishes in the background, unseen."""
         box: dict = {}
+        cid = getattr(T._LIVE, "cid", "")                 # the step a command's live output belongs to
 
         def run():
+            T._LIVE.cid = cid
             try:
                 box["v"] = fn(*a, **kw)
             except BaseException as e:  # noqa: BLE001  re-raised in the caller's thread
@@ -1591,6 +1593,10 @@ class Agent:
             self._inbox.append((text, images or []))
         self.emit({"type": "user", "text": text.split("\n\n\u200b")[0],
                    "images": [im.get("name", "image") for im in images or []], "plan": self.plan, "steer": True})
+
+    def _live_output(self, cid: str, text: str):
+        from meshpool_harness.redact import redact
+        self.emit({"type": "tool_output", "id": cid, "text": redact(text)})
 
     def take_back(self) -> str | None:
         """The last message added while working, if the agent has not read it yet (it comes out of the turn)."""
@@ -3508,6 +3514,8 @@ class Agent:
         except ValueError:
             args = {}
         is_mcp = bool(self.mcp and self.mcp.has(name))
+        T._LIVE.cid = cid                              # a command's output shows under this step as it comes
+        self.ws.on_output = self._live_output
         if E2E and name not in ("bash", "bash_many", "bash_start", "bash_output", "bash_stop", "todo_write", "update_plan",
                                 "edit", "write_file", "apply_patch", "shell", "probe", "trace"):
             rep = self.__dict__.setdefault("_hard_rep", {})

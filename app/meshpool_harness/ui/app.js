@@ -1285,9 +1285,17 @@ function applyEv(ev) {
       $(".rows", g).appendChild(d); cur.tools[ev.id] = d; bumpGroup(g);
       if (/(^|__|[.:])browser_open$/.test(raw) && cur.ready && typeof browserAutoOpen === "function") browserAutoOpen(cur);
       { const sm = stepSummary(name, ev); cur.activity = `${label}${sm ? " " + sm : ""}`; } break; }
+    case "tool_output": {                               // a command's output while it runs (live only, not saved)
+      const d = cur.tools[ev.id] || document.getElementById("tool-" + ev.id); if (!d || d.dataset.done) break;
+      let pre = $("pre.live", d);
+      if (!pre) { pre = document.createElement("pre"); pre.className = "live"; d.appendChild(pre); if (!d.open) { d.open = true; d.dataset.autoOpen = "1"; } }
+      const lines = (pre.textContent + ev.text).split("\n"); pre.textContent = lines.slice(-30).join("\n");
+      pre.scrollTop = pre.scrollHeight;
+      break; }
     case "tool_end": {
       if (ev.output) for (const m of String(ev.output).matchAll(OUT_RX)) (cur.tpaths ||= []).push(relPath(m[1]));   // this turn's files, for the cards under the reply
       const d = cur.tools[ev.id] || document.getElementById("tool-" + ev.id); if (!d) break;
+      d.dataset.done = "1"; $("pre.live", d)?.remove(); if (d.dataset.autoOpen) { d.open = false; delete d.dataset.autoOpen; }
       // A step the user stopped, or one Plan mode blocked, did not fail: label it for what happened.
       const out = String(ev.output || ""), stopped = /not run: stopped by the user|^\[exit 130\]|stopped by the user|sub-agents were stopped by stop/i.test(out);
       const planned = !ev.ok && (/plan mode/i.test(out) || (cur.view?.plan && ["write", "edit", "write_file", "bash", "bash_many", "delete", "move"].includes(d.dataset.name)));

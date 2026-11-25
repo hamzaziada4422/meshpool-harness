@@ -1123,3 +1123,4 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .msg-user.steer [data-takeback],#queuedChip [data-takeback]{font-size:var(--fs-xs);margin-left:6px}
 :root[data-thinking="hide"] .think{display:none}
 :root[data-codecolor="off"] [class^="tk-"],:root[data-codecolor="off"] [class*=" tk-"]{color:inherit;font-style:inherit}
+pre.live{max-height:180px;overflow:auto;opacity:.85}

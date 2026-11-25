@@ -18,7 +18,7 @@ from meshpool_harness.harnesses.pi_rpc import PiAgent
 
 LIVE: dict[str, "Session"] = {}
 LOCK = threading.Lock()
-_SKIP = {"text_delta", "stream_reset", "model_start", "model_end", "usage", "context", "queued"}
+_SKIP = {"text_delta", "stream_reset", "model_start", "model_end", "usage", "context", "queued", "tool_output"}
 # /goal: the agent keeps taking turns until it says the goal is met. The note is hidden in the chat (after \u200b).
 GOAL_NOTE = ("\n\n\u200b[Meshpool] The goal of this chat: {goal}\nKeep working until it is fully done and checked. End your "
              "reply with one last line: \"GOAL: DONE\" once the goal is met and verified, or \"GOAL: CONTINUE\" and "
