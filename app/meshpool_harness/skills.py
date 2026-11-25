@@ -257,7 +257,8 @@ def load_all(include_disabled: bool = True) -> list[dict]:
     out = []
     base = folder()
     try:
-        names = sorted(e.name for e in os.scandir(base) if e.is_dir() and not e.name.startswith("."))
+        names = sorted((e.name for e in os.scandir(base) if e.is_dir() and not e.name.startswith(".")),
+                       key=os.path.normcase)              # the order sorted(Path) gave (no case on Windows)
     except OSError:
         names = []
     for name in names:
