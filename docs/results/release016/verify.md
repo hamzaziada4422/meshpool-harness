@@ -188,3 +188,43 @@ BAR: cost FAIL, quality FAIL, time PASS -> NOT MET
 ```
 
 Billed through the gateway (X-Litellm-Key-Spend) for the whole round including swe7: $6.86.
+
+## office_final (1812e40d, release commit; mp-work; codex rows from office_1c0b6df5)
+### O7
+```
+   mp-work: solved 14/14 (100.0%)  $ 0.1758  $/solved 0.01256  median s 46.9  errors 0
+     codex: solved 13/14 (92.9%)  $ 0.1478  $/solved 0.01137  median s 54.8  errors 0
+solve-rate diff +7.1 pts (95% CI +0.0 to +21.4)
+cost per solved ratio 1.10x (95% CI 0.90-1.33)
+median per-task time ratio 0.72x (95% CI 0.65-1.50)
+BAR: cost FAIL, quality PASS, time PASS -> NOT MET
+```
+### spreadsheetbench
+```
+   mp-work: solved 11/12 (91.7%)  $ 0.0566  $/solved 0.00514  median s 23.7  errors 0
+     codex: solved 12/12 (100.0%)  $ 0.0758  $/solved 0.00632  median s 25.2  errors 0
+solve-rate diff -8.3 pts (95% CI -25.0 to +0.0)
+cost per solved ratio 0.81x (95% CI 0.58-1.18)
+median per-task time ratio 1.15x (95% CI 0.67-1.87)
+BAR: cost FAIL, quality FAIL, time FAIL -> NOT MET
+```
+### officebench
+```
+   mp-work: solved 7/8 (87.5%)  $ 0.0372  $/solved 0.00532  median s 15.6  errors 0
+     codex: solved 8/8 (100.0%)  $ 0.0452  $/solved 0.00566  median s 25.4  errors 0
+solve-rate diff -12.5 pts (95% CI -37.5 to +0.0)
+cost per solved ratio 0.94x (95% CI 0.61-1.28)
+median per-task time ratio 0.86x (95% CI 0.19-1.95)
+BAR: cost FAIL, quality FAIL, time PASS -> NOT MET
+```
+### pooled
+```
+   mp-work: solved 32/34 (94.1%)  $ 0.2696  $/solved 0.00843  median s 29.7  errors 0
+     codex: solved 33/34 (97.1%)  $ 0.2689  $/solved 0.00815  median s 37.4  errors 0
+solve-rate diff -2.9 pts (95% CI -14.7 to +5.9)
+cost per solved ratio 1.03x (95% CI 0.86-1.21)
+median per-task time ratio 0.86x (95% CI 0.66-1.50)
+BAR: cost FAIL, quality FAIL, time PASS -> NOT MET
+```
+
+Billed through the gateway (X-Litellm-Key-Spend) for the whole round including swe7: $7.11.
