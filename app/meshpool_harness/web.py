@@ -102,6 +102,58 @@ def check_public(url: str) -> None:
         _check_ip(url, host, ip)
 
 
+def _pinned_create(url: str):
+    """socket.create_connection for a public-only fetch: the name is resolved once, every address is checked, and the
+    connection goes to a checked address. check_public resolves the name too, but urlopen resolved it again, so a DNS
+    answer that changed in between (rebinding: a public IP first, then 127.0.0.1 or 169.254.169.254) reached a local
+    service (security review, 0.0.16)."""
+    def create(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None, *a, **k):
+        host, port = address[0], address[1]
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+        for info in infos:
+            _check_ip(url, host, ipaddress.ip_address(str(info[4][0]).split("%", 1)[0]))
+        err = None
+        for info in infos:
+            try:
+                return socket.create_connection((info[4][0], port), timeout, source_address)
+            except OSError as e:
+                err = e
+        raise err or OSError(f"could not connect to {host}")
+    return create
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, *a, pin_url: str = "", **k):
+        super().__init__(*a, **k)
+        if pin_url:
+            self._create_connection = _pinned_create(pin_url)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, *a, pin_url: str = "", **k):
+        super().__init__(*a, **k)
+        if pin_url:
+            self._create_connection = _pinned_create(pin_url)
+
+
+def _pin_url(req) -> str:
+    """The URL to pin a connection for, or "" when a proxy makes the connection (the proxy resolves the name)."""
+    return "" if req.has_proxy() or getattr(req, "_tunnel_host", None) else req.full_url
+
+
+class _PinnedHTTP(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        u = _pin_url(req)
+        return self.do_open(lambda host, **kw: _PinnedHTTPConnection(host, pin_url=u, **kw), req)
+
+
+class _PinnedHTTPS(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        u = _pin_url(req)
+        return self.do_open(lambda host, **kw: _PinnedHTTPSConnection(host, pin_url=u, **kw), req,
+                            context=self._context)
+
+
 class _PublicRedirects(urllib.request.HTTPRedirectHandler):
     """Check every redirect hop too: a public page must not bounce the request to a local address."""
 
@@ -122,7 +174,7 @@ def _get(url: str, data: bytes | None = None, headers: dict | None = None, timeo
     open_ = urllib.request.urlopen
     if public_only:
         check_public(url)
-        open_ = urllib.request.build_opener(_PublicRedirects).open
+        open_ = urllib.request.build_opener(_PublicRedirects, _PinnedHTTP, _PinnedHTTPS).open
     try:
         with open_(req, timeout=timeout) as r:
             body, hdr, final = r.read(limit), {k.lower(): v for k, v in r.headers.items()}, r.geturl()

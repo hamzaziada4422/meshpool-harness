@@ -369,7 +369,7 @@ def run() -> int:
         if not ready.wait(60):
             print("The Meshpool server did not start. See the lines above.")
             return 1
-        url = f"http://127.0.0.1:{box['port']}/"
+        url = SV.app_url(box["port"])                  # the launch key: only this window gets the API token
         if os.name == "nt":
             shown = _window_process(url) == "closed"    # blocks until the window closes
         else:

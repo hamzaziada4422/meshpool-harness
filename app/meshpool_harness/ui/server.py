@@ -35,6 +35,17 @@ EXTRA_PREFIXES = ("/api/memory", "/api/xray", "/api/insights", "/api/work", "/ap
                   "/api/worktree")
 
 TOKEN = secrets.token_urlsafe(24)
+# The page that carries TOKEN is served only to the app's own window: it opens app_url(port), whose launch key sets an
+# HttpOnly, SameSite=Strict session cookie. Any other local process (a sandboxed command, a script the user allowed)
+# that asks for / gets no token, so it cannot reach /api/term or /api/settings (security review: `curl
+# http://127.0.0.1:8765/` handed the token to anything on the machine). The key lives in this process's memory only.
+LAUNCH_KEY = secrets.token_urlsafe(24)
+SESSION = secrets.token_urlsafe(24)
+
+
+def app_url(port: int) -> str:
+    """The URL that opens the app: the launch key in it lets the page carry the API token."""
+    return f"http://127.0.0.1:{int(port)}/?k={LAUNCH_KEY}"
 UI_VER = secrets.token_hex(4)
 DESKTOP = False
 LAST_PING = [time.time()]
@@ -220,6 +231,14 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):          # quiet console
         pass
 
+    def _session_ok(self) -> bool:
+        """The app's own window: it carries the session cookie its launch key set."""
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == "mp_s" and v and secrets.compare_digest(v, SESSION):
+                return True
+        return False
+
     def _host_ok(self) -> bool:
         host = (self.headers.get("Host") or "").split(":")[0]
         return host in ("127.0.0.1", "localhost")
@@ -347,10 +366,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, {"error": "forbidden"})
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
+            key = parse_qs(u.query).get("k", [""])[0]
+            keyed = bool(key) and secrets.compare_digest(key, LAUNCH_KEY)
+            if not (keyed or self._session_ok() or os.environ.get("MH_UI_OPEN_PAGE") == "1"):
+                return self._send(403, b"<!doctype html><meta charset=utf-8><title>Meshpool</title><p>Open Meshpool "
+                                       b"from its app icon, or with the link the app printed when it started.</p>",
+                                  "text/html; charset=utf-8", {"Content-Security-Policy": "frame-ancestors 'none'"})
             html = (HERE / "index.html").read_text(encoding="utf-8").replace("__MESHPOOL_TOKEN__", TOKEN) \
                 .replace("__MESHPOOL_DESKTOP__", "true" if DESKTOP else "false").replace("__MESHPOOL_VER__", UI_VER)
-            return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8",
-                              {"Content-Security-Policy": "frame-ancestors 'none'"})
+            extra = {"Content-Security-Policy": "frame-ancestors 'none'", "Cache-Control": "no-store"}
+            if keyed:
+                extra["Set-Cookie"] = f"mp_s={SESSION}; HttpOnly; SameSite=Strict; Path=/"
+            return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8", extra)
         m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js|preview\.js|editor\.js|memory\.js|memory\.css|insights\.js|insights\.css|yourwork\.js|yourwork\.css|firstrun\.js|chat010\.js|home010\.js|worktree\.js)", u.path)
         if m:
             ctype = "text/javascript; charset=utf-8" if m.group(1).endswith(".js") else "text/css; charset=utf-8"
@@ -417,9 +444,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"error": "not found"})
             ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
             disp = "inline" if ctype.startswith(("image/", "text/")) or ctype == "application/pdf" else "attachment"
-            hdr = {"Content-Disposition": _disposition(disp, p.name)}
-            if ctype in ("text/html", "image/svg+xml", "application/xhtml+xml"):
-                hdr["Content-Security-Policy"] = "sandbox"       # a page an agent wrote must not reach the app's token
+            # every file an agent wrote is sandboxed, whatever its type: on Windows .xml is text/xml (served inline) and
+            # an XHTML <script> in it ran in the app's origin (security review); nosniff stops a browser guessing HTML
+            hdr = {"Content-Disposition": _disposition(disp, p.name), "Content-Security-Policy": "sandbox",
+                   "X-Content-Type-Options": "nosniff"}
             return self._send(200, p.read_bytes(), ctype, hdr)
         m = re.fullmatch(r"/api/agent/([\w-]+)/events", u.path)
         if m:                                         # a chat's events pushed as they happen (EventSource cannot set headers)
@@ -649,6 +677,9 @@ class Handler(BaseHTTPRequestHandler):
             if not self._json_type() or not self._origin_ok():
                 return self._send(403, {"error": "forbidden"})
             shown = any(fn() for fn in list(ON_SHOW))
+            if not shown and HTTPD[0] is not None:     # no window of ours: this instance opens one with its own key
+                webbrowser.open(app_url(HTTPD[0].server_address[1]))   # (the second launch never learns the key)
+                shown = True
             return self._send(200, {"ok": True, "native": shown})
         if self.headers.get("X-Meshpool-Token") != TOKEN:
             return self._send(403, {"error": "forbidden"})
@@ -1258,8 +1289,9 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     if httpd is None:
         print(f"Could not open a local port between {port} and {port + 19}.")
         return 1
-    url = f"http://127.0.0.1:{port}/"
+    url = app_url(port)
     HTTPD[0] = httpd
+    os.environ["MESHPOOL_UI_PORT"] = str(port)     # the agent's browser never opens the app's own window
     if desktop:
         LAST_PING[0] = time.time()
         threading.Thread(target=_watchdog, args=(float(os.environ.get("MH_IDLE_EXIT_S", "1200")),), daemon=True).start()

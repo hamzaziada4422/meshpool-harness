@@ -421,12 +421,37 @@ class Browser:
 B = Browser()
 
 
+def _refuse_url(u: str) -> str:
+    """Why the agent's browser may not open `u`, or "". A file outside the project (security review: browser_open
+    file:///home/u/.ssh/id_rsa read it into a snapshot without any approval), or Meshpool's own window (its local
+    server's port, MESHPOOL_UI_PORT), whose controls could change the chat's own permissions."""
+    from urllib.parse import urlparse, unquote
+    pu = urlparse(u)
+    if pu.scheme == "file":
+        proj = Path(os.environ.get("MESHPOOL_PROJECT") or os.getcwd()).resolve()
+        try:
+            target = Path(unquote(pu.path)).resolve()
+        except (OSError, ValueError):
+            return "that file path cannot be read"
+        if target != proj and proj not in target.parents:
+            return "a file outside the project folder (open files in the project, or read them with the file tools)"
+        return ""
+    port = os.environ.get("MESHPOOL_UI_PORT", "")
+    if pu.scheme in ("http", "https") and (pu.hostname or "") in ("127.0.0.1", "localhost", "::1", "0.0.0.0") \
+            and port and str(pu.port or (443 if pu.scheme == "https" else 80)) == port:
+        return "Meshpool's own window"
+    return ""
+
+
 def browser_open(url: str) -> str:
     def go():
         B.ensure()
         u = url.strip()
         if "://" not in u and not u.startswith(("about:", "file:")):
             u = "https://" + u
+        why = _refuse_url(u)
+        if why:
+            raise ToolFailed(f"Not opened: {why}.")
         B.page.goto(u, wait_until="domcontentloaded", timeout=45000)
         return B.snapshot()
     return B.run(go)

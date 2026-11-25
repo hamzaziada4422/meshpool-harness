@@ -791,6 +791,12 @@ class Workspace:
         if write and any(_git_dir_name(x) for x in q.relative_to(self.root).parts):
             # git runs settings and hooks from here (core.fsmonitor, hooks/): a write there can run any command
             raise ToolError("agents cannot change files inside .git; use git commands instead")
+        rel = [x.lower().rstrip(". ") for x in q.relative_to(self.root).parts]
+        if write and len(rel) == 2 and rel[0] == ".meshpool" and rel[1] in ("hooks.json", "permissions.json"):
+            # the project's hooks run commands and its rules approve them: an agent that writes them approves itself
+            # (security review: in a trusted folder, a written hooks.json ran on the next tool call with shell=True)
+            raise ToolError("agents cannot change .meshpool/hooks.json or .meshpool/permissions.json; ask the user to "
+                            "change hooks and permission rules in Settings")
         return q
 
     @staticmethod

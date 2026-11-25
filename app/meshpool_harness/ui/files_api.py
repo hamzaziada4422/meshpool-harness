@@ -35,7 +35,9 @@ MAX_SAVE = 4_000_000
 MAX_SEARCH = 100
 KEEP_BACKUPS = 20
 # Inside the Meshpool home only: files that hold keys, tokens or sign-in state are never shown or read here.
-_SECRET = re.compile(r"(^\.env|token|secret|credential|oauth|\.pem$|\.key$|^id_rsa|\.config$|^mcp.*\.json$|^connectors.*\.json$)", re.I)
+# Folders too: the agent browser's profile holds cookies and saved logins (security review).
+_SECRET = re.compile(r"(^\.env|token|secret|credential|oauth|\.pem$|\.key$|^id_rsa|\.config$|^mcp.*\.json$|^connectors.*\.json$|"
+                     r"^browser-profile|^window-profile|^cookies|^login data|^web data|^local state$)", re.I)
 PREVIEW_EXT = {".pdf", ".pptx", ".ppt", ".pptm", ".ppsx", ".pps", ".potx", ".odp", ".docx", ".doc", ".docm", ".dotx", ".odt",
                ".rtf", ".xls", ".xlsx", ".xlsm", ".xlsb", ".ods", ".key", ".pages", ".numbers",
                ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico",

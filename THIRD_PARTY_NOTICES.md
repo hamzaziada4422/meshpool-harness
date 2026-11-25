@@ -35,7 +35,7 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | Material Symbols 0.49.0, outlined, rounded and sharp at weight 400, with fill, without product logos (`app/engines/icons/bundles/material.json.gz`, `LICENSE-material-symbols.txt`), by Google | Apache-2.0 | https://fonts.google.com/icons (npm @material-symbols/svg-400) |
 | IBM Carbon icons 11.92.0, 32 px, without the Brand category and IBM product marks (`app/engines/icons/bundles/carbon.json.gz`, `LICENSE-carbon.txt`), Copyright IBM Corp. | Apache-2.0 | https://carbondesignsystem.com (npm @carbon/icons) |
 | Selawik font, Regular and Bold, compiled unmodified from source (`app/engines/forge/fonts`): measures slides set in Segoe UI | SIL Open Font License 1.1 (`Selawik-LICENSE.txt` beside it) | https://github.com/microsoft/Selawik |
-| Mermaid 11.4.1 (`app/meshpool_harness/ui/vendor/mermaid.min.js`, `LICENSE-mermaid.txt`): diagrams in chat | MIT | https://mermaid.js.org |
+| Mermaid 11.17.2 (`app/meshpool_harness/ui/vendor/mermaid.min.js`, `LICENSE-mermaid.txt`): diagrams in chat | MIT | https://mermaid.js.org |
 | KaTeX 0.16.11 (`app/meshpool_harness/ui/vendor/katex.min.js`, CSS and fonts, `LICENSE-katex.txt`): maths in chat | MIT | https://katex.org |
 | 7-Zip 25.01 (`7zr.exe`, inside the Windows installer: unpacks the program files appended to it) | LGPL-2.1-or-later (the unRAR code is not used) | https://www.7-zip.org |
 | Taste Skill, method for building and reviewing user interfaces (`app/defaults/skills/build-ui`, `ui-review`; adapted, not copied), Copyright (c) 2026 Leonxlnx | MIT | https://github.com/Leonxlnx/taste-skill |
