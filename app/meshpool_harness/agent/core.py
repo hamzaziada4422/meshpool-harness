@@ -1089,6 +1089,10 @@ class Agent:
                                     searchable="find_skill" not in self._dropped())
         except Exception:
             pass
+        trailer = os.environ.get("MH_COMMIT_TRAILER", "").strip()
+        if trailer:                                    # Settings: a line at the end of the agent's commits and PRs
+            text += ("\n\n# Commits\n\nWhen you write a git commit message or a pull request description, end it with "
+                     "this line, on a line of its own after a blank line:\n" + trailer.splitlines()[0][:200])
         try:
             if getattr(self, "_delegate_depth", 0) == 0 and _subagents_on():   # sub-agents it can name in delegate_task
                 from meshpool_harness.agent import subagents as SAG

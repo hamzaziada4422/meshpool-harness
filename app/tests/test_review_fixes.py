@@ -376,3 +376,12 @@ def test_a_side_question_is_answered_and_kept_out_of_the_chat(env, monkeypatch):
         "where is the retry logic?")
     with pytest.raises(ValueError, match="Ask something"):
         a.side_question("  ")
+
+
+def test_commit_attribution_is_opt_in(env, monkeypatch):                        # GIT-058
+    (env / "p").mkdir()
+    monkeypatch.delenv("MH_COMMIT_TRAILER", raising=False)
+    assert "# Commits" not in core.Agent(str(env / "p"), mode="auto").system_prompt()
+    monkeypatch.setenv("MH_COMMIT_TRAILER", "Co-Authored-By: meshpool <noreply@example.com>")
+    sp = core.Agent(str(env / "p"), mode="auto").system_prompt()
+    assert "# Commits" in sp and sp.count("Co-Authored-By: meshpool <noreply@example.com>") == 1
