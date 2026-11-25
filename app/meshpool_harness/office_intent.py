@@ -76,6 +76,17 @@ def engines_wanted(text: str) -> bool:
     return styled_deliverable(text) and not names_output(text)
 
 
+_REVISIONS = re.compile(r"\b(?:track(?:ed)?[\s-]+changes?|track changes|redline|redlin(?:e|ing)|revision marks?|"
+                        r"(?:add|insert|leave|with)\s+(?:a\s+|the\s+)?comments?)\b", re.I)
+
+
+def wants_revisions(text: str) -> bool:
+    """Word tracked changes or comments: edit_office_file writes real revisions (w:ins / w:del wrapping runs) and
+    comments. Office-7 on 59e49c8b: docx_tracked written by hand put <w:ins/> inside run properties, which Word does
+    not accept or reject as a change; with edit_office_file's tracked_replace it passed 2/2 on 38f57ffb."""
+    return bool(_REVISIONS.search(str(text or "").split(SEP)[0]))
+
+
 SHEET_SOURCES = (".xlsx", ".xlsm", ".xls", ".csv")
 _SHEET_NAME = re.compile(r"[\w][\w.()-]*\.(?:xlsx|xlsm|xls|csv)\b", re.I)
 # A name the request gives to the output, not a source: "save it as x.xlsx", "into x.xlsx", "output x.xlsx".

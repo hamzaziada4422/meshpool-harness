@@ -1104,6 +1104,47 @@ def _slide_count_miss(asked: str, root, since: float) -> str:
             "so it has the number of slides asked for, save it and check again.")
 
 
+_TOTAL_ROW = re.compile(r"\b(?:a\s+|the\s+)?totals?\s+row\b|\brow\s+(?:of|for|with)\s+(?:the\s+)?totals?\b", re.I)
+
+
+def _total_row_miss(asked: str, root, since: float) -> str:
+    """A workbook written this turn for a request that asks for a total row, where no row that sums (=SUM...) carries a
+    "Total" label: as a note for the agent, else "". Office-7 on 59e49c8b: xlsx_edit wrote =SUM in the last row with no
+    label, so neither the user nor a reader of the sheet could tell it was the total."""
+    from meshpool_harness.capabilities import SEP as _SEP
+    if not _TOTAL_ROW.search(str(asked or "").split(_SEP)[0]):
+        return ""
+    try:
+        import openpyxl
+    except ImportError:
+        return ""
+    bad = []
+    try:
+        for f in Path(root).rglob("*.xlsx"):
+            if "Meshpool outputs" in f.parts or f.name.startswith("~$") or f.stat().st_mtime < since:
+                continue
+            wb = openpyxl.load_workbook(f)
+            sums = labelled = 0
+            for ws in wb.worksheets:
+                for row in ws.iter_rows():
+                    vals = [c.value for c in row]
+                    if any(isinstance(v, str) and v.startswith("=") and "SUM" in v.upper() for v in vals):
+                        sums += 1
+                        if any(isinstance(v, str) and not v.startswith("=") and re.search(r"total", v, re.I)
+                               for v in vals):
+                            labelled += 1
+            if sums and not labelled:
+                bad.append(f"{f.name} has a summing row but no cell in it says Total")
+            elif not sums:
+                bad.append(f"{f.name} has no row that sums with a formula")
+    except Exception:  # noqa: BLE001 - a file that cannot be read is not judged here
+        return ""
+    if not bad:
+        return ""
+    return ("The request asks for a total row, but " + "; ".join(bad) + ". The job is not done: add the total row "
+            "with a live =SUM formula and a \"Total\" label in that row, save it and check again.")
+
+
 def _destructive(args: dict, root=None) -> bool:
     """A shell command that deletes recursively, rewrites history, wipes a disk, pipes the web into a shell or uses sudo.
     shell's argv list (["rm", "-rf", "build"], ["bash", "-lc", "git reset --hard"]) is read as the script it runs.
@@ -1213,6 +1254,7 @@ KEEP_NOTE = ("\n\n\u200b[Meshpool] This request says existing behaviour must sta
 class Agent:
     office_on = False      # a message in this chat asked for an office file: Codex style shows the office tools too
     office_engines = False  # MH_OFFICE_DIRECT=1: a message asked for a new deck, report or model (engine tools shown)
+    office_revisions = False  # MH_OFFICE_DIRECT=1: a message asked for tracked changes or comments (edit_office_file shown)
     usage_task = None      # the session may set one usage task before send() to share it across goal / resume turns
     usage_source = "chat"  # what this agent's own calls are called in the usage ledger ("subagent" for a sub-agent)
     _turn_no = 0           # counted up by each send(); turn-scoped guards read it before the first turn too
@@ -1510,8 +1552,12 @@ class Agent:
             is_dup = lambda x: x["function"]["name"].rsplit("__", 1)[-1] in dup   # noqa: E731
             head = T.schemas([n for n in self._tool_names() if not _engine_tool(n)]) + \
                 [x for x in mcp if not _engine_tool(x["function"]["name"]) and not is_dup(x)]
-            return head + ((T.schemas(["office_task"]) + [x for x in mcp if _engine_tool(x["function"]["name"])]
-                            + [x for x in mcp if is_dup(x)]) if self.office_engines else [])   # appended, never reordered
+            if self.office_engines:                                      # appended, never reordered
+                return head + T.schemas(["office_task"]) + [x for x in mcp if _engine_tool(x["function"]["name"])] \
+                    + [x for x in mcp if is_dup(x)]
+            if getattr(self, "office_revisions", False):                 # tracked changes or comments: the editor
+                return head + [x for x in mcp if is_dup(x)]              # writes real Word revisions
+            return head
         names = self._tool_names()
         if getattr(self, "lane", "task") == "chat" and not getattr(self, "_tools_full", False) \
                 and os.environ.get("MH_LITE_CHAT_TOOLS", "1") != "0":
@@ -1787,9 +1833,11 @@ class Agent:
         except Exception:  # noqa: BLE001
             pass
         if self._office_direct() and not self.office_engines:   # decided here, before the turn: fixed for the turn
-            from meshpool_harness.office_intent import engines_wanted
+            from meshpool_harness.office_intent import engines_wanted, wants_revisions
             if engines_wanted(asked):                        # a new deck, report or model: the engines join, and stay
                 self.office_engines = self.office_on = True
+            elif wants_revisions(asked):                     # Word tracked changes or comments: edit_office_file joins
+                self.office_revisions = self.office_on = True
         if not self.title:
             self.title = text.strip().splitlines()[0][:80] if text.strip() else "Session"
         body = text
@@ -2157,7 +2205,9 @@ class Agent:
                             continue
                     if self._office_direct() and not g.get("office_count_nudged") \
                             and os.environ.get("MH_OFFICE_FINISH_CHECK", "1") != "0":
-                        miss = _slide_count_miss(getattr(self, "_asked_text", ""), self.root, g.get("t0", 0))
+                        ask = getattr(self, "_asked_text", "")
+                        miss = _slide_count_miss(ask, self.root, g.get("t0", 0)) or \
+                            _total_row_miss(ask, self.root, g.get("t0", 0))
                         if miss:
                             g["office_count_nudged"] = True  # once per request: a stated count is part of the job
                             self.messages.append({"role": "user", "content": "[Meshpool] " + miss})

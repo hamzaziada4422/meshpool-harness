@@ -154,7 +154,8 @@ def test_test_connection_and_save_clean_a_pasted_key_the_same(home, monkeypatch,
     try:
         r = SV.test_connection({"MESHPOOL_BASE_URL": f.url + "/v1", "MESHPOOL_API_KEY": pasted, "MH_MODEL": "m"})
         assert r["ok"], r
-        assert f.log[-1]["headers"]["authorization"] == "Bearer sk-x.1_2="
+        chat = [x for x in list(f.log) if "/chat/completions" in str(x.get("path", ""))]   # not a background /models
+        assert chat and chat[-1]["headers"]["authorization"] == "Bearer sk-x.1_2="
         SV.save_settings({"values": {"MESHPOOL_API_KEY": pasted, "MESHPOOL_BASE_URL": f.url + "/v1"}})
         assert C.read()["MESHPOOL_API_KEY"] == "sk-x.1_2="
     finally:

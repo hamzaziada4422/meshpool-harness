@@ -124,7 +124,9 @@ EDIT_NOTE = (SEP + "[Meshpool] To change a file that exists, use edit_office_fil
 EDIT_NOTE_DIRECT = (SEP + "[Meshpool] Change the existing file in place with openpyxl, python-docx or python-pptx, "
                     "keeping its sheets, styles and formulas, and do exactly what was asked to every row or cell it "
                     "applies to. Check a formula change by reading the formula text; do not recalculate unless the "
-                    "request asks for computed values. Do not rebuild the file.")
+                    "request asks for computed values. For Word tracked changes or comments, use edit_office_file "
+                    "(tracked_replace, tracked_delete, tracked_insert_after, comments): it writes real revisions. "
+                    "Do not rebuild the file.")
 
 
 # How the agent makes each file itself when it writes office files directly (office direct, a lean Work chat).

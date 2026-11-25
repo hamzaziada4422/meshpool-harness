@@ -97,7 +97,8 @@ def test_session_notes_defer_to_the_engines_for_a_new_deliverable(monkeypatch):
 
 def test_edit_note_in_office_direct_names_libraries_not_absent_tools():
     n = CAP.note(["edit"], direct=True)
-    assert "openpyxl" in n and "edit_office_file" not in n and "make_spreadsheet" not in n
+    assert "openpyxl" in n and "make_spreadsheet" not in n
+    assert "For Word tracked changes or comments, use edit_office_file" in n   # offered only for those requests
     assert "formula text" in n
     assert "edit_office_file" in CAP.note(["edit"])                  # the engine lane keeps its note
 
@@ -161,3 +162,30 @@ def test_slide_count_check(tmp_path):
     assert "deck.pptx has 5 slides" in _slide_count_miss("Make a 3-slide deck", tmp_path, t0)
     assert _slide_count_miss("Make a deck about sales", tmp_path, t0) == ""            # no stated count
     assert _slide_count_miss(ask, tmp_path, _t.time() + 60) == ""                       # not written this turn
+
+
+def test_total_row_check(tmp_path):
+    import time as _t
+    import openpyxl
+    from meshpool_harness.agent.core import _total_row_miss
+    t0 = _t.time() - 1
+    ask = "In inventory.xlsx, add a Value column. Add a total row for the Value column."
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Item", "Value"])
+    ws.append(["a", 5])
+    ws.append([None, "=SUM(B2:B2)"])
+    wb.save(tmp_path / "inventory.xlsx")
+    assert "no cell in it says Total" in _total_row_miss(ask, tmp_path, t0)
+    ws["A3"] = "Total"
+    wb.save(tmp_path / "inventory.xlsx")
+    assert _total_row_miss(ask, tmp_path, t0) == ""
+    assert _total_row_miss("Sort inventory.xlsx by value", tmp_path, t0) == ""
+
+
+def test_revision_requests_bring_the_office_editor(tmp_path, monkeypatch):
+    from meshpool_harness.office_intent import wants_revisions
+    assert wants_revisions("Make these changes as tracked changes so I can accept or reject them in Word.")
+    assert wants_revisions("Add a comment on paragraph 2 of memo.docx")
+    assert not wants_revisions("Make the dates in report.docx bold")
+    assert "tracked_replace" in CAP.note(["edit"], direct=True)
