@@ -22,9 +22,9 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
   |---|---|---|---|---|---|
   | Office-7 | 7 x 6 | 41 vs 41 | 0.89x (0.81-0.95) | 0.53x | 42 solved at 0.94x |
   | SpreadsheetBench (public sample), same hour as Codex | 6 x 6 | 33 vs 33 | 0.89x (0.78-1.03) | 1.22x | 31 solved at 1.04x |
-  | OfficeBench (public sample), same hour as Codex | 4 x 6 | 22 vs 24 | 0.95x (0.53-1.45) | 1.29x | 21 solved at 0.83x |
+  | OfficeBench (public sample), same hour as Codex | 4 x 6 | 24 vs 22 | 1.02x (0.63-1.31) | 1.07x | 21 solved at 0.83x |
 
-  Where meshpool loses: OfficeBench solves 2 fewer tasks than Codex (task ob-1-15-2 passed 8 of 12 runs against Codex's 12 of 12), and on SpreadsheetBench and OfficeBench it takes longer than Codex in the same hour (1.22x and 1.29x). The OfficeBench cost interval is wide and includes costing more than Codex. Office-7 solves one task fewer than 0.0.16 did.
+  A new check before the answer makes sure that text from a named file, added to a Word document, is in its paragraphs as given (not hidden in a content control or reworded). It fired only on the OfficeBench task that failed before (ob-1-15-2: 12 of 12 runs pass now, 8 of 12 before). Where meshpool loses: OfficeBench costs about the same as Codex (1.02x, and the interval spans both cheaper and dearer), not less, and on SpreadsheetBench and OfficeBench it takes longer than Codex in the same hour (1.22x and 1.07x). Office-7 solves one task fewer than 0.0.16 did.
 - **A project's own servers wait for your trust too.** The MCP servers a project lists in `.mcp.json` or `.meshpool/mcp.json` start only once you trust the folder, like its hooks and allow rules. The app now shows a note at the top of the chat with Trust this folder, and `meshpool trust`, `meshpool trust --revoke` and `meshpool trust --list` manage trusted folders from the command line.
 - **Always in this folder.** An approval can now save a narrow rule for this folder (this command, file edits, or one tool) in your own settings, so the next chat there does not ask again.
 - **Rules that always ask.** Next to allow and deny, a saved rule can now always ask, even with full access or an allow rule. Add one in Settings, Permissions.
