@@ -715,15 +715,19 @@ function mentionPop(inp, v, pos, q) {
   if (!root) { if ($("#pop.inline")) closePop(); return; }
   clearTimeout(MENTION_T); MENTION_Q = q;
   MENTION_T = setTimeout(async () => {
-    let r; try { r = await api(`/api/fs/search?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q || ".")}`); } catch (e) { return; }
+    const sym = (q || "").length >= 2 ? api(`/api/fs/symbols?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}`).catch(() => ({results: []})) : Promise.resolve({results: []});
+    let r, s; try { [r, s] = await Promise.all([api(`/api/fs/search?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q || ".")}`), sym]); } catch (e) { return; }
     if (MENTION_Q !== q || $("#input") !== inp) return;
-    const hits = (r.results || []).sort((a, b) => a.path.length - b.path.length).slice(0, 8);
-    if (!hits.length) { if ($("#pop.inline")) closePop(); return; }
-    inlinePop(hits.map(h => ({label: "@" + h.path, desc: h.dir ? "folder" : "", fn: () => {
+    const put = text => {
       const cur = inp.value, p2 = inp.selectionStart, start = cur.lastIndexOf("@", p2 - 1);
-      inp.value = cur.slice(0, start) + "@" + h.path + " " + cur.slice(p2); inp.focus();
-      const c = start + h.path.length + 2; inp.setSelectionRange(c, c); inp.dispatchEvent(new Event("input"));
-    }})));
+      inp.value = cur.slice(0, start) + text + " " + cur.slice(p2); inp.focus();
+      const c = start + text.length + 1; inp.setSelectionRange(c, c); inp.dispatchEvent(new Event("input"));
+    };
+    const hits = (r.results || []).sort((a, b) => a.path.length - b.path.length).slice(0, (s.results || []).length ? 5 : 8);
+    const syms = (s.results || []).slice(0, 5);          // functions and classes: @path:line (name)
+    if (!hits.length && !syms.length) { if ($("#pop.inline")) closePop(); return; }
+    inlinePop([...hits.map(h => ({label: "@" + h.path, desc: h.dir ? "folder" : "", fn: () => put("@" + h.path)})),
+      ...syms.map(x => ({label: `${x.name}`, desc: `${x.kind} · ${x.path}:${x.line}`, fn: () => put(`@${x.path}:${x.line} (${x.kind} ${x.name})`)}))]);
   }, 120);
 }
 /* Up and Down in an empty composer walk back through the messages you sent (newest first), as in a terminal. */

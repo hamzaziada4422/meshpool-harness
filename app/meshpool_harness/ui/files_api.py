@@ -192,6 +192,58 @@ def _git_files(root: Path) -> list | None:
     return sorted(x for x in r.stdout.decode("utf-8", "replace").split("\0") if x)[:200000]
 
 
+_SYMBOL_EXT = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".go", ".rs", ".java", ".kt", ".rb", ".php", ".cs",
+               ".swift", ".c", ".cc", ".cpp", ".h", ".hpp", ".scala", ".dart", ".lua", ".ex", ".exs"}
+_SYMBOL = re.compile(
+    r"^\s*(?:export\s+)?(?:default\s+)?(?:pub(?:\([^)]*\))?\s+)?(?:public\s+|private\s+|protected\s+|static\s+|async\s+|"
+    r"abstract\s+|final\s+|override\s+|inline\s+)*"
+    r"(?P<kind>def|class|function|func|fn|interface|struct|enum|trait|type|module|object)\s+"
+    r"(?:\([^)]*\)\s*)?(?P<name>[A-Za-z_$][\w$]*)"
+    r"|^\s*(?:export\s+)?(?:const|let|var)\s+(?P<arrow>[A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>")
+
+
+def symbols(root_s: str, q: str) -> dict:
+    """Functions, classes and similar definitions whose name contains q, for the @ picker: {name, kind, path, line}.
+    Source files only, up to 1 MB each, about 1.5 seconds; names that start with q first."""
+    root, _ = safe(root_s, "")
+    q = (q or "").strip().lower()
+    if len(q) < 2:
+        return {"results": []}
+    files = _git_files(root)
+    if files is None:
+        files = []
+        for cur, dirs, names in os.walk(root, followlinks=False):
+            dirs[:] = sorted(x for x in dirs if x not in HIDE_DIRS and not _hidden_name(root, x))
+            files += [_rel(root, Path(cur) / n) for n in sorted(names)]
+            if len(files) > 20000:
+                break
+    hits, deadline = [], time.time() + 1.5
+    for rel in files:
+        if Path(rel).suffix.lower() not in _SYMBOL_EXT or any(x in HIDE_DIRS for x in rel.split("/")):
+            continue
+        f = root / rel
+        try:
+            if f.is_symlink() or f.stat().st_size > 1_000_000:
+                continue
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if q not in text.lower():
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            m = _SYMBOL.match(line)
+            if not m:
+                continue
+            name = m.group("name") or m.group("arrow")
+            if name and q in name.lower():
+                hits.append({"name": name, "kind": "function" if m.group("arrow") else m.group("kind"), "path": rel,
+                             "line": i})
+        if time.time() > deadline or len(hits) > 400:
+            break
+    hits.sort(key=lambda h: (not h["name"].lower().startswith(q), len(h["name"]), h["path"]))
+    return {"results": hits[:20]}
+
+
 MAX_LINE_HITS = 200
 
 
@@ -368,6 +420,8 @@ def handle(method: str, u, body: bytes = b""):
             return 200, list_dir(q.get("root", ""), q.get("path", ""))
         if p == "/api/fs/search":
             return 200, search(q.get("root", ""), q.get("q", ""), q.get("content") == "1")
+        if p == "/api/fs/symbols":
+            return 200, symbols(q.get("root", ""), q.get("q", ""))
         if p == "/api/fs/read":
             return 200, read(q.get("root", ""), q.get("path", ""))
         if p == "/api/fs/stat":

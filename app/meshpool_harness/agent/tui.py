@@ -672,7 +672,7 @@ class Terminal:
             start = s["found"] if s["found"] is not None else len(self.history)
             hit = find(s["search"], start) if s["search"] else None
             s["found"] = hit if hit is not None else s["found"]
-        elif k in ("esc", "ctrl_c", "ctrl_g"):
+        elif k in ("esc", "ctrl_c"):
             s["buf"], s["cur"], s["search"] = s["orig"], len(s["orig"]), None
             return True
         elif k in ("enter", "right", "left", "tab"):
@@ -694,31 +694,6 @@ class Terminal:
                      ("" if s["found"] is not None or not s["search"] else " (no match)") + ". Enter to use, Esc to cancel")
         return True
 
-    def _edit_externally(self, text: str) -> str:
-        """The prompt in the user's editor ($VISUAL, $EDITOR; else nano, vi or Notepad). The text as saved comes back."""
-        import tempfile
-        ed = os.environ.get("VISUAL") or os.environ.get("EDITOR") or (
-            "notepad" if os.name == "nt" else next((e for e in ("nano", "vim", "vi") if shutil.which(e)), ""))
-        if not ed:
-            self.notices.append("No editor found: set EDITOR to the editor you want Ctrl+G to open.")
-            return text
-        fd, path = tempfile.mkstemp(prefix="meshpool-prompt-", suffix=".md")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(text)
-            import shlex
-            subprocess.run(shlex.split(ed, posix=os.name != "nt") + [path])
-            with open(path, encoding="utf-8") as f:
-                return f.read().rstrip("\n")
-        except OSError as e:
-            self.notices.append(f"Could not open the editor ({e}).")
-            return text
-        finally:
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
-
     def echo_user(self, text: str):
         rows = [seg for r in text.split("\n") for seg in R.hard_wrap(r, max(10, self.width - 4))]
         self.scroll([""] + [f" {self.st.accent('❯') if i == 0 else ' '} {r}" for i, r in enumerate(rows)])
@@ -731,7 +706,7 @@ class Terminal:
         if not prefill and getattr(self, "stash", "") and getattr(self, "stash_used", False):
             prefill, self.stash, self.stash_used = self.stash, "", False   # the stashed prompt comes back after a send
         s = {"buf": prefill, "cur": len(prefill), "sel": 0, "note": "",
-             "hint": PLACEHOLDERS[len(self.history) % len(PLACEHOLDERS)], "search": None, "editor": False}
+             "hint": PLACEHOLDERS[len(self.history) % len(PLACEHOLDERS)], "search": None}
         h = len(self.history)
         draft = ""
         last_c = 0.0
@@ -836,9 +811,6 @@ class Terminal:
                     elif k == "ctrl_r":
                         s["search"], s["found"], s["orig"] = "", None, buf
                         s["note"] = "Search earlier prompts: type to search, Ctrl+R for older, Enter to use, Esc to cancel"
-                    elif k == "ctrl_g":
-                        s["editor"] = True               # the editor runs once the keys are let go (below)
-                        break
                     elif k == "ctrl_s":
                         if buf.strip():
                             self.stash, self.stash_used = buf, False
@@ -880,8 +852,6 @@ class Terminal:
                     self.refresh()
         finally:
             self.set_live(None)
-        if s.get("editor"):                             # Ctrl+G: the prompt in $VISUAL or $EDITOR, then back here
-            return self.read_input(prefill=self._edit_externally(s["buf"]))
         if result is not None and getattr(self, "stash", ""):
             self.stash_used = True
         if result is not None:

@@ -347,16 +347,6 @@ def test_word_movement_keys():
     assert t.read_input() == "a! b"
 
 
-def test_ctrl_g_edits_the_prompt_in_an_editor(tmp_path, monkeypatch):
-    script = tmp_path / "ed.sh"
-    script.write_text("#!/bin/sh\nprintf 'from the editor\\nsecond line\\n' > \"$1\"\n")
-    script.chmod(0o755)
-    monkeypatch.setenv("VISUAL", str(script))
-    t, out, clk = S.make_terminal()
-    keys = iter([FakeKeys("draft", "\x07"), FakeKeys("\r")])
-    t.keys_factory = lambda: next(keys)
-    assert t.read_input() == "from the editor\nsecond line"
-
 
 def test_a_status_line_command_shows_in_the_footer(tmp_path, monkeypatch):
     import time as _t
