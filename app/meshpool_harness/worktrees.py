@@ -7,6 +7,7 @@ same files, and the main checkout stays as it is.
   listing(repo)        the worktrees Meshpool made, with branch, uncommitted changes and unpushed commits.
   prune(repo, keep)    removes the oldest clean, fully pushed worktrees beyond the newest `keep`.
   owner(path)          (repo, name) when path is inside one of Meshpool's worktrees, else None.
+  hold(path, obj)      marks a worktree in use while a chat or sub-agent works in it; prune skips it (in_use).
 
   Options of create: base "HEAD" (default), a branch or commit, or "remote" (the remote's default branch, fetched
   first); sparse: folders to check out (a sparse checkout for big monorepos). Each new worktree is locked
@@ -21,6 +22,9 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+import time
+import weakref
 from pathlib import Path
 
 DIR = Path(".meshpool") / "worktrees"
@@ -122,15 +126,139 @@ def owner(path) -> tuple[Path, str] | None:
     return None
 
 
+# Worktrees in use: a chat or sub-agent working in one holds it (hold, from Agent), so prune never removes it under
+# them. In this process a count per worktree; for other processes a marker file per process id in the worktree's own
+# git folder (.git/worktrees/<name>/meshpool-in-use-<pid>), honoured while that process is alive.
+_HELD: dict = {}
+_HELD_LOCK = threading.Lock()
+_MARK = "meshpool-in-use-"
+
+
+def _top(path) -> Path | None:
+    own = owner(path)
+    return (own[0] / DIR / own[1]).resolve() if own else None
+
+
+def _admin(top: Path) -> Path | None:
+    """The worktree's own folder inside the main repository's .git (from its .git file), or None."""
+    try:
+        line = (top / ".git").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not line.startswith("gitdir:"):
+        return None
+    p = Path(line[7:].strip())
+    p = p if p.is_absolute() else (top / p)
+    return p.resolve() if p.is_dir() else None
+
+
+def _alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":                                   # os.kill on Windows would end the process
+        try:
+            import ctypes
+            k = ctypes.windll.kernel32
+            h = k.OpenProcess(0x1000, False, pid)         # PROCESS_QUERY_LIMITED_INFORMATION
+            if not h:
+                return False
+            code = ctypes.c_ulong()
+            ok = k.GetExitCodeProcess(h, ctypes.byref(code))
+            k.CloseHandle(h)
+            return bool(ok) and code.value == 259         # STILL_ACTIVE
+        except Exception:  # noqa: BLE001
+            return True                                   # unsure: keep the worktree
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True                                       # another user's live process
+    except OSError:
+        return False
+    return True
+
+
+def hold(path, obj=None) -> bool:
+    """Marks the worktree that holds path as in use by this process, until release(path), or until obj (a chat's
+    agent) is gone. False when path is not in one of Meshpool's worktrees."""
+    top = _top(path)
+    if top is None:
+        return False
+    key = str(top)
+    with _HELD_LOCK:
+        _HELD[key] = _HELD.get(key, 0) + 1
+    adm = _admin(top)
+    if adm is not None:
+        try:
+            (adm / f"{_MARK}{os.getpid()}").write_text(str(time.time()), encoding="utf-8")
+        except OSError:
+            pass
+    if obj is not None:
+        weakref.finalize(obj, release, key)
+    return True
+
+
+def release(path) -> None:
+    top = _top(path)
+    if top is None:
+        return
+    key = str(top)
+    with _HELD_LOCK:
+        n = _HELD.get(key, 0) - 1
+        if n > 0:
+            _HELD[key] = n
+            return
+        _HELD.pop(key, None)
+    adm = _admin(top)
+    if adm is not None:
+        try:
+            (adm / f"{_MARK}{os.getpid()}").unlink()
+        except OSError:
+            pass
+
+
+def in_use(path) -> bool:
+    """True while a chat or sub-agent, in this process or another live one, works in this worktree."""
+    top = _top(path)
+    if top is None:
+        return False
+    with _HELD_LOCK:
+        if _HELD.get(str(top), 0) > 0:
+            return True
+    adm = _admin(top)
+    if adm is None:
+        return False
+    busy = False
+    try:
+        marks = list(adm.glob(_MARK + "*"))
+    except OSError:
+        return False
+    for m in marks:
+        try:
+            pid = int(m.name[len(_MARK):])
+        except ValueError:
+            continue
+        if pid != os.getpid() and _alive(pid):
+            busy = True
+        else:                                             # a process that ended, or this one with no holder left
+            try:
+                m.unlink()
+            except OSError:
+                pass
+    return busy
+
+
 def prune(path, keep: int = 5) -> list[str]:
     """Removes the oldest of Meshpool's worktrees beyond the newest `keep`, only those with no uncommitted changes
-    and no unpushed commits (remove refuses the rest). Returns the names removed."""
+    and no unpushed commits (remove refuses the rest), and never one a chat or sub-agent still works in (in_use).
+    Returns the names removed."""
     root = repo_root(path)
     rows = [w for w in listing(root) if not w.get("missing")]
     rows.sort(key=lambda w: Path(w["path"]).stat().st_mtime if Path(w["path"]).exists() else 0, reverse=True)
     gone = []
     for w in rows[max(0, int(keep)):]:
-        if w.get("dirty") or w.get("unpushed"):
+        if w.get("dirty") or w.get("unpushed") or in_use(w["path"]):
             continue
         try:
             remove(w["path"])

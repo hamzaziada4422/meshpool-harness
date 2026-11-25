@@ -929,20 +929,119 @@ def _allow_hit(rules: list, name: str, args: dict) -> str:
 
 
 _SEGMENT = re.compile(r"&&|\|\||[;|&\n\r`]|\$\(|\)|\{|\}")
-_WRAPPERS = ("sudo", "env", "command", "builtin", "exec", "time", "nohup", "nice", "doas", "xargs")
+# Wrappers that run the command after them: (options that take a value, plain flags). A value is the next word
+# unless joined (-uroot, --user=root). An option a wrapper does not list makes the reading uncertain, and then every
+# later word counts as a possible start of the command, so a deny or ask rule still matches.
+_ENV_SET = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=\S*")
+_WRAPPERS: dict = {
+    "sudo": ({"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T", "--user", "--group", "--close-from",
+              "--chdir", "--host", "--prompt", "--role", "--type", "--other-user", "--command-timeout"},
+             set("AbEeHiKknPSsv") | {"--preserve-env", "--login", "--shell", "--non-interactive", "--background",
+                                     "--set-home", "--stdin", "--askpass"}),
+    "doas": ({"-u", "-C"}, set("ns")),
+    "env": ({"-u", "-C", "-S", "--unset", "--chdir", "--split-string"}, set("i0v") | {"--ignore-environment",
+                                                                                    "--null", "--debug"}),
+    "nice": ({"-n", "--adjustment"}, set()),
+    "time": ({"-f", "-o", "--format", "--output"}, set("pavq") | {"--portability", "--append", "--verbose",
+                                                                   "--quiet"}),
+    "timeout": ({"-s", "-k", "--signal", "--kill-after"}, set("v") | {"--preserve-status", "--foreground",
+                                                                      "--verbose"}),
+    "stdbuf": ({"-i", "-o", "-e", "--input", "--output", "--error"}, set()),
+    "ionice": ({"-c", "-n", "-p", "--class", "--classdata"}, set("t")),
+    "xargs": ({"-a", "-d", "-E", "-e", "-I", "-i", "-L", "-l", "-n", "-P", "-s", "--arg-file", "--delimiter",
+               "--eof", "--replace", "--max-lines", "--max-args", "--max-procs", "--max-chars"},
+              set("0prtx") | {"--null", "--no-run-if-empty", "--verbose", "--interactive", "--exit"}),
+    "exec": ({"-a"}, set("cl")), "command": (set(), set("pvV")), "builtin": (set(), set()),
+    "nohup": (set(), set()), "eval": (set(), set()), "chronic": (set(), set("ev")),
+}
+_SHELLS = "sh|bash|zsh|dash|ksh|mksh|ash"
+# sh -c '...', bash -lc "...", env -S "...": the script in it is a command line of its own
+_INNER = re.compile(r"(?:^|[\s;&|(`])(?:\S*/)?(?:(?:%s)(?:\s+-[A-Za-z]+)*\s+-[A-Za-z]*c[A-Za-z]*"
+                    r"|env(?:\s+-\S+)*\s+(?:-S|--split-string))"
+                    r"""(?:\s+|=)(?:'([^']*)'|"((?:\\.|[^"\\])*)"|(\S+))""" % _SHELLS)
 
 
-def _command_parts(cmd: str) -> list[str]:
-    """The commands in a shell line, each with its spacing normalised and leading VAR=value, sudo, env, nohup and
-    similar wrappers taken off, so a rule about "git push" also sees "cd x && sudo  git push"."""
-    out = []
-    for part in _SEGMENT.split(str(cmd or "")):
-        w = part.replace("\\\n", " ").split()
-        while w and (re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=\S*", w[0]) or w[0] in _WRAPPERS or w[0].startswith("-")
-                     and out is not None and len(w) > 1 and w[0] in ("-n", "-u", "-E")):
+def _unwrap(w: list) -> list:
+    """The word lists a command may really run once VAR=value prefixes and wrappers (sudo -u root, env -i, nice -n 5,
+    time -p ...) with their options and values are taken off: one normally, every later start when unsure."""
+    sure, starts = True, []
+    while w:
+        if _ENV_SET.fullmatch(w[0]):
             w = w[1:]
-        if w:
-            out.append(" ".join(w))
+            continue
+        name = w[0].rsplit("/", 1)[-1].strip("'\"")
+        if name not in _WRAPPERS:
+            break
+        takes, flags = _WRAPPERS[name]
+        w = w[1:]
+        while w and w[0].startswith("-") and w[0] != "-":
+            opt, w = w[0], w[1:]
+            if opt == "--":
+                break
+            if name == "nice" and re.fullmatch(r"-\d+", opt):          # nice -5 cmd
+                continue
+            if opt.startswith("--"):
+                key = opt.split("=", 1)[0]
+                if key in takes and "=" not in opt and w:
+                    w = w[1:]
+                elif key not in takes and key not in flags:
+                    sure = False
+                continue
+            for i, ch in enumerate(opt[1:], 1):                         # -nu root, -uroot, -Ei
+                if "-" + ch in takes:
+                    if i == len(opt) - 1 and w:
+                        w = w[1:]
+                    break
+                if ch not in flags:
+                    sure = False
+        if name == "env":                                               # env -i FOO=1 cmd
+            while w and _ENV_SET.fullmatch(w[0]):
+                w = w[1:]
+        if name == "timeout" and w:                                     # timeout 5 cmd: the duration first
+            w = w[1:]
+        if not sure:
+            starts += [w[i:] for i in range(1, len(w))]
+    return ([w] if w else []) + starts
+
+
+_GIT_VALUE = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env",
+              "--exec-path", "--list-cmds", "--attr-source")
+
+
+def _git_bare(w: list) -> list:
+    """git with its global options taken off (git -C dir -c k=v --no-pager push -> git push), or [] when there are
+    none, so a rule about "git push" also sees "git -C ../main push"."""
+    if not w or w[0].rsplit("/", 1)[-1] not in ("git", "git.exe"):
+        return []
+    rest, i = w[1:], 0
+    while i < len(rest) and rest[i].startswith("-"):
+        opt = rest[i]
+        i += 2 if opt in _GIT_VALUE else 1
+    return ["git"] + rest[i:] if i else []
+
+
+def _command_parts(cmd: str, _depth: int = 0) -> list[str]:
+    """The commands in a shell line, each with its spacing normalised and leading VAR=value, sudo, env, nohup and
+    similar wrappers (with their options and the options' values) taken off, so a rule about "git push" also sees
+    "cd x && sudo -u root git push". The script of sh -c, bash -lc and env -S is read as a command line too."""
+    out: list[str] = []
+    text = str(cmd or "")
+    for part in _SEGMENT.split(text):
+        for w in _unwrap(part.replace("\\\n", " ").split()):
+            forms = [w, [x.strip("'\"") for x in w]]                         # 'git' push runs git push
+            g = _git_bare(forms[1])
+            if g:
+                forms.append(g)
+            for s in (" ".join(f) for f in forms):
+                if s and s not in out:
+                    out.append(s)
+    if _depth < 4:
+        for m in _INNER.finditer(text):
+            inner = m.group(1) if m.group(1) is not None else \
+                re.sub(r"\\(.)", r"\1", m.group(2)) if m.group(2) is not None else m.group(3)
+            for s in _command_parts(inner, _depth + 1):
+                if s not in out:
+                    out.append(s)
     return out
 
 
@@ -983,6 +1082,12 @@ class Agent:
         self.root = Path(workdir).expanduser().resolve()
         if not self.root.is_dir():
             raise ValueError(f"Project folder not found: {workdir}")
+        try:                                   # in one of Meshpool's worktrees: prune leaves it alone while this lives
+            from meshpool_harness import worktrees as _WT
+            if _WT.owner(self.root):
+                _WT.hold(self.root, self)
+        except Exception:  # noqa: BLE001
+            pass
         self.id = session_id or time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
         self.dir = (Path(sessions_dir) if sessions_dir else SESSIONS) / self.id   # headless runs: inside workdir
         self.ws = Workspace(str(self.root), str(self.dir / "tool-output"))
@@ -2680,26 +2785,14 @@ class Agent:
         if hk["blocked"]:
             return False, f"Blocked by a hook: {hk['message']}"
         rules = _rules(self.root)
-        if hk["allow"] and not _destructive(args) and not _deny_hit(rules["ask"], name, args):
-            return True, ""
-        main = self._main_checkout_touch(name, args)
-        if main:
-            if not self.approve:
-                return False, main + " Work in this worktree only, or ask the user."
-            decision, note = self.approve("bash", main, str(args.get("command") or args.get("commands") or ""))
-            return decision in ("yes", "always", "save"), note or ""
-        guard = self._power_file(name, args)
-        if guard and name in ("bash", "shell", "bash_start", "bash_many") and self.mode == "auto":
-            guard = ""                             # full access: commands run as the user chose
-        if guard:                                  # hooks, allow rules, MCP servers: the agent never grants itself these
-            if not self.approve:
-                return False, f"Not allowed: {guard} decides what may run on this computer. Ask the user to change it."
-            decision, note = self.approve("edit", f"Change {guard}? It decides what runs without asking.",
-                                          self._diff(name, args))
-            return decision in ("yes", "always", "save"), note or ""
+        # Order matters: the user's deny rules refuse first, whatever a hook, a guard or an answer says. Then each
+        # question that applies is asked (an ask rule, a command reaching the main checkout, a change to a file that
+        # grants power); a guard only ever adds a question, it never lets a call past the rules. A hook's "allow"
+        # counts only after all of these.
         hit = _deny_hit(rules["deny"], name, args)
         if hit:
             return False, f"Not allowed by your saved rule {hit!r} (permissions.json). Do something else, or ask the user to change the rule."
+        answered, notes = False, []
         hit = _deny_hit(rules["ask"], name, args)
         if hit:                                    # the user's rule: ask first, whatever the mode or other rules say
             if not self.approve or getattr(self, "_delegate_depth", 0) > 0:   # a sub-agent never answers it itself
@@ -2709,7 +2802,35 @@ class Agent:
                                           f"Your rule \u201c{hit}\u201d says to ask before this. Go ahead?",
                                           str(args.get("command") or args.get("commands") or args.get("path") or
                                               json.dumps(args, ensure_ascii=False)[:2000]))
-            return decision in ("yes", "always", "save"), note or ""
+            if decision not in ("yes", "always", "save"):
+                return False, note or ""
+            answered = True
+            notes.append(note or "")
+        main = self._main_checkout_touch(name, args)
+        if main:
+            if not self.approve:
+                return False, main + " Work in this worktree only, or ask the user."
+            decision, note = self.approve("bash", main, str(args.get("command") or args.get("commands") or ""))
+            if decision not in ("yes", "always", "save"):
+                return False, note or ""
+            answered = True
+            notes.append(note or "")
+        guard = self._power_file(name, args)
+        if guard and name in ("bash", "shell", "bash_start", "bash_many") and self.mode == "auto":
+            guard = ""                             # full access: commands run as the user chose
+        if guard:                                  # hooks, allow rules, MCP servers: the agent never grants itself these
+            if not self.approve:
+                return False, f"Not allowed: {guard} decides what may run on this computer. Ask the user to change it."
+            decision, note = self.approve("edit", f"Change {guard}? It decides what runs without asking.",
+                                          self._diff(name, args))
+            if decision not in ("yes", "always", "save"):
+                return False, note or ""
+            answered = True
+            notes.append(note or "")
+        if answered:                               # the user said yes to every question that applied
+            return True, " ".join(n for n in notes if n)
+        if hk["allow"] and not _destructive(args):
+            return True, ""
         if _allow_hit(rules["allow"], name, args) and not _destructive(args):
             return True, ""
         risky = self._outside(name, args) if self.mode != "auto" else ""

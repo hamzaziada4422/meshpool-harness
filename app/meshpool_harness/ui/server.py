@@ -41,6 +41,7 @@ OFFICE_TOKEN = secrets.token_urlsafe(24)
 OFFICE_FRAMES = ("frame-ancestors 'self' https://*.officeapps.live.com https://*.office.com https://*.office365.com "
                  "https://*.microsoft365.com https://*.cloud.microsoft")
 OFFICE_HTTPD: list = []
+OFFICE_CHATS: set = set()      # the chats the Office panel started: the only ones its token reaches
 UI_VER = secrets.token_hex(4)
 DESKTOP = False
 LAST_PING = [time.time()]
@@ -1218,6 +1219,10 @@ class OfficeHandler(Handler):
         if self.headers.get("X-Meshpool-Token") != OFFICE_TOKEN:
             self._send(403, {"error": "forbidden"})
             return False
+        m = re.fullmatch(r"/api/agent/([\w-]+)(/.*)?", path)
+        if m and m.group(1) not in OFFICE_CHATS:      # a chat of the app's own: never through the panel's token
+            self._send(403, {"error": "forbidden"})
+            return False
         self.headers.replace_header("X-Meshpool-Token", TOKEN)     # the app's own checks, unchanged, from here on
         return True
 
@@ -1232,6 +1237,12 @@ class OfficeHandler(Handler):
             return {"id": b.get("id", 0), "decision": "yes" if b.get("decision") == "yes" else "no",
                     "since": b.get("since", 10 ** 9)}
         return {"since": b.get("since", 10 ** 9)}
+
+    def _send(self, code: int, body, ctype="application/json; charset=utf-8", extra=None):
+        if self.command == "POST" and code == 200 and isinstance(body, dict) and body.get("id") and \
+                urlparse(self.path).path == "/api/agent":
+            OFFICE_CHATS.add(str(body["id"]))         # a chat this panel started: its later calls may reach it
+        return super()._send(code, body, ctype, extra)
 
     def do_GET(self):
         if not self._gate():

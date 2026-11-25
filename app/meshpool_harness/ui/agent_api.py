@@ -304,6 +304,7 @@ class Session:
                                      + (self.harness.get("install") or ""))
                 cls = PiAgent if self.harness["type"] == "pi" else ACPAgent
                 self.agent = cls(self.harness, workdir, **kw)
+                _hold(self.agent, workdir)            # Meshpool's own Agent holds its worktree itself
             else:
                 self.agent = Agent(workdir, profile="work" if self.harness["id"] == "meshpool-work" else "code", **kw)
             self.agent.save()
@@ -649,6 +650,7 @@ class Session:
         if new["type"] in ("acp", "pi"):
             cls = PiAgent if new["type"] == "pi" else ACPAgent
             a = cls(new, self.workdir, session_id=self.id, **kw)
+            _hold(a, self.workdir)
             a.events = list(history)                  # before_turn() reads them; _carry sends them with the message
             a._carry = any(e.get("type") in ("user", "assistant") for e in history)
         else:
@@ -1539,7 +1541,8 @@ def fork(sid: str, upto: int = 0) -> dict:
     meta = read_meta(sid)
     scratch = bool(meta.get("scratch"))
     v = create({"workdir": "" if scratch else src.workdir, "harness": src.harness.get("id"), "kind": src.kind,
-                "project_id": meta.get("project_id") or "", "plan": False})
+                "project_id": meta.get("project_id") or "", "plan": False,
+                "mode": getattr(src.agent, "mode", None) or src.mode})   # a Supervised chat's branch stays Supervised
     s = get(v["id"])
     if scratch:                                              # a private folder: the branch gets a copy of its files
         import shutil
@@ -1577,6 +1580,16 @@ def fork(sid: str, upto: int = 0) -> dict:
         a.save()
     s._persist(running=False)
     return s.view(0)
+
+
+def _hold(agent, workdir) -> None:
+    """An outside agent (Codex, Pi, ...) working in one of Meshpool's worktrees keeps it from being pruned while it
+    lives (worktrees.hold)."""
+    try:
+        from meshpool_harness import worktrees as WT
+        WT.hold(workdir, agent)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _short_harness(name: str) -> str:

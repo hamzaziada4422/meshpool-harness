@@ -351,6 +351,8 @@ class Delegation:
         parent, cfg, depth = self.parent, self.cfg, self.depth
         names = [n for n in parent._tool_names() if n not in BLOCKED and n != "delegate_task"]
         defn = self.defs.get(self.rows[index]["agent"]) if self.rows[index].get("agent") else None
+        if self.rows[index].get("agent") and not defn:   # never a general sub-agent with every tool in its place
+            raise RuntimeError(f"no saved sub-agent named {self.rows[index]['agent']}")
         if defn:                                         # a saved sub-agent: its tools, from the chat's own
             from meshpool_harness.agent import subagents as SA
             names = SA.tool_names(defn, names) or [n for n in names if n in K.READ_ONLY]
