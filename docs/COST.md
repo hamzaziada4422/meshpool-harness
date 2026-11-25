@@ -92,13 +92,16 @@ or model and Word tracked changes keep the engines. Raw rows in `docs/results/of
 |---|---|---|---|
 | Office-7 (decks, documents, workbooks), 7 x 6 | 41/42 vs 41/42 | 0.89x (0.81-0.95) | 0.53x |
 | SpreadsheetBench, same hour as Codex, 6 x 6 each | 33/36 vs 33/36 | 0.89x (0.78-1.03) | 1.22x |
-| OfficeBench, same hour as Codex, 4 x 6 each | 22/24 vs 24/24 | 0.95x (0.53-1.45) | 1.29x |
+| OfficeBench, same hour as Codex, 4 x 6 each | 24/24 vs 22/24 | 1.02x (0.63-1.31) | 1.07x |
 
-Office-7 now solves as many tasks as Codex at 0.89x its cost, and SpreadsheetBench, run side by side with Codex in the
-same hour, as many tasks at 0.89x. OfficeBench still trails by one task: ob-1-15-2 ("add the reference to the end of
-the document") was solved in 8 of 12 runs against Codex's 12 of 12, the failing runs putting the entry at the end of the
-References list. Side by side, SpreadsheetBench and OfficeBench took 1.2-1.3x Codex's median time; against Codex's
-earlier runs (same settings) the times were 0.48-0.76x, so time here moves with the hour more than with the route.
+Office-7 now solves as many tasks as Codex at 0.89x its cost, SpreadsheetBench, run side by side with Codex in the
+same hour, as many tasks at 0.89x, and OfficeBench, side by side, 24 of 24 against Codex's 22 at about its cost
+(1.02x). OfficeBench's last loss, ob-1-15-2 ("add the reference from reference.txt to the end of the document", 8 of 12
+before), is fixed by one pre-answer check that also runs on Codex's request: the named file's text must be in the
+document's paragraphs as the file gives it, not inside a content control and not reworded (12 of 12 with it; on the 239
+saved office runs it fires on the 4 failures only). Side by side, SpreadsheetBench and OfficeBench took 1.22x and 1.07x
+Codex's median time; against Codex's earlier runs (same settings) the times were 0.48-0.76x, so time here moves with
+the hour more than with the route.
 
 0.0.16, on the same suites: Office-7 42/42 at 0.94x, SpreadsheetBench 31/36 at 1.04x (0.90x on a later run), OfficeBench
 21/24 at 0.83x. Why the route helps: a request that is exactly Codex's gets Codex's results, and Meshpool's notes on an
