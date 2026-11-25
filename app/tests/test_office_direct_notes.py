@@ -351,3 +351,19 @@ def test_review_revision_greps_are_not_refused(tmp_path, monkeypatch):
     a.office_revisions = True
     grep = {"command": ["bash", "-lc", "unzip -p contract.docx word/document.xml | grep -c '<w:ins '"]}
     assert a._engine_only("shell", grep) == ""
+
+
+def test_hidden_notes_do_not_switch_on_office_or_browser_tools(tmp_path, monkeypatch):
+    """CLI check (0.0.16): Meshpool's hidden notes name .docx and .xlsx, so every chat's first message switched the
+    office tools on (and the browser tools rode along): 40 tools in a small code chat instead of the benchmark's 1."""
+    from meshpool_harness.agent.core import Agent
+    from meshpool_harness import capabilities as CAP
+    a = Agent(str(tmp_path), mode="auto", emit=lambda e: None)
+    a._post = lambda base, key, body, stream: ({"choices": [{"message": {"role": "assistant", "content": "ok"},
+                                                 "finish_reason": "stop"}], "usage": {}}, True)
+    a.send("Fix the bug in calc.py" + CAP.SEP + "[Meshpool] Office files (.docx, .xlsx, .pptx) are made with ...")
+    assert not a.office_on and not a.browser_on
+    a.send("Make report.docx from notes.txt")
+    assert a.office_on
+    a.send("Check the landing page in index.html renders")
+    assert a.browser_on

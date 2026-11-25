@@ -1272,6 +1272,11 @@ def _unchanged_output_miss(asked: str, root, since: float) -> str:
             "identifies it is empty, not only when every cell is), change the file, save and check again.")
 
 
+# A message about a web page or an app's interface: the browser tools (open, click, screenshot, ui_audit) join the chat.
+_WEB_ASK = (r"\b(?:browser|web ?page|website|web app|webapp|landing page|front[- ]?end|frontend|html|css|ui|ux|"
+            r"screenshot|localhost|https?://|click|button|form|layout|responsive|dark mode|playwright|selenium)\b")
+
+
 def _destructive(args: dict, root=None) -> bool:
     """A shell command that deletes recursively, rewrites history, wipes a disk, pipes the web into a shell or uses sudo.
     shell's argv list (["rm", "-rf", "build"], ["bash", "-lc", "git reset --hard"]) is read as the script it runs.
@@ -1380,6 +1385,7 @@ KEEP_NOTE = ("\n\n\u200b[Meshpool] This request says existing behaviour must sta
 
 class Agent:
     office_on = False      # a message in this chat asked for an office file: Codex style shows the office tools too
+    browser_on = False     # a message in this chat is about a web page or app UI: Codex style shows the browser tools
     office_engines = False  # MH_OFFICE_DIRECT=1: a message asked for a new deck, report or model (engine tools shown)
     office_revisions = False  # MH_OFFICE_DIRECT=1: a message asked for tracked changes or comments (edit_office_file shown)
     usage_task = None      # the session may set one usage task before send() to share it across goal / resume turns
@@ -1665,6 +1671,8 @@ class Agent:
                     return bool(getattr(self, "office_on", False))
                 if n.startswith("mcp__meshpool_assistant__"):      # memory, schedules, chat search stay in Code chats
                     return not n.endswith("run_subtasks")
+                if n.startswith("mcp__browser__"):                 # Meshpool's own browser server: on request, as
+                    return bool(getattr(self, "browser_on", False))   # the office tools (5k tokens on every call)
                 return not n.startswith("mcp__meshpool_") and not name.endswith("run_subtasks")
             mcp = [x for x in self.mcp.schemas() if keep(x["function"]["name"])] if self.mcp else []
             if self._c171():                       # Codex 0.171: exec_command, then the user's MCP tools
@@ -1955,8 +1963,11 @@ class Agent:
         text = EX.expand_mentions(text, self.root)          # @file attaches the file
         try:                                                # a message about an office file brings the office tools
             from meshpool_harness import capabilities as CAP
-            if re.search(r"\.(docx?|xlsx?|pptx?|pdf)\b", text, re.I) or CAP.needs(text):
+            own = str(asked or "").split(CAP.SEP)[0]       # the user's words, not Meshpool's hidden notes (which name
+            if re.search(r"\.(docx?|xlsx?|pptx?|pdf)\b", own, re.I) or CAP.needs(own):   # .docx/.xlsx themselves)
                 self.office_on = True
+            if re.search(_WEB_ASK, own, re.I):              # a page, an app's UI, a browser: the browser tools join
+                self.browser_on = True
         except Exception:  # noqa: BLE001
             pass
         if self._office_direct() and not self.office_engines:   # decided here, before the turn: fixed for the turn
