@@ -1,6 +1,18 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
 **New in 0.0.17**
+- **Bugs fixed, each with a test.** docs/audit/LEDGER-0.0.17.md lists 602 bugs from three audits (the 0.0.16 workstream audit, a platform-wide audit and this release's own review), with the status of each and the test that checks it. 598 have a test. Among the fixes new in this release:
+  - `meshpool setup` no longer saves a key the endpoint refused (a 4xx answer), and it no longer blames the network for it.
+  - ChatGPT sign-in runs a pinned Codex (0.171.0), not whatever is newest.
+  - A plain `pip install` now includes the default settings, profiles and fonts.
+  - The Windows installer works in a folder whose path has an apostrophe.
+  - A 16:9 slide master sized 10 x 5.625 in is scaled and used instead of refused.
+  - The icon, template and brand caches are private to each user, so another user on the computer cannot plant files in them.
+  - `--mcp-config` servers no longer start again in every command and child run.
+  - The `probe` and `trace` tools ask like any command instead of failing.
+  - A repository with submodules gets an isolated copy again, and meshpool's git calls in a copy never run the repository's own hooks or fsmonitor. A repository whose git settings run programs on checkout (a filter, an external diff) gets no copy.
+  - Saved allow rules never cover a chained, PowerShell, non-ASCII or path-glob command, and read-only git commands in a repository whose git settings run programs ask first.
+  - Still open: the cost and speed targets against Codex are only partly met (see the 0.0.16 table), three tests still wait a fixed time, and typing speed in very long chats is not measured.
 - **The browser follows a new tab.** When a link or a script opens a page in a new tab, the agent's browser now switches to it before it reports what it sees. Before, it still described the old tab for one step.
 - **Release builds are sturdier.** LibreOffice is downloaded from the main site when the archive site is down, still checked against its pinned checksum. The release smoke test now makes a real tool call: the v0.0.16 smoke test passed on a reply that held a tool error.
 - **The benchmark pages say what was measured.** The README and BENCHMARKS now carry the 0.0.16 office results against Codex (cheaper per solved task on every suite, fewer tasks solved on SpreadsheetBench and OfficeBench) instead of the older "not cheaper yet" line.
