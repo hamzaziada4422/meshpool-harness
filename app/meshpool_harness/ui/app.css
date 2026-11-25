@@ -1027,7 +1027,12 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .pv-sheet th.rn{position:sticky;left:0;z-index:1;background:var(--fill);color:var(--ink-3);font-size:var(--fs-xs);text-align:right;min-width:36px}
 .pv-sheet thead th.rn{z-index:3}
 .pv-sheet td.num{text-align:right;font-variant-numeric:tabular-nums}
-.pv-sheet tbody tr:nth-child(2) td{font-weight:500}
+.pv-sheet tbody tr.hd td{font-weight:500}
+.pv-sheet thead th.sortable{cursor:pointer;user-select:none}
+.pv-sheet thead th.sortable:hover{color:var(--ink)}
+.pv-tools{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--line-2);background:var(--surface)}
+.pv-filter{flex:0 1 240px;min-width:0;font:inherit;font-size:var(--fs-s);padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
+.pv-count{font-size:var(--fs-xs);color:var(--ink-3)}
 .pv-sheet tbody tr:hover td{background:var(--hover)}
 @media (max-width:980px){.pvp{position:fixed;right:0;top:0;bottom:0;z-index:40;width:100vw;box-shadow:var(--shadow)}}
 @media (max-width:560px){.pv-type,.pv-ic{display:none}#pvOpen{padding:5px 8px}.pv-th{width:68px}.pv-count{display:none}}

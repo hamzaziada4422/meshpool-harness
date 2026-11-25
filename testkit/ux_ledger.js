@@ -162,6 +162,19 @@ const results = []; const check = (name, ok, detail = "") => { results.push([nam
   await p.click(".ver010 [data-vv='-1']").catch(() => {});
   const v2 = await p.textContent(".ver010 .vn").catch(() => "");
   check("Try again keeps the earlier answer, and the arrows switch versions", v1 === "2/2" && v2 === "1/2", `${v1} -> ${v2}`);
+  // a CSV preview sorts by a column and filters rows; the label row stays on top
+  fs.writeFileSync(path.join(proj, "people.csv"), "name,age\nzoe,31\nadam,9\nmia,120\n");
+  await p.evaluate(dir => openPreview(dir, "people.csv"), proj);
+  await p.waitForSelector(".pv-sheet table tbody tr", {timeout: 15000}).catch(() => {});
+  const col = async () => p.$$eval(".pv-sheet tbody tr td:nth-child(3)", tds => tds.map(t => t.textContent).join(","));
+  await p.click(".pv-sheet thead th.sortable:nth-child(3)"); await p.waitForTimeout(150);
+  const up = await col();
+  await p.click(".pv-sheet thead th.sortable:nth-child(3)"); await p.waitForTimeout(150);
+  const down = await col();
+  await p.fill(".pv-filter", "mi"); await p.waitForTimeout(400);
+  const filtered = await col(), cnt = await p.textContent(".pv-count");
+  check("a table preview sorts by a column (numbers as numbers) and filters rows", up === "age,9,31,120" &&
+        down === "age,120,31,9" && filtered === "age,120" && /1 of 3/.test(cnt), `${up} | ${down} | ${filtered} | ${cnt}`);
   check("no page errors", !errs.length, errs.join(" | "));
   await b.close();
   const ok = results.filter(r => r[1]).length; console.log(`\n${ok}/${results.length} passed`);
