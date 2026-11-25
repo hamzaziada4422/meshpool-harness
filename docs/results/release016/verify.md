@@ -310,3 +310,15 @@ BAR: cost FAIL, quality FAIL, time PASS -> NOT MET
 ```
 
 Gate: O7 0.94x (met), SB 1.04x (not met). Billed through the gateway (X-Litellm-Key-Spend) for the whole round including swe7: $8.55.
+
+## sb_d1d706eb — SpreadsheetBench re-run after the literal-year fix (mp-work 6 reps; codex rows from office_final6)
+```
+   mp-work: solved 29/36 (80.6%)  $ 0.2430  $/solved 0.00838  median s 33.2  errors 0
+     codex: solved 35/36 (97.2%)  $ 0.2524  $/solved 0.00721  median s 26.8  errors 0
+solve-rate diff -16.7 pts (95% CI -30.6 to -5.6)
+cost per solved ratio 1.16x (95% CI 0.92-1.44)
+median per-task time ratio 1.45x (95% CI 0.71-1.93)
+BAR: cost FAIL, quality FAIL, time FAIL -> NOT MET
+```
+
+sb-39515 went from 3/6 to 5/6 (no rep used TODAY()); other tasks lost more this time (sb-56921 3/6, one run each on sb-41969, sb-269-43, sb-280-17). Billed through the gateway for the whole round: $8.77.
