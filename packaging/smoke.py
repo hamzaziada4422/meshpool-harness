@@ -166,7 +166,16 @@ def main():
                                   env=dict(env, MESHPOOL_HOME=str(home)), stdout=log, stderr=subprocess.STDOUT))
     try:
         base = f"http://127.0.0.1:{uport}"
-        page = wait_http(base + "/")
+        # The page carries the API token only for the launch key the app prints at startup (?k=...)
+        end, key = time.time() + 90, ""
+        while time.time() < end and not key:
+            m = re.search(r"\?k=([\w-]+)", (tmp / "ui.log").read_text(errors="replace"))
+            key = m.group(1) if m else ""
+            if not key:
+                time.sleep(0.5)
+        if not key:
+            raise SystemExit("smoke: FAILED, the app printed no launch address: " + (tmp / "ui.log").read_text()[-600:])
+        page = wait_http(f"{base}/?k={key}")
         tok = re.search(r'token: "([^"]+)"', page).group(1)
 
         def api(path, body=None):
