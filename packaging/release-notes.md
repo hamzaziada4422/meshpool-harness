@@ -1,5 +1,11 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
+**New in 0.0.17**
+- **The browser follows a new tab.** When a link or a script opens a page in a new tab, the agent's browser now switches to it before it reports what it sees. Before, it still described the old tab for one step.
+- **Release builds are sturdier.** LibreOffice is downloaded from the main site when the archive site is down, still checked against its pinned checksum. The release smoke test now makes a real tool call: the v0.0.16 smoke test passed on a reply that held a tool error.
+- **The benchmark pages say what was measured.** The README and BENCHMARKS now carry the 0.0.16 office results against Codex (cheaper per solved task on every suite, fewer tasks solved on SpreadsheetBench and OfficeBench) instead of the older "not cheaper yet" line.
+- **Measured and left out.** A set of further office checks (a firmer second formula note, extracted values written as values, the unchanged named cell, a stricter re-run rule) was measured on Office-7, SpreadsheetBench and OfficeBench and did not beat 0.0.16 on cost per solved task, so it is not in this release. The agent itself is the same as in 0.0.16, and so are its results below.
+
 **New in 0.0.16**
 - **Hundreds of bugs fixed.** A full audit of the app, the agent, the terminal and every engine found and fixed several hundred problems, each with a test. Among them: undo of a rename that only changes letter case, Stop on a helper agent no longer throws away a report it already finished, the Look question is asked again, Anthropic keys work when the saved address differs, and slides, intro pages, merger heatmaps and DCF sheets no longer overflow or point at the wrong cell.
 - **Small and local models work.** Meshpool learns a model's real context window from the server or from the first cut-off reply, and no longer shrinks to a tiny window by mistake. An unknown model gets 200k tokens instead of 128k; only a real Ollama or LM Studio server starts small. A model that keeps compacting is stopped instead of looping.
