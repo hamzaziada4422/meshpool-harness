@@ -491,3 +491,10 @@ def test_status_line_waits_for_trust_in_a_repo_whose_git_runs_programs(env, monk
     t2.cwd = str(env / "p")
     (env / "p").mkdir(exist_ok=True)
     assert t2._statusline_ok() is True
+
+
+def test_codex_style_chats_get_the_data_rule_on_the_first_message(env):          # 0.0.17 merge
+    from meshpool_harness import assistant as AS
+    assert core.DATA_RULE in AS.context_block(rules=False, data_rule=True, lookup=False, record=False)
+    assert core.DATA_RULE not in AS.context_block(rules=False, lookup=False, record=False)   # in the system prompt
+    assert core.DATA_RULE in AS.context_block(rules=True, lookup=False, record=False)       # outside agents

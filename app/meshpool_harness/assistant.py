@@ -400,12 +400,13 @@ def project_block(project_id: str, task: str = "", exclude=()) -> str:
 
 def context_block(task: str = "", root: str = "", project_id: str = "", chat_id: str = "", incognito: bool = False,
                   exclude=(), record: bool = True, lookup: bool = True, rules: bool = True, tools: str = "all",
-                  office: bool = True) -> str:
+                  office: bool = True, data_rule: bool = False) -> str:
     """Text the app adds, out of sight, to the first message of a new thread. task and root pick what memory is
     relevant: the user's core facts, the facts that match the task, and the project's notes. project_id adds the
     project's instructions, memory and knowledge files (see project_store). `incognito` reads no memory at all.
     With a chat_id, the facts given are recorded (so a reply can show its sources)."""
-    return build_context(task, root, project_id, chat_id, incognito, exclude, record, lookup, rules, tools, office)["text"]
+    return build_context(task, root, project_id, chat_id, incognito, exclude, record, lookup, rules, tools, office,
+                         data_rule)["text"]
 
 
 def _notes(tools: str, office, mem_on: bool, incognito: bool) -> str:
@@ -437,7 +438,7 @@ def _notes(tools: str, office, mem_on: bool, incognito: bool) -> str:
 
 def build_context(task: str = "", root: str = "", project_id: str = "", chat_id: str = "", incognito: bool = False,
                   exclude=(), record: bool = False, lookup: bool = True, rules: bool = True, tools: str = "all",
-                  office: bool = True) -> dict:
+                  office: bool = True, data_rule: bool = False) -> dict:
     """context_block with its parts: {text, facts: [ids given], sections: [{title, text, ids}]} for the X-ray.
     `rules`: add HONESTY and PLAIN (Meshpool's own agents carry them in their system prompt, so their first message
     leaves them out; Pi and Codex get them here, once). `tools`: which Meshpool tools the agent has, "all", "deferred"
@@ -459,6 +460,9 @@ def build_context(task: str = "", root: str = "", project_id: str = "", chat_id:
              f"Today is {now.strftime('%A %d %B %Y')}, {now.strftime('%H:%M')} local time "
              f"(UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]}).",
              *(([LEAN_RULES] if lean else [HONESTY, PLAIN]) if rules else [])]
+    if rules or data_rule:                     # an agent whose system prompt is someone else's text gets it here
+        from meshpool_harness.agent.core import DATA_RULE
+        parts.append(DATA_RULE)
     sections.append({"title": "Meshpool's own rules", "text": "\n".join(parts), "ids": []})
     try:                                       # who the user is and the language to answer in (Settings, General)
         from meshpool_harness.ui import settings_v2 as SV

@@ -983,14 +983,6 @@ def effort_choice(v) -> str:
 
 
 
-def _budget_usd() -> float:
-    """Settings, Spending limit per task (MH_BUDGET_USD). 0 means no limit."""
-    try:
-        return max(0.0, float(os.environ.get("MH_BUDGET_USD", "0") or 0))
-    except ValueError:
-        return 0.0
-
-
 _OWN_MCP = ("mcp__meshpool_assistant__", "mcp__meshpool_tools__")
 _AUX = threading.local()                              # set while a side question (/btw) calls the model
 
@@ -2243,7 +2235,7 @@ class Agent:
                     text = (text.rstrip("\n") if c171 else text) + \
                         f"\n\n# {name} instructions for {self.root}\n\n<INSTRUCTIONS>\n{body}\n</INSTRUCTIONS>"
                     break
-            return text + "\n\n" + DATA_RULE
+            return text                        # Codex's own text, unchanged: the data rule rides on the first message
         if os.name == "nt":
             shell = (("bash (Git Bash). For Windows tools, run them through powershell -NoProfile -Command \"...\" "
                       "or cmd /c \"...\"") if bash else
@@ -2990,14 +2982,7 @@ class Agent:
         try:
             cap = self._turn_cap
             for step in (range(cap) if cap else itertools.count()):
-                self._check_stop()
-                cap = _budget_usd()
-                if cap and turn.get("cost", 0.0) >= cap:
-                    self.unfinished = True             # "continue" picks it up again, under a fresh budget
-                    self.emit({"type": "error", "text": f"Stopped: this task reached your spending limit of "
-                                                        f"${cap:.2f} (${turn['cost']:.2f} so far). Raise the limit in "
-                                                        "Settings, or send \"continue\" to spend up to the limit again."})
-                    break
+                self._check_stop()                 # the spending limit: usage.reserve raises BudgetExceeded
                 self._take_inbox()
                 if time.time() - getattr(self, "_saved_at", 0) > 4:        # a crash or power loss keeps the work so far
                     self._saved_at = time.time()

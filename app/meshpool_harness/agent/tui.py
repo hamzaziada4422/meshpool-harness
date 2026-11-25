@@ -1189,12 +1189,13 @@ def logo_lines(color: bool) -> list[str]:
     return R.logo(B.depth() if color else 0)
 
 
-def _context() -> str:
+def _context(agent=None) -> str:
     """The user's instructions and memory (shared with the app), sent out of sight with a session's first message.
     The same block the app sends (assistant.context_block), so the two never drift apart."""
     try:
         from meshpool_harness import assistant as AS
-        return AS.context_block(rules=False) or ""   # the CLI agent carries HONESTY and PLAIN in its system prompt
+        style = bool(getattr(agent, "_style", lambda: False)()) if agent is not None else False
+        return AS.context_block(rules=False, data_rule=style) or ""   # the CLI agent carries HONESTY and PLAIN itself
     except Exception:  # noqa: BLE001
         return ""
 
@@ -1289,7 +1290,7 @@ class Session(SharedCommands):
             return self.front.send(text, images)
         if self.ctx:
             self.ctx = False
-            block = _context()
+            block = _context(self.agent)
             if block:
                 text += "\n\n\u200b" + block
         term.stopping = term.failed = False

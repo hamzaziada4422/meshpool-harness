@@ -1479,6 +1479,7 @@ class Session:
                         body += "\n\n\u200b" + AS.context_block(
                             text, self.workdir, pid, chat_id=self.id, incognito=self.incognito, exclude=ex,
                             lookup=not m0.get("project_unbound"), rules=outside, tools=tools,
+                            data_rule=outside or bool(getattr(self.agent, "_style", lambda: False)()),
                             # Pi: the office rules ride on the message that asks for a file (capabilities.note),
                             # not on every chat's first message
                             office=("direct" if self._office_direct(text) else True) if (
