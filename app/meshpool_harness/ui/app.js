@@ -1450,8 +1450,12 @@ function applyEvRaw(ev) {
       const d = cardEl("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.closed ? "Closed when Meshpool restarted." : ev.decision === "stopped" ? "Stopped before running." : ev.decision === "timeout" ? "No answer in time." : ev.reason ? esc(ev.reason) : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "save" ? "Allowed, and saved for this folder." : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
         const g = d.previousElementSibling; if (g?.classList.contains("work") && d === col.lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
-      if (ev.final && cur.thoughtLive) { cur.thoughtLive = false; break; }   // the saved copy of what streamed live
-      if (ev.delta) cur.thoughtLive = true;
+      if (ev.final && cur.thoughtLive) {      // the saved copy of what streamed live: add only what this page missed
+        const seen = cur.thoughtSeen || ""; cur.thoughtLive = false; cur.thoughtSeen = "";   // (FL-R6a: the server drops
+        const rest = ev.text.startsWith(seen) ? ev.text.slice(seen.length) : "";             // the pieces once it is here)
+        if (rest && cur.thought && cur.thought.isConnected) { const tdr = $("div", cur.thought); tdr.textContent += rest; }
+        break; }
+      if (ev.delta) { cur.thoughtLive = true; cur.thoughtSeen = (cur.thoughtSeen || "") + ev.text; }
       if (!cur.thought || !cur.thought.isConnected) { closeGroup(); cur.thought = add(`<details ${S.steps ? "open" : ""}><summary>Thinking</summary><div></div></details>`, "think"); }
       const td = $("div", cur.thought); td.textContent += ev.text; td.scrollTop = td.scrollHeight; cur.activity = "Thinking"; break; }
     case "plan": { cur.planEv = ev; planSoon(); break; }       // shown in the Session panel and as one line above the composer

@@ -137,6 +137,7 @@ class Terminal:
         self.idle.set()
         self.keys_free = threading.Event()      # set while the Esc watcher does not hold the keyboard
         self.keys_free.set()
+        self._kb_lock = threading.Lock()        # FL-L1: the watcher's "is anyone else reading?" check and its take
         self.on_esc = None                      # what Esc does while the agent works (stop the turn)
         self.typeahead: list = []               # keys typed while the agent worked, for the next prompt
         # screen state
@@ -272,10 +273,13 @@ class Terminal:
         """While the agent works, Esc stops the turn (Ctrl+C still does too). The keyboard is let go whenever a
         question or approval needs it (idle cleared), and taken back after."""
         while self._turn:
-            if not self.idle.is_set():
+            with self._kb():                   # FL-L1: check and take in one step, so a question that opens in
+                take = self._turn and self.idle.is_set()   # between waits for the watcher instead of reading too
+                if take:
+                    self.keys_free.clear()
+            if not take:
                 time.sleep(0.05)
                 continue
-            self.keys_free.clear()
             try:
                 if os.name == "nt":
                     import msvcrt
@@ -304,6 +308,19 @@ class Terminal:
             finally:
                 self.keys_free.set()
 
+    def _kb(self):
+        """The lock that makes "is a question open?" and "take the keyboard" one step for the Esc watcher (FL-L1)."""
+        lock = self.__dict__.get("_kb_lock")
+        return lock if lock is not None else self.__dict__.setdefault("_kb_lock", threading.Lock())
+
+    def _hold_keys(self, wait: float = 1.0) -> None:
+        """A question or approval needs the keyboard: say so (idle cleared) under the watcher's lock, then wait until
+        the watcher has let go."""
+        with self._kb():
+            self.idle.clear()
+        if hasattr(self, "keys_free"):
+            self.keys_free.wait(wait)
+
     def _esc_pressed(self):
         self.stopping = True
         self._label = "Stopping"
@@ -323,7 +340,8 @@ class Terminal:
                     pass
 
     def turn_finish(self):
-        self._turn = False
+        with self._kb():                        # FL-L1: the watcher never takes the keyboard after this
+            self._turn = False
         self._flush_text()
         self._tools.clear()
         if self.interactive:
@@ -551,6 +569,14 @@ class Terminal:
         self.scroll(lines)
 
     # ---------- facts for the screen ----------
+    def follow_history(self) -> None:
+        """FL-L11: after /resume into a chat of another folder, the Up arrow walks that folder's earlier prompts, the
+        same key add_history now saves new prompts under (self.cwd). Only when history was read at start."""
+        hc = getattr(self, "_history_cwd", None)
+        if hc and not self.cwd_label and os.path.realpath(self.cwd) != os.path.realpath(hc):
+            from meshpool_harness.agent import tui_more as TM
+            self.history, self._history_cwd = TM.load_history(self.cwd), self.cwd
+
     def refresh_facts(self, agent):
         from meshpool_harness import __version__
         from meshpool_harness import providers as PV
@@ -845,9 +871,12 @@ class Terminal:
                         s["buf"] = buf[:cur] + (buf[j:] if j >= 0 else "")
                     elif k == "ctrl_u":
                         s["buf"], s["cur"] = buf[cur:], 0
-                    elif k == "ctrl_w":
+                    elif k in ("ctrl_w", "word_backspace"):   # Ctrl+W, and Alt+Backspace (read as ctrl_w)
                         j = len(buf[:cur].rstrip(" "))
-                        j = buf.rfind(" ", 0, j) + 1
+                        if j and buf[j - 1] == "\n":       # FL-V15: at a line's start: join it to the line above
+                            j -= 1
+                        else:                               # else stop at a space or a line break, never past it
+                            j = max(buf.rfind(" ", 0, j), buf.rfind("\n", 0, j)) + 1
                         s["buf"], s["cur"] = buf[:j] + buf[cur:], j
                     elif k in ("up", "ctrl_p"):
                         recalled = h < len(self.history) and buf == self.history[h]   # walking history, not the menu
@@ -902,10 +931,6 @@ class Terminal:
                         j = cur + (len(buf[cur:]) - len(buf[cur:].lstrip()))
                         nxt = [x for x in (buf.find(" ", j), buf.find("\n", j)) if x >= 0]
                         s["buf"] = buf[:cur] + buf[min(nxt) if nxt else len(buf):]
-                    elif k == "word_backspace":
-                        j = len(buf[:cur].rstrip(" "))
-                        j = max(buf.rfind(" ", 0, j), buf.rfind("\n", 0, j)) + 1
-                        s["buf"], s["cur"] = buf[:j] + buf[cur:], j
                     elif k == "ctrl_l":
                         self._write("\x1b[2J\x1b[H")
                         self._rows = self._cur_row = 0
@@ -1030,9 +1055,7 @@ class Terminal:
         with self._approve_lock:                       # parallel tool calls: one question on the screen at a time
             if self.stopping:
                 return "no", ""
-            self.idle.clear()
-            if hasattr(self, "keys_free"):
-                self.keys_free.wait(1.0)                # the Esc watcher lets go of the keyboard first
+            self._hold_keys(1.0)                        # the Esc watcher lets go of the keyboard first
             try:
                 extra = (scope,) if scope else ()
                 choice, note = self._approve_raw(kind, title, detail, *extra) if self.raw_ok() else self._approve(kind, title, detail, *extra)
@@ -1118,8 +1141,7 @@ class Terminal:
         st = self.st
         if not (sys.stdin.isatty() or self.keys_factory):
             return None
-        self.idle.clear()
-        self.keys_free.wait(1.0)
+        self._hold_keys(1.0)
         try:
             return self._ask_questions(questions)
         finally:
@@ -1888,6 +1910,7 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
     if prompt is None:
         from meshpool_harness.agent import tui_more as TM
         term.history = TM.load_history(wd)       # Up arrow reaches prompts from earlier sessions in this folder
+        term._history_cwd = wd                   # the folder it was read for (follow_history reloads on /resume)
     try:
         if headless:
             text, images = prompt, None
