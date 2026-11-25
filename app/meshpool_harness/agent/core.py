@@ -1355,6 +1355,9 @@ class Agent:
         from meshpool_harness.agent import extras as EX
         if not getattr(self, "_no_instructions", False):  # a sub-agent defined to work without them
             text += EX.instruction_text(self.root)      # home, parent folders and the project, with @imports
+        defn = getattr(self, "_as_agent", None)
+        if defn:
+            text += f"\n\nYOUR ROLE ({defn['name']}), from the user's saved agents:\n" + defn["prompt"][:20000]
         try:
             from meshpool_harness import skills as SK
             text += SK.catalog_text(getattr(self, "_route_text", ""),
@@ -1403,6 +1406,8 @@ class Agent:
         d = self._dropped_route()
         if E2E and getattr(self, "headless", False) and not self.plan:
             d = d | {"ask_user"}
+        if os.environ.get("MH_NO_COMMANDS") == "1":        # --disable-slash-commands: no skills either
+            d = d | {"use_skill", "find_skill"}
         return d
 
     def _dropped_route(self) -> set:
@@ -1439,7 +1444,31 @@ class Agent:
                if not x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_web__")
                and not x["function"]["name"].endswith("run_subtasks")]   # delegate_task instead
               if self.mcp else [])
-        return T.schemas(names) + self._lazy_apply(ms)
+        out = T.schemas(names) + self._lazy_apply(ms)
+        defn = getattr(self, "_as_agent", None)
+        if defn and defn.get("tools"):            # meshpool --agent NAME: only the tools its definition names
+            from meshpool_harness.agent import subagents as SA
+            keep = set(SA.tool_names(defn, [x["function"]["name"] for x in out]))
+            self._only_names = keep
+            out = [x for x in out if x["function"]["name"] in keep]
+        return out
+
+    def as_agent(self, name: str) -> dict:
+        """Work as one of the user's saved sub-agents for this session: its instructions, tools and model."""
+        from meshpool_harness.agent import subagents as SA
+        defs = SA.definitions(self.root)
+        defn = defs.get(SA._slug(name))
+        if not defn:
+            raise ValueError(f"No saved sub-agent named {name}. Saved: {', '.join(sorted(defs)) or 'none'}")
+        self._as_agent = defn
+        if defn.get("model"):
+            self.model = defn["model"]
+        if defn.get("effort"):
+            self.effort = effort_choice(defn["effort"])
+        if defn.get("omit_instructions"):
+            self._no_instructions = True
+        self.messages[0]["content"] = self.system_prompt()
+        return defn
 
     def _lazy_apply(self, ms: list) -> list:
         """E2E-AUTONOMY: with many connected tools show an index and load schemas on demand (agent/mcp_assist.py)."""
@@ -1572,9 +1601,11 @@ class Agent:
         if not hasattr(self, "_inbox"):
             self._inbox, self._inbox_lock = [], threading.Lock()
         from meshpool_harness.agent import extras as EX
-        cmd = EX.expand_command(text, self.root)          # /name from .meshpool/commands
-        if cmd:
+        cmd = None if os.environ.get("MH_NO_COMMANDS") == "1" else EX.expand_command(text, self.root)
+        if cmd:                                           # /name from .meshpool/commands
             text = cmd
+        elif os.environ.get("MH_NO_COMMANDS") == "1":
+            pass
         elif isinstance(text, str) and text.startswith("/mcp__") and getattr(self, "mcp", None) is not None \
                 and hasattr(self.mcp, "expand_prompt"):
             try:                                          # /mcp__server__prompt: a connected app's ready-made request
@@ -3101,6 +3132,9 @@ class Agent:
     def _permit(self, name: str, args: dict) -> tuple[bool, str]:
         if name == "delegate_task":
             return True, ""                    # its sub-agents' own actions are checked against this chat's mode
+        only = getattr(self, "_only_names", None)
+        if only is not None and name not in only:
+            return False, f"{name} is not one of the tools this agent may use."
         sk = self._skill_blocked(name)
         if sk:
             return False, f"The skill {sk} says not to use {name} while following it. Do it another way."

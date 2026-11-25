@@ -345,7 +345,8 @@ def search_text(query: str) -> str:
 def catalog_text(task: str = "", searchable: bool = True) -> str:
     """The skills list for an agent's system prompt: in full for a few skills, otherwise names only plus the
     ones that match the task the chat started with."""
-    rows = for_model()
+    import os
+    rows = for_model() if os.environ.get("MH_NO_COMMANDS") != "1" else []
     if not rows:
         return ""
     if not on_demand():

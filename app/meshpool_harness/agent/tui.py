@@ -1302,9 +1302,9 @@ class Session:
         names = [c[0] for c in COMMANDS]
         if cmd not in names:
             from meshpool_harness.agent import extras as EX
-            if cmd in EX.commands(self.agent.root):          # a command file in .meshpool/commands
+            if cmd in EX.commands(self.agent.root) and os.environ.get("MH_NO_COMMANDS") != "1":   # .meshpool/commands
                 return self.send(text)
-            if cmd.startswith("mcp__"):                      # a connected app's prompt: the agent fills it in
+            if cmd.startswith("mcp__") and os.environ.get("MH_NO_COMMANDS") != "1":   # a connected app's prompt
                 return self.send(text)
             near = [n for n in names if n.startswith(cmd)] if cmd else []
             if len(near) == 1:
@@ -1838,6 +1838,13 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
         except ValueError as e:
             term.p(st.red(str(e)))
             return 1
+    if os.environ.get("MH_START_AGENT") and not sub:     # meshpool --agent NAME
+        try:
+            d = agent.as_agent(os.environ.pop("MH_START_AGENT"))
+            term.notices.append(f"Working as your saved agent {d['name']}.")
+        except ValueError as e:
+            term.p(st.red(str(e)))
+            return 1
     term.agent = agent
     agent.headless = prompt is not None and not sub     # one request, no one to answer questions
     if pm == "plan" and hasattr(agent, "plan"):
@@ -1875,7 +1882,7 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
                 return 1 if term.failed else 0
             sess.send(prompt)
             return 1 if term.failed else 0
-        term.notices = _notices(agent, mcp)
+        term.notices = (term.notices or []) + _notices(agent, mcp)    # --mcp-config and --agent notes first
         if (resume or session) and getattr(agent, "unfinished", False):
             term.notices.append("The last task stopped before it finished. Type continue to pick it up.")
         term.startup()

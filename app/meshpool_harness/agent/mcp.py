@@ -867,6 +867,8 @@ class Manager:
             self.config_error = f"{self.path.name} is not valid JSON: {e}"
             cfg = {}
         cfg = {**project_servers(self.roots[0]), **cfg, **self.extra}
+        if os.environ.get("MH_STRICT_MCP") == "1":      # --strict-mcp-config: this run's servers and meshpool's own
+            cfg = dict(self.extra)
         log_dir = C.runs_dir() / "mcp-logs"
         os.environ["MESHPOOL_PROJECT"] = str(Path(self.roots[0]).resolve())   # usable as ${MESHPOOL_PROJECT}
         threads = []

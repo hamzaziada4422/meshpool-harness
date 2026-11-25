@@ -170,9 +170,36 @@ def _agent_parser():
     ap.add_argument("--effort", choices=["auto", "low", "medium", "high"], help="how hard the model thinks (auto: Meshpool decides)")
     ap.add_argument("-n", "--name", help="a name for this session (shown in /resume and the app)")
     ap.add_argument("--mcp-config", help="MCP servers for this run only: a JSON file, or JSON text, with mcpServers")
+    ap.add_argument("--strict-mcp-config", action="store_true", help="use only the servers from --mcp-config, not "
+                                                                      "your saved ones or the project's")
+    ap.add_argument("--settings", metavar="FILE", help="meshpool settings for this run: a JSON object or KEY=VALUE "
+                                                      "lines (MH_ and MESHPOOL_ keys)")
+    ap.add_argument("--agent", help="start as one of your saved sub-agents (its instructions, tools and model)")
+    ap.add_argument("--disable-slash-commands", action="store_true", help="no custom commands, server prompts or "
+                                                                           "skills for this run")
     from meshpool_harness import __version__
     ap.add_argument("-v", "--version", action="version", version=f"meshpool {__version__}")
     return ap
+
+
+def _settings_file(path) -> dict:
+    """{KEY: value} from a JSON object or KEY=VALUE lines; only meshpool's own MH_ and MESHPOOL_ keys."""
+    import json
+    text = Path(path).expanduser().read_text(encoding="utf-8", errors="replace")
+    if text.lstrip().startswith("{"):
+        d = json.loads(text)
+        if not isinstance(d, dict):
+            raise ValueError("the JSON must be an object")
+        pairs = d.items()
+    else:
+        pairs = [ln.split("=", 1) for ln in text.splitlines() if "=" in ln and not ln.lstrip().startswith("#")]
+    out = {}
+    for k, v in pairs:
+        k = str(k).strip()
+        if not re.fullmatch(r"(MH|MESHPOOL)_[A-Z0-9_]+", k):
+            raise ValueError(f"{k} is not a meshpool setting (they start with MH_ or MESHPOOL_)")
+        out[k] = ("1" if v else "0") if isinstance(v, bool) else str(v).strip()
+    return out
 
 
 def _read_arg_file(path) -> str:
@@ -234,6 +261,36 @@ def _no_console() -> bool:
         return not ctypes.windll.kernel32.GetConsoleWindow()
     except Exception:  # noqa: BLE001
         return False
+
+
+def _mcp_add_json(args: list) -> int:
+    import json
+    from meshpool_harness.agent import mcp as M
+    if len(args) != 2 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,62}", args[0]):
+        print("usage: meshpool mcp add-json NAME JSON   (JSON: {\"command\": ..., \"args\": [...]} or {\"url\": ...};"
+              " - reads it from standard input)", file=sys.stderr)
+        return 2
+    raw = sys.stdin.read() if args[1] == "-" else args[1]
+    try:
+        spec = json.loads(raw)
+    except ValueError as e:
+        print(f"meshpool: not valid JSON: {e}", file=sys.stderr)
+        return 2
+    if isinstance(spec, dict) and isinstance(spec.get("mcpServers"), dict) and len(spec["mcpServers"]) == 1:
+        spec = next(iter(spec["mcpServers"].values()))       # a whole snippet as a server's docs give it
+    if not isinstance(spec, dict) or not (isinstance(spec.get("command"), str) or isinstance(spec.get("url"), str)):
+        print("meshpool: the server needs a command or a url", file=sys.stderr)
+        return 2
+    if spec.get("args") is not None and not isinstance(spec["args"], list):
+        print("meshpool: args must be a list", file=sys.stderr)
+        return 2
+    try:
+        existed = M.edit_config(lambda s: (args[0] in s, s.__setitem__(args[0], spec))[0])
+    except (OSError, ValueError) as e:
+        print(f"meshpool: {e}", file=sys.stderr)
+        return 1
+    print(f"{'Replaced' if existed else 'Added'} the MCP server {args[0]} in {M.config_file()}.")
+    return 0
 
 
 def _worktree_cli(args: list) -> int:
@@ -328,8 +385,21 @@ def main(argv=None):
         if argv and argv[0] == "agent":
             argv = argv[1:]
         a = _agent_parser().parse_args(argv)
+        if a.settings:                       # first, so the flags below still win
+            try:
+                for k, v in _settings_file(a.settings).items():
+                    os.environ[k] = v
+            except (OSError, ValueError) as e:
+                print(f"meshpool: --settings: {e}", file=sys.stderr)
+                return 2
         if a.model:
             os.environ["MH_MODEL"] = a.model
+        if a.strict_mcp_config:
+            os.environ["MH_STRICT_MCP"] = "1"
+        if a.agent:
+            os.environ["MH_START_AGENT"] = a.agent
+        if a.disable_slash_commands:
+            os.environ["MH_NO_COMMANDS"] = "1"
         from meshpool_harness.agent.tui import main as agent_main
         prompt = a.prompt
         if prompt is not None and _stdin_has_data(prompt == "-"):   # cat notes.txt | meshpool -p "summarise this"
@@ -482,6 +552,8 @@ def main(argv=None):
     if argv[0] == "login":
         from meshpool_harness.agent.tui import ask_key
         return 0 if ask_key(force=True) else 1
+    if argv[:2] == ["mcp", "add-json"]:          # meshpool mcp add-json NAME '{"command": ...}'  (or - for stdin)
+        return _mcp_add_json(argv[2:])
     if argv[0] == "mcp":
         from meshpool_harness.agent.mcp import Manager, config_file
         from meshpool_harness.agent.tui import Terminal, _mcp_status
