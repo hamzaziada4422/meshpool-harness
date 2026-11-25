@@ -77,6 +77,10 @@ def scratch_rm(cmd: str, root, workdir: str | None = None) -> bool:
     program (sudo, xargs), or a cd whose target is not a plain path."""
     if not cmd or not DESTRUCTIVE.search(cmd) or re.search(r"[$`~]", cmd):
         return False
+    # every destructive match in the WHOLE command must be an rm: a pattern that only matches across pieces
+    # (curl ... | sh, wget -qO- ... | bash) is never cleared by judging the pieces one by one (PR #19 review)
+    if any(not m.group(0).lstrip().lower().startswith("rm") for m in DESTRUCTIVE.finditer(cmd)):
+        return False
     try:
         lex = shlex.shlex(cmd, posix=True, punctuation_chars=";&|<>()\n")
         lex.whitespace = " \t\r"
@@ -125,8 +129,10 @@ def scratch_rm(cmd: str, root, workdir: str | None = None) -> bool:
             name = os.path.basename(t.rstrip("/"))
             if not name or set(name) <= set("*?.[]") or ".." in Path(t).parts:
                 return False                       # rm -rf *, rm -rf ., rm -rf ../x
-            if any(ch in os.path.dirname(t) for ch in "*?["):
-                return False                       # a wildcard above the last part
+            if any(ch in t for ch in "*?["):
+                return False                       # a wildcard (rm -f *.py): what it matches is not known here
+            if ".git" in Path(t).parts or name == ".git":
+                return False                       # the repository's own history (rm -f .git/HEAD)
             p = Path(os.path.realpath(os.path.join(str(cwd), t)))
             if p == r or p in r.parents:
                 return False                       # the project or a folder holding it

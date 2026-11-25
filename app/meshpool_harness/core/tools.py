@@ -246,7 +246,8 @@ def shell_script(argv) -> str:
         # swe6 traces (D0, 7 calls in 23 runs): ["python", "t.py", "2>&1", "|", "tail"] meant a pipeline; joined as
         # quoted words it ran python with "|" as an argument and failed. Operators standing alone stay operators. The
         # permission checks read this same script (permrules.commands_of), so they judge what really runs.
-        return " ".join(a if _ARGV_OP.match(a) else shlex.quote(a) for a in argv)
+        execs = any(a in ("-exec", "-execdir", "-ok", "-okdir") for a in argv)   # find -exec ... ; ends with ";"
+        return " ".join(a if _ARGV_OP.match(a) and not (execs and a == ";") else shlex.quote(a) for a in argv)
     return shlex.join(argv)
 
 

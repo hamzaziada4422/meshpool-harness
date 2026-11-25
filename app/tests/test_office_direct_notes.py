@@ -302,3 +302,52 @@ def test_office_looks_are_capped_per_request(tmp_path):
     call = {"function": {"name": "mcp__meshpool_office__check_deck", "arguments": "{}"}}
     assert a._guarded_tool(call, g).startswith("ok") and a._guarded_tool(call, g).startswith("ok")
     assert "already ran 2 times" in a._guarded_tool(call, g)
+
+
+def test_review_request_checks_only_fire_on_what_was_asked(tmp_path):
+    import time as _t
+    import openpyxl
+    from meshpool_harness.agent.core import _slide_count_miss, _total_row_miss, _unchanged_output_miss
+    from meshpool_harness.office_intent import wants_revisions
+    t0 = _t.time() - 1
+    _deck(tmp_path / "deck.pptx", 8)
+    assert _slide_count_miss("Summarise the first 3 slides of deck.pptx", tmp_path, t0) == ""
+    assert _slide_count_miss("Add 2 slides to deck.pptx about pricing", tmp_path, t0) == ""
+    wb = openpyxl.Workbook()
+    wb.active.append(["a", 1])
+    wb.save(tmp_path / "b.xlsx")
+    assert _total_row_miss("Remove the total row from b.xlsx", tmp_path, t0) == ""
+    assert _total_row_miss("Highlight the total row in b.xlsx", tmp_path, t0) == ""
+    assert "total row" in _total_row_miss("Add a total row to b.xlsx", tmp_path, t0)
+    assert not wants_revisions("Add a comment column to tracker.xlsx")
+    assert wants_revisions("Add a comment to paragraph 2 of memo.docx")
+
+
+def test_review_formatting_only_edit_is_not_unchanged(tmp_path):
+    import os
+    import time as _t
+    import openpyxl
+    from openpyxl.styles import Font
+    from meshpool_harness.agent.core import _unchanged_output_miss
+    wb = openpyxl.Workbook()
+    wb.active.append(["h1", "h2"])
+    wb.save(tmp_path / "in.xlsx")
+    old = _t.time() - 100
+    os.utime(tmp_path / "in.xlsx", (old, old))
+    t0 = _t.time() - 1
+    wb.active["A1"].font = Font(bold=True)
+    wb.save(tmp_path / "out.xlsx")
+    assert _unchanged_output_miss("Highlight row 1 of in.xlsx in bold, save as out.xlsx", tmp_path, t0) == ""
+
+
+def test_review_revision_greps_are_not_refused(tmp_path, monkeypatch):
+    from meshpool_harness.agent.core import Agent
+    from meshpool_harness.hrouter import profiles as PROF
+    from meshpool_harness.hrouter.route import Route
+    monkeypatch.setenv("MH_LEAN_WORK", "1")
+    monkeypatch.setenv("MH_OFFICE_DIRECT", "1")
+    a = Agent(str(tmp_path), mode="auto", profile="work", emit=lambda e: None)
+    a.set_route(Route(spec="data", family="data", base="work", profile="core", settings=PROF.settings("core")), "x")
+    a.office_revisions = True
+    grep = {"command": ["bash", "-lc", "unzip -p contract.docx word/document.xml | grep -c '<w:ins '"]}
+    assert a._engine_only("shell", grep) == ""

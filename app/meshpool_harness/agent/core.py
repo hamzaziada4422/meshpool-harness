@@ -1081,8 +1081,11 @@ def _slide_count_miss(asked: str, root, since: float) -> str:
     pptx_chart built 3 slides for "Make deck.pptx, 4 to 6 slides ..." and answered done."""
     import zipfile
     from meshpool_harness.capabilities import SEP as _SEP
-    m = _SLIDES.search(str(asked or "").split(_SEP)[0])
-    if not m:
+    text = str(asked or "").split(_SEP)[0]
+    m = _SLIDES.search(text)
+    # a deck the request makes ("Make deck.pptx, 4 to 6 slides"), not "the first 3 slides of" or "add 2 slides to"
+    if not m or not re.search(r"\b(?:make|create|build|prepare|produce|generate|draft|put together|turn)\b", text, re.I) \
+            or re.search(r"\b(?:first|last|top|add|insert|remove|delete|drop|of the)\s+\d{1,2}\s+slides?\b", text, re.I):
         return ""
     lo, hi = (int(m.group(1)), int(m.group(2))) if m.group(1) else (int(m.group(3)), int(m.group(3)))
     lo, hi = min(lo, hi), max(lo, hi)
@@ -1112,8 +1115,11 @@ def _total_row_miss(asked: str, root, since: float) -> str:
     "Total" label: as a note for the agent, else "". Office-7 on 59e49c8b: xlsx_edit wrote =SUM in the last row with no
     label, so neither the user nor a reader of the sheet could tell it was the total."""
     from meshpool_harness.capabilities import SEP as _SEP
-    if not _TOTAL_ROW.search(str(asked or "").split(_SEP)[0]):
-        return ""
+    text = str(asked or "").split(_SEP)[0]
+    if not re.search(r"\b(?:add|insert|include|create|make|put|with)\b[^.]{0,40}?\btotals?\s+row|"
+                     r"\b(?:add|insert|include|create|make)\b[^.]{0,40}?\brow\s+(?:of|for)\s+(?:the\s+)?totals?\b",
+                     text, re.I):
+        return ""                                    # "remove the total row", "highlight the total row": not asked for
     try:
         import openpyxl
     except ImportError:
@@ -1237,9 +1243,12 @@ def _unchanged_output_miss(asked: str, root, since: float) -> str:
     except ImportError:
         return ""
 
-    def values(path):
+    def values(path):                                # values and the visible style: a formatting-only edit differs
         wb = openpyxl.load_workbook(path)
-        return [[c.value for c in row] for ws in wb.worksheets for row in ws.iter_rows()]
+        return [[(c.value, bool(c.font and c.font.b), bool(c.font and c.font.i),
+                  str(getattr(getattr(c.font, "color", None), "rgb", "")) if c.font else "",
+                  str(getattr(getattr(c.fill, "fgColor", None), "rgb", "")) if c.fill else "", c.number_format)
+                 for c in row] for ws in wb.worksheets for row in ws.iter_rows()]
     try:
         names = {n.lower() for n in re.findall(r"[\w][\w.()-]*\.xlsx\b", text)}
         inputs = [f for f in Path(root).rglob("*.xlsx") if f.name.lower() in names and f.stat().st_mtime < since]
@@ -1953,8 +1962,10 @@ class Agent:
             from meshpool_harness.office_intent import engines_wanted, wants_revisions
             if engines_wanted(asked):                        # a new deck, report or model: the engines join, and stay
                 self.office_engines = self.office_on = True
-            elif wants_revisions(asked):                     # Word tracked changes or comments: edit_office_file joins
-                self.office_revisions = self.office_on = True
+            else:                                            # Word tracked changes or comments: edit_office_file joins
+                self.office_revisions = wants_revisions(asked)   # for this message only
+                if self.office_revisions:
+                    self.office_on = True
         if not self.title:
             self.title = text.strip().splitlines()[0][:80] if text.strip() else "Session"
         body = text
@@ -2807,6 +2818,7 @@ class Agent:
             except ValueError:
                 cap = 2
             if cap and seen[short] > cap:
+                g["rseq"] = g.get("rseq", 0) + 1          # a refusal like the others: the refused-streak guard counts it
                 return (f"[Meshpool] Not run: {short} already ran {cap} times for this request. Fix what it reported "
                         "and answer, or answer now if it found nothing to fix.")
         out = self._guarded_tool_inner(c, g, cut)
@@ -4490,7 +4502,10 @@ class Agent:
                                                 args.get("content"), args.get("new"), args.get("input"))) + \
             " ".join(str(c) for c in args.get("commands") or [])
         if _office_direct_on() and self._lean():     # MH_OFFICE_DIRECT=1: small office jobs are done by hand
-            if getattr(self, "office_revisions", False) and re.search(r"<w:(?:ins|del)\b|w:ins\b|w:del\b", text):
+            writes = name in ("write_file", "edit", "apply_patch") or re.search(
+                r"\.write\(|writestr|>\s*\S|sed\s+-i|\.save\(|ZipFile\([^)]*['\"][wa]['\"]", text)
+            if getattr(self, "office_revisions", False) and writes and \
+                    re.search(r"<w:(?:ins|del)\b|w:ins\b|w:del\b", text):
                 # Office-7 on 9cd021c0: docx_tracked written as raw revision XML took 71 calls where
                 # edit_office_file's tracked_replace took 8
                 return ("Not run: Word tracked changes are not written as XML by hand here. Use edit_office_file "
