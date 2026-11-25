@@ -119,7 +119,7 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
             "out_dir": str(outdir), "wall_s": round(time.time() - t0, 1), "key_spend_since_start": spent}
 
 
-COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect", "trust", "worktree", "office"}
+COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect", "trust", "worktree", "office", "completion"}
 
 
 def _agent_parser():
@@ -147,11 +147,19 @@ def _agent_parser():
     ap.add_argument("--output-format", choices=["text", "json", "stream-json"], help="with -p: text (default), json, or stream-json (one event per line as it happens)")
     ap.add_argument("--permission-mode", choices=["ask", "edits", "auto", "plan"], help="ask (default), edits (accept file changes), auto (everything), plan (read only, then a plan)")
     ap.add_argument("--append-system-prompt", help="extra instructions added to the agent's system prompt for this run")
+    ap.add_argument("--append-system-prompt-file", metavar="FILE", help="like --append-system-prompt, read from a file")
+    ap.add_argument("--system-prompt", help="replace meshpool's own instructions for this run (the rule that tool "
+                                             "output is data, not instructions, is always kept)")
+    ap.add_argument("--system-prompt-file", metavar="FILE", help="like --system-prompt, read from a file")
     ap.add_argument("--max-turns", type=int, help="stop after this many tool steps in one request")
     ap.add_argument("--allowed-tools", help="comma-separated tools or bash:pattern rules that never ask, e.g. edit,bash:npm test*")
     ap.add_argument("--disallowed-tools", help="comma-separated tools or bash:pattern rules that are always refused")
     ap.add_argument("-c", "--continue", dest="resume", action="store_true", help="resume the last session here")
     ap.add_argument("--resume", dest="session", help="resume a session by id")
+    ap.add_argument("--fork-session", action="store_true", help="with -c or --resume: continue in a new session, "
+                                                                 "leaving the old one as it was")
+    ap.add_argument("--session-id", help="the id for a new session (letters, digits, - and _)")
+    ap.add_argument("--no-session-persistence", action="store_true", help="with -p: do not save this session")
     ap.add_argument("--model", help="model id for this session")
     ap.add_argument("--no-mcp", action="store_true", help="do not start MCP servers")
     ap.add_argument("--profile", choices=["code", "work"], help="code (default): a coding agent; work: Cowork, for documents, research and connected apps")
@@ -163,6 +171,40 @@ def _agent_parser():
     from meshpool_harness import __version__
     ap.add_argument("-v", "--version", action="version", version=f"meshpool {__version__}")
     return ap
+
+
+def _read_arg_file(path) -> str:
+    if not path:
+        return ""
+    return Path(path).expanduser().read_text(encoding="utf-8", errors="replace").strip()
+
+
+def completion(shell: str) -> str:
+    """A shell completion script for meshpool: commands and the main options."""
+    import argparse
+    opts = sorted({o for act in _agent_parser()._actions for o in act.option_strings if o.startswith("--")})
+    cmds = sorted(COMMANDS | {"completion"})
+    if shell == "bash":
+        return ("_meshpool() {\n"
+                "  local cur=${COMP_WORDS[COMP_CWORD]}\n"
+                f"  local cmds=\"{' '.join(cmds)}\"\n"
+                f"  local opts=\"{' '.join(opts)}\"\n"
+                "  if [[ $COMP_CWORD -eq 1 && $cur != -* ]]; then COMPREPLY=($(compgen -W \"$cmds\" -- \"$cur\"));\n"
+                "  elif [[ $cur == -* ]]; then COMPREPLY=($(compgen -W \"$opts\" -- \"$cur\"));\n"
+                "  else COMPREPLY=($(compgen -f -- \"$cur\")); fi\n"
+                "}\ncomplete -F _meshpool meshpool\n")
+    if shell == "zsh":
+        return ("#compdef meshpool\n_meshpool() {\n"
+                f"  local -a cmds; cmds=({' '.join(cmds)})\n"
+                f"  local -a opts; opts=({' '.join(opts)})\n"
+                "  if (( CURRENT == 2 )) && [[ $words[CURRENT] != -* ]]; then compadd -a cmds\n"
+                "  elif [[ $words[CURRENT] == -* ]]; then compadd -a opts\n"
+                "  else _files; fi\n}\ncompdef _meshpool meshpool\n")
+    if shell == "fish":
+        lines = [f"complete -c meshpool -n '__fish_use_subcommand' -a '{c}'" for c in cmds]
+        lines += [f"complete -c meshpool -l {o[2:]}" for o in opts]
+        return "\n".join(lines) + "\n"
+    raise argparse.ArgumentTypeError("bash, zsh or fish")
 
 
 def _stdin_has_data(explicit: bool) -> bool:
@@ -314,8 +356,39 @@ def main(argv=None):
                 f" (copied {', '.join(w['copied'])})" if w["copied"] else ""), file=sys.stderr)
             a.dir = w["path"]
             os.environ["MH_WORKTREE_MADE"] = w["path"]   # the terminal asks to keep or remove it on the way out
-        if a.append_system_prompt:
-            os.environ["MH_APPEND_PROMPT"] = a.append_system_prompt
+        try:
+            extra = "\n\n".join(x for x in (a.append_system_prompt, _read_arg_file(a.append_system_prompt_file)) if x)
+            own = a.system_prompt or _read_arg_file(a.system_prompt_file)
+        except OSError as e:
+            print(f"meshpool: {e}", file=sys.stderr)
+            return 2
+        if extra:
+            os.environ["MH_APPEND_PROMPT"] = extra
+        if own:
+            os.environ["MH_SYSTEM_PROMPT"] = own
+        if a.session_id:
+            from meshpool_harness.agent import core as K
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", a.session_id) or a.session_id.startswith("sub-"):
+                print("meshpool: --session-id takes letters, digits, - and _ (up to 80)", file=sys.stderr)
+                return 2
+            if (K.SESSIONS / a.session_id / "session.json").exists():
+                print(f"meshpool: a session with the id {a.session_id} already exists; use --resume", file=sys.stderr)
+                return 2
+            if (a.resume or a.session) and not a.fork_session:
+                print("meshpool: --session-id names a new session; add --fork-session to resume into it",
+                      file=sys.stderr)
+                return 2
+            os.environ["MH_SESSION_ID"] = a.session_id
+        if a.fork_session:
+            if not (a.resume or a.session):
+                print("meshpool: --fork-session goes with -c or --resume", file=sys.stderr)
+                return 2
+            os.environ["MH_FORK_SESSION"] = "1"
+        if a.no_session_persistence:
+            if prompt is None:
+                print("meshpool: --no-session-persistence goes with -p", file=sys.stderr)
+                return 2
+            os.environ["MH_NO_PERSIST"] = "1"
         if a.permission_mode:
             os.environ["MH_PERMISSION_MODE"] = a.permission_mode
             if a.permission_mode == "auto":
@@ -351,6 +424,15 @@ def main(argv=None):
             print("Usage: meshpool disconnect <name>")
             return 1
         return connect_cli.disconnect(argv[1])
+    if argv[0] == "completion":                # meshpool completion bash|zsh|fish
+        sh = (argv[1:2] or [""])[0]
+        if sh not in ("bash", "zsh", "fish"):
+            print("usage: meshpool completion bash|zsh|fish\n  bash: eval \"$(meshpool completion bash)\" in "
+                  "~/.bashrc\n  zsh: meshpool completion zsh > \"${fpath[1]}/_meshpool\"\n  fish: meshpool "
+                  "completion fish > ~/.config/fish/completions/meshpool.fish", file=sys.stderr)
+            return 2
+        sys.stdout.write(completion(sh))
+        return 0
     if argv[0] == "trust":                     # meshpool trust [path] [--revoke] [--list]
         return _trust_cli(argv[1:])
     if argv[0] == "worktree":                  # meshpool worktree list | add [name] | remove NAME [--force]

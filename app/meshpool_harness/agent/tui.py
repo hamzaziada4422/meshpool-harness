@@ -1791,6 +1791,10 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
         agent = (Agent.resume(wd, session, **kw) if (resume or session) else None)
         if (resume or session) and agent is None:
             term.p(st.amber("No earlier session for this folder. Starting a new one."))
+        if agent is not None and os.environ.pop("MH_FORK_SESSION", ""):     # --fork-session
+            old = agent.id
+            agent.fork_id(os.environ.pop("MH_SESSION_ID", ""))
+            term.p(st.dim(f"Continuing {old} as a new session, {agent.id}."))
         try:
             agent = agent or Agent(wd, **kw)
         except ValueError as e:
@@ -1850,6 +1854,9 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
             mcp.close()
         if sub:
             agent.close()
+        if not getattr(agent, "persist", True):    # --no-session-persistence: nothing of this run is kept
+            import shutil
+            shutil.rmtree(getattr(agent, "dir", ""), ignore_errors=True)
     if prompt is None and not sub:
         _leave_worktree(term, wd)
         _session_summary(term, locals().get("sess"), locals().get("t_start"))

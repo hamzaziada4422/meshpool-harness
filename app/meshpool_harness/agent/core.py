@@ -1263,7 +1263,9 @@ class Agent:
                 _WT.hold(self.root, self)
         except Exception:  # noqa: BLE001
             pass
-        self.id = session_id or time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
+        self.id = session_id or os.environ.pop("MH_SESSION_ID", "") or \
+            time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
+        self.persist = os.environ.pop("MH_NO_PERSIST", "") != "1"       # -p --no-session-persistence
         self.dir = (Path(sessions_dir) if sessions_dir else SESSIONS) / self.id   # headless runs: inside workdir
         self.ws = Workspace(str(self.root), str(self.dir / "tool-output"))
         self.ws.should_stop = lambda: self._stop
@@ -1288,6 +1290,7 @@ class Agent:
         self._trace_lock = threading.Lock()
         self.route = None                      # hrouter.Route: the specialised harness this chat runs as
         self.lane = "task"                     # per message: chat (answer fast, fast model if set), task, deep
+        self._own_prompt = os.environ.pop("MH_SYSTEM_PROMPT", "")    # --system-prompt: this run's agent only
         self.messages = [{"role": "system", "content": self.system_prompt()}]
         self.title = ""
 
@@ -1312,6 +1315,10 @@ class Agent:
                 f"  <shell>{shell}</shell>\n</environment_context>")
 
     def system_prompt(self) -> str:
+        own = getattr(self, "_own_prompt", "")
+        if own:                                # --system-prompt: the caller's instructions, plus the data rule
+            extra = os.environ.get("MH_APPEND_PROMPT", "").strip()
+            return own.strip() + "\n\n" + DATA_RULE + (("\n\n" + extra) if extra else "")
         from meshpool_harness.config import find_bash
         bash = find_bash()
         if self._style():
@@ -3729,8 +3736,17 @@ class Agent:
                 break
 
     # ---------- sessions ---------------------------------------------------------------------------------------
+    def fork_id(self, new_id: str = "") -> str:
+        """Continue this conversation under a new session id; the old session stays as it was."""
+        self.id = new_id or time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
+        self.dir = self.dir.parent / self.id
+        self.ws.run_dir = self.dir / "tool-output"
+        self.ws.run_dir.mkdir(parents=True, exist_ok=True)
+        self.save()
+        return self.id
+
     def save(self):
-        if getattr(self, "deleted", False):           # the user deleted this thread; never bring it back
+        if getattr(self, "deleted", False) or not getattr(self, "persist", True):   # deleted, or not to be kept
             return
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
