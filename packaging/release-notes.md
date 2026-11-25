@@ -1,6 +1,13 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
 **New in 0.0.17**
+- **Less CPU.** Measured before and after on the same machine:
+  - Five open chats start no helper processes until one is used, then share one (15 helper processes before). Idle CPU with them open fell about 5 times.
+  - A reply streaming into a long chat uses about a third of the CPU it did, and reasoning about a sixth. The page no longer asks for git status on every streamed piece, and a code block is coloured when it settles, not on every word.
+  - The Session panel checks git every 15 seconds when idle instead of every 4, and not at all while the window is hidden.
+  - A deck starts LibreOffice once instead of three times, and a workbook twice instead of five times.
+  - The skills list, the git safety check and program versions are kept instead of being worked out again on every step, so a ten-step turn starts about half as many processes.
+  - In the terminal, typing no longer runs git, and your status line command runs when its input changes.
 - **Bugs fixed, each with a test.** docs/audit/LEDGER-0.0.17.md lists 602 bugs from three audits (the 0.0.16 workstream audit, a platform-wide audit and this release's own review), with the status of each and the test that checks it. 598 have a test. Among the fixes new in this release:
   - `meshpool setup` no longer saves a key the endpoint refused (a 4xx answer), and it no longer blames the network for it.
   - ChatGPT sign-in runs a pinned Codex (0.171.0), not whatever is newest.
