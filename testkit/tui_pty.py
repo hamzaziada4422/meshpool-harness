@@ -100,6 +100,8 @@ def main():
         "---\nname: reviewer\ndescription: Reviews code for bugs\ntools: Read, Grep\n---\nBe strict.\n")
     t.line("/agents")
     check("/agents lists saved sub-agents", t.wait(r"reviewer(.|\n)*Reviews code for bugs(.|\n)*tools: Read, Grep"), t.plain()[-400:])
+    t.line("# I prefer tabs over spaces")
+    check("# saves a line to memory", t.wait(r"Saved to memory|Already in memory"), t.plain()[-300:])
     t.line("!echo shell-hello")
     check("!command runs it and shows the output", t.wait(r"\$ echo shell-hello(.|\n)*shell-hello(.|\n)*\(exit 0\)"),
           t.plain()[-300:])

@@ -146,6 +146,10 @@ const results = []; const check = (name, ok, detail = "") => { results.push([nam
     return JSON.stringify(rows.filter(r => r.length));
   });
   check("side by side pairs old and new lines", sbs === JSON.stringify([[":keep", ":keep"], ["d:old line", "a:new line"], [":tail", ":tail"]]), sbs);
+  // "# a fact" in the box saves it to memory instead of sending it
+  await p.fill("#input", "# I deploy on Fridays"); await p.keyboard.press("Enter"); await p.waitForTimeout(800);
+  const mem = await p.evaluate(async () => (await api("/api/memory")).facts?.map(f => f.text) || []);
+  check("# in the message box saves to memory", mem.some(t => /deploy on Fridays/i.test(t)) && !(await p.inputValue("#input")), mem.slice(0, 5).join(" | "));
   check("no page errors", !errs.length, errs.join(" | "));
   await b.close();
   const ok = results.filter(r => r[1]).length; console.log(`\n${ok}/${results.length} passed`);

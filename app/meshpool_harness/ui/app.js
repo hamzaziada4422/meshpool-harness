@@ -547,6 +547,11 @@ async function sendNow(interrupt) {
   S.recall = null; rememberSent(typed);
   const busy = cfg().busy;
   if (text.startsWith("/") && await runSlash(text)) { inp.value = ""; inp.dispatchEvent(new Event("input")); return; }
+  if (/^#\s+\S/.test(text) && !text.includes("\n") && !S.attachments.length) {   // "# a fact": saved to memory, not sent
+    try { const r = await post("/api/memory", {action: "add", text: text.replace(/^#\s+/, "")}); inp.value = ""; inp.dispatchEvent(new Event("input")); toast(r.created ? "Saved to memory." : "Already in memory.", 3000, {label: "Memory", fn: () => goPage("memory")}); }
+    catch (e) { toast(e.message, 5000); }
+    return;
+  }
   if (!S.settings?.ready) { S.pendingGoal = null; showOnboarding(); return; }
   if (!S.cur && S.mode === "code" && !S.draft.project) { toast("Choose a folder or a repository first."); $("#envSel")?.click(); return; }
   const atts = S.attachments; S.attachments = []; renderAttach();

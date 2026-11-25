@@ -1219,6 +1219,13 @@ class Session:
                 if self.command(text) == "exit":
                     break
                 continue
+            if re.fullmatch(r"#\s+\S.*", text):          # "# a fact": saved to memory, not sent
+                from meshpool_harness import assistant as AS
+                try:
+                    term.p(term.st.dim("  " + AS.remember(text[1:].strip())))
+                except ValueError as e:
+                    term.p(term.st.amber("  " + str(e)))
+                continue
             if text.startswith("!") and text[1:].strip():   # !command: run it here; the agent sees it next message
                 self.shell(text[1:].strip())
                 continue
