@@ -1003,6 +1003,12 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/threads/([\w-]+)", u.path)
             if m:
                 return self._send(200, A.thread_action(m.group(1), self._json()))
+            m = re.fullmatch(r"/api/agent/([\w-]+)/btw", u.path)        # a side question, kept out of the chat
+            if m:
+                s_ = A.get(m.group(1))
+                if not hasattr(s_.agent, "side_question"):
+                    raise ValueError("Side questions work with Meshpool's own agents.")
+                return self._send(200, {"answer": s_.agent.side_question(str(self._json().get("question") or ""))})
             m = re.fullmatch(r"/api/agent/([\w-]+)/fork", u.path)       # branch: a new chat from this one's history
             if m:
                 return self._send(200, A.fork(m.group(1), int(self._json().get("turn") or 0)))

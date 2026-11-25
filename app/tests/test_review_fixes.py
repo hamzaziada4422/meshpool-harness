@@ -356,3 +356,23 @@ def test_compaction_keeps_what_the_user_asked_for():                          # 
                  {"role": "tool", "tool_call_id": f"c{i}", "content": "out " * 50}]
     r = CP.compact_history(msgs, client=Fake(), model="m", focus="the API design decisions")
     assert r and seen and seen[0].endswith("keep, in full detail: the API design decisions")
+
+
+def test_a_side_question_is_answered_and_kept_out_of_the_chat(env, monkeypatch):    # /btw
+    (env / "p").mkdir()
+    a = core.Agent(str(env / "p"), mode="auto")
+    a.messages += [{"role": "user", "content": "add retries"},
+                   {"role": "assistant", "content": "I put the retry logic in net/retry.py."}]
+    before = list(a.messages)
+    sent = []
+
+    def post(self, base, key, body, stream):
+        sent.append(body)
+        return {"choices": [{"message": {"content": "It is in net/retry.py."}}], "usage": {"prompt_tokens": 10}}, False
+    monkeypatch.setattr(core.Agent, "_post", post)
+    assert a.side_question("where is the retry logic?") == "It is in net/retry.py."
+    assert a.messages == before and "tools" not in sent[0]
+    assert "net/retry.py" in sent[0]["messages"][1]["content"] and sent[0]["messages"][1]["content"].endswith(
+        "where is the retry logic?")
+    with pytest.raises(ValueError, match="Ask something"):
+        a.side_question("  ")

@@ -586,6 +586,13 @@ const SLASH = [
   ["/usage", "Usage, by model and by chat", () => openSettings("usage")],
   ["/review", "Review this branch's changes for bugs (/review what to focus on)", arg => sendCmd(REVIEW_PROMPT + (arg ? ` Focus on: ${arg}.` : ""))],
   ["/qa", "Click through your app and report UI and UX problems (/qa address)", arg => sendCmd(qaPrompt(arg))],
+  ["/btw", "A quick side question about this chat; the answer is not added to it (/btw your question)", async arg => {
+    if (!S.cur) return toast("Open a chat first.");
+    if (!arg) return toast("Type your question after /btw.");
+    toast("Asking on the side…", 2500);
+    try { const r = await post(`/api/agent/${S.cur.id}/btw`, {question: arg}); await ask({title: "By the way", text: r.answer, ok: "Close", cancel: "Copy"}) === false && navigator.clipboard?.writeText(r.answer); }
+    catch (e) { toast(e.message, 6000); }
+  }],
   ["/compact", "Summarize the earlier steps to free up room (/compact what to keep in full)", async arg => {
     if (!S.cur) return toast("Open a chat first.");
     try { const r = await post(`/api/agent/${S.cur.id}/compact`, {focus: arg || ""}); toast(r.compacted ? `Summarized ${r.compacted.removed} earlier messages.` : "Nothing to summarize yet."); } catch (e) { toast(e.message); }

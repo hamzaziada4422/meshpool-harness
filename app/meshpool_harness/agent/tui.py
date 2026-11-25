@@ -43,6 +43,7 @@ COMMANDS = [
     ("connect", "[app]", "connect Notion, Gmail, Slack... or an MCP server"),
     ("tokens", "", "tokens and cost of this session"),
     ("agents", "", "saved sub-agents (agents/*.md)"),
+    ("btw", "<question>", "a quick side question; not added to the conversation"),
     ("context", "", "what fills the context window"),
     ("resume", "[id]", "open an earlier session"),
     ("export", "[file]", "save this conversation as Markdown"),
@@ -1299,6 +1300,19 @@ class Session:
         t.p(st.dim("  " + {"ask": "Edits and commands are asked first.",
                             "edits": "File edits are allowed; commands are still asked.",
                             "auto": "Edits and commands are allowed without asking."}[mode]))
+
+    def cmd_btw(self, arg):
+        t, st = self.term, self.term.st
+        if not hasattr(self.agent, "side_question"):
+            return t.p(st.dim("  /btw is not available for this agent."))
+        try:
+            t.spin.start("Answering on the side")
+            ans = self.agent.side_question(arg)
+        except ValueError as e:
+            ans = str(e)
+        finally:
+            t.spin.stop()
+        t.scroll([st.dim("  By the way (not added to the conversation):")] + ["  " + x for x in ans.splitlines()])
 
     def cmd_agents(self, arg):
         from meshpool_harness.agent import subagents as SA

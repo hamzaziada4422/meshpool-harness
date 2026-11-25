@@ -2343,6 +2343,24 @@ class Agent:
         self._finish = choice.get("finish_reason")
         return choice.get("message") or {}, streamed
 
+    def side_question(self, question: str) -> str:
+        """/btw: a quick answer from what this chat has seen so far, in one separate call with no tools. It is not
+        added to the conversation, so a running task goes on as it was."""
+        q = str(question or "").strip()
+        if not q:
+            raise ValueError("Ask something after /btw, for example: /btw which file has the retry logic?")
+        from meshpool_harness.agent import compaction as CP
+        log = CP.render([m for m in list(self.messages)[1:] if m.get("role") in ("user", "assistant", "tool")][-60:])
+        system = ("You answer a quick side question about a task another agent is working on, from the log of that "
+                  "task below. Answer in a few sentences, plainly. If the log does not say, say you do not know from "
+                  "what has happened so far. You cannot run tools or change anything. " + DATA_RULE)
+        user = f"The log so far:\n{log[-60000:]}\n\nThe question: {q}"
+        try:
+            return self._aux_complete(system, user, {"in": 0, "cached": 0, "out": 0, "calls": 0}, max_tokens=900) \
+                .strip() or "(no answer)"
+        except RuntimeError as e:
+            raise ValueError(f"Could not ask that on the side: {e}")
+
     def _aux_complete(self, system: str, user: str, turn: dict, max_tokens: int = 700) -> str:
         """One separate chat completion (fresh messages, no tools) on the same model and endpoint. Goes through
         _post, so auth, the refused-field list and usage accounting are the agent's own. Raises on failure."""
