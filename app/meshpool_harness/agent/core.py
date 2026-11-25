@@ -102,8 +102,8 @@ OFFICE_DIRECT_RULE = ("- For an office-file job (edit or derive from an existing
                       "fill, add a column, a chart or a slide, convert, extract; or a small new file), write it "
                       "yourself in one Python script with python-docx, openpyxl or python-pptx, keeping the source's "
                       "sheets, layout and styles unless asked otherwise; save it, then reopen the file to check what "
-                      "the request asks for (re-read formulas as written; recalculate through LibreOffice only when the "
-                      "request asks for computed values). When that check disagrees with the request (a failed "
+                      "the request asks for (a formula change is checked by reading the formula text, not by recalculating; "
+                      "recalculate through LibreOffice only when the request asks for computed values). When that check disagrees with the request (a failed "
                       "assertion, the same result for different inputs, a row the rule matches still there), the file "
                       "is wrong: fix the file, not the check, and apply the user's rule to every row it matches. "
                       "office_task is listed only when a request asks for a new deck, "
@@ -1924,6 +1924,7 @@ class Agent:
         self.ws.turn_files = set()
         self.ws.turn_new = set()
         g = {"hist": [], "doom_at": -10, "seen": set(), "edits": self.ws.edits, "edits0": self.ws.edits, "last": 0,
+             "cmds0": len(self.ws.commands),
              "todo_nudged": False}
         route = getattr(self, "route", None)
         g["req"] = self.messages[-1].get("content") if self.messages else ""
@@ -2104,6 +2105,22 @@ class Agent:
                         rep = scope_report(self.ws, done="reply")
                         if rep:
                             self.messages.append({"role": "user", "content": "[Meshpool] " + rep})
+                            continue
+                    if self._office_direct() and not g.get("office_check_nudged") \
+                            and os.environ.get("MH_OFFICE_FINISH_CHECK", "1") != "0":
+                        # SpreadsheetBench (38f57ffb), sb-374-31: the agent's own assert failed, it printed the rows
+                        # and answered "Done" without changing the file. A failed assertion this turn with no later
+                        # save is not a finished job: say so once.
+                        cmds = self.ws.commands[g.get("cmds0", 0):]
+                        bad = [i for i, c in enumerate(cmds) if c.get("code") not in (0, None)
+                               and "AssertionError" in str(c.get("tail", ""))]
+                        if bad and not any(re.search(r"\.save\(|\.save_as\(|to_excel\(", str(c.get("cmd", "")))
+                                           and c.get("code") == 0 for c in cmds[bad[-1] + 1:]):
+                            g["office_check_nudged"] = True
+                            self.messages.append({"role": "user", "content": (
+                                "[Meshpool] Your own check failed (AssertionError) and the file has not been saved "
+                                "since. The job is not done: change the file so it does what the request asks, save "
+                                "it and check again. If the request really cannot be met, say exactly why in one line.")})
                             continue
                     route = getattr(self, "route", None)
                     after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits]

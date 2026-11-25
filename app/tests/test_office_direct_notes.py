@@ -93,3 +93,47 @@ def test_session_notes_defer_to_the_engines_for_a_new_deliverable(monkeypatch):
     agent._office_direct = lambda: True
     monkeypatch.setenv("MH_OFFICE_DIRECT_NOTE", "0")
     assert f(s, "Sort data.xlsx by date") is False
+
+
+def test_edit_note_in_office_direct_names_libraries_not_absent_tools():
+    n = CAP.note(["edit"], direct=True)
+    assert "openpyxl" in n and "edit_office_file" not in n and "make_spreadsheet" not in n
+    assert "formula text" in n
+    assert "edit_office_file" in CAP.note(["edit"])                  # the engine lane keeps its note
+
+
+def _office_agent(tmp_path, monkeypatch):
+    import json as _json
+    from meshpool_harness.agent.core import Agent
+    from meshpool_harness.hrouter import profiles as PROF
+    from meshpool_harness.hrouter.route import Route
+    monkeypatch.setenv("MH_LEAN_WORK", "1")
+    monkeypatch.setenv("MH_OFFICE_DIRECT", "1")
+    a = Agent(str(tmp_path), mode="auto", profile="work", emit=lambda e: None)
+    a.set_route(Route(spec="data", family="data", base="work", profile="core", settings=PROF.settings("core")), "x")
+    replies = iter([
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "type": "function", "function": {
+            "name": "shell", "arguments": _json.dumps({"command": ["bash", "-lc", "python3 -c 'assert 5 == 4'"]})}}]},
+        {"role": "assistant", "content": "Done."},
+        {"role": "assistant", "content": "Fixed and saved."},
+    ])
+
+    def fake(base, key, body, stream):
+        return {"choices": [{"message": next(replies), "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 10}}, True
+    a._post = fake
+    return a
+
+
+def test_office_direct_does_not_accept_done_right_after_its_own_failed_assert(tmp_path, monkeypatch):
+    """SpreadsheetBench sb-374-31 (38f57ffb): its assert failed, it printed the rows and answered "Done" with the
+    file unchanged. Once per request it is told the job is not done."""
+    a = _office_agent(tmp_path, monkeypatch)
+    assert a.send("Delete the blank rows above Code in data.xlsx") == "Fixed and saved."
+    assert any("Your own check failed (AssertionError)" in str(m.get("content")) for m in a.messages)
+
+
+def test_office_finish_check_can_be_switched_off(tmp_path, monkeypatch):
+    a = _office_agent(tmp_path, monkeypatch)
+    monkeypatch.setenv("MH_OFFICE_FINISH_CHECK", "0")
+    assert a.send("Delete the blank rows above Code in data.xlsx") == "Done."

@@ -119,6 +119,14 @@ EDIT_NOTE = (SEP + "[Meshpool] To change a file that exists, use edit_office_fil
              "make_spreadsheet, make_deck or office_task.")
 
 
+# The same for office direct (a lean Work chat), where edit_office_file and the engines are not offered: SpreadsheetBench
+# on 38f57ffb, sb-374-31 got EDIT_NOTE, which named tools the turn did not have.
+EDIT_NOTE_DIRECT = (SEP + "[Meshpool] Change the existing file in place with openpyxl, python-docx or python-pptx, "
+                    "keeping its sheets, styles and formulas, and do exactly what was asked to every row or cell it "
+                    "applies to. Check a formula change by reading the formula text; do not recalculate unless the "
+                    "request asks for computed values. Do not rebuild the file.")
+
+
 # How the agent makes each file itself when it writes office files directly (office direct, a lean Work chat).
 DIRECT = {
     "presentation": "python-pptx (native charts through chart_data, not pictures)",
@@ -133,7 +141,7 @@ def note(caps, harness: dict | None = None, direct: bool = False) -> str:
     not answer that it cannot. direct: the agent writes the file itself (office direct), so the note names the
     library, not an engine tool it may not have (office3 xlsx_budget: 27 calls spent looking for make_spreadsheet)."""
     if list(caps or []) == ["edit"]:
-        return EDIT_NOTE
+        return EDIT_NOTE_DIRECT if direct else EDIT_NOTE
     caps = [c for c in caps if c in CAPS]
     if not caps:
         return ""
