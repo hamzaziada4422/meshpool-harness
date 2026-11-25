@@ -54,6 +54,20 @@ _SKIP = {"text_delta", "stream_reset", "model_start", "model_end", "usage", "con
 # A text_delta of a finished reply (Session._fold_deltas): one shared, never-mutated marker in place of each, so event
 # positions stay put. It has no "i"; outward views (Session.view, the event stream) leave it out.
 _DELTA_GONE = {"type": "text_delta", "text": "", "gone": True}
+# FL-R6a: the same for a streamed piece of the model's reasoning once the call's saved copy (thought, final) arrived.
+_THOUGHT_GONE = {"type": "thought", "text": "", "delta": True, "gone": True}
+_RUN_MCP_SPEC: list = []    # meshpool --mcp-config for this terminal run, read once (run_mcp_spec)
+
+
+def run_mcp_spec() -> str:
+    """meshpool --mcp-config: the servers for this terminal run only. FL-V17: read once and taken out of the
+    environment, so commands the agent runs, MCP servers and other child runs (a nested meshpool -p) do not start
+    them too. Chats opened later in the same terminal (/clear, /resume) still get them."""
+    if os.environ.get("MESHPOOL_FRONTEND") != "terminal":
+        return ""
+    if "MH_MCP_CONFIG" in os.environ:
+        _RUN_MCP_SPEC[:] = [os.environ.pop("MH_MCP_CONFIG")]
+    return _RUN_MCP_SPEC[0] if _RUN_MCP_SPEC else ""
 # /goal: the agent keeps taking turns until it says the goal is met. The note is hidden in the chat (after \u200b).
 GOAL_NOTE = ("\n\n\u200b[Meshpool] The goal of this chat: {goal}\nKeep working until it is fully done and checked. End your "
              "reply with one last line: \"GOAL: DONE\" once the goal is met and verified, or \"GOAL: CONTINUE\" and "
@@ -362,6 +376,7 @@ class Session:
     _retry_open = False        # a retry notice is showing: the next good model event resolves it
     _undo_token = None         # the turn an Undo / Rewind holds: a message sent meanwhile waits in the queue
     _open_deltas = ()          # positions in self.events of the text_delta events of the reply still streaming
+    _open_thoughts = ()        # positions in self.events of the streamed reasoning pieces not folded yet (FL-R6a)
 
     def __init__(self, workdir: str | None = None, resume_id: str | None = None, mode: str | None = None,
                  harness: str | None = None, kind: str = "code", model: str | None = None, plan: bool = False,
@@ -577,7 +592,7 @@ class Session:
             # office file (Agent.office_on), so coding chats do not pay for them.
             from meshpool_harness.harnesses.acp import office_extra
             extra = office_extra(self.workdir)
-            spec = os.environ.get("MH_MCP_CONFIG", "") if os.environ.get("MESHPOOL_FRONTEND") == "terminal" else ""
+            spec = run_mcp_spec()
             if spec:                                  # meshpool --mcp-config: servers for this terminal run only
                 from meshpool_harness.agent.tui import _mcp_for_run
                 try:
@@ -673,6 +688,14 @@ class Session:
                 self._open_deltas.append(ev["i"])
             elif self._open_deltas and t in ("assistant", "stream_reset", "turn_end"):
                 self._fold_deltas(final=t != "turn_end")
+            if t == "thought" and not ev.get("final"):
+                if not isinstance(self._open_thoughts, list):
+                    self._open_thoughts = []
+                self._open_thoughts.append(ev["i"])
+            elif self._open_thoughts and t == "thought":
+                self._fold_thoughts()                # the call's saved copy is here: the streamed pieces can go
+            elif self._open_thoughts and t == "turn_end":
+                self._open_thoughts = []             # no saved copy came (a stop, or a harness that sends none): kept
             self.changed.notify_all()
         lease = getattr(self, "_lease", None)
         if lease and time.time() - getattr(self, "_lease_beat", 0) > 60:      # a working run keeps its task claimed
@@ -723,6 +746,19 @@ class Session:
                     evs[p] = _DELTA_GONE
             k = j + 1
 
+    def _fold_thoughts(self):
+        """Under self.lock. FL-R6a: reasoning streams as many thought events (one per token or so), like a reply's
+        text. Once the call's saved copy (one thought event, final, with the whole text) has arrived, each streamed
+        piece becomes _THOUGHT_GONE, a shared marker the page is never sent and that is never saved. Positions never
+        move, so since= cursors and event indexes stay right. The page adds any part it had not seen yet from the
+        saved copy (app.js, case "thought")."""
+        idx, self._open_thoughts = self._open_thoughts, []
+        evs = self.events
+        for p in idx:
+            if 0 <= p < len(evs) and evs[p].get("type") == "thought" and not evs[p].get("gone") \
+                    and not evs[p].get("final"):
+                evs[p] = _THOUGHT_GONE
+
     def _persist_soon(self):
         """Steps arrive many per second: write the transcript at most once every two seconds instead of on every step."""
         with self.lock:
@@ -758,6 +794,7 @@ class Session:
                     replace = n is None or epoch != getattr(self, "_tlog_epoch", None) or total < n
                     src = self.events if replace else self.events[n:]
                     evs = [{k: v for k, v in e.items() if k != "i"} for e in src if e.get("type") not in _SKIP
+                           and not e.get("gone")
                            and not (e.get("type") == "subagent" and e.get("kind") == "tool")]   # live only
                 if replace:
                     log.rewrite(evs[-3000:], run)
@@ -1966,6 +2003,7 @@ class Session:
             self.agent.save()
             with self.lock:
                 self._open_deltas = []
+                self._open_thoughts = []
                 if cut is not None:                  # keep the transcript up to there: earlier turns keep their Undo
                     self.events = [dict(e, i=i) for i, e in enumerate(self.events[:cut])]
                 else:
@@ -1979,6 +2017,7 @@ class Session:
                     users = [i for i, e in enumerate(self.events) if e.get("type") == "user" and not e.get("steer")]
                     cut = users[int(turn) - 1] if 0 < int(turn) <= len(users) else len(self.events)
                 self._open_deltas = []
+                self._open_thoughts = []
                 self.events = [dict(e, i=i) for i, e in enumerate(self.events[:cut])]
                 if hasattr(self.agent, "events"):
                     self.agent.events = [{k: v for k, v in e.items() if k not in ("i", "t")} for e in self.events]

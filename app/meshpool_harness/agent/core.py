@@ -1107,7 +1107,7 @@ def rule_for(name: str, args: dict) -> list[str]:
     """What an "Always in this folder" answer saves: for a command, that exact command; for a known test, build or
     lint command (npm test, pytest, cargo test...), that command with any arguments. Edit tools or this one tool
     otherwise. Nothing for a chained, redirected, destructive or VAR=value command."""
-    if name in ("bash", "shell", "bash_start"):
+    if name in ("bash", "shell", "bash_start", "probe", "trace"):       # FL-L13: probe and trace save the command
         cmd = (T.shell_script(args.get("command")) if name == "shell" else str(args.get("command") or "")).strip()
         if not cmd or _CHAINED.search(cmd) or _destructive({"command": cmd}) or re.search(r"[^\x20-\x7e]", cmd):
             return []
@@ -5573,6 +5573,8 @@ class Agent:
             kind, title, detail = "bash", "Run this command?", args.get("command", "")
         elif name == "bash_start":
             kind, title, detail = "bash", "Start this in the background?", args.get("command", "")
+        elif name in ("probe", "trace"):        # FL-L13: they run a command, so they ask like bash (no MCP-style title)
+            kind, title, detail = "bash", f"Run this command ({name})?", str(args.get("command") or args.get("cmd") or "")
         elif name in ("shell", "exec_command"):
             kind, title, detail = "bash", "Run this command?", _summary_of(name, args)
         elif name == "apply_patch":
@@ -5592,7 +5594,7 @@ class Agent:
             nice = {"make_document": "Make a Word document", "make_pdf": "Make a PDF", "make_spreadsheet":
                     "Build a spreadsheet", "make_deck": "Make a PowerPoint deck", "convert_document": "Convert a file",
                     "analyze_data": "Analyse data"}.get(tool) or ("Use " + tool.replace("_", " ") + " ("
-                                                              + name.split('__')[1].replace("_", " ") + ")")
+                                                              + (name.split('__')[1] if '__' in name else name).replace("_", " ") + ")")
             kind, title = ("doc" if args.get("markdown") else "mcp"), f"{nice}{' ' + target if target else ''}?"
             if destr:
                 title = "The app marks this as one that deletes or overwrites data. " + title
