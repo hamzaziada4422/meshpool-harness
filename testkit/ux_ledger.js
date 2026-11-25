@@ -189,6 +189,16 @@ const results = []; const check = (name, ok, detail = "") => { results.push([nam
         !!(await p.$(".msg-user.steer.taken")), tbv);
   await p.evaluate(() => post(`/api/agent/${S.cur.id}/stop`, {since: 1e9})).catch(() => {});
   await p.fill("#input", "");
+  // Appearance: reasoning can be hidden and code colours turned off
+  const ap = await p.evaluate(() => {
+    store("thinking", "hide"); store("codecolor", "off"); applyAppearance();
+    const col = document.createElement("div"); col.innerHTML = '<div class="think"></div><pre><code><span class="tk-k">def</span></code></pre>';
+    document.body.appendChild(col);
+    const r = [getComputedStyle(col.querySelector(".think")).display === "none",
+               getComputedStyle(col.querySelector(".tk-k")).color === getComputedStyle(col.querySelector("code")).color];
+    store("thinking", "show"); store("codecolor", "on"); applyAppearance(); col.remove(); return r;
+  });
+  check("reasoning can be hidden and code colours turned off", ap[0] && ap[1], JSON.stringify(ap));
   check("no page errors", !errs.length, errs.join(" | "));
   await b.close();
   const ok = results.filter(r => r[1]).length; console.log(`\n${ok}/${results.length} passed`);

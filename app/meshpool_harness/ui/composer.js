@@ -180,7 +180,7 @@ function renderBar() {
   const goal = S.cur?.view?.goal;
   const touch = matchMedia("(pointer: coarse)").matches;
   const hintHTML = (goal ? `<span class="goalh" title="${esc(goal)}">Goal: <b>${esc(clip(goal, 70))}</b> <button class="linkbtn" id="goalClr">Clear</button></span>${c.busy && !touch ? " · " : ""}` : "")
-    + (c.busy && !touch ? `Enter adds to the task · Esc stops` : "");
+    + (c.busy && !touch ? `Enter adds to the task${store("escstop") === "off" ? "" : " · Esc stops"}` : "");
   if (setHTML($("#hintTxt"), hintHTML)) { $("#goalClr")?.addEventListener("click", () => setGoal("")); }
   const inp = $("#input"), pj = S.view === "project" ? S.pj.find(p => p.id === S.pjId) : null;
   const code = S.mode === "code" && !S.cur;

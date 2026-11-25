@@ -237,7 +237,7 @@ function applyAppearance() {
   R.style.setProperty("--resp", rf === "serif" ? 'Georgia,"Times New Roman",serif' : rf === "system" ? 'system-ui,-apple-system,"Segoe UI",sans-serif' : "inherit");
   R.style.setProperty("--mono", store("codefont") ? `${store("codefont")},"IBM Plex Mono",ui-monospace,Consolas,monospace` : '"IBM Plex Mono",ui-monospace,Consolas,"SFMono-Regular",monospace');
   R.style.setProperty("--code-fs", (store("codesize") || 13) + "px");
-  for (const [k, a, d] of [["motion", "motion", "system"], ["contrast", "contrast", "system"]]) { const v = store(k) || d; if (v === "system") R.removeAttribute("data-" + a); else R.dataset[a] = v; }
+  for (const [k, a, d] of [["motion", "motion", "system"], ["contrast", "contrast", "system"], ["thinking", "thinking", "show"], ["codecolor", "codecolor", "on"]]) { const v = store(k) || d; if (v === "system") R.removeAttribute("data-" + a); else R.dataset[a] = v; }
   const t = store("theme") || "system", z = store("size") || "normal";
   if (t === "system") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = t;
   if (z === "normal") document.documentElement.removeAttribute("data-size"); else document.documentElement.dataset.size = z;
@@ -465,7 +465,7 @@ function setupComposer() {
     if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey &&
         !inp.value.slice(0, inp.selectionStart).includes("\n") && recallSent(inp, e.key === "ArrowUp" ? -1 : 1)) { e.preventDefault(); return; }
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendNow((isMac ? e.metaKey : e.ctrlKey) && cfg().busy); }
-    if (e.key === "Escape" && !pop && cfg().busy && !$(".scrim")) { e.preventDefault(); stopNow(); }
+    if (e.key === "Escape" && !pop && cfg().busy && !$(".scrim") && store("escstop") !== "off") { e.preventDefault(); stopNow(); }
   });
   inp.addEventListener("paste", e => {
     const files = [...(e.clipboardData?.files || [])]; if (files.length) { e.preventDefault(); addAttachments(files); return; }
