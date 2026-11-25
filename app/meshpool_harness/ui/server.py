@@ -39,6 +39,9 @@ OF_DIR = HERE.parent / "office"
 _ICONS: dict = {}
 # The Office panel's own token: good only on the HTTPS listener and only for the few calls the panel makes.
 OFFICE_TOKEN = secrets.token_urlsafe(24)
+# A chat's event stream sends what is new at most about 30 times a second: a streaming reply came as ~80 frames a
+# second at 10 ms, each one parsed and applied by the page (CPU audit). The page paces the text per animation frame.
+SSE_FRAME_S = 0.03
 # Only Office on the web may show the panel in a frame (its add-in frames live on these hosts; the desktop apps do not
 # frame it). No SharePoint or live.com: any tenant can put pages there.
 OFFICE_FRAMES = ("frame-ancestors 'self' https://*.officeapps.live.com https://*.office.com https://*.office365.com "
@@ -367,7 +370,7 @@ class Handler(BaseHTTPRequestHandler):
                 with s.lock:                      # wake the moment an event arrives; 0.25 s at most for a state change
                     if len(s.events) <= cursor and s.state == last_state:
                         s.changed.wait(0.25)
-                time.sleep(0.01)                  # let a burst of text_delta pile up into one frame
+                time.sleep(SSE_FRAME_S)           # let a burst of text_delta pile up into one frame
         except (BrokenPipeError, ConnectionResetError, OSError):
             return
 
