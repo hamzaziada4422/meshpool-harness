@@ -1926,9 +1926,51 @@ def probe_mcp():
         pass
 
 
+def prune_old_chats(days: float | None = None, now: float | None = None) -> list[str]:
+    """Settings, Keep chats for: deletes chats not touched for that many days (the same way Delete does), except
+    pinned ones and chats that are running. Returns the ids deleted. 0 or unset: nothing is deleted."""
+    if days is None:
+        try:
+            days = float(os.environ.get("MH_KEEP_DAYS") or C.read().get("MH_KEEP_DAYS") or 0)
+        except ValueError:
+            days = 0
+    if not days or days <= 0 or not SESSIONS.is_dir():
+        return []
+    cutoff = (now or time.time()) - days * 86400
+    gone = []
+    for d in list(SESSIONS.iterdir()):
+        if not d.is_dir() or d.name.startswith((".", "_")):
+            continue
+        sid = d.name
+        live = LIVE.get(sid)
+        if live is not None and live.state in ("working", "waiting"):
+            continue
+        meta = read_meta(sid)
+        if meta.get("pinned") or meta.get("scheduled") and live is not None:
+            continue
+        try:
+            last = max(f.stat().st_mtime for f in d.iterdir()) if any(d.iterdir()) else d.stat().st_mtime
+        except OSError:
+            continue
+        if last < cutoff:
+            try:
+                thread_action(sid, {"action": "delete"})
+                gone.append(sid)
+            except Exception:  # noqa: BLE001
+                continue
+    return gone
+
+
 def scheduler_loop():
     from meshpool_harness import assistant as AS
+    last_prune = 0.0
     while True:
+        if time.time() - last_prune > 86400:          # Keep chats for N days: at start, then once a day
+            last_prune = time.time()
+            try:
+                prune_old_chats()
+            except Exception:  # noqa: BLE001
+                pass
         try:
             for t in AS.due():
                 try:

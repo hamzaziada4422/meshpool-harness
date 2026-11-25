@@ -22,6 +22,8 @@ FIELDS = [
     ("MH_AGENT_PERMISSIONS", "What agents may do without asking", "ask",
      "Supervised asks before every change and command. Auto-accept edits changes files without asking but asks "
      "before commands. Full access never asks."),
+    ("MH_KEEP_DAYS", "Keep chats for (days)", "0", "Chats not touched for this many days are deleted, with their "
+     "private folders; pinned chats are kept. 0 keeps every chat. Checked when Meshpool starts and once a day."),
     ("MH_FETCH_ALLOW", "Web pages: only these sites", "", "Comma-separated domains (example.com covers its subdomains). "
      "When set, agents read web pages only from these sites. Empty: any public site."),
     ("MH_FETCH_DENY", "Web pages: never these sites", "", "Comma-separated domains agents never read, even when allowed above."),
