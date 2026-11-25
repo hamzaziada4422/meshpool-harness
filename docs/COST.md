@@ -13,6 +13,7 @@ were measured. All numbers come from the release round (raw rows on the audit br
   input tokens and $0.60 per million output tokens.
 - "Cost per solved" is total spend divided by tasks solved, so an agent that fails more pays more per success.
   The interval is a paired bootstrap over tasks (reps of a task stay together).
+- "Median time" is the median over tasks of Meshpool's time divided by Codex's on the same task.
 - Meshpool ran as shipped (`python -m meshpool_harness -p ... --auto` for office, the same agent through
   `api.run_task` for code), with one benchmark setting: `MH_CAPS` cache hints, which send a stable
   `prompt_cache_key` so the provider can reuse the cached prefix.
