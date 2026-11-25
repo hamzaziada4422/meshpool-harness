@@ -20,6 +20,17 @@ Updated after four gap-filling passes (agent and core, UI and engines, packaging
 - Distinct test ids and test files cited: 923 (listed in tests.txt). 916 of the 916 under app/tests match pytest's own list (5019 collected). None is missing. The other 7 are under testkit, outside that run; each was checked to exist by reading the file.
 - Rows marked uncertain in the Status column: 1.
 
+## Independent check
+
+An agent that did not write these fixes checked the ledger at commit 60c1d4b7.
+
+- It ran every cited test: 920 of the 923 ids passed. Two cases of OSS-34's file failed (worktrees refused a repository with submodules, a regression from the 0.0.16 merge, fixed in 6cc223af). D-03's two tests skip unless the real Pi and Codex programs are installed, so D-03 is not checked here.
+- It broke 98 fixes on purpose, one at a time, and ran their tests. 90 breaks were caught. All 22 rows fixed in 0.0.17 had a test that failed when the fix was undone.
+- The 8 breaks no test caught were in PA-engines-31 (brand cache), FL-V8, FL-V7, M01-01, F-39, PA-agent-17, PA-forge-07 and PA-forge-09. M01-01's test catches the bug's real shape, so it stays. The tests of the other seven were rewritten, and each now fails with the same break and passes on the real code.
+- It found that PA-skills-16 was only partly fixed: the CI skip check missed seven ways the tests say LibreOffice or Playwright is missing. Fixed in dd11eb85: any skip that names LibreOffice now fails the job.
+- The statuses of the open, won't fix, not reproducible and removed rows were found to be right.
+- In a sample of 64 older fixed rows, 3 tests would have missed the bug coming back and 3 covered it only in part. If the sample is typical, about 1 in 20 older fixed rows has a test that would miss a regression. Those found were fixed; the rest of the older rows were not each checked this way.
+
 ## How to read it
 
 - ID keeps the source ID. Platform audit rows are PA-<area>-<n>, numbered in the order of ALL_BUGS.md within each area (PA-extra rows are the "Extra" line at its top; PA-ND rows are the items its summary lists as not done). This branch's review rows are FL-<id>: H, M, L from the first pass, R and N from the rechecks, T found by tests, O the Office add-in review, S the second batch review, V the seventh review.
@@ -598,7 +609,7 @@ Updated after four gap-filling passes (agent and core, UI and engines, packaging
 | FL-L11 | branch review | permissions, git, trust | low | Prompt history file briefly readable by others; history keyed to the start folder after /resume | fixed (0.0.17; the 0600 create was already there; after /resume the Up-arrow history now follows the resumed chat's folder) | tests/test_ledger017_review.py::test_history_file_is_private_from_the_start_and_follows_resume | 0.0.17 fix: agent/tui.py:572 (follow_history), agent/tui_session.py:93; agent/tui_more.py:53 |
 | FL-L12 | branch review | permissions, git, trust | low | read_file's binary check left a file handle open | fixed | tests/test_ledger017_review.py::test_read_file_binary_check_closes_the_file | core/tools.py:1018 |
 | FL-L13 | branch review | permissions, git, trust | low | Approving probe or trace in ask mode raises IndexError | fixed (0.0.17; probe and trace ask with the command shown and save the command, not the whole tool) | tests/test_ledger017_review.py::test_probe_and_trace_ask_like_a_command_and_save_the_command | 0.0.17 fix: agent/core.py:5500 (_permit), agent/core.py:1104 (rule_for); agent/core.py:5589 (name.split('__')[1]) |
-| FL-R1 | branch review | permissions, git, trust | high | The power-file guard could be bypassed (Move to:, cd && apply_patch, workdir, letter case) | fixed | tests/test_review_fixes.py::test_power_file_guard_has_no_known_bypass; tests/test_review_fixes.py::test_power_file_names_in_a_command_skip_saved_rules | agent/core.py:5630 |
+| FL-R1 | branch review | permissions, git, trust | high | The power-file guard could be bypassed (Move to:, cd && apply_patch, workdir, letter case) | fixed | tests/test_review_fixes.py::test_power_file_guard_has_no_known_bypass; tests/test_review_fixes.py::test_power_file_names_in_a_command_skip_saved_rules | agent/core.py (_power_file) |
 | FL-R2 | branch review | permissions, git, trust | medium | Saved bash rules let PowerShell run (...) and @(...) expressions | fixed | tests/test_review_fixes.py::test_saved_rules_never_cover_powershell_or_substitutions | agent/core.py:1105 |
 | FL-R3 | branch review | permissions, git, trust | medium | git_config_safe missed .git/config.worktree and core.worktree | fixed | tests/test_review_fixes.py::test_git_config_worktree_and_core_worktree_are_caught | core/tools.py:330 |
 | FL-R4 | branch review | permissions, git, trust | medium | rule_for could still be widened (VAR= prefix, .exe names, missing wrappers, run verbs) | fixed (rules now save the exact command) | tests/test_review_fixes.py::test_other_commands_save_exactly_what_was_approved; tests/test_review_fixes.py::test_nothing_is_saved_for_prefixed_chained_or_destructive_commands | agent/core.py:1114 |
