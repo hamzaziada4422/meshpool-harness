@@ -141,9 +141,11 @@ def _skills(out: list):
         if not text.startswith("---") or text.find("\n---", 3) < 0:
             out.append(_p("error", f, "has no front matter (--- name and description ---)"))
             continue
+        shipped = (C.APP / "defaults" / "skills" / d.name).is_dir()   # a copy of meshpool's own: it loads fine here
         try:
             import yaml
-            yaml.safe_load(text[3:text.find("\n---", 3)])
+            if not shipped:
+                yaml.safe_load(text[3:text.find("\n---", 3)])
         except ImportError:
             pass
         except Exception as e:  # noqa: BLE001
