@@ -516,7 +516,7 @@ def explain(status: int, body=None, *, kind: str = "generic", host: str = "", mo
             out.append("In Azure the model box takes the deployment name you chose, not the model name. Open the "
                        "resource in Azure AI Foundry, Deployments, and copy the name from there.")
         elif az:
-            out = [f"Azure did not find that address or deployment (404)."]
+            out = ["Azure did not find that address or deployment (404)."]
             out.append("Check the endpoint address is the one shown under Keys and Endpoint (https://NAME.openai.azure."
                        "com) and that the deployment name is spelled exactly as in Azure.")
         else:

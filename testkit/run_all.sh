@@ -4,7 +4,21 @@
 # QA_DIR holds fakehome/ (importer fixtures), proj-src/ (file fixtures) and is where results go.
 set -u
 Q="$1"; PY="$2"; R="$(cd "$(dirname "$0")/.." && pwd)"; OUT="$Q/run-$(date +%H%M%S)"; mkdir -p "$OUT"
-pkill -f "mock_llm.py 8911"; pkill -f "meshpool_harness ui --port 879"; sleep 2
+# Stop only the apps an earlier run of this script started (their ids are in $Q/run_all.pids), never a meshpool the
+# developer has open on a port in the 879x range (PA-skills-minor: this used to be pkill -f "... ui --port 879").
+PIDS="$Q/run_all.pids"
+# The UI scripts use /tmp/proj1 and /tmp/proj2. They are replaced only when this script made them (the marker file),
+# so an unrelated folder of the same name is never deleted.
+for d in /tmp/proj1 /tmp/proj2; do
+  if [ -e "$d" ] && [ ! -f "$d/.meshpool-testkit" ]; then echo "run_all: $d exists and was not made by run_all.sh; move it and run again" >&2; exit 2; fi
+done
+if [ -f "$PIDS" ]; then
+  while read -r pid; do
+    [ -n "$pid" ] && ps -p "$pid" -o args= 2>/dev/null | grep -q "meshpool_harness ui --port 879" && kill "$pid"
+  done < "$PIDS"
+  rm -f "$PIDS"
+fi
+pkill -f "mock_llm.py 8911"; sleep 2
 (cd "$R" && nohup python3 testkit/mock_llm.py 8911 "$OUT/mock.jsonl" > "$OUT/mock.log" 2>&1 &)
 pkill -f "mock_mcp_http.py 8977"; (cd "$R" && nohup python3 testkit/mock_mcp_http.py 8977 > "$OUT/mock_mcp.log" 2>&1 &)
 start() {  # port home extra-env...
@@ -16,13 +30,13 @@ start() {  # port home extra-env...
   # harness (Codex) would otherwise sign in with the tester's own account and make real, paid calls.
   local unset=(); for v in $(env | cut -d= -f1 | grep -E '^(CLAUDE_|ANTHROPIC_|OPENAI_|CODEX_|AWS_|GH_|GITHUB_|GOOGLE_|AZURE_|GEMINI_)'); do unset+=(-u "$v"); done
   (cd "$R/app" && env "${unset[@]}" HOME="$Q/fakehome" MESHPOOL_HOME="$home" MH_BROWSER_HEADLESS=1 "$@" \
-     nohup "$PY" -m meshpool_harness ui --port "$port" --no-browser > "$OUT/app-$port.log" 2>&1 &)
+     nohup "$PY" -m meshpool_harness ui --port "$port" --no-browser > "$OUT/app-$port.log" 2>&1 & echo $! >> "$PIDS")
 }
 start 8799 "$OUT/home-main" MH_ALLOW_PRIVATE_FETCH=1;   # stop_check fetches a slow local page
 start 8798 "$OUT/home-fresh"; start 8797 "$OUT/home-code" MH_OBSERVE=1
 sleep 12
 rm -rf "$OUT/proj"; cp -r "$Q/proj-src" "$OUT/proj"
-for d in /tmp/proj1 /tmp/proj2; do rm -rf "$d"; mkdir -p "$d"; printf 'def add(a, b):\n    return a + b\n' > "$d/calc.py"
+for d in /tmp/proj1 /tmp/proj2; do rm -rf "$d"; mkdir -p "$d"; : > "$d/.meshpool-testkit"; printf 'def add(a, b):\n    return a + b\n' > "$d/calc.py"
   (cd "$d" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm init); done
 cd "$R/testkit"
 export MESHPOOL_UI_LOGS="$OUT"   # ui_token.py reads each app's launch key from app-PORT.log

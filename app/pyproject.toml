@@ -27,8 +27,16 @@ meshpool = "meshpool_harness.cli:main"
 
 [project.entry-points."meshpool_harness.connectors"]
 
+# PA-packaging-10: the code reads defaults/ and profiles/ next to meshpool_harness (config.APP), so a plain
+# `pip install ./app` must ship them too, plus the deck fonts (.ttf) and the icon bundles (.json.gz).
 [tool.setuptools.packages.find]
-include = ["meshpool_harness*", "engines*"]
+include = ["meshpool_harness*", "engines*", "defaults", "profiles"]
 
 [tool.setuptools.package-data]
-"*" = ["*.yaml", "*.json", "*.md", "*.svg", "*.txt", "*.html", "*.sqlite", "*.js", "*.css", "*.png", "*.woff2", "*.xlsx", "*.pptx", "*.pdf"]
+"*" = ["*.yaml", "*.json", "*.md", "*.svg", "*.txt", "*.html", "*.sqlite", "*.js", "*.css", "*.png", "*.woff2", "*.xlsx", "*.pptx", "*.pdf",
+       "*.ttf", "*.gz"]
+"defaults" = ["**/*"]
+"profiles" = ["*"]
+
+[tool.setuptools.exclude-package-data]
+"defaults" = ["**/__pycache__/*", "**/*.pyc"]

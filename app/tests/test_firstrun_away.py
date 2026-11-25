@@ -62,7 +62,7 @@ def test_while_you_were_away_reports_changes_only(monkeypatch):
     replies = {"s1": "The price is 10 dollars today. Nothing else moved.",
                "s2": "The price is 10 dollars today. Nothing else moved.",
                "s3": "The price jumped to 14 dollars and the supplier changed the delivery terms."}
-    cur = {"sid": "s1"}
+    assert t["only_on_change"] is True and t["name"] == "Price watch"
     monkeypatch.setattr(away, "last_reply", lambda sid: replies[sid])
 
     def run(sid, ts):

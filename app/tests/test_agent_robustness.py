@@ -578,7 +578,6 @@ def test_a_stream_of_only_keep_alives_ends(tmp_path, monkeypatch):
 
 
 def test_stop_while_connecting_sends_nothing(tmp_path, monkeypatch):
-    import threading
     import time
     a = Agent(str(tmp_path), mode="auto")
     log = []
@@ -586,10 +585,10 @@ def test_stop_while_connecting_sends_nothing(tmp_path, monkeypatch):
     real = core.http.client.HTTPConnection.connect
 
     def slow_connect(self):
-        time.sleep(0.6)                                            # Stop lands while this is connecting
-        real(self)
+        a._stop = True                                             # Stop lands while this is connecting: set here,
+        time.sleep(0.6)                                            # not by a timer that a slow runner can move
+        real(self)                                                 # before or after the connect (PA-skills-13)
     monkeypatch.setattr(core.http.client.HTTPConnection, "connect", slow_connect)
-    threading.Timer(0.2, lambda: setattr(a, "_stop", True)).start()
     with pytest.raises(core.Interrupted):
         a._wait(a._post, base, "k", {"model": "m", "messages": []}, True)
     time.sleep(1.2)

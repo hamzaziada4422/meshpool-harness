@@ -20,7 +20,7 @@ from meshpool_harness import __version__
 from meshpool_harness import config as C
 
 KINDS = {"read_file": "read", "grep": "search", "glob": "search", "web_search": "search", "web_research": "search", "fetch_url": "fetch", "edit": "edit",
-         "write_file": "edit", "bash": "execute", "fetch_url": "fetch", "todo_write": "think", "office_task": "other"}
+         "write_file": "edit", "bash": "execute", "todo_write": "think", "office_task": "other"}
 
 
 class Server:
