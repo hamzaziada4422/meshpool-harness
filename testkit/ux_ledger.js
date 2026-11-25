@@ -175,6 +175,20 @@ const results = []; const check = (name, ok, detail = "") => { results.push([nam
   const filtered = await col(), cnt = await p.textContent(".pv-count");
   check("a table preview sorts by a column (numbers as numbers) and filters rows", up === "age,9,31,120" &&
         down === "age,120,31,9" && filtered === "age,120" && /1 of 3/.test(cnt), `${up} | ${down} | ${filtered} | ${cnt}`);
+  // a message added while the agent works can be taken back before it is read
+  await p.evaluate(dir => newThread(dir), proj); await p.waitForTimeout(500);
+  await p.fill("#input", "run the long task please"); await p.keyboard.press("Enter");
+  await p.waitForFunction(() => ["working", "waiting"].includes(S.cur?.view?.state), null, {timeout: 20000}).catch(() => {});
+  await p.waitForTimeout(1500);
+  await p.fill("#input", "also update the changelog"); await p.keyboard.press("Enter");
+  await p.waitForSelector(".msg-user.steer [data-takeback]", {timeout: 15000}).catch(() => {});
+  await p.click(".msg-user.steer [data-takeback]").catch(() => {});
+  await p.waitForSelector(".msg-user.steer.taken", {timeout: 15000}).catch(() => {});
+  const tbv = await p.inputValue("#input");
+  check("a message added while working can be taken back into the box", tbv === "also update the changelog" &&
+        !!(await p.$(".msg-user.steer.taken")), tbv);
+  await p.evaluate(() => post(`/api/agent/${S.cur.id}/stop`, {since: 1e9})).catch(() => {});
+  await p.fill("#input", "");
   check("no page errors", !errs.length, errs.join(" | "));
   await b.close();
   const ok = results.filter(r => r[1]).length; console.log(`\n${ok}/${results.length} passed`);

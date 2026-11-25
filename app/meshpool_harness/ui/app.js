@@ -1156,6 +1156,17 @@ document.addEventListener("click", e => {
   const code = b.closest(".codewrap")?.querySelector("pre code")?.textContent || "";
   navigator.clipboard.writeText(code).then(() => { b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy"; }, 1500); }, () => toast("Could not copy."));
 });
+document.addEventListener("click", async e => {              // Take back: a message sent while the agent worked
+  const b = e.target.closest?.("[data-takeback]"); if (!b || !S.cur) return;
+  b.disabled = true;
+  try {
+    const r = await post(`/api/agent/${S.cur.id}/take_back`, {since: 1e9});
+    const t = r.taken?.text;
+    if (t == null) { toast("The agent has already read it."); b.remove(); return; }
+    const inp = $("#input"); inp.value = t + (inp.value ? "\n" + inp.value : ""); inp.dispatchEvent(new Event("input")); inp.focus();
+    clearTimeout(S.cur.pollT); poll();
+  } catch (err) { toast(err.message); b.disabled = false; }
+});
 function md(src) {
   const parts = String(src || "").split(/```/);
   return parts.map((p, i) => {
@@ -1225,12 +1236,17 @@ function applyEv(ev) {
   switch (ev.type) {
     case "queued": {
       const box = $("#attachRow"); $("#queuedChip")?.remove();
-      if (ev.n) box.insertAdjacentHTML("afterbegin", `<span class="att-chip" id="queuedChip">${ICON.list}<span>Queued: ${esc(ev.text.slice(0, 60))}${ev.n > 1 ? ` and ${ev.n - 1} more` : ""}</span></span>`);
+      if (ev.n) box.insertAdjacentHTML("afterbegin", `<span class="att-chip" id="queuedChip">${ICON.list}<span>Queued: ${esc(ev.text.slice(0, 60))}${ev.n > 1 ? ` and ${ev.n - 1} more` : ""}</span><button class="linkbtn" data-takeback title="Put it back in the message box">Take back</button></span>`);
       break; }
+    case "unsteer": {                                    // a message added while working, taken back before it was read
+      const b = [...col.querySelectorAll(".msg-user.steer:not(.taken)")].pop();
+      if (b) { b.classList.add("taken"); const t = b.querySelector(".tag"); if (t) t.textContent = "Taken back"; b.querySelector("[data-takeback]")?.remove(); }
+      break; }
+    case "steer_read": { col.querySelectorAll(".msg-user.steer [data-takeback]").forEach(x => x.remove()); break; }
     case "user": {
       if (String(ev.text).trim() === RESUME_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Picking up where it left off</span>`, "goalturn"); break; }
       if (String(ev.text).trim() === GOAL_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Continuing toward the goal</span>`, "goalturn"); break; }
-      if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span><br>${esc(ev.text)}</div>`, "msg-user"); $("#queuedChip")?.remove(); break; }
+      if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span> <button class="linkbtn" data-takeback title="Take it back before the agent reads it">Take back</button><br><span class="stx">${esc(ev.text)}</span></div>`, "msg-user steer"); $("#queuedChip")?.remove(); break; }
       closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; cur.tpaths = []; cur.lastAi = null; cur.lastText = "";
       add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user");
       break; }

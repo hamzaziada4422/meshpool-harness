@@ -1055,9 +1055,12 @@ class Handler(BaseHTTPRequestHandler):
                 s, b = A.get(m.group(1)), self._json()
                 s.reply(b.get("question_id", ""), b.get("answers"))
                 return self._send(200, s.view(int(b.get("since", 10**9))))
-            m = re.fullmatch(r"/api/agent/([\w-]+)/(send|stop|answer|mode|compact|grade)", u.path)
+            m = re.fullmatch(r"/api/agent/([\w-]+)/(send|stop|answer|mode|compact|grade|take_back)", u.path)
             if m:
                 s, act, b = A.get(m.group(1)), m.group(2), self._json()
+                if act == "take_back":
+                    r = s.take_back()
+                    return self._send(200, dict(s.view(int(b.get("since", 10**9))), taken=r))
                 if act == "send":
                     r = s.send(b.get("text", ""), images=b.get("images") or None, interrupt=bool(b.get("interrupt")))
                     return self._send(200, dict(s.view(int(b.get("since", 10**9))), sent=r))

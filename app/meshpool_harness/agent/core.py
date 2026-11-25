@@ -1592,9 +1592,21 @@ class Agent:
         self.emit({"type": "user", "text": text.split("\n\n\u200b")[0],
                    "images": [im.get("name", "image") for im in images or []], "plan": self.plan, "steer": True})
 
+    def take_back(self) -> str | None:
+        """The last message added while working, if the agent has not read it yet (it comes out of the turn)."""
+        with self._inbox_lock:
+            if not self._inbox:
+                return None
+            text, _ = self._inbox.pop()
+        shown = text.split("\n\n\u200b")[0]
+        self.emit({"type": "unsteer", "text": shown})
+        return shown
+
     def _take_inbox(self) -> bool:
         with self._inbox_lock:
             items, self._inbox = self._inbox, []
+        if items:
+            self.emit({"type": "steer_read", "n": len(items)})
         for text, images in items:
             body = "[Added by the user while you were working] " + text
             if images:

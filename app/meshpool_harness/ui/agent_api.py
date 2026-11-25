@@ -580,6 +580,18 @@ class Session:
         self._start_turn(text, images)
         return {"queued": False}
 
+    def take_back(self) -> dict:
+        """The last message sent while the agent worked, back to the user: from the queue, or from the running
+        turn when the agent has not read it yet. {"text": None} when there is nothing left to take back."""
+        with self.lock:
+            if self.queue:
+                text, _ = self.queue.pop()
+                self.emit({"type": "queued", "text": self.queue[-1][0] if self.queue else "", "n": len(self.queue)})
+                return {"text": text}
+        if hasattr(self.agent, "take_back"):
+            return {"text": self.agent.take_back()}
+        return {"text": None}
+
     def _capability_turn(self, text: str) -> list:
         """Before a message runs: what it asks Meshpool to make (capabilities.needs), and an agent that can make it.
         The chat keeps its agent when that agent can; otherwise it moves, with its history, to the agent Auto would
