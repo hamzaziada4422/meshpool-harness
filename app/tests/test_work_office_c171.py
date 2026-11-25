@@ -1,4 +1,4 @@
-"""MH_WORK_OFFICE_STYLE=c171: a Work chat's office edit, or a file the user names, sends the request Codex CLI 0.171
+"""MH_WORK_OFFICE_STYLE=c171 (the default; =lean keeps the lean Work route): a Work chat's office edit, or a file the user names, sends the request Codex CLI 0.171
 sends (its prompt, its one command tool), with none of Meshpool's office notes, checks or caps. A new deck, report or
 model and Word tracked changes keep the Work route. No network and no model calls (the transport is scripted)."""
 import json
@@ -73,8 +73,10 @@ def test_a_new_deck_or_tracked_changes_keep_the_work_route(tmp_path):
     assert not a.office_c171_for("Sort data.xlsx by date")
 
 
-def test_off_by_default(tmp_path, monkeypatch):
+def test_on_by_default_and_lean_turns_it_off(tmp_path, monkeypatch):
     monkeypatch.delenv("MH_WORK_OFFICE_STYLE")
+    assert _work(tmp_path).office_c171_for("Sort data.xlsx by date")
+    monkeypatch.setenv("MH_WORK_OFFICE_STYLE", "lean")
     a = _work(tmp_path)
     assert not a.office_c171_for("Sort data.xlsx by date")
     _turn(a, "Sort data.xlsx by date")

@@ -2216,7 +2216,7 @@ class Agent:
         (the engines) and Word tracked changes or comments (edit_office_file) keep the Work route. The session asks
         before it builds the message, so the office notes stay off a Codex request (ui.agent_api)."""
         try:
-            if not (self._office_direct_raw() and os.environ.get("MH_WORK_OFFICE_STYLE", "lean") == "c171"):
+            if not (self._office_direct_raw() and os.environ.get("MH_WORK_OFFICE_STYLE", "c171") == "c171"):
                 return False
             from meshpool_harness import capabilities as CAP
             from meshpool_harness.office_intent import engines_wanted, wants_revisions
@@ -2764,7 +2764,7 @@ class Agent:
                 self.office_revisions = wants_revisions(asked)   # for this message only
                 if self.office_revisions:
                     self.office_on = True
-        if self._office_direct_raw() and os.environ.get("MH_WORK_OFFICE_STYLE", "lean") == "c171":
+        if self._office_direct_raw() and os.environ.get("MH_WORK_OFFICE_STYLE", "c171") == "c171":
             want = self.office_c171_for(asked)
             if want != bool(self.office_c171):
                 self.office_c171 = want
