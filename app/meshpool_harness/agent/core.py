@@ -2372,6 +2372,26 @@ class Agent:
         self._finish = choice.get("finish_reason")
         return choice.get("message") or {}, streamed
 
+    def add_dir(self, path: str) -> str:
+        """/add-dir: the user lets this chat read and edit in another folder too. Returns the folder."""
+        p = Path(str(path or "")).expanduser()
+        try:
+            p = p.resolve(strict=True)
+        except (OSError, RuntimeError):
+            raise ValueError(f"No folder at {path}.")
+        if not p.is_dir():
+            raise ValueError(f"{p} is not a folder.")
+        if p == Path.home().resolve() or p == Path(p.anchor):
+            raise ValueError("Add a project folder, not your whole home folder or drive.")
+        extra = self.ws.__dict__.setdefault("extra_roots", [])
+        if p != self.ws.root and p not in extra:
+            extra.append(p)
+            self.messages.append({"role": "user", "content": f"\u200b[Meshpool] The user added the folder {p}: you "
+                                                             "may read and edit files there too, besides the project."})
+            self.messages.append({"role": "assistant", "content": "Understood."})
+            self.save()
+        return str(p)
+
     def side_question(self, question: str) -> str:
         """/btw: a quick answer from what this chat has seen so far, in one separate call with no tools. It is not
         added to the conversation, so a running task goes on as it was."""
@@ -2701,8 +2721,9 @@ class Agent:
             q = Path(p).resolve() if os.path.isabs(p) else (self.ws.root / p).resolve()
         except (OSError, ValueError):
             return f"Read {p[:80]} (outside the project)?"
-        # the project, this chat's own tool output and the files the user attached; never other chats' histories
-        ok = [self.ws.root, self.dir.resolve(), (C.runs_dir() / "_uploads").resolve()]
+        # the project, folders the user added (/add-dir), this chat's own tool output and the files the user
+        # attached; never other chats' histories
+        ok = [self.ws.root, *getattr(self.ws, "extra_roots", []), self.dir.resolve(), (C.runs_dir() / "_uploads").resolve()]
         return "" if any(q == r or r in q.parents for r in ok) else f"Read {str(q)[:120]} (outside the project)?"
 
     # A new deck or workbook written in code instead of through the engines (python-pptx, openpyxl, xlsxwriter,

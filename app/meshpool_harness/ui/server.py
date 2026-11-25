@@ -1005,6 +1005,12 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/threads/([\w-]+)", u.path)
             if m:
                 return self._send(200, A.thread_action(m.group(1), self._json()))
+            m = re.fullmatch(r"/api/agent/([\w-]+)/add_dir", u.path)    # /add-dir: another folder for this chat
+            if m:
+                s_ = A.get(m.group(1))
+                if not hasattr(s_.agent, "add_dir"):
+                    raise ValueError("Adding a folder works with Meshpool's own agents.")
+                return self._send(200, {"folder": s_.agent.add_dir(str(self._json().get("path") or ""))})
             m = re.fullmatch(r"/api/agent/([\w-]+)/btw", u.path)        # a side question, kept out of the chat
             if m:
                 s_ = A.get(m.group(1))

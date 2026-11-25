@@ -598,6 +598,11 @@ const SLASH = [
   ["/usage", "Usage, by model and by chat", () => openSettings("usage")],
   ["/review", "Review this branch's changes for bugs (/review what to focus on)", arg => sendCmd(REVIEW_PROMPT + (arg ? ` Focus on: ${arg}.` : ""))],
   ["/qa", "Click through your app and report UI and UX problems (/qa address)", arg => sendCmd(qaPrompt(arg))],
+  ["/add-dir", "Let the agent read and edit in another folder too (/add-dir path)", async arg => {
+    if (!S.cur) return toast("Open a chat first.");
+    if (!arg) return toast("Type the folder's path after /add-dir.");
+    try { const r = await post(`/api/agent/${S.cur.id}/add_dir`, {path: arg}); toast(`The agent may now work in ${r.folder} too.`, 5000); } catch (e) { toast(e.message, 6000); }
+  }],
   ["/btw", "A quick side question about this chat; the answer is not added to it (/btw your question)", async arg => {
     if (!S.cur) return toast("Open a chat first.");
     if (!arg) return toast("Type your question after /btw.");

@@ -535,9 +535,12 @@ class Workspace:
         if self.container and self.mounted and self.cdir and os.path.isabs(p) and (p == self.cdir or p.startswith(self.cdir.rstrip("/") + "/")):
             p = str(self.root / os.path.relpath(p, self.cdir))     # container path -> host copy
         q = (self.root / p).resolve() if not os.path.isabs(p) else Path(p).resolve()
-        if write and self.root not in q.parents and q != self.root:
-            raise ToolError(f"writes must stay inside the workdir {self.root}; got {q}")
-        if write and ".git" in q.relative_to(self.root).parts:
+        base = next((r for r in [self.root, *getattr(self, "extra_roots", [])] if q == r or r in q.parents), None)
+        if write and base is None:
+            raise ToolError(f"writes must stay inside the workdir {self.root}"
+                            + (f" or the added folders ({', '.join(map(str, self.extra_roots))})"
+                               if getattr(self, "extra_roots", None) else "") + f"; got {q}")
+        if write and ".git" in q.relative_to(base).parts:
             # git runs settings and hooks from here (core.fsmonitor, hooks/): a write there can run any command
             raise ToolError("agents cannot change files inside .git; use git commands instead")
         return q

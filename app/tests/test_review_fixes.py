@@ -385,3 +385,23 @@ def test_commit_attribution_is_opt_in(env, monkeypatch):                        
     monkeypatch.setenv("MH_COMMIT_TRAILER", "Co-Authored-By: meshpool <noreply@example.com>")
     sp = core.Agent(str(env / "p"), mode="auto").system_prompt()
     assert "# Commits" in sp and sp.count("Co-Authored-By: meshpool <noreply@example.com>") == 1
+
+
+def test_add_dir_lets_the_agent_read_and_edit_another_folder(env):               # /add-dir
+    (env / "p").mkdir()
+    other = env / "shared-lib"
+    other.mkdir()
+    (other / "util.py").write_text("x = 1\n")
+    a = core.Agent(str(env / "p"), approve=lambda *x: ("no", ""), mode="ask")
+    assert a._outside("read_file", {"path": str(other / "util.py")})              # asks before
+    with pytest.raises(T.ToolError):
+        a.ws.write_file(str(other / "new.py"), "y = 2\n")
+    assert a.add_dir(str(other)) == str(other.resolve())
+    assert a._outside("read_file", {"path": str(other / "util.py")}) == ""
+    a.ws.write_file(str(other / "new.py"), "y = 2\n")
+    assert (other / "new.py").read_text() == "y = 2\n"
+    with pytest.raises(T.ToolError):                                                # never its .git
+        (other / ".git").mkdir()
+        a.ws.write_file(str(other / ".git" / "config"), "x")
+    with pytest.raises(ValueError):
+        a.add_dir(str(env / "missing"))

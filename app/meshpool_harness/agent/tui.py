@@ -44,6 +44,7 @@ COMMANDS = [
     ("tokens", "", "tokens and cost of this session"),
     ("agents", "", "saved sub-agents (agents/*.md)"),
     ("btw", "<question>", "a quick side question; not added to the conversation"),
+    ("add-dir", "<folder>", "let the agent read and edit in another folder too"),
     ("context", "", "what fills the context window"),
     ("resume", "[id]", "open an earlier session"),
     ("export", "[file]", "save this conversation as Markdown"),
@@ -1261,7 +1262,7 @@ class Session:
                 cmd = near[0]
             else:
                 return term.p(st.amber(f"  Unknown command /{cmd}. Type /help."))
-        fn = getattr(self, "cmd_" + cmd)
+        fn = getattr(self, "cmd_" + cmd.replace("-", "_"))
         try:
             return fn(arg)
         except KeyboardInterrupt:
@@ -1300,6 +1301,15 @@ class Session:
         t.p(st.dim("  " + {"ask": "Edits and commands are asked first.",
                             "edits": "File edits are allowed; commands are still asked.",
                             "auto": "Edits and commands are allowed without asking."}[mode]))
+
+    def cmd_add_dir(self, arg):
+        t, st = self.term, self.term.st
+        if not hasattr(self.agent, "add_dir"):
+            return t.p(st.dim("  /add-dir is not available for this agent."))
+        try:
+            t.p(f"  The agent may now read and edit in {_tilde(self.agent.add_dir(arg.strip()))} too.")
+        except ValueError as e:
+            t.p(st.amber("  " + str(e)))
 
     def cmd_btw(self, arg):
         t, st = self.term, self.term.st
