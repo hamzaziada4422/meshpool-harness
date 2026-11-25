@@ -206,7 +206,8 @@ def test_cycle_note_after_repeated_failing_patch_rounds(tmp_path, monkeypatch):
 
 
 def test_large_repo_style_codex_switch(tmp_path, monkeypatch):
-    """MH_LARGE_REPO_STYLE=codex: a code chat in a large repo runs the Codex design (no lean prompt, preload or re-check)."""
+    """A code chat in a large repo runs Codex 0.171's request by default (swe7); MH_LARGE_REPO_STYLE=core keeps the lean
+    core, =codex the plain Codex design (no lean prompt, preload or re-check)."""
     from meshpool_harness.agent.core import Agent
     from meshpool_harness.hrouter import profiles as PR
     from meshpool_harness.hrouter.route import Route
@@ -223,7 +224,11 @@ def test_large_repo_style_codex_switch(tmp_path, monkeypatch):
         a.set_route(Route(spec="code.debug", family="code", sub="debug", base="code", profile="core",
                           settings=PR.settings("core")), "fix it")
         return a
-    assert chat(big)._lean() and chat(small)._lean()           # off by default: both lean
+    d = chat(big)                                               # default: Codex 0.171's request on a large repo
+    assert d._c171() and not d._lean() and chat(small)._lean() and not chat(small)._c171()
+    assert d.tool_schemas()[0]["function"]["name"] == "exec_command"
+    monkeypatch.setenv("MH_LARGE_REPO_STYLE", "core")
+    assert chat(big)._lean() and chat(small)._lean()           # =core: both lean
     monkeypatch.setenv("MH_LARGE_REPO_STYLE", "codex")
     b = chat(big)
     assert chat(small)._lean() and not b._lean() and b._codex() and b._bare_codex()

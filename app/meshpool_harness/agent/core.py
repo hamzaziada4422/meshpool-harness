@@ -1259,7 +1259,7 @@ class Agent:
             return False
 
     def _bare_codex(self) -> bool:
-        """MH_LARGE_REPO_STYLE=codex (opt-in, unmeasured): a lean-core code chat in a repo too large to preload runs the
+        """MH_LARGE_REPO_STYLE=codex (opt-in; the default is c171, see _c171): a lean-core code chat in a repo too large to preload runs the
         plain Codex design instead (swe3: lean core 2.6x Codex's cost per solved task on swe_sympy): Codex's own
         prompt and loop, without preload, re-check, the keep and requirement notes, the route card or the grader."""
         if self._c171():                                 # Codex 0.171's request: none of those layers either
@@ -1271,12 +1271,21 @@ class Agent:
             return False
 
     def _c171(self) -> bool:
-        """Harness profile "c171" (codex171, opt-in: MH_PROFILE=c171): a code chat sends the request Codex CLI 0.171
-        sends. Its base instructions (prompt-171.md), one tool, exec_command (core/tools.py), plus the user's own MCP
-        tools, and its <environment_context> as a user message of its own (_c171_env). Like _bare_codex: no preload,
-        re-check, keep or requirement notes, route card or grader. The loop guards and compaction stay."""
+        """Harness profile "c171" (codex171; MH_PROFILE=c171 for every code chat): a code chat sends the request Codex
+        CLI 0.171 sends. Its base instructions (prompt-171.md), one tool, exec_command (core/tools.py), plus the user's
+        own MCP tools, and its <environment_context> as a user message of its own (_c171_env). Like _bare_codex: no
+        preload, re-check, keep or requirement notes, route card or grader. The loop guards and compaction stay.
+        Default for a lean-core code chat in a repo too large to preload (MH_LARGE_REPO_STYLE, default "c171"): swe7
+        (swe_sympy, 12 tasks x 2, docs/results/swe7) c171 solved 22/24 vs Codex 21/24 at 0.73x its cost per solved
+        task (CI 0.57-0.90), 0.93x its time; the lean core there solved 20/24 at 1.86x. MH_LARGE_REPO_STYLE=codex
+        keeps the plain Codex design (_bare_codex), =core the lean core."""
         try:
-            return self.profile == "code" and self._style() and bool(self.hsettings().get("codex171"))
+            if self.profile != "code" or not self._style():
+                return False
+            if self.hsettings().get("codex171"):
+                return True
+            return (os.environ.get("MH_LARGE_REPO_STYLE", "c171") == "c171"
+                    and bool(self.hsettings().get("lean_core")) and self._large_repo())
         except Exception:  # noqa: BLE001
             return False
 
