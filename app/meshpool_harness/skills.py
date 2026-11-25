@@ -73,10 +73,12 @@ def _front_list(text: str, *keys: str) -> list[str]:
     if not text.startswith("---"):
         return []
     end = text.find("\n---", 3)
+    if end < 0 or not any(f"\n{k}:" in text[:end + 1] for k in keys):   # cheap: most skills have none of these
+        return []
     raw = None
     try:
         import yaml
-        doc = yaml.safe_load(text[3:end])
+        doc = yaml.load(text[3:end], Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
         if isinstance(doc, dict):
             raw = next((doc[k] for k in keys if doc.get(k) not in (None, "")), None)
     except Exception:  # noqa: BLE001
