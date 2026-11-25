@@ -28,6 +28,14 @@ FIELDS = [
     ("MH_STATUSLINE", "Terminal status line command", "", "A command whose first line of output shows at the "
      "bottom of the terminal, refreshed every few seconds. It gets the session (folder, model, mode, tokens, cost) "
      "as JSON on standard input."),
+    ("MH_COMPACT_PROMPT", "Summary instructions", "", "What the summary of a long chat must keep, used in place of "
+     "meshpool's own instructions. Text, or the full path of a .md or .txt file. Empty: meshpool's own."),
+    ("MH_INSTRUCTIONS_EXCLUDE", "Instruction files to skip", "", "Comma-separated patterns of instruction and rules "
+     "files never loaded, for example */legacy/AGENTS.md or */.cursor/rules/*."),
+    ("MH_EXTRA_HEADERS", "Extra headers for the model provider", "", "Added to every model request, as JSON or "
+     "Name: value pairs split by ;. They never replace the key header."),
+    ("MH_EXTRA_QUERY", "Extra query parameters for the model provider", "", "Added to every model request URL, "
+     "like a=1&b=2."),
     ("MH_KEEP_DAYS", "Keep chats for (days)", "0", "Chats not touched for this many days are deleted, with their "
      "private folders; pinned and open chats are kept. 0 keeps every chat. Whole days, 1 or more. Checked when "
      "Meshpool starts and once a day."),

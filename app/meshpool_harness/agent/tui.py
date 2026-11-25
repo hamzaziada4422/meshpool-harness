@@ -563,6 +563,22 @@ class Terminal:
         rows = [""] + R.header(self.st, self.width, self.version, self.model, self.provider, self.cwd) + [""]
         rows += R.notice_lines(self.st, self.width, self.notices) + [""]
         self.scroll(rows)
+        self.set_title("")
+
+    def set_title(self, chat: str, busy: bool = False):
+        """The terminal window's title: meshpool, the folder, and the chat's title once it has one; a dot while the
+        agent works. MH_TERM_TITLE=0 leaves the title alone."""
+        if not (self.raw_ok() and getattr(self.out, "isatty", lambda: False)()) or \
+                os.environ.get("MH_TERM_TITLE", "1") == "0" or os.environ.get("TERM") == "dumb":
+            return
+        name = Path(self.cwd).name or str(self.cwd)
+        text = ("● " if busy else "") + "meshpool · " + name + (f" · {chat}" if chat else "")
+        text = "".join(ch for ch in text if ch.isprintable())[:120]
+        try:
+            self.out.write(f"\x1b]0;{text}\x07")
+            self.out.flush()
+        except (OSError, ValueError, AttributeError):
+            pass
 
     def project_line(self) -> str:
         b = self._branch()
@@ -1167,6 +1183,15 @@ def _mcp_status(term: Terminal, mcp):
             term.p("    " + st.red(s["error"]))
         if s["tools"]:
             term.p("    " + st.dim(", ".join(s["tools"])))
+    try:
+        ps = mcp.prompts() if hasattr(mcp, "prompts") else []
+    except Exception:  # noqa: BLE001
+        ps = []
+    if ps:
+        term.p("Prompts (type one as a command):")
+        for p in ps[:40]:
+            args = " ".join(f"<{a['name']}>" if a.get("required") else f"[{a['name']}]" for a in p["arguments"])
+            term.p(f"  {p['command']} {args}".rstrip() + (f"  {st.dim(p['description'][:80])}" if p["description"] else ""))
 
 
 # ---------- the session: commands and the turn loop --------------------------------------------------------------
@@ -1193,6 +1218,7 @@ class Session:
         term.stopping = term.failed = False
         term.started = True
         term.turn_begin()
+        term.set_title(getattr(agent, "title", "") or "", busy=True)
         try:
             return agent.send(text)
         except KeyboardInterrupt:
@@ -1203,6 +1229,7 @@ class Session:
         finally:
             term.turn_finish()
             term.refresh_facts(agent)
+            term.set_title(getattr(agent, "title", "") or "")
 
     def set_mode(self, mode: str):
         self.agent.mode = mode
@@ -1275,6 +1302,8 @@ class Session:
         if cmd not in names:
             from meshpool_harness.agent import extras as EX
             if cmd in EX.commands(self.agent.root):          # a command file in .meshpool/commands
+                return self.send(text)
+            if cmd.startswith("mcp__"):                      # a connected app's prompt: the agent fills it in
                 return self.send(text)
             near = [n for n in names if n.startswith(cmd)] if cmd else []
             if len(near) == 1:

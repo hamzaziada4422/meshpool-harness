@@ -672,7 +672,7 @@ class Workspace:
             ctx = f"-B{before} -A{after}" if (before or after) and output_mode == "content" else ""
             mode = {"files_with_matches": "-l", "count": "-c"}.get(output_mode, "")
             case = "-i" if ignore_case else ""
-            out, _ = self._run(f"grep -rnE {case} {mode} {ctx} {inc} --exclude-dir=.git --exclude-dir=node_modules -e "
+            out, _ = self._run(f"grep -rnE {case} {mode} {ctx} {inc} --exclude-dir=.git --exclude-dir=.jj --exclude-dir=.sl --exclude-dir=node_modules -e "
                                f"{json.dumps(pattern)} {json.dumps(path)} | head -{head}", 60, "grep", record=False)
             return out
         try:
@@ -681,7 +681,8 @@ class Workspace:
             raise ToolError(f"invalid regex: {e}")
         base = self._path(path)
         files = [base] if base.is_file() else [f for f in base.rglob("*") if f.is_file()
-                                                 and not any(part in (".git", "node_modules", "__pycache__", ".venv")
+                                                 and not any(part in (".git", ".jj", ".sl", ".hg", "node_modules",
+                                                                      "__pycache__", ".venv")
                                                              for part in f.relative_to(base).parts)]
         if not base.is_file():
             skip = self._ignored(files, base)
@@ -742,7 +743,7 @@ class Workspace:
                                if "/" in pattern else f"find . -name {json.dumps(pattern.split('/')[-1])} -not -path './.git/*' | head -2000",
                                60, "glob", record=False)
             return out
-        found = [p for p in self.root.glob(pattern) if ".git" not in p.relative_to(self.root).parts
+        found = [p for p in self.root.glob(pattern) if not {".git", ".jj", ".sl", ".hg"} & set(p.relative_to(self.root).parts)
                  and "node_modules" not in p.relative_to(self.root).parts and (not inside_only or self._inside(p))]
         skip = self._ignored(found) if not any(ch in pattern for ch in ("node_modules", "dist/", "build/")) else set()
         res = sorted(str(p.relative_to(self.root)) for p in found if p not in skip)

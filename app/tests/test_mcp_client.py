@@ -314,3 +314,40 @@ def test_resources_can_be_listed_and_read(tmp_path):
 def test_no_resource_tools_without_a_server_that_offers_them():
     m = M.Manager(roots=["."])
     assert not m.has(M.RES_LIST) and M.RES_LIST not in [x["function"]["name"] for x in m.schemas()]
+
+
+def test_server_prompts_become_commands(tmp_path):
+    spec = _script(tmp_path, """
+        import json, sys
+        for line in sys.stdin:
+            msg = json.loads(line)
+            if "id" not in msg:
+                continue
+            m = msg["method"]
+            if m == "initialize":
+                res = {"protocolVersion": "2025-06-18", "capabilities": {"prompts": {}}, "serverInfo": {"name": "gh"}}
+            elif m == "tools/list":
+                res = {"tools": []}
+            elif m == "prompts/list":
+                res = {"prompts": [{"name": "review-pr", "description": "Review a pull request",
+                                    "arguments": [{"name": "number", "required": True}, {"name": "focus"}]}]}
+            elif m == "prompts/get":
+                a = msg["params"]["arguments"]
+                res = {"messages": [{"role": "user", "content": {"type": "text",
+                        "text": f"Review PR {a['number']} focusing on {a.get('focus', 'everything')}."}}]}
+            else:
+                res = {}
+            print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": res}), flush=True)
+    """)
+    m = M.Manager(roots=["."])
+    try:
+        m.add("gh", spec, 20)
+        ps = m.prompts()
+        assert ps and ps[0]["command"] == "/mcp__gh__review-pr"
+        assert m.expand_prompt("/mcp__gh__review-pr 12 error handling") == "Review PR 12 focusing on error handling."
+        assert m.expand_prompt("/mcp__gh__other 1") is None and m.expand_prompt("hello") is None
+        import pytest
+        with pytest.raises(ValueError, match="needs: number"):
+            m.expand_prompt("/mcp__gh__review-pr")
+    finally:
+        m.close()

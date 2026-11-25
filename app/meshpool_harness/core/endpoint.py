@@ -20,6 +20,7 @@ never followed (OPENER), because urllib's default would copy the key header to t
 from __future__ import annotations
 
 import json
+import os
 import re
 import urllib.error
 import urllib.request
@@ -337,7 +338,47 @@ def chat_request(base: str, key: str, body: dict, *, kind: str = "", api_version
     if wire_of(k) == "anthropic":
         k = "generic"
     c = build(k, base, key, body, api_version=api_version or v, path=path)
-    return c.url, c.body, c.headers
+    return with_query(c.url), c.body, {**extra_headers(), **c.headers}
+
+
+_NEVER = {"authorization", "api-key", "x-api-key", "host", "content-length", "content-type", "cookie",
+          "proxy-authorization", "transfer-encoding"}
+
+
+def extra_headers() -> dict:
+    """MH_EXTRA_HEADERS: headers added to every model request, as JSON ({"X-Team": "data"}) or "Name: value" pairs
+    split by ; or new lines. They never replace the key header or the ones the request itself needs."""
+    raw = os.environ.get("MH_EXTRA_HEADERS", "").strip()
+    if not raw:
+        return {}
+    pairs = []
+    if raw.startswith("{"):
+        try:
+            d = json.loads(raw)
+            pairs = list(d.items()) if isinstance(d, dict) else []
+        except ValueError:
+            pairs = []
+    else:
+        for part in re.split(r"[;\n]", raw):
+            n, sep, val = part.partition(":")
+            if sep:
+                pairs.append((n, val))
+    out = {}
+    for n, val in pairs:
+        n, val = str(n).strip(), str(val).strip()
+        if re.fullmatch(r"[A-Za-z0-9-]{1,64}", n) and n.lower() not in _NEVER and "\r" not in val and "\n" not in val:
+            out[n] = val[:1000]
+    return out
+
+
+def with_query(url: str) -> str:
+    """MH_EXTRA_QUERY: query parameters added to every model request URL (a=1&b=2)."""
+    raw = os.environ.get("MH_EXTRA_QUERY", "").strip().lstrip("?")
+    if not raw:
+        return url
+    from urllib.parse import parse_qsl, urlencode
+    q = urlencode([(k, v) for k, v in parse_qsl(raw) if k])
+    return (url + ("&" if "?" in url else "?") + q) if q else url
 
 
 # ---------- never follow a redirect with a key -----------------------------------------------------------------------

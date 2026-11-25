@@ -940,6 +940,73 @@ class Manager:
     def has(self, name: str) -> bool:
         return name in self.map or (name in (RES_LIST, RES_READ) and bool(self._resource_servers()))
 
+    # ---- prompts (ready-made requests a server offers, used as /mcp__server__prompt) ------------------------------
+    def prompts(self) -> list[dict]:
+        """[{"command", "server", "name", "description", "arguments"}] for every connected server that offers prompts."""
+        out = []
+        for s in list(self.servers.values()):
+            if s.status != "connected" or "prompts" not in (getattr(s, "caps", None) or {}):
+                continue
+            try:
+                r = s._rpc("prompts/list", {}, 30)
+            except MCPError:
+                continue
+            for p in (r.get("prompts") or [])[:100]:
+                if isinstance(p, dict) and isinstance(p.get("name"), str):
+                    out.append({"command": "/" + tool_name(s.name, p["name"]), "server": s.name, "name": p["name"],
+                                "description": str(p.get("description") or "")[:300],
+                                "arguments": [a for a in (p.get("arguments") or []) if isinstance(a, dict)]})
+        return out
+
+    def expand_prompt(self, text: str) -> str | None:
+        """The message for "/mcp__server__prompt words...": the server's prompt filled in, None when text is not one.
+        The words fill the prompt's arguments in order; the last one takes the rest. Raises ValueError for a prompt
+        that needs more arguments than were given."""
+        m = re.match(r"^/(mcp__[A-Za-z0-9_-]+)(?:\s+(.*))?$", text.strip(), re.S)
+        if not m:
+            return None
+        hit = next((p for p in self.prompts() if p["command"] == "/" + m.group(1)), None)
+        if not hit:
+            return None
+        import shlex
+        rest = (m.group(2) or "").strip()
+        try:
+            words = shlex.split(rest)
+        except ValueError:
+            words = rest.split()
+        args, specs = {}, hit["arguments"]
+        for i, a in enumerate(specs):
+            if i < len(words):
+                args[a["name"]] = " ".join(words[i:]) if i == len(specs) - 1 else words[i]
+        missing = [a["name"] for a in specs if a.get("required") and a["name"] not in args]
+        if missing:
+            raise ValueError(f"{hit['command']} needs: {', '.join(missing)}")
+        try:
+            r = self.servers[hit["server"]]._rpc("prompts/get", {"name": hit["name"], "arguments": args}, 60)
+        except MCPError as e:
+            raise ValueError(f"Could not get the prompt {hit['name']} from {hit['server']}: {redact(e)}")
+        parts = []
+        for msg in r.get("messages") or []:
+            c = (msg or {}).get("content")
+            for item in (c if isinstance(c, list) else [c]):
+                if isinstance(item, dict) and item.get("type") == "text":
+                    parts.append(str(item.get("text") or ""))
+                elif isinstance(item, dict) and item.get("type") == "resource":
+                    res = item.get("resource") or {}
+                    if res.get("text"):
+                        parts.append(f"[{res.get('uri', '')}]\n{res['text']}")
+        return "\n\n".join(p for p in parts if p.strip()) or None
+
+    def annotations(self, name: str) -> dict:
+        """The server's own hints for one tool (readOnlyHint, destructiveHint, ...), {} when it gives none."""
+        pair = self.map.get(name)
+        s = self.servers.get(pair[0]) if pair else None
+        if not s:
+            return {}
+        t = next((t for t in s.tools if t.get("name") == pair[1]), None)
+        ann = (t or {}).get("annotations")
+        return ann if isinstance(ann, dict) else {}
+
     # ---- resources (files, records, docs a server offers to read) ------------------------------------------------
     def _resource_servers(self) -> list:
         return [s for s in list(self.servers.values()) if s.status == "connected" and "resources" in (getattr(s, "caps", None) or {})]

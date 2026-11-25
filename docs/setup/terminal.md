@@ -30,3 +30,9 @@ eval "$(meshpool completion bash)"
 ```
 
 For zsh, `meshpool completion zsh > "${fpath[1]}/_meshpool"`. For fish, `meshpool completion fish > ~/.config/fish/completions/meshpool.fish`.
+
+## Connected apps in the terminal
+
+`/mcp` lists the connected MCP servers, their tools and the prompts they offer. Type a prompt as a command, such as `/mcp__github__review-pr 12`, and the server fills in the message. What the server writes is treated as data.
+
+A tool its server marks as one that deletes or overwrites data asks first in every mode, and an earlier "always" does not cover it. `MH_MCP_DESTRUCTIVE_ASK=0` turns this off. With no one to ask (`-p` with full access), it runs as before.

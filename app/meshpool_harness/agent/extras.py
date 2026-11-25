@@ -45,6 +45,17 @@ def _git_root(root: Path) -> Path:
     return root
 
 
+def excluded(f: Path) -> bool:
+    """MH_INSTRUCTIONS_EXCLUDE: comma-separated patterns of instruction and rules files never loaded, matched
+    against the file's full path (*/legacy/AGENTS.md, **/.cursor/rules/*)."""
+    pats = [p.strip() for p in os.environ.get("MH_INSTRUCTIONS_EXCLUDE", "").split(",") if p.strip()]
+    if not pats:
+        return False
+    full = Path(f).expanduser().resolve().as_posix() if not isinstance(f, str) else f
+    return any(fnmatch.fnmatchcase(full, p) or fnmatch.fnmatchcase(full, "*/" + p.lstrip("/")) or
+               fnmatch.fnmatchcase(Path(full).name, p) for p in pats)
+
+
 def _read(p: Path) -> str:
     try:
         return p.read_text(encoding="utf-8", errors="replace")[:MAX_FILE]
@@ -145,7 +156,7 @@ def scoped_rules(root: Path, path: str, seen: set) -> str:
         if not base.is_dir():
             continue
         for f in sorted(base.rglob("*.md")) + sorted(base.rglob("*.mdc")):
-            if f.is_symlink() or not f.is_file() or f.resolve() in seen:
+            if f.is_symlink() or not f.is_file() or f.resolve() in seen or excluded(f):
                 continue
             pats = rule_globs(f)
             if pats and any(_glob_match(rel, g) for g in pats):
@@ -161,6 +172,8 @@ def scoped_rules(root: Path, path: str, seen: set) -> str:
 def instruction_text(root: Path) -> str:
     parts, total = [], 0
     for where, f in instruction_files(root):
+        if excluded(f):
+            continue
         body = _imports(_read(f), f.parent, {f.resolve()}).strip()
         if not body or total + len(body) > MAX_ALL:
             continue
@@ -187,7 +200,7 @@ def nested_instructions(root: Path, path: str, seen: set) -> str:
         for name in FILES:
             f = folder / name
             try:
-                if f.is_symlink() or not f.is_file() or f.resolve() in seen:
+                if f.is_symlink() or not f.is_file() or f.resolve() in seen or excluded(f):
                     continue
             except OSError:
                 continue

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from pathlib import Path
 
 KEEP_RECENT = 10                 # messages kept word for word at the end
 MAX_LOG = 60_000                 # characters of older steps shown to the summariser
@@ -121,8 +122,14 @@ def summarize(middle: list, task: str, client=None, model: str | None = None, fo
             from meshpool_harness.core.client import LiveClient
             client = LiveClient("compact")
         model = model or os.environ.get("MH_MODEL_FAST") or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
+        own = os.environ.get("MH_COMPACT_PROMPT", "").strip()
+        if "\n" not in own and own.endswith((".md", ".txt")):    # a file: read it (missing: meshpool's own)
+            try:
+                own = Path(own).expanduser().read_text(encoding="utf-8", errors="replace").strip()[:6000]
+            except OSError:
+                own = ""
         r = client.chat(model=model, messages=[
-            {"role": "system", "content": SYSTEM},
+            {"role": "system", "content": (own[:6000] + "\n\nUse only facts in the log.") if own else SYSTEM},
             {"role": "user", "content": f"The task:\n{task[:3000]}\n\nThe log of earlier steps:\n{render(middle)}"
              + (f"\n\nThe user asked this summary to keep, in full detail: {focus[:1000]}" if focus else "")}],
             max_tokens=2800, temperature=0.1, task_id="compact", role="worker")
