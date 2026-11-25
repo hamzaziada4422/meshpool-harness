@@ -548,10 +548,13 @@ def restore_version(fid: str, index: int) -> dict:
     if f is None:
         raise KeyError("That memory does not exist.")
     try:
-        old = f["history"][int(index)]["text"]
+        i = int(index)
+        if i < 0:                                 # PA-extra-4: -1 is not "the last version" here, it is no version
+            raise IndexError(i)
+        old = f["history"][i]["text"]
     except (IndexError, ValueError, TypeError):
         raise ValueError("That version does not exist.") from None
-    return update(fid, reason=f"Restored an earlier version", text=old, status="active")
+    return update(fid, reason="Restored an earlier version", text=old, status="active")
 
 
 def set_scope(fid: str, scope: str) -> dict:

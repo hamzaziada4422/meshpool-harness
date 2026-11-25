@@ -384,6 +384,9 @@ def child_env() -> dict:
         env = merged
         for k in ("MESHPOOL_RESOLVING_ENV", "PWD", "OLDPWD", "SHLVL", "_"):
             env.pop(k, None)
+    # PA-toplevel-23: a server outlives the turn it was started in; with the turn's MH_CHECK_RUN it would record every
+    # later turn's checks into that first one. Without it, it follows checks.current() (the pointer file).
+    env.pop("MH_CHECK_RUN", None)
     return env
 
 

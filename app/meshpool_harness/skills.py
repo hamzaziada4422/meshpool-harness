@@ -341,7 +341,7 @@ def instructions(name: str, arguments: str = "", by_user: bool = False) -> str:
     text = _with_arguments(Path(s["path"]).read_text(encoding="utf-8", errors="replace"), arguments)
     extra = ""
     if s["files"]:
-        extra = (f"\n\nFiles that come with this skill (read them with read_file using these full paths):\n"
+        extra = ("\n\nFiles that come with this skill (read them with read_file using these full paths):\n"
                  + "\n".join(str(Path(s["path"]).parent / f) for f in s["files"]))
     return f"Skill: {s['name']}\nFolder: {Path(s['path']).parent}\n\n{text}{extra}"
 

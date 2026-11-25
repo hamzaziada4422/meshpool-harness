@@ -312,11 +312,12 @@ def test_ctrl_c_in_the_terminal_stops_the_sub_agents_before_it_goes_on(monkeypat
 
     def child(b):
         calls.append(time.time())
+        if len(calls) == 1:                                         # Ctrl+C, in the main thread as in a terminal,
+            threading.Timer(0.3, _thread.interrupt_main).start()   # only once run_tool is surely running (PA-skills-13)
         time.sleep(0.15)
         return _msg("", [("glob", {"pattern": "*"})])               # never finishes on its own
     fake(monkeypatch, child)
     a = _agent(_env)
-    threading.Timer(0.6, _thread.interrupt_main).start()            # Ctrl+C, in the main thread as in a terminal
     with pytest.raises(KeyboardInterrupt):
         D.run_tool(a, {"tasks": [{"goal": "List files again and again"}, {"goal": "List files once more, slowly"}]})
     t_back = time.time()

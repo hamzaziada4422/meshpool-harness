@@ -101,7 +101,7 @@ def test_context_has_the_project_and_only_that_project(home):
     PS.knowledge_add(a, "big.txt", big)
     ctx = AS.context_block("when is the launch?", "", a)
     assert "ALPHA-RULE" in ctx and "Falcon" in ctx and "first of March" in ctx and "brief.txt" in ctx
-    assert "BETA-RULE" not in ctx
+    assert "BETA-RULE" not in ctx and "BETA-RULE" in AS.context_block("hello", "", b)   # b's rule exists, in b only
     assert "BETA-RULE" not in AS.context_block("hello", "", "") and "ALPHA-RULE" not in AS.context_block("hello", "", "")
     # a long file contributes the passage that matches the question, not everything
     assert "Acme and Globex" in AS.context_block("which vendor shortlist?", "", a)

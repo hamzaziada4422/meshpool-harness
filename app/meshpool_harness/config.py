@@ -80,11 +80,14 @@ FIELDS = [
     ("MH_SUBAGENT_AUTO_APPROVE", "Sub-agents approve their own actions", "0", "On: what would need your yes in the "
      "chat (a command in Ask, say) is allowed once for a sub-agent. Off: it is refused and the sub-agent "
      "reports it."),
-    ("MH_SUBAGENT_PARALLEL", "Sub-agents at the same time", "4", "1 to 10."),
+    # PA-toplevel-20: these ranges must match the clamps in agent/delegate.settings and assistant.subagent_settings
+    ("MH_SUBAGENT_PARALLEL", "Sub-agents at the same time", "4", "1 to 10. Sub-agents started from Hermes, Codex or "
+     "Pi: 6 at most."),
     ("MH_SUBAGENT_STEPS", "Steps per sub-agent", "50", "The most tool steps one sub-agent takes before it reports "
-     "(5 to 250)."),
+     "(5 to 250; 200 at most for sub-agents started from Hermes, Codex or Pi)."),
     ("MH_SUBAGENT_MINUTES", "Sub-agent time limit (minutes)", "30", "All sub-agents of one job stop at this and "
-     "report what they have. 0: no limit."),
+     "report what they have (up to 240). 0: no limit. Sub-agents started from Hermes, Codex or Pi stop at 25 "
+     "minutes at most, also with 0."),
     ("MH_SUBAGENT_DEPTH", "Sub-agent levels", "1", "1: sub-agents do their part themselves. 2 or 3: they may hand "
      "parts on to sub-agents of their own."),
     ("MH_MAX_INFLIGHT", "Model calls at the same time", "", "Per endpoint and key, across all chats and sub-agents. "

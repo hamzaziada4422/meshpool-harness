@@ -504,6 +504,32 @@ def _freeze_colors(prs, theme: dict, cmap: dict) -> None:
             el.getparent().replace(el, new)
 
 
+# Lengths in a master or layout part that scale with the page: positions and sizes (group child spaces too, so a
+# group keeps its own mapping), line widths, text insets, table grids; and point sizes (fonts, fixed spacing), so the
+# page keeps its proportions. Paths in custom shapes use their own coordinate space and need nothing.
+_SCALE_ATTRS = {"off": ("x", "y"), "chOff": ("x", "y"), "ext": ("cx", "cy"), "chExt": ("cx", "cy"), "ln": ("w",),
+                "bodyPr": ("lIns", "tIns", "rIns", "bIns"), "gridCol": ("w",), "tr": ("h",),
+                "rPr": ("sz",), "defRPr": ("sz",), "endParaRPr": ("sz",), "spcPts": ("val",)}
+
+
+def _scale_masters(prs, k: float) -> None:
+    """Scale every slide master and layout of `prs` by k (a 16:9 deck at 10 x 5.625 in to 13.333 x 7.5 in)."""
+    parts = []
+    for m in prs.slide_masters:
+        parts.append(m._element)
+        parts += [lay._element for lay in m.slide_layouts]
+    for root in parts:
+        for el in root.iter(f"{{{A}}}*"):
+            names = _SCALE_ATTRS.get(etree.QName(el).localname)
+            if not names:
+                continue
+            for a in names:
+                v = el.get(a)
+                if v is not None and re.fullmatch(r"-?\d+", v):
+                    n = int(round(int(v) * k))
+                    el.set(a, str(min(n, 400000) if a == "sz" else n))      # the schema's largest font size
+
+
 def make_master(deck_path: str, out_path: str) -> tuple[bool, str, float | None]:
     """A template from a company deck: slides removed, size, layouts and artwork checked.
     (ok, why not, left edge of the master's artwork in the footer's right corner)."""
@@ -511,11 +537,11 @@ def make_master(deck_path: str, out_path: str) -> tuple[bool, str, float | None]
     prs = open_pptx(deck_path)                            # a .potx too
     if abs(prs.slide_width - WIDE[0]) > WIDE[0] * 0.003 or abs(prs.slide_height - WIDE[1]) > WIDE[1] * 0.003:
         w, h = prs.slide_width / EMU, prs.slide_height / EMU
-        if abs(w / h - 16 / 9) < 0.01:
-            return False, (f"its slides are 16:9 but {w:.2f} x {h:.2f} in; the forge layouts are drawn for "
-                           "13.33 x 7.5 in (resize the deck to Widescreen 13.33 x 7.5 in to use its master)"), None
-        return False, (f"its slides are {w:.2f} x {h:.2f} in; the forge layouts need 16:9 widescreen "
-                       "(13.33 x 7.5 in)"), None
+        if not (h and abs(w / h - 16 / 9) < 0.01):
+            return False, (f"its slides are {w:.2f} x {h:.2f} in; the forge layouts need 16:9 widescreen "
+                           "(13.33 x 7.5 in)"), None
+        _scale_masters(prs, WIDE[0] / prs.slide_width)   # PA-ND-2: 16:9 at another size (10 x 5.625 in): scaled up
+        prs.slide_width, prs.slide_height = WIDE
     try:
         find_layout(prs, "Title Only")
         find_layout(prs, "Title Slide")
