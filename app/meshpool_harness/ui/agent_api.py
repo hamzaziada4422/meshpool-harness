@@ -894,6 +894,14 @@ class Session:
             raise ValueError("This agent does not ask questions.")
         self.agent.reply(str(question_id or ""), answers)
 
+    def _codex_office(self, text: str) -> bool:
+        """This message's office job runs on Codex 0.171's request (core.Agent.office_c171_for)."""
+        try:
+            f = getattr(self.agent, "office_c171_for", None)
+            return bool(f and self.harness.get("type") not in ("acp", "pi") and f(text))
+        except Exception:  # noqa: BLE001
+            return False
+
     def _office_direct(self, text: str = "") -> bool:
         """The agent writes office files itself (core.Agent._office_direct: a lean Work chat, MH_OFFICE_DIRECT on), so
         the notes name the libraries, not engine tools. Not once the engines are offered: a message asking for a new
@@ -1400,7 +1408,8 @@ class Session:
                     except Exception as e:  # noqa: BLE001
                         self.emit({"type": "status", "text": f"Could not record a checkpoint: {e}"})
                 body = self._body(text, images)
-                if caps:                                # a file the agent can make: say so, with the tools for it
+                codex_office = self._codex_office(text)   # Codex's own request: no Meshpool office notes on it
+                if caps and not codex_office:           # a file the agent can make: say so, with the tools for it
                     from meshpool_harness import capabilities as CAP
                     body += CAP.note(caps, self.harness, direct=self._office_direct(text))
                 from meshpool_harness import pace as PACE
@@ -1444,12 +1453,15 @@ class Session:
                         if outside:
                             tools = "deferred" if self.harness.get("type") == "pi" else (
                                 "all" if not self.harness.get("lean") else "none")
+                        elif codex_office:             # Codex's request has one command tool: name no Meshpool tool
+                            tools = "none"             # (pdf_report: told to check with view_output, it searched the
+                                                       # disk for it and re-rendered the PDF, 42 calls vs Codex's 10)
                         body += "\n\n\u200b" + AS.context_block(
                             text, self.workdir, pid, chat_id=self.id, incognito=self.incognito, exclude=ex,
                             lookup=not m0.get("project_unbound"), rules=outside, tools=tools,
                             # Pi: the office rules ride on the message that asks for a file (capabilities.note),
                             # not on every chat's first message
-                            office=("direct" if self._office_direct(text) else True) if (
+                            office=False if codex_office else ("direct" if self._office_direct(text) else True) if (
                                 tools != "none" and tools != "deferred") or (
                                 bool(getattr(self.agent, "office_on", False)) and not caps) else False)
 
