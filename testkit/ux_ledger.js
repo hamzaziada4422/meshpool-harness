@@ -150,6 +150,18 @@ const results = []; const check = (name, ok, detail = "") => { results.push([nam
   await p.fill("#input", "# I deploy on Fridays"); await p.keyboard.press("Enter"); await p.waitForTimeout(800);
   const mem = await p.evaluate(async () => (await api("/api/memory")).facts?.map(f => f.text) || []);
   check("# in the message box saves to memory", mem.some(t => /deploy on Fridays/i.test(t)) && !(await p.inputValue("#input")), mem.slice(0, 5).join(" | "));
+  // Try again keeps the earlier answer: 2/2 under the new reply, and the arrow goes back to 1/2
+  await p.evaluate(dir => newThread(dir), proj); await p.waitForTimeout(500);
+  await send("show python code");
+  await p.waitForFunction(() => S.cur?.view?.state === "idle", null, {timeout: 60000}).catch(() => {});
+  const ends0 = await p.evaluate(() => (S.cur.log || []).filter(e => e.type === "turn_end").length);
+  await p.click(".racts010 [data-ra=retry]");
+  await p.waitForFunction(n => S.cur?.view?.state === "idle" && (S.cur.log || []).filter(e => e.type === "turn_end").length >= n, ends0, {timeout: 60000}).catch(() => {});
+  await p.waitForSelector(".ver010 .vn", {timeout: 15000}).catch(() => {});
+  const v1 = await p.textContent(".ver010 .vn").catch(() => "");
+  await p.click(".ver010 [data-vv='-1']").catch(() => {});
+  const v2 = await p.textContent(".ver010 .vn").catch(() => "");
+  check("Try again keeps the earlier answer, and the arrows switch versions", v1 === "2/2" && v2 === "1/2", `${v1} -> ${v2}`);
   check("no page errors", !errs.length, errs.join(" | "));
   await b.close();
   const ok = results.filter(r => r[1]).length; console.log(`\n${ok}/${results.length} passed`);

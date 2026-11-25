@@ -1240,8 +1240,8 @@ function applyEv(ev) {
     case "stream_reset": if (cur.live) { cur.live.remove(); cur.live = null; cur.liveDirty = false; } break;
     case "assistant":
       { const txt = stripGoal(ev.text);
-      if (cur.live) { if (txt) { mdRender(cur.live, txt); easeEnd(cur.live); } else cur.live.remove(); cur.live = null; cur.liveDirty = false; }
-      else if (txt) { closeGroup(); mdRender(add("", "msg-ai"), txt); } }
+      if (cur.live) { if (txt) { mdRender(cur.live, txt); easeEnd(cur.live); cur.lastAi = cur.live; } else cur.live.remove(); cur.live = null; cur.liveDirty = false; }
+      else if (txt) { closeGroup(); cur.lastAi = add("", "msg-ai"); mdRender(cur.lastAi, txt); } }
       cur.lastText = ev.text || cur.lastText;
       break;
     case "tool_start": {

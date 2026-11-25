@@ -1361,7 +1361,7 @@ class Session:
                           getattr(a, "model", None) or a.agent_info.get("name", self.harness["name"])),
                 "harness_models": getattr(a, "available_models", None), "plan": self.plan, "goal": self.goal,
                 "style": self.style_id() or _default_style(), "incognito": bool(self.incognito),
-                "effort": getattr(a, "effort", None),
+                "effort": getattr(a, "effort", None), "versions": meta.get("versions") or {},
                 "epoch": self.epoch, "turns": self.cp.turns() if self.cp else [],
                 "checkpoints_note": self.cp.disabled if self.cp else "",
                 "events": evs, "total": since + len(evs) if since <= n else n,
@@ -1736,6 +1736,13 @@ def thread_action(sid: str, body: dict) -> dict:
         write_meta(sid, pinned=act == "pin")
     elif act in ("archive", "unarchive"):
         write_meta(sid, archived=act == "archive")
+    elif act == "keep_version":                      # Try again: the answer being replaced stays viewable
+        turn, text = int(body.get("turn") or 0), str(body.get("text") or "")[:100000]
+        if turn < 1 or not text.strip():
+            raise ValueError("Give the reply's turn and text.")
+        vs = {k: v for k, v in (read_meta(sid).get("versions") or {}).items() if k.isdigit() and int(k) < turn}
+        vs[str(turn)] = ((read_meta(sid).get("versions") or {}).get(str(turn)) or [])[-8:] + [text]
+        write_meta(sid, versions=vs)
     elif act in ("seen", "unseen"):                   # the blue dot: a finished chat nobody has opened yet
         write_meta(sid, unread=act == "unseen")
     elif act == "move":                               # into a project, or out of it (project_id empty)
