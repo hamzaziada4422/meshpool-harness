@@ -453,7 +453,6 @@ def test_route_card_switch_leaves_the_method_card_out(tmp_path, monkeypatch):
 
 
 def test_core_profile_is_codex_style_without_the_extra_verification_layers(tmp_path, monkeypatch):
-    monkeypatch.setenv("MH_SMALL_REPO_STYLE", "core")         # the lean core itself (default code lane: c171)
     from meshpool_harness.agent import core as C
     s = PR.settings("core")
     assert s["engine_style"] == "codex" and s["lean_core"] is True and s["review"] is False

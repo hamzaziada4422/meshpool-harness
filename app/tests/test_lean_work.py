@@ -111,7 +111,6 @@ def test_flag_on_work_keeps_its_office_and_web_tools(tmp_path, monkeypatch):
 
 
 def test_flag_on_does_not_touch_code_chats(tmp_path, monkeypatch):
-    monkeypatch.setenv("MH_SMALL_REPO_STYLE", "core")         # the lean core itself (default code lane: c171)
     monkeypatch.setenv("MH_LEAN_WORK", "1")
     c = Agent(str(tmp_path), mode="auto")
     c.set_route(Route(spec="code.debug", family="code", sub="debug", base="code", profile="core",
