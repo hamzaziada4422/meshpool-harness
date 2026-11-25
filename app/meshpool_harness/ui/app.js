@@ -15,15 +15,17 @@ const ROUTES = [["chat", "Chat", "Quick answers, rewrites, questions"], ["resear
   ["code.test", "Tests", "Write and run tests"], ["code.terminal", "Terminal", "Install, configure, deploy"],
   ["browser", "Browser", "Websites, forms, sign-ins"], ["automation", "Automation", "Scheduled and repeating work"]];
 function routeMenu(anchor) {
-  document.querySelector(".routemenu")?.remove();
+  { const old = document.querySelector(".routemenu"); if (old) { if (old._close) old._close(); else old.remove(); } }   // its listener goes too
   const m = document.createElement("div"); m.className = "routemenu"; m.setAttribute("role", "menu");
   m.innerHTML = ROUTES.map(([id, name, d]) => `<button role="menuitem" data-spec="${id}"><b>${name}</b><small>${d}</small></button>`).join("");
   anchor.appendChild(m);
-  const close = e => { if (!m.contains(e.target)) { m.remove(); document.removeEventListener("mousedown", close); } };
-  setTimeout(() => document.addEventListener("mousedown", close), 0);
-  m.addEventListener("keydown", e => { if (e.key === "Escape") { m.remove(); document.removeEventListener("mousedown", close); } });
+  const shut = () => { m.remove(); document.removeEventListener("mousedown", close); };
+  const close = e => { if (!m.contains(e.target)) shut(); };
+  m._close = shut;
+  setTimeout(() => { if (m.isConnected) document.addEventListener("mousedown", close); }, 0);
+  m.addEventListener("keydown", e => { if (e.key === "Escape") shut(); });
   m.querySelectorAll("button").forEach(b => b.onclick = async () => {
-    m.remove(); document.removeEventListener("mousedown", close);
+    shut();
     const c = S.cur; if (!c) return;
     try { await post(`/api/agent/${c.id}/route`, {spec: b.dataset.spec, since: 1e9}); clearTimeout(c.pollT); poll(); }
     catch (e) { toast(e.message); }
