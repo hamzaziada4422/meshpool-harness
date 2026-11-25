@@ -753,6 +753,8 @@ def run_tool(parent, args: dict) -> tuple[str, bool]:
         raise
     finally:
         reg.pop(d.id, None)
+    if hasattr(parent, "_absorb_usage"):                  # every sub-agent has finished: count any call whose ledger
+        parent._absorb_usage(getattr(parent, "_turn_usage", None))   # record landed after its report (CI run, 3.11)
     ok = any(r["status"] in ("completed", "interrupted") for r in res["results"])   # reports came back
     return report(res), ok
 
