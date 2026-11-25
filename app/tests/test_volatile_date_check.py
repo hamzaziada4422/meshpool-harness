@@ -46,3 +46,8 @@ def test_each_sheet_with_a_volatile_formula_is_named(tmp_path):
     wb.save(tmp_path / "two.xlsx")
     msg = C._volatile_date_miss(ASK, tmp_path, 0)
     assert "two.xlsx!Sheet!A1" in msg and "two.xlsx!S2!B2" in msg
+
+
+def test_the_notes_say_to_keep_named_years_literal():
+    assert "TODAY()" in CAP.EDIT_NOTE_DIRECT and "literal" in CAP.EDIT_NOTE_DIRECT
+    assert "TODAY()" in C.OFFICE_DIRECT_RULE
