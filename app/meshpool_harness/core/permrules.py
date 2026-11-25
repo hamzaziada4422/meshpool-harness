@@ -49,6 +49,95 @@ DESTRUCTIVE = re.compile(
     re.I)
 
 
+# Recursive deletes that only clear caches: rm -rf __pycache__ (dev6 traces: the agent tidying up after its tests).
+_CACHE_DIRS = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis"})
+
+
+def _temp_roots() -> list[Path]:
+    import tempfile
+    out = []
+    for t in {tempfile.gettempdir(), os.environ.get("TMPDIR") or "", "/tmp"}:
+        if t and os.path.isdir(t):
+            out.append(Path(os.path.realpath(t)))
+    return out
+
+
+def _within(p: Path, base: Path, strict: bool) -> bool:
+    return base in p.parents or (not strict and p == base)
+
+
+def scratch_rm(cmd: str, root, workdir: str | None = None) -> bool:
+    """True when every part of `cmd` that DESTRUCTIVE matches is an rm that only clears scratch, so it needs no yes:
+    - rm without -r of named files inside the project or a temp folder (what apply_patch's Delete File does unasked);
+    - rm -r of a Python cache folder (__pycache__, .pytest_cache, ...) inside the project;
+    - rm -r of a literal path strictly inside a temp folder.
+    dev6 traces: `rm -f debug_slug.py`, `rm -rf __pycache__` were refused in headless auto mode ("No one is available
+    to approve this"), 1-3 wasted calls each, 12 times in 37 runs. Anything else stays destructive: $ or backticks,
+    ~, a target that is only wildcards, the project or temp folder itself, a path that leaves them, rm behind another
+    program (sudo, xargs), or a cd whose target is not a plain path."""
+    if not cmd or not DESTRUCTIVE.search(cmd) or re.search(r"[$`~]", cmd):
+        return False
+    try:
+        lex = shlex.shlex(cmd, posix=True, punctuation_chars=";&|<>()\n")
+        lex.whitespace = " \t\r"
+        toks = list(lex)
+    except ValueError:
+        return False
+    segs, cur = [], []
+    for t in toks:
+        if t and set(t) <= set(";&|<>()\n"):
+            if set(t) & set("<>()"):
+                return False                       # redirections, subshells: not judged here
+            segs.append(cur)
+            cur = []
+        else:
+            cur.append(t)
+    segs.append(cur)
+    r = Path(os.path.realpath(str(root)))
+    temps = _temp_roots()
+    cwd = Path(os.path.realpath(os.path.join(str(r), workdir))) if workdir else r
+    for w in segs:
+        if not w:
+            continue
+        if w[0] == "cd":
+            if len(w) != 2 or any(ch in w[1] for ch in "*?[") or w[1] == "-":
+                return False
+            cwd = Path(os.path.realpath(os.path.join(str(cwd), w[1])))
+            continue
+        if not DESTRUCTIVE.search(shlex.join(w)):
+            continue
+        if os.path.basename(w[0]) != "rm":
+            return False
+        flags, targets, opts = [], [], True
+        for a in w[1:]:
+            if opts and a == "--":
+                opts = False
+            elif opts and a.startswith("-") and a != "-":
+                flags.append(a)
+            else:
+                targets.append(a)
+        if not targets:
+            return False
+        rec = any(f in ("--recursive",) or (not f.startswith("--") and set(f[1:]) & {"r", "R"}) for f in flags)
+        if any(f.startswith("--") and f not in ("--recursive", "--force", "--verbose") for f in flags):
+            return False
+        for t in targets:
+            name = os.path.basename(t.rstrip("/"))
+            if not name or set(name) <= set("*?.[]") or ".." in Path(t).parts:
+                return False                       # rm -rf *, rm -rf ., rm -rf ../x
+            if any(ch in os.path.dirname(t) for ch in "*?["):
+                return False                       # a wildcard above the last part
+            p = Path(os.path.realpath(os.path.join(str(cwd), t)))
+            if p == r or p in r.parents:
+                return False                       # the project or a folder holding it
+            if _within(p, r, strict=True):         # in the project (even one under /tmp): the project's rules
+                if rec and name not in _CACHE_DIRS:
+                    return False
+            elif not any(_within(p, tb, strict=True) for tb in temps):
+                return False                       # neither the project nor a temp folder
+    return True
+
+
 def commands_of(name: str, args: dict) -> list[str]:
     """The shell command strings a tool call runs ([] for a tool that runs none)."""
     from meshpool_harness.core import tools as T

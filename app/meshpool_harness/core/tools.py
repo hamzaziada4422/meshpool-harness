@@ -240,7 +240,18 @@ def shell_script(argv) -> str:
     argv = [str(a) for a in argv or []]
     if len(argv) >= 3 and os.path.basename(argv[0]) in ("bash", "sh", "zsh") and argv[1] in ("-c", "-lc"):
         return argv[2]
-    return argv[0] if len(argv) == 1 else shlex.join(argv)
+    if len(argv) == 1:
+        return argv[0]
+    if os.path.basename(argv[0]) not in ("bash", "sh", "zsh") and any(_ARGV_OP.match(a) for a in argv[1:]):
+        # swe6 traces (D0, 7 calls in 23 runs): ["python", "t.py", "2>&1", "|", "tail"] meant a pipeline; joined as
+        # quoted words it ran python with "|" as an argument and failed. Operators standing alone stay operators. The
+        # permission checks read this same script (permrules.commands_of), so they judge what really runs.
+        return " ".join(a if _ARGV_OP.match(a) else shlex.quote(a) for a in argv)
+    return shlex.join(argv)
+
+
+# An argv element that is a shell operator on its own: | || && ; & > >> 2> 2>&1 &> < and a redirect to /dev/null
+_ARGV_OP = re.compile(r"^(\|\||\||&&|;|&|\d?>>?|\d?>&\d|&>>?|<|\d?>/dev/null)$")
 
 
 def patch_from_shell(argv):

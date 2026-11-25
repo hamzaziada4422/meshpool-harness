@@ -87,6 +87,15 @@ def split_patch(text: str) -> list[str]:
         raise first_err
 
 
+def _header_next(lines: list, n: int) -> bool:
+    """The next non-blank line after line n (1-based) is a file header or the end marker."""
+    for raw in lines[n:]:
+        t = raw.strip()
+        if t:
+            return t == END or any(t.startswith(m) for m in (ADD, DELETE, UPDATE))
+    return False
+
+
 def parse(text: str) -> list[Hunk]:
     lines = split_patch(text)
     hunks: list[Hunk] = []
@@ -132,6 +141,8 @@ def parse(text: str) -> list[Hunk]:
         if mode in ("started", "delete") or (mode == "add" and not line.startswith("+")):
             if header(trimmed, n):
                 continue
+            if not trimmed and _header_next(lines, n):
+                continue                    # dev6 trace: a blank line between two file sections (9 rejected calls)
             raise _bad_hunk(f"'{trimmed}' is not a valid hunk header. Valid hunk headers: '*** Add File: {{path}}', "
                             "'*** Delete File: {path}', '*** Update File: {path}'", n)
         if mode == "add":

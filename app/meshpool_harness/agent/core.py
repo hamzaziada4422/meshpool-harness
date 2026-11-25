@@ -1066,13 +1066,22 @@ def _rule_hit(rules: list, name: str, args: dict, deny: bool = False) -> str:
     return ""
 
 
-def _destructive(args: dict) -> bool:
+def _destructive(args: dict, root=None) -> bool:
     """A shell command that deletes recursively, rewrites history, wipes a disk, pipes the web into a shell or uses sudo.
-    shell's argv list (["rm", "-rf", "build"], ["bash", "-lc", "git reset --hard"]) is read as the script it runs."""
+    shell's argv list (["rm", "-rf", "build"], ["bash", "-lc", "git reset --hard"]) is read as the script it runs.
+    With the project root, an rm that only clears scratch (permrules.scratch_rm: named files in the project, caches,
+    temp folders) is not destructive."""
     cmd = args.get("command") or args.get("cmd") or ""
     if isinstance(cmd, (list, tuple)):
         cmd = T.shell_script(cmd)
-    return bool(_DESTRUCTIVE.search(str(cmd) + " " + " ".join(map(str, args.get("commands") or []))))
+    parts = [str(cmd)] + [str(c) for c in args.get("commands") or []]
+    hit = [c for c in parts if c and _DESTRUCTIVE.search(c)]
+    if not hit:
+        return False
+    if root is None or os.environ.get("MH_SCRATCH_RM", "1") == "0":
+        return True
+    wd = args.get("workdir") if isinstance(args.get("workdir"), str) else None
+    return not all(PR.scratch_rm(c, root, wd) for c in hit)
 
 
 _CHAT_TOOLS = frozenset({"read_file", "grep", "glob", "edit", "write_file", "bash", "web_search", "web_research",
@@ -4214,12 +4223,12 @@ class Agent:
             return False, (f"Not allowed by your saved rule {hit!r} (permissions.json). Do something else, or ask the user to change the rule."
                            + (" While a bash deny rule is saved, no command with $(...), backticks or <(...) runs: "
                               "run its parts as separate plain commands." if subst else ""))
-        if hk["allow"] and not _destructive(args):
+        if hk["allow"] and not _destructive(args, self.root):
             return True, ""
-        if _rule_hit(rules["allow"], name, args) and not _destructive(args):
+        if _rule_hit(rules["allow"], name, args) and not _destructive(args, self.root):
             return True, ""
         risky = self._outside(name, args) if self.mode != "auto" else ""
-        if self.mode == "auto" and _destructive(args):        # OSS-18: Full access still asks about these ...
+        if self.mode == "auto" and _destructive(args, self.root):        # OSS-18: Full access still asks about these ...
             if _rule_hit([r for r in rules["allow"] if r.startswith("bash:")], name, args):
                 return True, ""          # ... unless the user allowlisted this command ("bash:rm -rf build*"; a bare
             risky = risky or "destructive"                    # "bash" or --allowed-tools bash allows the tool, not this)
@@ -4235,14 +4244,14 @@ class Agent:
         if risky:
             group = "outside-" + name
         cmds = PR.commands_of(name, args) if group == "bash" and not risky else []
-        if cmds and self.mode in ("ask", "edits") and not _destructive(args) and \
+        if cmds and self.mode in ("ask", "edits") and not _destructive(args, self.root) and \
                 all(PR.safe_read(c, self.root) for c in cmds):
             return True, ""                    # H-15: a plain read-only command inside the project needs no question
         if group == "bash":
             pats = [x[5:] for x in self.always if x.startswith("bash:")]
-            if cmds and not _destructive(args) and all(PR.granted(c, pats) for c in cmds):
+            if cmds and not _destructive(args, self.root) and all(PR.granted(c, pats) for c in cmds):
                 return True, ""                # the chat grant covers only the command patterns the user allowed
-        elif group in self.always and risky != "destructive" and not _destructive(args):
+        elif group in self.always and risky != "destructive" and not _destructive(args, self.root):
             return True, ""                    # a chat grant never covers a destructive command (OSS-18)
         if not self.approve:
             return False, "No one is available to approve this. Run with --auto to allow changes."
@@ -4280,9 +4289,9 @@ class Agent:
             body = args.get("markdown") or args.get("request") or args.get("content")
             detail = (str(body)[:3000] if isinstance(body, str) and body.strip()
                       else json.dumps(args, indent=1, ensure_ascii=False)[:3000])
-        pats = [p for c in cmds for p in PR.grant_patterns(c)] if group == "bash" and not _destructive(args) else []
+        pats = [p for c in cmds for p in PR.grant_patterns(c)] if group == "bash" and not _destructive(args, self.root) else []
         pats = list(dict.fromkeys(pats))
-        scope = ("once" if risky == "destructive" or _destructive(args) else   # a destructive command: this once only
+        scope = ("once" if risky == "destructive" or _destructive(args, self.root) else   # a destructive command: this once only
                  "all file edits" if group == "edit" else "this tool" if group != "bash" else
                  " and ".join(f"`{p}`" for p in pats[:3]) + " commands" if pats else "once")   # once: no chat grant
         decision, note = PR.approve_with_scope(self.approve, kind, title, detail, scope)
