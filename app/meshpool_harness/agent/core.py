@@ -1785,13 +1785,65 @@ def _leaves_tree_as_it_was(cmd: str) -> bool:
     return pushes == backs
 
 
-def _check_line(cmd: str, shown: str, code: int) -> str:
+_NO_MATCH_CMD = re.compile(r"^\s*(?:cd\s+\S+\s*&&\s*)?(?:git\s+(?:-\w+\s+\S+\s+)*grep|rg|grep|egrep|fgrep|ag|ack|fd|find)\b")
+
+
+def _no_match(cmd: str, code: int, tail: str = "") -> bool:
+    """grep, rg and the like exit 1 with no output when nothing matched: that is an answer, not a failed check."""
+    segs = PR._segments(str(cmd or ""))
+    return (code == 1 and bool(segs) and all(_NO_MATCH_CMD.match(x) for x in segs)
+            and not str(tail or "").strip())
+
+
+def _test_summary(cmd: str, tail: str) -> str:
+    """"pytest, 14 passed" (or "pytest, 2 failed, 14 passed") for a test run, from the runner's own summary line;
+    "" when the command is no test run or printed no counts."""
+    m = _TEST_RUN.search(cmd or "")
+    if not m:
+        return ""
+    word = re.sub(r"\s+", " ", m.group(1).lower())
+    runner = word if word in ("pytest", "py.test", "unittest", "go test", "cargo test", "jest", "vitest", "mocha",
+                              "rspec", "phpunit", "npm test", "yarn test", "pnpm test", "dotnet test") else "tests"
+    low = str(tail or "")
+    nums = [f"{n} {w}" for w in ("failed", "errors", "passed", "skipped")
+            for n in re.findall(r"\b(\d+) " + w + r"\b", low)[-1:]]
+    ok = re.search(r"(?m)^Ran (\d+) tests?\b", low)
+    if not nums and ok and re.search(r"(?m)^OK\b", low):
+        nums = [f"{ok.group(1)} passed"]
+    return ", ".join([runner] + nums) if nums else ""
+
+
+def _tests_after_own_edit(cmd) -> bool:
+    """One combined step that writes files and then runs a test (a patch or a heredoc script, then pytest): the test
+    ran after the change, though the step as a whole changed the tree."""
+    wrote = False
+    for seg in PR._segments(str(cmd or "")):
+        seg = re.sub(r"^cd\s+(\"[^\"]*\"|'[^']*'|\S+)\s*&&\s*", "", seg).strip()
+        if _TEST_RUN.search(seg) and not T.read_only(seg):
+            if wrote:
+                return True
+        elif not (_GIT_LOOK.match(seg) or T.read_only(seg)):
+            wrote = True
+    return False
+
+
+def _check_line(cmd: str, shown: str, code: int, tail: str = "") -> str:
     """The receipt's verdict on the last command after the last change: never "passed" when the exit status could
-    not show a failure (a check piped into another command without pipefail)."""
+    not show a failure (a check piped into another command without pipefail), "no match" for a search that found
+    nothing, and the name of the test run when one verified the change ("Verified: pytest, 14 passed")."""
+    if _no_match(cmd, code, tail):
+        return f"`{shown}` found no match (exit 1 is how a search says so)"
+    summ = _test_summary(cmd, tail)
+    bad = bool(re.search(r"\b[1-9]\d* (?:failed|errors?)\b", summ))
     if code != 0:
-        return f"`{shown}` FAILED (exit {code})"
+        return f"`{shown}` FAILED (exit {code})" + (f": {summ}" if summ else "")
+    if bad:
+        return f"Not verified: {summ}"
+    if summ:                                    # the runner's own summary line shows it passed, pipe or not
+        return f"Verified: {summ}"
     if _piped_check_hides_status(cmd):
-        return (f"`{shown}` ran (exit status is the last command's in the pipe; failures before it are not visible)")
+        return (f"`{shown}` ran (exit status is the last command's in the pipe; failures before it are not visible)"
+                + (f": {summ}" if summ else ""))
     if _TEST_RUN.search(cmd or "") and re.search(r"\|\|\s*(?:true\b|:(?=\s|;|$)|exit\s+0\b)", cmd or ""):
         return f"`{shown}` ran (its exit status is ignored by `|| true`, so a failure would not show)"
     return f"`{shown}` passed"
@@ -5463,11 +5515,12 @@ class Agent:
         more = f" and {len(rel) - 12} more" if len(rel) > 12 else ""
         after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits and c.get("kind") != "read"]
         if after:
-            last = after[-1]
+            real = [c for c in after if not _no_match(c["cmd"], c["code"], c.get("tail", ""))]
+            last = (real or after)[-1]          # a search that found nothing is not the check
             # the command, not the `cd <long project path> &&` the model put in front of it
             cmd = re.sub(r"^\s*cd\s+(\"[^\"]*\"|'[^']*'|\S+)\s*&&\s*", "", last["cmd"]).strip() or last["cmd"]
             cmd = cmd.splitlines()[0][:80]
-            check = _check_line(last["cmd"], cmd, last["code"])
+            check = _check_line(last["cmd"], cmd, last["code"], last.get("tail", ""))
             check += f" ({len(after)} command{'s' if len(after) > 1 else ''} after the last change)"
         else:
             check = "nothing was run after the last change, so it is not verified"
@@ -7439,12 +7492,16 @@ class Agent:
             elif name == "exec_command":               # Codex 0.171 (profile c171): its result format, as Codex sends it
                 pre = getattr(self, "_sig_pre", None)  # the repeat guard's fingerprint of this same call
                 before = pre[1] if pre and pre[0] == id(c) else self._tree_sig()
+                n_edits = self.ws.edits
                 out = self.ws.exec_command(**args)
                 ok = T.exec_exit_code(out) == 0
                 after = self._tree_sig() if before is not None else None
                 self._sig_post = (id(c), after)
-                if before is not None and after != before and not _leaves_tree_as_it_was(args.get("cmd")):
+                if before is not None and after != before and not _leaves_tree_as_it_was(args.get("cmd")) \
+                        and self.ws.edits == n_edits:      # a patch in the same step already counted its edit
                     self.ws.edits += 1                 # a heredoc write is an edit: the loop guards see the progress
+                    if _tests_after_own_edit(args.get("cmd")) and self.ws.commands:
+                        self.ws.commands[-1]["after_edit"] = self.ws.edits    # it tested what it had just written
             else:
                 out = getattr(self.ws, name)(**args)
                 route = getattr(self, "route", None)

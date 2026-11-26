@@ -33,6 +33,19 @@ def _agent(root, replies, mode="auto"):
     return a, seen
 
 
+def _c171(root, mode="auto"):
+    from meshpool_harness.hrouter import profiles as PROF
+    from meshpool_harness.hrouter.route import Route
+    a = A.Agent(str(root), mode=mode)
+    a.set_route(Route(spec="code.debug", family="code", sub="debug", base="code", profile="c171",
+                      settings=PROF.settings("c171")), "fix it")           # the profile that has exec_command
+    return a
+
+
+def _run(a, name, args, i=1):
+    return a._run_tool({"id": f"c{i}", "function": {"name": name, "arguments": json.dumps(args)}})
+
+
 def _git(root, *args):
     return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=True).stdout
 
@@ -78,3 +91,52 @@ def test_1_history_key_names_the_moves():
         assert A._history_key([c]), c
     for c in ("git status", "git checkout -- a.py", "git commit -m x", "git branch", "git log", "ls"):
         assert not A._history_key([c]), c
+
+
+# ----------------------------------------------------------------------------------- 2: the verification line
+def _project(root):
+    (root / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+    (root / "test_calc.py").write_text("from calc import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n\n\n"
+                                       "def test_zero():\n    assert add(0, 0) == 0\n")
+
+
+PATCH_SCRIPT = ("apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: calc.py\n@@\n-    return a - b\n+    return a + b\n"
+                "*** End Patch\nEOF\npython -m pytest -q 2>&1 | tail -5")
+
+
+def test_2_a_test_run_in_the_same_step_as_the_edit_verifies_it(tmp_path):
+    _project(tmp_path)
+    a = _c171(tmp_path)
+    _run(a, "exec_command", {"cmd": PATCH_SCRIPT})
+    r = a.receipt()
+    assert "not verified" not in r, r
+    assert "Verified: pytest, 2 passed" in r, r
+
+
+def test_2_a_script_that_writes_then_tests_counts_as_tested():
+    assert A._tests_after_own_edit("python - <<'PY'\nopen('a.py','w').write('x=1')\nPY\npython -m pytest -q")
+    assert not A._tests_after_own_edit("python -m pytest -q && sed -i 's/a/b/' a.py")
+    assert not A._tests_after_own_edit("python -m pytest -q")
+
+
+def test_2_a_search_with_no_match_is_not_a_failure():
+    line = A._check_line("rg -n currency README.md", "rg -n currency README.md", 1, "")
+    assert "FAILED" not in line and "no match" in line, line
+    assert "FAILED" in A._check_line("python check.py", "python check.py", 1, "")
+    assert "FAILED" in A._check_line("grep -n x f | wc -l; false", "grep -n x f", 1, "")
+
+
+def test_2_the_receipt_skips_a_no_match_search_and_names_the_test_run(tmp_path):
+    _project(tmp_path)
+    a = _c171(tmp_path)
+    (tmp_path / "README.md").write_text("an adder\n")
+    _run(a, "exec_command", {"cmd": PATCH_SCRIPT})
+    _run(a, "exec_command", {"cmd": "rg -n currency README.md"}, 2)
+    r = a.receipt()
+    assert "FAILED" not in r and "Verified: pytest, 2 passed" in r, r
+
+
+def test_2_the_runner_and_counts_are_named():
+    assert A._check_line("pytest -q", "pytest -q", 0, "14 passed in 0.2s").startswith("Verified: pytest, 14 passed")
+    assert A._check_line("python -m pytest | tail", "python -m pytest | tail", 0,
+                         "2 failed, 14 passed in 1s").startswith("Not verified: pytest, 2 failed, 14 passed")
