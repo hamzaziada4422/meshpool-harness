@@ -11,9 +11,9 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
   - A Python or JSON edit checks its syntax without starting a new Python process, and a JavaScript edit asks node once, not three times.
   - The hooks files, model hints and model profiles are read once while unchanged, not on every tool call or model step.
   - A long-running terminal command is polled every 2 seconds once its panel is closed, not 4 times a second for good.
-- **Bugs fixed, each with a test.** docs/audit/LEDGER-0.0.18.md lists 93 bugs found after 0.0.17 by six area bug hunts, each with the test that checks it. Among them:
+- **Bugs fixed, each with a test.** docs/audit/LEDGER-0.0.18.md lists 105 bugs found after 0.0.17 by six area bug hunts and a later pass, each with the test that checks it. Among them:
   - Security: the /files route and the memory settings could reach files outside their folders. A sandboxed command on Linux could change meshpool's own settings. The read-only shortcut ignored a command's folder. "Allow in this chat" for `uv run` or `npx` covered any program they started. The browser was opened with the app's lifetime key on its command line, and the desktop app wrote that key into its log.
-  - Office files: Word replacements could change the wrong text after a hyperlink, or change linked headers twice. A failed in-place save could destroy the original. Reads now include tracked insertions, footnotes, footers, content controls and hidden-sheet and hidden-slide marks. Windows CSVs keep their accents. A password-protected file says so.
+  - Office files: Word replacements could change the wrong text after a hyperlink, or change linked headers twice. A failed in-place save could destroy the original. Reads now include tracked insertions, footnotes, footers, content controls and hidden-sheet and hidden-slide marks. Windows CSVs keep their accents. A password-protected file says so. An Excel file with shapes, slicers, sparklines or threaded comments is edited as a copy, because saving it in place would lose them.
   - Converting a document while LibreOffice was open on the computer could quit that LibreOffice.
   - `meshpool scheduler` could delete the user's other cron entries when `crontab -l` failed.
   - A refused key is no longer sent again until retries run out, and part of a key can no longer show in an error message.

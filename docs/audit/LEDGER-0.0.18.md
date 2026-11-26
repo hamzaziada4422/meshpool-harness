@@ -15,9 +15,13 @@ fix once to see the test fail again. Rows from the 0.0.17 ledger were not counte
 | Server and security (SV) | 12 | 12 | 4 |
 | Command line and setup (CL) | 13 | 13 | 3 |
 | Lead (LD) | 8 | 7 | 0 |
-| all | 93 | 92 | 14 |
+| Later pass (LP, LQ) | 12 | 12 | 3 |
+| all | 105 | 104 | 6 |
 
 The one fix without a test is LD-07. The race behind it could not be made to happen reliably.
+
+The later pass fixed the items the first pass found but left, and closed PA-skills-13 from the 0.0.17 ledger (three
+tests that slept a fixed time now wait for an event).
 
 ## Lead
 
@@ -148,6 +152,23 @@ The one fix without a test is LD-07. The race behind it could not be made to hap
 | CL-12 | `--settings FILE` kept the quotes around values and refused files with a BOM. |
 | CL-13 | Unknown options were ignored silently, and `schedule add` had no `--cron`. |
 
+## Later pass (app/tests/test_lp_0018.py, test_lq_bugs018.py, test_lq_ui018.py)
+
+| ID | What was wrong |
+|---|---|
+| LP-01 | A command run in a container kept running inside it after a timeout or Stop, and its output was not capped. |
+| LP-02 | `meshpool run-due` exited 0 even when a task could not start. |
+| LP-03 | `meshpool permissions list` did not show the ask rules. |
+| LP-04 | One round of provider lookups read the settings file 18 times. Now 0 while it is unchanged. |
+| LP-05 | Uploads under runs/_uploads were never removed. Now an upload is removed after 30 days, unless a company profile or project points at it. |
+| LP-06 | On macOS, MH_SANDBOX_WRITE covering the data folder let sandboxed commands write meshpool's settings. |
+| LP-07 | PA-skills-13: three tests slept a fixed time before a negative check. Each now waits for an event. |
+| LQ-01 | Excel edits through openpyxl dropped shapes, form controls, slicers, threaded comments, data bars and sparklines, including from the user's own file. Such a workbook is now edited as a copy, and the result names what the copy lacks. |
+| LQ-02 | Merging decks wrote tags and media twice under the same name, and a slide link pulled in the source deck's slide, layout and master. |
+| LQ-03 | Each Session panel refresh ran 8 git processes: 40 for 5 refreshes, now 5. An edit still shows on the next refresh. |
+| LQ-04 | The update status was polled every minute while the tab was hidden: 5 requests in 5 hidden minutes, now 0. |
+| LQ-05 | An insight card whose id held a quote never showed. |
+
 ## Found, not fixed
 
 Needs the owner (a design decision):
@@ -156,16 +177,8 @@ Needs the owner (a design decision):
 - SV: The mp_s cookie is not tied to a port. Another server on 127.0.0.1 opened in the same browser receives it.
 - SV: The launch key printed in the terminal in browser mode still lasts for the app's life (testkit scripts reuse it).
 
-Left for a later pass:
-- AG: A command run in a container keeps running inside the container after a timeout. Only the docker client is
-  killed.
-- OF: Excel edits through openpyxl drop shapes, form controls, slicers, threaded comments and data bars.
-- OF: merge.py could reuse non-image parts under names that collide with parts in the target deck.
-- CPU: The session panel still runs about 7 git processes per refresh. The cache lasts 1.5 s.
-- CPU: The page still polls for an update every 60 s while hidden.
-- CL: `meshpool run-due` exits 0 even when a task failed to start.
-- CL: `permissions list` does not show the ask rules.
-- CL: providers.py reads the settings file several times per model call.
-- SV: Uploads under runs/_uploads are never removed.
-- UI: The insight nudge builds a selector from an id without escaping it (not proven to happen).
-- AG: The macOS sandbox exposes the data folder only if MH_SANDBOX_WRITE is set to cover it.
+Known limits:
+- LP-01: In a container without `timeout` (coreutils or busybox), Stop ends only the top process.
+- LP-05: An old chat that names an upload by path loses that file after 30 days. Today only company profiles upload,
+  and learning a profile copies the files into the brand store.
+- LQ-02: A merged slide's comments keep author ids from the source deck. This was broken before as well.
