@@ -1,0 +1,186 @@
+# Every Python package the desktop builds install into the bundled Python 3.12, dependencies included. No build reads
+# this file. It records what .github/workflows/release.yml installs (packaging/requirements-cli.txt, the requirements
+# packaging/hermes_requirements.py prints for Hermes at HERMES_COMMIT, and RUNTIME_EXTRAS; the Mac builds add
+# packaging/mac/constraints.txt), so that the Python packages in THIRD_PARTY_NOTICES.md can be checked against it
+# (app/tests/test_fix_pass2_open_engines.py). Names only: the versions of unpinned packages move from build to build.
+#
+# Made with uv for each platform (Linux x86_64, Windows x64, Mac arm64 and x86_64), Hermes 0.21.2:
+#   python packaging/hermes_requirements.py <hermes checkout> > hermes-req.txt
+#   uv pip compile --python-version 3.12 --python-platform <platform> [-c packaging/mac/constraints.txt] \
+#     packaging/requirements-cli.txt hermes-req.txt extras.txt        (extras.txt: pywebview and playwright)
+# uv reads Windows as platform_machine x86_64 while Python on Windows says AMD64, so nemo-relay (Hermes installs it on
+# AMD64) was added for Windows by hand.
+agent-client-protocol
+annotated-doc
+annotated-types
+anthropic
+anyio
+appnope                                 # Mac only
+asttokens
+attrs
+av
+beautifulsoup4
+bleach
+bottle
+cairocffi
+cairosvg
+certifi
+cffi
+charset-normalizer
+click
+clr-loader                              # Windows only
+colorama                                # Windows only
+coloredlogs
+comm
+concurrent-log-handler                  # Windows only
+contourpy
+croniter
+cryptography
+cssselect2
+ctranslate2
+cycler
+ddgs
+debugpy
+defusedxml
+distro
+docstring-parser
+duckdb
+et-xmlfile
+executing
+fastapi
+faster-whisper
+fastjsonschema
+filelock
+fire
+firecrawl-anydoc
+flatbuffers
+fonttools
+fsspec
+greenlet
+h11
+hf-xet
+httpcore
+httpcore2
+httptools
+httpx
+httpx2
+huggingface-hub
+humanfriendly
+idna
+ipykernel
+ipython
+ipython-pygments-lexers
+jedi
+jinja2
+jiter
+jsonschema
+jsonschema-specifications
+jupyter-client
+jupyter-core
+jupyterlab-pygments
+kiwisolver
+lxml
+markdown
+markdown-it-py
+markupsafe
+matplotlib
+matplotlib-inline
+mcp
+mcp-types
+mdurl
+mistune
+mpmath
+nbclient
+nbconvert
+nbformat
+nemo-relay                              # Linux, Windows, Mac (Apple silicon) only
+nest-asyncio2
+numpy
+olefile
+onnxruntime
+openai
+openpyxl
+opentelemetry-api
+packaging
+pandas
+pandocfilters
+parso
+pathspec
+pdfminer-six
+pexpect                                 # Linux, Mac only
+pillow
+pillow-heif
+pip                                     # comes with the bundled Python (python-build-standalone)
+platformdirs
+playwright
+portalocker                             # Windows only
+primp
+prompt-toolkit
+protobuf
+proxy-tools
+psutil
+ptyprocess                              # Linux, Mac only
+pure-eval
+pycparser
+pydantic
+pydantic-core
+pygments
+pyjwt
+pyobjc-core                             # Mac only
+pyobjc-framework-cocoa                  # Mac only
+pyobjc-framework-quartz                 # Mac only
+pyobjc-framework-security               # Mac only
+pyobjc-framework-uniformtypeidentifiers # Mac only
+pyobjc-framework-webkit                 # Mac only
+pyparsing
+pypdf
+pypdfium2
+pyreadline3                             # Windows only
+python-dateutil
+python-docx
+python-dotenv
+python-multipart
+python-pptx
+pythonnet                               # Windows only
+pytz
+pywebview
+pywin32                                 # Windows only
+pywinpty                                # Windows only
+pyyaml
+pyzmq
+referencing
+reportlab
+requests
+rich
+rpds-py
+ruamel-yaml
+ruamel-yaml-clib
+ruff
+sniffio
+snowballstemmer
+socksio
+soupsieve
+sse-starlette
+stack-data
+starlette
+sympy
+tenacity
+termcolor
+tinycss2
+tokenizers
+tornado
+tqdm
+traitlets
+truststore
+typing-extensions
+typing-inspection
+tzdata
+urllib3
+uvicorn
+uvloop                                  # Linux, Mac only
+watchfiles
+wcwidth
+webencodings
+websockets
+xlrd
+xlsxwriter

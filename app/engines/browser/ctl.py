@@ -74,10 +74,14 @@ def _inside(path: str, folder: str) -> bool:
         return False
 
 
-SNAP_JS = """(mark) => {
+SNAP_JS = """(arg) => {
+  // arg: the mark attribute, or [mark, the last number used, mode]: "page" (the top document), "frame" (an iframe's
+  // document: its elements only, numbered on from the page's) or "clear" (an iframe not shown: drop its old numbers)
+  const [mark, start, mode] = Array.isArray(arg) ? arg : [arg, 0, 'page'];
   const sel = 'a,button,input,select,textarea,[role=button],[role=link],[role=checkbox],[role=tab],[role=menuitem],[onclick],summary';
-  const out = []; let n = 0;
+  const out = []; let n = start;
   document.querySelectorAll('[' + mark + ']').forEach(e => e.removeAttribute(mark));
+  if (mode === 'clear') return {elements: [], count: n};
   const cand = new Set(document.querySelectorAll(sel));
   // elements made clickable by script (no tag/role hint) usually show a pointer cursor: include the innermost ones
   for (const e of document.querySelectorAll('body *')) {
@@ -134,14 +138,44 @@ SNAP_JS = """(mark) => {
     }
     out.push('[' + n + '] ' + role + ' "' + name + '"' + extra);
   }
-  const frames = Array.from(document.querySelectorAll('iframe,frame')).filter(f => f.getBoundingClientRect().width > 0);
   const shown = out.slice(0, 150);
-  if (frames.length) shown.push('(note: ' + frames.length + ' iframe(s) on this page, contents not listed above: ' +
-    frames.slice(0, 3).map(f => (f.getAttribute('title') || f.getAttribute('name') || f.getAttribute('src') || 'frame').slice(0, 60)).join('; ') +
-    '. Their buttons and fields are not numbered; try {"text": ...} targets or goto the frame URL.)');
+  if (mode === 'frame') return {elements: shown, count: n};
   const text = (document.body ? document.body.innerText : '').replace(/\\n{3,}/g, '\\n\\n').slice(0, 3000);
-  return {title: document.title, url: location.href, elements: shown, text};
+  return {title: document.title, url: location.href, elements: shown, text, count: n};
 }"""
+
+
+def _frames(page) -> list:
+    """The page's own document first, then every iframe in it."""
+    main = page.main_frame
+    return [main] + [f for f in page.frames if f is not main]
+
+
+def _snapshot(page) -> dict:
+    """SNAP_JS on the page, then on each iframe shown on it, numbering on from the page's: a button or field inside a
+    frame is listed and used by its number like any other."""
+    snap = page.evaluate(SNAP_JS, [MARK, 0, "page"])
+    n, unread = snap.pop("count"), []
+    for fr in _frames(page)[1:]:
+        try:
+            el = fr.frame_element()
+            shown = el.is_visible()
+            name = (el.get_attribute("title") or el.get_attribute("name") or fr.url or "frame")[:60]
+        except Exception:
+            continue                              # the frame went away while we looked
+        try:
+            sub = fr.evaluate(SNAP_JS, [MARK, n, "frame" if shown else "clear"])
+        except Exception:
+            if shown:
+                unread.append(name)
+            continue
+        n = sub["count"]
+        snap["elements"] += [f'{e} (in frame "{name}")' for e in sub["elements"]]
+    snap["elements"] = snap["elements"][:150]
+    if unread:
+        snap["elements"].append(f"(note: {len(unread)} iframe(s) could not be read, so their buttons and fields are not "
+                                f"numbered: {'; '.join(unread[:3])}. Try goto the frame URL.)")
+    return snap
 
 
 _DATE_FMT = {"date": "YYYY-MM-DD", "datetime-local": "YYYY-MM-DDThh:mm", "month": "YYYY-MM", "time": "hh:mm",
@@ -229,11 +263,36 @@ def _serve(outdir: str | None = None):
     page, state = first["page"], first["state"]
 
     def ref(n):
-        return page.locator(f"[{MARK}='{int(n)}']").first
+        sel = f"[{MARK}='{int(n)}']"
+        for fr in _frames(page):                  # the snapshot numbers an iframe's elements too
+            try:
+                if fr.locator(sel).count():
+                    return fr.locator(sel).first
+            except Exception:
+                continue
+        return page.locator(sel).first
+
+    def first_visible(make):
+        """make(frame) -> Locator. The first visible match, like a person would pick: in the page, then in its iframes.
+        None when nothing matches anywhere; the first match when none is visible."""
+        hidden = None
+        for fr in _frames(page):
+            try:
+                loc = make(fr)
+                k = loc.count()
+            except Exception:
+                continue
+            for i in range(min(k, 20)):
+                if loc.nth(i).is_visible():
+                    return loc.nth(i)
+            if k and hidden is None:
+                hidden = loc.first
+        return hidden
 
     def locate(t):
         """A batch step's target: {"n": 3} | {"role": "button", "name": "Save"} | {"label": "Email"} |
-        {"placeholder": "Search"} | {"text": "Next"}. Names by role/label/text survive page changes, numbers do not."""
+        {"placeholder": "Search"} | {"text": "Next"}. Names by role/label/text survive page changes, numbers do not.
+        Targets inside iframes are found too."""
         if isinstance(t, (int, str)) and str(t).isdigit():
             return ref(t)
         if not isinstance(t, dict):
@@ -242,28 +301,28 @@ def _serve(outdir: str | None = None):
             return ref(t["n"])
         if "field" in t:                          # a form field by the label text a person sees next to it
             name = str(t["field"])
-            for loc in (page.get_by_label(name, exact=True), page.get_by_placeholder(name, exact=True),
-                        page.locator(f"xpath=//*[normalize-space(text())={json.dumps(name)}]/following::*[self::input or self::textarea or self::select][1]")):
-                if loc.count() and loc.first.is_visible():
-                    return loc.first
+            for fr in _frames(page):
+                for loc in (fr.get_by_label(name, exact=True), fr.get_by_placeholder(name, exact=True),
+                            fr.locator(f"xpath=//*[normalize-space(text())={json.dumps(name)}]/following::*[self::input or self::textarea or self::select][1]")):
+                    if loc.count() and loc.first.is_visible():
+                        return loc.first
             raise LookupError(f"no field labelled {name!r}")
         exact = t.get("exact", True)
         if "role" in t:
-            loc = page.get_by_role(t["role"], name=t.get("name"), exact=exact) if t.get("name") else page.get_by_role(t["role"])
+            make = (lambda fr: fr.get_by_role(t["role"], name=t["name"], exact=exact)) if t.get("name") else (
+                lambda fr: fr.get_by_role(t["role"]))
         elif "label" in t:
-            loc = page.get_by_label(t["label"], exact=exact)
+            make = lambda fr: fr.get_by_label(t["label"], exact=exact)
         elif "placeholder" in t:
-            loc = page.get_by_placeholder(t["placeholder"], exact=exact)
+            make = lambda fr: fr.get_by_placeholder(t["placeholder"], exact=exact)
         elif "text" in t:
-            loc = page.get_by_text(t["text"], exact=exact)
+            make = lambda fr: fr.get_by_text(t["text"], exact=exact)
         else:
             raise ValueError(f"bad target {t!r}")
-        for i in range(min(loc.count(), 20)):     # first visible match, like a person would pick
-            if loc.nth(i).is_visible():
-                return loc.nth(i)
-        if loc.count() == 0:
+        loc = first_visible(make)
+        if loc is None:
             raise LookupError(f"no element matches {t!r}")
-        return loc.first
+        return loc
 
     def batch(steps):
         """Code-mode step: run several actions in one command and report each, stopping at the first failure, so
@@ -326,19 +385,12 @@ def _serve(outdir: str | None = None):
             state["note"] = _fill(loc, " ".join(args[1:]), 10000)
         elif cmd == "hover":
             ref(args[0]).hover(timeout=10000)
-        elif cmd == "click_text":                 # smallest visible element whose text is exactly this
+        elif cmd == "click_text":                 # smallest visible element whose text is exactly this (iframes too)
             txt = " ".join(args)
-            loc = page.get_by_text(txt, exact=True)
-            n = loc.count()
-            if n == 0:
+            target = first_visible(lambda fr: fr.get_by_text(txt, exact=True))
+            if target is None:
                 return {"error": f"no visible element with text {txt!r}"}
-            target = None
-            for i in range(n):
-                el = loc.nth(i)
-                if el.is_visible():
-                    target = el
-                    break
-            (target or loc.first).click(timeout=10000, force=target is None)
+            target.click(timeout=10000, force=not target.is_visible())
         elif cmd == "press":
             page.keyboard.press(args[0])
         elif cmd == "select":
@@ -393,7 +445,7 @@ def _serve(outdir: str | None = None):
             page.evaluate("() => { window.__mhTyped = true; }")
         if os.environ.get("MH_BROWSER_STATES") == "1":       # (invalid) / (disabled) / (read-only) markers
             page.evaluate("() => { window.__mhStates = true; }")
-        snap = page.evaluate(SNAP_JS, MARK)
+        snap = _snapshot(page)
         prev = state.get("last")
         state["last"] = snap
         b = state.pop("batch", None) if cmd == "batch_done" else None

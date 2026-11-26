@@ -25,7 +25,8 @@ Modes (``Checkpoints(root, store, mode=...)``)
 
 Undo (``revert_to_before(turn)``) only touches paths the turns changed, and only while they still hold what the agent
 left. Before it deletes or overwrites a file it copies it to ``<store>/undone/<time>/<path>`` (the newest 20 folders
-are kept) and returns that folder as ``"backup"``. Paths changed while another chat worked in the same folder are
+are kept) and returns that folder as ``"backup"``. Folders the turns made are removed once empty (``"removed_folders"``);
+one that has files in it stays, with a note. Paths changed while another chat worked in the same folder are
 marked ``ambiguous`` and left alone (reported in ``kept`` with a note). The last ``MH_UNDO_TURNS`` (default 100) turns
 stay undoable; older turns keep their file list but not their contents (``pruned``). Turn numbers only ever grow
 (``seq``; pass ``seq_floor=`` from chat metadata). ``turns.json`` is written atomically with a ``.bak`` copy and a
@@ -600,8 +601,9 @@ class Checkpoints:
             pass
 
     # ---------- reading the folder -----------------------------------------------------------------------------------
-    def _scan(self, store: bool = True, persist: bool = True) -> dict | None:
-        """Walk the folder (stat only; hash just the files whose size or mtime changed). -> manifest or None."""
+    def _scan(self, store: bool = True, persist: bool = True, dirs: set | None = None) -> dict | None:
+        """Walk the folder (stat only; hash just the files whose size or mtime changed). -> manifest or None.
+        `dirs`, when given, collects the folders walked (so a window can tell which ones a turn made)."""
         if self.disabled:
             return None
         cache = self._load_cache()
@@ -636,6 +638,8 @@ class Checkpoints:
                         return None
                     continue
                 keep.append(n)
+                if dirs is not None:
+                    dirs.add(rel)
             dirnames[:] = keep
             for n in filenames:
                 rel = f"{rel_d}/{n}" if rel_d else n
@@ -734,20 +738,24 @@ class Checkpoints:
     # ---------- windows (scan-mode turns, journal opaque tools) -----------------------------------------------------
     def _begin_window(self) -> dict | None:
         w = _win_open(str(self.root), str(self.store.resolve()), self.shared)
-        w["before"] = self._scan()
+        w["dirs"] = set()
+        w["before"] = self._scan(dirs=w["dirs"])
         if w["before"] is None:
             _win_close(w)
             return None
         return w
 
     def _end_window(self, w) -> tuple:
-        """-> (pre, post, ambiguous paths) for what changed since the window began."""
+        """-> (pre, post, ambiguous paths, folders made) for what changed since the window began. Folders are only
+        booked when no other chat worked in the folder at the same time (it may have made them)."""
         if not w:
-            return {}, {}, set()
-        after = self._scan()
+            return {}, {}, set(), set()
+        dirs = set()
+        after = self._scan(dirs=dirs)
         over = _win_close(w) if "id" in w else w.get("over", False)
         if after is None:
-            return {}, {}, set()
+            return {}, {}, set(), set()
+        made = set() if over or w.get("dirs") is None else dirs - w["dirs"]
         before = w["before"]
         fw = _foreign_since(self.root, self.shared, w["start"])
         pre, post, amb = {}, {}, set()
@@ -760,9 +768,14 @@ class Checkpoints:
             pre[path], post[path] = _val(before, path), va
             if over:
                 amb.add(path)
-        return pre, post, amb
+        made = {d for d in made if not any(p.startswith(d + "/") for p in fw)}   # Meshpool's own writes made them
+        return pre, post, amb, made
 
-    def _book(self, t: dict, pre: dict, post: dict, amb=()) -> None:
+    def _book(self, t: dict, pre: dict, post: dict, amb=(), made=()) -> None:
+        if made:
+            with self._lk:
+                t["dirs"] = sorted(set(t.get("dirs") or []) | set(made))
+                self._dirty = True
         if not post:
             return
         with self._lk:
@@ -860,7 +873,7 @@ class Checkpoints:
         turns = self._load()["turns"]
         live = [t for t in turns if not t.get("pruned") and self._done(t)]
         for t in live[:max(0, len(live) - undo_turns())]:
-            for k in ("pre", "post", "before", "after"):
+            for k in ("pre", "post", "before", "after", "dirs"):
                 t.pop(k, None)
             t["pruned"] = True
             t["done"] = True
@@ -880,6 +893,16 @@ class Checkpoints:
                  "event_index": t.get("event_index")} for t in self._load()["turns"]]
 
     # ---------- journal: tool calls ------------------------------------------------------------------------------------
+    def _missing_parents(self, rel: str) -> list:
+        """The folders on the way to `rel` that do not exist yet."""
+        parts = rel.split("/")[:-1]
+        out = []
+        for i in range(len(parts)):
+            d = "/".join(parts[:i + 1])
+            if out or not os.path.lexists(self.root / d):
+                out.append(d)
+        return out
+
     def _targets(self, name: str, args: dict) -> list:
         if name == "apply_patch":
             raw = _patch_paths(args)
@@ -911,11 +934,13 @@ class Checkpoints:
                 except Exception:
                     return "!unreadable"
             pre = {r: val(r, True) for r in rels if r not in (t.get("pre") or {})}
+            missing = {d for r in rels for d in self._missing_parents(r)}     # folders the write may make
             try:
                 yield
             finally:
                 post = {r: val(r) for r in rels}
-                self._book(t, pre, post)
+                made = {d for d in missing if (self.root / d).is_dir() and not (self.root / d).is_symlink()}
+                self._book(t, pre, post, made=made)
                 self._flush()
             return
         w = self._begin_window()
@@ -1054,7 +1079,8 @@ class Checkpoints:
         """Undo the file changes the agent made in `turn` and every later turn. Only files those turns changed are
         touched, and only while they still hold what the agent left: files the user (or another tool) created or
         edited since stay as they are and are listed in "kept". Whatever Undo deletes or overwrites is first copied to
-        "backup". Returns what changed on disk."""
+        "backup". Folders those turns made go too once empty ("removed_folders"); one with files in it is left, with a
+        note. Returns what changed on disk."""
         turn = int(turn)
         with self._lk:
             idx = self._load()
@@ -1071,7 +1097,9 @@ class Checkpoints:
             agent_left: dict = {}      # path -> value the agent's last change left
             target: dict = {}          # path -> value before the agent's first change
             amb: set = set()
+            made: set = set()          # folders those turns made
             for x in sorted((x for x in later if self._done(x)), key=lambda x: x["n"]):
+                made.update(x.get("dirs") or [])
                 pre, post = self._pre_post(x)
                 for ch in x.get("changed") or []:
                     p = ch["path"]
@@ -1182,6 +1210,22 @@ class Checkpoints:
                     restored.append(path)
                 except OSError as e:
                     keep(path, f"couldn't put it back ({getattr(e, 'strerror', None) or e})")
+            # 3. the folders those turns made, deepest first, once empty; one with anything in it stays
+            removed_dirs = []
+            for d in sorted(made, reverse=True):
+                p = self.root / d
+                if d in kept or p.is_symlink() or not p.is_dir() or not self._inside(p.parent):
+                    continue
+                try:
+                    p.rmdir()
+                    removed_dirs.append(d)
+                except OSError as e:
+                    try:
+                        full = next(p.iterdir(), None) is not None
+                    except OSError:
+                        full = False
+                    notes.append(f"{d}/: a turn made this folder, but it has files in it now, so it was left as is"
+                                 if full else f"{d}/: couldn't remove this folder ({e.strerror or e})")
             cache = self._load_cache()
             for path in restored + deleted:
                 cache.pop(path, None)
@@ -1196,6 +1240,8 @@ class Checkpoints:
             self._trim_backups()
         self.gc()
         out = {"restored": restored, "deleted": deleted, "kept": kept, "message_index": t.get("message_index")}
+        if removed_dirs:
+            out["removed_folders"] = removed_dirs
         if notes:
             out["notes"] = notes
         if copied:
