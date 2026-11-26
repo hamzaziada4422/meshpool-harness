@@ -172,3 +172,33 @@ def test_cpu04_hooks_files_are_not_reread_per_tool_call(home, tmp_path, monkeypa
     (home / "hooks.json").write_text(json.dumps({"PreToolUse": [{"command": "echo new"}]}))
     os.utime(home / "hooks.json", (OLD + 60, OLD + 60))
     assert [h["command"] for h in EX.hooks(proj)["PreToolUse"]] == ["echo new"]
+
+
+# ---------------------------------------------------------------------------------------------------- CPU-05
+def test_cpu05_sidebar_refresh_reads_no_project_files(home, tmp_path, monkeypatch):
+    from meshpool_harness import project_store as PS
+    from meshpool_harness.ui import agent_api as A
+    monkeypatch.setattr(A, "SESSIONS", tmp_path / "sessions")
+    A.list_dirty()
+    pids = []
+    for i in range(6):
+        link = tmp_path / f"repo{i}"
+        link.mkdir()
+        pids.append(PS.create(f"P{i}", "d", "be brief", link={"path": str(link)})["id"])
+    for p in (home / "projects").rglob("*"):
+        if p.is_file():
+            _age(p)
+    want_legacy = {}
+    for r in PS.list_projects():                       # what the sidebar used before, built the old way
+        for k in (r.get("legacy_path"), (r.get("link") or {}).get("path")):
+            if k:
+                want_legacy.setdefault(k, r["id"])
+    assert A._project_info() == (want_legacy, set(pids))
+    A.listing()
+    box = count_opens(monkeypatch, lambda p: "projects" in Path(p).parts)
+    for _ in range(10):                                # every 3.5 s while a chat runs
+        A.list_dirty()                                 # and the saved-chat rows rebuilt too
+        A.listing()
+    assert box["n"] == 0, f"{box['n']} project file reads for 10 sidebar refreshes"
+    PS.delete(pids[0])
+    assert pids[0] not in A._project_info()[1]
