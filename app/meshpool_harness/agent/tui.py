@@ -486,10 +486,15 @@ class Terminal:
                 rest, self._partial = self._partial, ""
                 self.scroll(["  " + x if x else "" for x in R.markdown(rest, self.width - 2, self.st, self._md)])
         elif self._text_open:
-            if self.print_mode and getattr(self, "_pbuf", ""):
-                self._write(self._pbuf, self.out)
-            self._pbuf = ""
-            self._write("\n", self.out)
+            if self.print_mode:
+                # -p: text that is not the final answer is narration ("Let me look at the project first."). It goes
+                # to stderr when that is a terminal and nowhere otherwise, so stdout holds the final answer alone.
+                nar = getattr(self, "_pbuf", "")
+                self._pbuf = ""
+                if nar.strip() and getattr(self.info, "isatty", lambda: False)():
+                    self._write(nar.rstrip("\n") + "\n", self.info)
+            else:
+                self._write("\n", self.out)
         self._text_open = False
         self._md = R.MdState()
 
