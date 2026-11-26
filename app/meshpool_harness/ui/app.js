@@ -1076,7 +1076,7 @@ function newThread(opt) {
   if (opt && typeof opt === "object" && opt.pid) return openProject(opt.pid, {focus: true});
   const where = opt === undefined && typeof lastWhere === "function" ? lastWhere() : {project: "", pid: ""};   // the last folder or project used
   clearColHandlers(); window.navPush?.("new:");
-  leavePreview();
+  if (S.cur || S.view !== "chat") leavePreview();      // (not at start-up, when nothing was open before this)
   leaveChat(S.cur);
   S.view = "chat"; S.pjId = "";
   S.draft.project = typeof opt === "string" ? opt : where.project;

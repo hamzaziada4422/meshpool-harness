@@ -82,7 +82,7 @@ def test_a_picture_asked_for_shows_large_in_the_reply(app, page):
     got = page.evaluate("""() => { const i = document.querySelector('.pvbig img'), c = document.querySelector('#col');
         return {lazy: i.loading, w: document.querySelector('.pvbig').getBoundingClientRect().width, col: c.getBoundingClientRect().width,
                 cards: document.querySelectorAll('.pvcard').length}; }""")
-    assert got["lazy"] == "lazy" and got["w"] <= got["col"] + 1 and got["cards"] == 2, got
+    assert got["lazy"] == "lazy" and got["w"] <= got["col"] + 1 and got["cards"] == 1, got      # the picture is large, so only notes.pdf keeps a card (round 3, item 4)
     page.click(".pvbig")
     page.wait_for_selector("#pvp:not([hidden])")
     assert page.evaluate("() => PVX.path") == "chart.png"

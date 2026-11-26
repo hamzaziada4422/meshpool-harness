@@ -106,6 +106,7 @@ function closePreview(quiet) {
   if (typeof edStop === "function") edStop();
   PVX.open = false; PVX.id++; pvFree();
   const hide = () => {
+    if (PVX.open) return;             // a preview opened again before this close was drawn: it stays
     const el = $("#pvp"); if (el) { el.hidden = true; $("#pvStage").innerHTML = ""; $("#pvThumbs").innerHTML = ""; }
     $("#app")?.classList.remove("pvopen");
     if (typeof fitPanel === "function") fitPanel();

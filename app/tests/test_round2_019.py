@@ -75,7 +75,9 @@ def test_chat_mode_rows_are_plain_and_code_mode_is_unchanged(app, page):
     assert "<!DOCTYPE html>" in page.evaluate("() => document.querySelectorAll('#col .tool')[2].querySelector('pre.script').textContent")
     # the Progress list reads the same way
     steps = page.evaluate("() => progressSteps().items.map(i => i.text)")
-    assert steps == [c[3] for c in CASES], steps
+    want = [c[3] for c in CASES]
+    want = [want[0] + " (2 times)"] + want[2:]                      # the same step twice is one row (round 3, item 2)
+    assert steps == want, steps
     # a failed connector step is not "Connector step ."
     page.evaluate("""() => { const pl = {base: 'Connector step', run: 'Using a connector', done: 'Used a connector'};
         applyEv({type: 'tool_start', id: 'y', name: 'mcp__foo__bar', summary: '/tmp/claude-0/x', mcp: true, plain: pl});
