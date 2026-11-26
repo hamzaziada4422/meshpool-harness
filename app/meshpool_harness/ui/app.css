@@ -210,6 +210,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .work .rows .appr.done{border:0;background:none;box-shadow:none;margin:0;padding:2px 12px 4px 34px;font-size:var(--fs-s);color:var(--ink-3);display:flex;gap:6px}
 .work .rows .appr.done b{font-weight:400}
 .note{color:var(--ink-3);font-size:var(--fs-s);margin:8px 0}
+.notedet{display:inline}.notedet summary{display:inline;cursor:pointer;text-decoration:underline;text-underline-offset:3px}.notedet[open]>div{margin-top:4px;overflow-wrap:anywhere;font-size:var(--fs-xs)}
 .note.bad{color:var(--del)} .note.warn{color:var(--warn)}
 .turnfoot{display:flex;gap:8px;align-items:center;color:var(--ink-3);font-size:var(--fs-xs);margin:4px 0 20px}
 .turnfoot button{border:0;background:none;color:var(--ink-3);padding:2px 6px;border-radius:var(--r-s);font-size:var(--fs-xs);display:inline-flex;align-items:center;gap:4px}
@@ -878,6 +879,8 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .empty-side{color:var(--ink-3);font-size:var(--fs-s);padding:4px 8px 8px;line-height:1.45}
 .empty-side .linkbtn{padding:0;font-size:inherit}
 .moreproj{margin:0 0 4px 8px;color:var(--ink-3);font-size:var(--fs-xs)}
+.addfolder{display:flex;align-items:center;gap:8px;margin:6px 0 2px 10px;padding:4px 6px;text-decoration:none;color:var(--ink-2)}
+.addfolder svg{width:15px;height:15px;flex:none}.addfolder:hover{color:var(--ink)}
 @media (hover:none){.th .end .tm{opacity:0}.th .end .more{opacity:1;pointer-events:auto}}
 
 /* tooltips */
@@ -1049,9 +1052,14 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .pvth.wait{animation:pvpulse 1.4s ease-in-out infinite}
 @keyframes pvpulse{50%{opacity:.55}}
 .pvi svg{width:20px;height:20px}
-.pvcm{min-width:0;padding:8px 10px;display:flex;flex-direction:column;justify-content:center;gap:2px}
-.pvcm b{font-size:var(--fs-s);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pvcm{min-width:0;overflow:hidden;padding:8px 10px;display:flex;flex-direction:column;justify-content:center;gap:2px}
+.pvcm b{font-size:var(--fs-s);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;align-self:stretch}
 .pvcm small{font-size:var(--fs-xs);color:var(--ink-3)}
+.pvwrap{position:relative;display:inline-flex;max-width:100%}
+.pvwrap .pvcard{padding-right:30px}
+.pvdl{position:absolute;top:4px;right:4px;width:24px;height:24px;color:var(--ink-3)}
+.pvdl:hover,.pvdl:focus-visible{color:var(--ink)}
+.pvcm .pvwhere{color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
 .pvmore{align-self:center;font-size:var(--fs-xs);color:var(--ink-3)}
 
 /* Preview button on html and svg code blocks */

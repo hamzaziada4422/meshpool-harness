@@ -141,12 +141,37 @@ async function loadModels(refresh) {
 async function loadProjects() { const r = await api("/api/projects"); S.projects = r.projects; S.defaultProject = r.default; }
 async function loadPj() { try { S.pj = (await api("/api/pj")).projects; } catch (e) { S.pj = S.pj || []; } }
 // Settings > Permissions: add a folder to the list Meshpool may open (a project's linked folder does not need this).
-async function pickProject() {
+// opts.project: the folder also becomes a project (pinned in the sidebar, in the project picker), and new chats start
+// in it. opts.noHome: the in-app picker never offers the whole home folder as its default. Returns the answer, or null.
+async function pickProject(opts = {}) {
   try {
-    let r = await post("/api/projects", {action: "pick"});
-    if (r.no_picker) { const path = await browseFolder(); if (!path) return; r = await post("/api/projects", {action: "add", path}); }
-    S.projects = r.projects; renderSide();
-  } catch (e) { toast(e.message); }
+    const as = opts.project ? {project: true} : {};
+    let r = await post("/api/projects", {action: "pick", ...as});
+    if (r.no_picker) { const path = await browseFolder("", {noHome: !!opts.noHome}); if (!path) return null; r = await post("/api/projects", {action: "add", path, ...as}); }
+    S.projects = r.projects;
+    if (r.pid) { await loadPj(); rememberWhere({pid: r.pid}); }
+    renderSide();
+    return r;
+  } catch (e) { toast(e.message); return null; }
+}
+// Where new chats start, kept across reloads: in Work, the project the last new chat was in (a folder picked in
+// onboarding or with "Add a folder" is a project); in Code, the folder or repository the last session used. A one-off
+// "Work in a folder" chat is not remembered: the next chat gets its own folder again. A deleted project, or a folder
+// no longer in the list, is not used.
+function rememberWhere(w) { const code = S.mode === "code"; store("where_" + (code ? "code" : "chat"), {project: code ? w.project || "" : "", pid: code ? "" : w.pid || ""}); }
+function lastWhere() {
+  const w = store("where_" + (S.mode === "code" ? "code" : "chat")) || {};
+  if (w.pid && (S.pj || []).some(p => p.id === w.pid && !p.link?.missing)) return {project: "", pid: w.pid};
+  if (w.project && (S.projects || []).some(p => p.path === w.project && p.exists !== false)) return {project: w.project, pid: ""};
+  return {project: "", pid: ""};
+}
+// The sidebar's "Add a folder": the folder becomes a project and the next new chat works in it.
+async function addFolderProject() {
+  const r = await pickProject({project: true, noHome: true});
+  if (!r || !r.pid) return;
+  const p = S.pj.find(x => x.id === r.pid);
+  newThread();
+  toast(`${p ? p.name : "The folder"} is in the sidebar. New chats work in it.`, 4000);
 }
 async function loadThreads() {
   const was = new Map((S.threads || []).map(t => [t.id, t.state]));
@@ -245,8 +270,10 @@ function renderSide() {
     const pjs = pinnedPj(), pinnedChats = mine.filter(t => t.pinned), rest = mine.filter(t => !t.pinned);
     if (pjs.length || pinnedChats.length) {
       html += secHead("pinned", "Pinned");
-      if (open("pinned")) html += `<ul class="threads prj">${pjs.map(p => pjRowHTML(p, all.filter(t => !isCodeThread(t)))).join("")}${pinnedChats.map(t => thHTML(t, {})).join("")}</ul>`;
+      // a project's row lists all its chats, Code sessions too: a question Auto turned into a Code session stays under it
+      if (open("pinned")) html += `<ul class="threads prj">${pjs.map(p => pjRowHTML(p, all)).join("")}${pinnedChats.map(t => thHTML(t, {})).join("")}</ul>`;
     }
+    html += `<button class="linkbtn addfolder" id="sideAddFolder" title="Work in a folder on this computer: it becomes a project here">${ICON.folder}<span>Add a folder</span></button>`;
     html += secHead("recents", "Recents");
     if (open("recents")) html += rest.length ? `<ul class="threads">${(S.allRecents ? rest : rest.slice(0, 40)).map(t => thHTML(t, {})).join("")}</ul>${rest.length > 40 ? `<button class="linkbtn moreproj" id="moreRecents">${S.allRecents ? "Show fewer" : `Show all ${rest.length}`}</button>` : ""}` : `<div class="empty-side">Your chats show up here. Start one with New.</div>`;
   }
@@ -301,6 +328,7 @@ function bindSide() {
     const sec = e.target.closest("[data-sec]"); if (sec) { const k = sec.dataset.sec; S.collapsed.has(k) ? S.collapsed.delete(k) : S.collapsed.add(k); store("collapsed", [...S.collapsed]); return renderSide(); }
     if (e.target.closest("#codeFilter")) return codeFilterMenu(e.target.closest("#codeFilter"));
     if (e.target.closest("#togArch")) { S.showArchived = !S.showArchived; return renderSide(); }
+    if (e.target.closest("#sideAddFolder")) return addFolderProject();
     if (e.target.closest("#moreThreads")) { S.threadLimit = (S.threadLimit || 300) + 300; S.allRecents = true; loadThreads(); return; }
     if (e.target.closest("#moreRecents")) { S.allRecents = !S.allRecents; return renderSide(); }
     const va = e.target.closest("[data-vall]"); if (va) return openProject(va.dataset.vall);
