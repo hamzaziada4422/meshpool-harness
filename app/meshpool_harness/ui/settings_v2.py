@@ -67,6 +67,7 @@ CAPS = [
     {"id": "web", "name": "Web search", "desc": "Search the web, read pages and research across sources.", "kind": "server", "server": "meshpool-web"},
     {"id": "browser", "name": "Browser use", "desc": "Open pages, click, type and fill in forms for you.", "kind": "server", "server": "browser"},
     {"id": "subtasks", "name": "Sub-tasks", "desc": "Split big jobs into parts that run at the same time.", "kind": "env", "env": "MH_SUBAGENTS"},
+    {"id": "look", "name": "Look at web pages it makes", "desc": "Before it says a web page, document or chart is done, meshpool opens it, checks it against your request and fixes what is wrong.", "kind": "env", "env": "MH_LOOK_REVIEW"},
     {"id": "grader", "name": "Independent check on big tasks", "desc": "A separate reviewer checks big jobs before Meshpool tells you they are done.", "kind": "env", "env": "MH_GRADER"},
     {"id": "plan_first", "name": "Plan first", "desc": "New chats start with a plan and wait for your OK.", "kind": "profile", "advanced": True},
     {"id": "computer", "name": "Computer use", "desc": "Let Meshpool see your screen and use the mouse and keyboard.", "kind": "server", "server": "computer-use", "advanced": True},

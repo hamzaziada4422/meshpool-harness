@@ -6,6 +6,7 @@ os.environ.setdefault("MH_FAILURES_LOG", "off")
 os.environ.setdefault("MH_RECOVER_MIN", "0")        # an outage in a test fails at once instead of waiting 30 min
 os.environ.setdefault("MH_GRADER", "0")            # the independent grader has its own tests (test_grader.py); off elsewhere
 os.environ.setdefault("MH_LEARN", "0")
+os.environ.setdefault("MH_LOOK_REVIEW", "0")      # looking at pages it made has its own tests (test_look_review.py)
 os.environ.setdefault("MH_UI_OPEN_PAGE", "1")      # UI tests load / directly; test_ui_launch_key.py covers the key            # the learning loop calls a model after a turn: off in tests
 
 import pytest  # noqa: E402
