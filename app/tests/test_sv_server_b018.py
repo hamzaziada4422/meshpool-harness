@@ -436,6 +436,19 @@ def test_a_blank_folder_is_not_the_apps_own_working_folder(httpd, tmp_path, monk
     assert st == 400
 
 
+def _printed(capfd, needle: str, secs: float = 20) -> str:
+    """Everything serve() printed, read once its banner has reached needle. The banner comes right after on_ready,
+    later under load: a fixed 0.3 s wait failed in a busy full run. Polling capfd while the server thread prints can
+    drop text (it reads, then truncates), so the wait watches serve()'s own print calls and capfd is read once after."""
+    end = time.time() + secs
+    while not any(needle in line for line in _BANNER) and time.time() < end:
+        time.sleep(0.05)
+    return capfd.readouterr().out
+
+
+_BANNER: list = []
+
+
 def _serve_quietly(monkeypatch, tmp_path, desktop: bool, open_browser: bool = False):
     """Run the real serve() on a free port with its background helpers stubbed; returns (port, stop)."""
     from meshpool_harness import autoupdate as AU
@@ -453,13 +466,19 @@ def _serve_quietly(monkeypatch, tmp_path, desktop: bool, open_browser: bool = Fa
     monkeypatch.setattr(M, "start_reaper", lambda *a, **k: None, raising=False)
     monkeypatch.setattr(AU, "start_background", lambda *a, **k: None, raising=False)
     monkeypatch.delenv("MH_UI_OPEN_PAGE", raising=False)
+    _BANNER.clear()
+    import builtins
+
+    def _print(*a, **k):
+        _BANNER.append(" ".join(str(x) for x in a))
+        builtins.print(*a, **k)
+    monkeypatch.setattr(S, "print", _print, raising=False)     # serve()'s own prints, seen as they happen
     ready = threading.Event()
     box = {}
     t = threading.Thread(target=lambda: S.serve(_free_port(), open_browser=open_browser, desktop=desktop,
                                                 on_ready=lambda p: (box.update(port=p), ready.set())), daemon=True)
     t.start()
     assert ready.wait(20)
-    time.sleep(0.3)                                       # the banner is printed right after on_ready
 
     def stop():
         S.HTTPD[0].shutdown()
@@ -475,7 +494,7 @@ def test_desktop_app_log_does_not_carry_the_launch_key(monkeypatch, tmp_path, ca
     itself, so its log gets the address without the key."""
     port, stop = _serve_quietly(monkeypatch, tmp_path, desktop=True)
     try:
-        out = capfd.readouterr().out
+        out = _printed(capfd, "to stop Meshpool")           # the banner's last line: everything before it is in
         assert "Meshpool is running" in out
         assert S.LAUNCH_KEY not in out
         st, body, _ = _get(port, "/")                     # what the log shows opens no token
@@ -494,7 +513,7 @@ def test_browser_mode_still_prints_the_link_that_opens_the_app(monkeypatch, tmp_
     monkeypatch.setattr(webbrowser, "open", lambda url, *a, **k: opened.append(url) or True)
     port, stop = _serve_quietly(monkeypatch, tmp_path, desktop=False, open_browser=True)
     try:
-        out = capfd.readouterr().out
+        out = _printed(capfd, f"http://127.0.0.1:{port}/?k={S.LAUNCH_KEY}")
         assert f"http://127.0.0.1:{port}/?k={S.LAUNCH_KEY}" in out
         end = time.time() + 5
         while not opened and time.time() < end:
