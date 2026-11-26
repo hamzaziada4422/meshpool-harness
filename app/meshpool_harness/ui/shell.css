@@ -452,3 +452,10 @@
    (about #0a0a0a), so its edge read only through the 8% border. It takes the next step up the ramp, --surface, in dark. */
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .modal{background:var(--surface)}:root:not([data-theme="light"]) .mnav{background:var(--bg)}}
 :root[data-theme="dark"] .modal{background:var(--surface)}:root[data-theme="dark"] .mnav{background:var(--bg)}
+
+/* Design-pass check 2 (0.0.18): the last onboarding step is long (agents to import, chats to bring), and Start sat 800px below
+   the fold at 1024x700. The fields scroll in .onb-body and the button row stays under them: always on screen, and it covers
+   nothing because the fields end above it. */
+.onb-card:has(>.onb-body){display:flex;flex-direction:column;padding-bottom:0;max-height:calc(100vh - 48px - min(12vh,112px));max-height:calc(100dvh - 48px - min(12vh,112px))}
+.onb-card>.onb-body{flex:0 1 auto;min-height:0;overflow-y:auto;margin:0 -4px;padding:0 4px 16px;-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 16px),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 16px),transparent)}
+.onb-card:has(>.onb-body)>.onb-go{flex:none;margin-top:0;padding:16px 0 24px;background:var(--bg)}

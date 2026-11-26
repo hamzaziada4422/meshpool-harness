@@ -169,3 +169,64 @@ def test_the_dark_settings_modal_stands_off_its_scrim_without_its_border(app, pa
     assert min(ratios) >= 1.1, (got, ratios)
 
 
+# ---------------------------------------------------------------------------------------------------- J-06
+CONTRAST = """(() => {
+  const parse = c => { const m = c.match(/rgba?\\(([^)]+)\\)/); if (!m) return null; const a = m[1].split(/[ ,\\/]+/).filter(Boolean).map(Number); return {r: a[0], g: a[1], b: a[2], a: a[3] === undefined ? 1 : a[3]}; };
+  const lum = ({r, g, b}) => { const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
+  const over = (t, b) => ({r: t.r * t.a + b.r * (1 - t.a), g: t.g * t.a + b.g * (1 - t.a), b: t.b * t.a + b.b * (1 - t.a), a: 1});
+  const bgOf = el => { const st = []; for (let e = el; e; e = e.parentElement) { const c = parse(getComputedStyle(e).backgroundColor); if (c && c.a > 0) { st.push(c); if (c.a >= 1) break; } } let base = {r: 255, g: 255, b: 255, a: 1}; for (let i = st.length - 1; i >= 0; i--) base = over(st[i], base); return base; };
+  window.__low = root => { const out = [], w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), seen = new Set(); let n;
+    while (n = w.nextNode()) { if (!n.nodeValue.trim()) continue; const el = n.parentElement; if (!el || seen.has(el)) continue; seen.add(el); const cs = getComputedStyle(el), r = el.getBoundingClientRect();
+      if (!r.width || !r.height || cs.visibility === 'hidden' || cs.display === 'none') continue; let o = 1; for (let e = el; e; e = e.parentElement) o *= +getComputedStyle(e).opacity; if (o < 0.5) continue;
+      const bg = bgOf(el), fg = over(parse(cs.color), bg), L1 = lum(fg), L2 = lum(bg), c = (Math.max(L1, L2) + 0.05) / (Math.min(L1, L2) + 0.05);
+      if (c < 4.5) out.push([n.nodeValue.trim().slice(0, 30), +c.toFixed(2)]); } return out; };
+})()"""
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("width,height", [(1280, 800), (1024, 700)])
+def test_onboarding_steps_2_and_3_are_readable_in_both_themes(app, page, theme, width, height):
+    """J-06: light steps 2 and 3, and dark at 1280, were not checked. Text reaches 4.5:1 on both steps in both themes, and
+    on step 3 the Start button is on screen at 1024x700 and 1280x800 with a tall list of things to bring."""
+    page.set_viewport_size({"width": width, "height": height})
+    page.evaluate("t => { document.documentElement.dataset.theme = t; }", theme)
+    page.evaluate(CONTRAST)
+    page.evaluate("() => { permStep(); }")
+    page.wait_for_selector("#onbPerm:not([hidden])")
+    page.wait_for_timeout(600)
+    assert page.evaluate("() => __low(document.querySelector('#onb'))") == []
+    page.click("#oDone")
+    page.wait_for_selector("#onbSetup")
+    page.wait_for_timeout(800)
+    page.evaluate("""() => { const b = document.createElement('div'); b.id = 'tallimport'; b.style.cssText = 'height:1400px'; b.textContent = 'Agents on this computer';
+        document.querySelector('#oImport').appendChild(b); }""")
+    page.wait_for_timeout(200)
+    assert page.evaluate("() => __low(document.querySelector('#onb'))") == []
+    btn = page.evaluate("() => { const r = document.querySelector('#oFinish').getBoundingClientRect(); return [r.top, r.bottom, innerHeight]; }")
+    assert btn[0] >= 0 and btn[1] <= btn[2], btn
+    page.evaluate("() => { document.querySelector('#onb').remove(); }")
+
+
+def test_onboarding_step_3_buttons_are_reachable_without_scrolling_and_cover_no_field(app, page):
+    """J-06: step 3's Start button sat about 800px below the fold at 1024x700. The fields scroll in their own area and the
+    button stays under them: on screen at once, and whatever the scroll it overlaps none of the fields."""
+    page.set_viewport_size({"width": 1024, "height": 700})
+    page.evaluate("() => { permStep(); }")
+    page.wait_for_selector("#onbPerm:not([hidden])")
+    page.click("#oDone")
+    page.wait_for_selector("#onbSetup")
+    page.wait_for_timeout(600)
+    page.evaluate("""() => { const b = document.querySelector('#onbSetup .onb-body'); for (let i = 0; i < 12; i++) { const s = document.createElement('section'); s.className = 'tallrow';
+        s.style.cssText = 'height:96px;margin:8px 0;border:1px solid var(--line)'; s.textContent = 'Item ' + i; b.insertBefore(s, b.querySelector('#oLocalRow')); } }""")
+    page.wait_for_timeout(200)
+    got = page.evaluate("""() => { const bd = document.querySelector('#onbSetup .onb-body'), go = document.querySelector('#onbSetup .onb-go').getBoundingClientRect(), hits = [], seen = [];
+        const btn0 = document.querySelector('#oFinish').getBoundingClientRect();
+        for (const top of [0, 300, 700, 100000]) { bd.scrollTop = top; const g = document.querySelector('#onbSetup .onb-go').getBoundingClientRect();
+          for (const el of bd.querySelectorAll('.tallrow')) { const r = el.getBoundingClientRect(), bb = bd.getBoundingClientRect();
+            const vis = Math.min(r.bottom, bb.bottom) - Math.max(r.top, bb.top) > 0;
+            if (vis && g.top < r.bottom && g.bottom > r.top && Math.min(r.bottom, bb.bottom) > g.top) hits.push([top, el.textContent]); } }
+        bd.scrollTop = 100000; const last = [...bd.querySelectorAll('.tallrow')].pop(), lr = last.getBoundingClientRect();
+        return {btn: [Math.round(btn0.top), Math.round(btn0.bottom)], inner: innerHeight, hits, bodyBottom: Math.round(bd.getBoundingClientRect().bottom), goTop: Math.round(go.top), lastBottom: Math.round(lr.bottom)}; }""")
+    assert got["btn"][0] >= 0 and got["btn"][1] <= got["inner"], got
+    assert got["hits"] == [], got
+    assert got["lastBottom"] <= got["goTop"] + 1, got

@@ -563,15 +563,15 @@ table.t td.n,table.t th:not(:first-child){text-align:right}
 .onb-card{width:min(440px,100%);padding:8px 0 88px}
 .onb-card img.logo{display:block;height:32px;width:auto;margin:0 0 32px}
 .onb-card h1{font:500 var(--fs-2xl)/1.15 var(--display);letter-spacing:0;margin:0 0 8px}
-.onb-card>p{color:var(--ink-2);margin:0 0 24px}
+.onb-card>p,.onb-body>p{color:var(--ink-2);margin:0 0 24px}
 #onbPerm,#onbSetup{max-width:640px}
 .onb-h{font-size:var(--fs-s);font-weight:600;color:var(--ink);margin:16px 0 8px}
 .onb-steps{display:flex;align-items:center;gap:8px;margin:-16px 0 24px}
 .onb-steps span{width:20px;height:3px;border-radius:3px;background:var(--line);transition:background-color var(--t-side) var(--ease)}
 .onb-steps span.on{background:var(--pool)}
 .onb-steps small{margin-left:4px;color:var(--ink-3);font-size:var(--fs-xs)}
-/* The step's button closes the card, in the flow: kept sticky, it covered the key field at 1024x700 and the last
-   controls of step 3 ("3. Add to memory") at 1366 and 1024 (UX audit 0.0.18). */
+/* The step's button closes the card. A step taller than the window scrolls its fields in .onb-body and keeps the button
+   below them, always on screen and never over a field (shell.css); a card without .onb-body keeps the button in the flow. */
 .onb-go{display:flex;align-items:center;gap:16px;padding:12px 0 4px;margin-top:8px}
 .onb-go .sp{flex:1}
 .onb .res:empty{display:none}

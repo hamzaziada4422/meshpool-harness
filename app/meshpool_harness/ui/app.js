@@ -2980,7 +2980,7 @@ function showOnboarding() {
   if ($("#onb")) return;
   store("onbFull", 1);
   const o = document.createElement("div"); o.className = "onb"; o.id = "onb";
-  o.innerHTML = `<div class="onb-card" id="onbKey">
+  o.innerHTML = `<div class="onb-card" id="onbKey"><div class="onb-body">
     <img class="logo mlogo" src="${logoSrc()}" alt="meshpool">
     ${onbSteps(1)}<h1>Choose what meshpool runs on</h1><p>It stays on this computer, and you can change it any time in Settings.</p>
     <div class="scope prov" role="radiogroup" aria-label="What meshpool runs on">${PROVIDERS.filter(p => p[0] !== "chatgpt" || !chatgptSignInGone()).map(([id, name, desc], i) => `<button class="scopeopt" data-prov="${id}" role="radio" aria-checked="${i === 0}"><b>${name}</b><small>${desc}</small></button>`).join("")}</div>
@@ -2991,7 +2991,7 @@ function showOnboarding() {
       <label class="field" style="max-width:none"><span>API key</span><span class="keyrow"><input id="oKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key"><button class="btn" id="oShow" type="button">Show</button></span></label>
     </div>
     <div id="oSubBox" hidden><p class="credit" id="oSubTxt"></p><button class="btn primary" id="oSign">Sign in</button></div>
-    <div class="res" id="oRes"></div>
+    <div class="res" id="oRes"></div></div>
     <div class="onb-go"><button class="bigbtn" id="oGo">Continue</button></div></div>
     <div class="onb-card" id="onbPerm" hidden></div>`;
   document.body.appendChild(o);
@@ -3232,7 +3232,7 @@ function permStep(host) {
   let card = $("#onbPerm", o);
   if (!card) { card = document.createElement("div"); card.className = "onb-card"; card.id = "onbPerm"; o.appendChild(card); }
   card.hidden = false;
-  card.innerHTML = `<img class="logo mlogo" src="${logoSrc()}" alt="meshpool">
+  card.innerHTML = `<div class="onb-body"><img class="logo mlogo" src="${logoSrc()}" alt="meshpool">
     ${onbSteps(2)}<h1>Choose where meshpool can work</h1><p>meshpool only works in the places you allow. You can change this any time in Settings → Permissions.</p>
     <div class="scope" role="radiogroup" aria-label="Where meshpool can work">
       <button class="scopeopt" data-scope="pick" role="radio"><b>Folders I choose</b><small>Add one or more folders now.</small></button>
@@ -3240,7 +3240,7 @@ function permStep(host) {
       <button class="scopeopt" data-scope="later" role="radio"><b>Start without a folder</b><small>Each chat keeps its files in its own folder. Open it from the chat's Files panel.</small></button>
     </div><div class="res" id="oScope"></div>
     <div id="oPermH"><h3 class="onb-h">What meshpool can do</h3>
-    <ul class="rows2" id="oPerms"></ul></div>
+    <ul class="rows2" id="oPerms"></ul></div></div>
     <div class="onb-go"><button class="bigbtn" id="oAll">Allow all</button><button class="btn" id="oDone">Continue</button></div>`;
   const draw = async body => {
     try {
@@ -3280,11 +3280,11 @@ function permStep(host) {
 function setupStep(o, prev) {
   prev?.remove();
   const card = document.createElement("div"); card.className = "onb-card"; card.id = "onbSetup"; o.appendChild(card);
-  card.innerHTML = `<img class="logo mlogo" src="${logoSrc()}" alt="meshpool">
+  card.innerHTML = `<div class="onb-body"><img class="logo mlogo" src="${logoSrc()}" alt="meshpool">
     ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. You can skip this.</p>
     <div id="oImport"></div>
     <div id="oContext"></div>
-    <label class="switchrow" id="oLocalRow" hidden><input type="checkbox" id="oLocal"> <span id="oLocalTxt"></span></label>
+    <label class="switchrow" id="oLocalRow" hidden><input type="checkbox" id="oLocal"> <span id="oLocalTxt"></span></label></div>
     <div class="onb-go"><button class="bigbtn" id="oFinish">Start using meshpool</button></div>`;
   importPanel($("#oImport", card)).then(() => { const b = $("#impGo", card); if (b) b.hidden = true; });
   contextPanel($("#oContext", card));
