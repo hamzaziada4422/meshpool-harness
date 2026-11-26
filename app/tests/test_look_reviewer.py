@@ -193,6 +193,65 @@ def test_actions_run_in_the_browser_that_drew_the_pictures_and_it_is_closed_afte
     assert not _chrome_children()                                               # one browser, closed after
 
 
+@needs_browser
+def test_look_at_tells_a_reviewer_with_no_picture_what_is_there(proj, tmp_path, monkeypatch):
+    page = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" "
+            "content=\"width=device-width\"><title>Cakes</title></head><body><main><h1>Sweet Crumb</h1>"
+            "<section id=\"hours\"><h2>Hours</h2><p>Mon to Sat 7am to 4pm</p></section></main></body></html>\n")
+    plan = {"persona": PERSONA, "actions": [{"do": "look_at", "target": "Hours", "width": "phone"}]}
+    both = Both(monkeypatch, [write("index.html", page), "Made it."], [plan, verdict()])
+    a, _ = agent(proj)
+    from meshpool_harness import providers as PV
+    a._no_vision_models = {PV.split(a.current_model())[1]}
+    a.send("make a page for the bakery with its hours")
+    assert "it shows: Hours Mon to Sat 7am to 4pm" in body_text(both.r_bodies[1])
+    assert not _chrome_children()
+
+
+def test_a_missing_browser_is_said_not_hidden(proj, tmp_path, monkeypatch):
+    plan = {"persona": PERSONA, "actions": [{"do": "click", "target": "Order now"}]}
+    both, _ = two_rounds(monkeypatch, tmp_path, [plan, verdict(), ])       # a fake render: no browser is held open
+    a, _ = agent(proj)
+    a.send(ASK)
+    assert "not tried: the browser was not available" in body_text(both.r_bodies[1])
+
+
+# what a Claude model behind the adapter really sent in the live run: the plan reply carries extra keys and "problem"
+# instead of "what", and the verdict reply has a stray "]" before "pass" (it used to make the whole review fall back)
+RECORDED_PLAN = ('{"persona": "A customer on her phone, looking at the bakery\'s menu and placing a pickup order.", '
+                 '"pass": false, "problems": [{"problem": "no confirmation after placing an order", "severity": "blocker"}], '
+                 '"actions": [{"do": "look_at", "target": "Menu", "width": "phone"}, {"do": "look_at", "target": "Pickup date", '
+                 '"width": "phone"}]}')
+RECORDED_VERDICT = ('{"persona": "A customer on her phone, looking at the bakery\'s menu and placing a pickup order", '
+                    '"can_do_the_job": false, "problems": [{"what": "no confirmation is shown after the order form is sent", '
+                    '"where": "Place an Order form", "severity": "blocker"}, {"what": "no visible keyboard focus on the '
+                    'Pickup date field", "where": "order form", "severity": "major"}, {"what": "the phone layout was not '
+                    'confirmed", "where": "phone width", "severity": "minor"}]], "pass": false}')
+
+
+def test_replies_recorded_from_the_adapter_are_read():
+    d = LR.parse_json(RECORDED_VERDICT)
+    assert d and d["pass"] is False and len(d["problems"]) == 3                 # the stray "]" is left out
+    v = LR.normalize_verdict(d, "make a bakery site", "web", "x")
+    assert [p["severity"] for p in v["problems"]] == ["blocker", "major", "minor"] and not v["pass"]
+    plan = LR.parse_json(RECORDED_PLAN)
+    assert [a["do"] for a in LR.plan_actions(plan["actions"])] == ["look_at", "look_at"]
+    one = LR.normalize_verdict(plan, "make a bakery site", "web", "x")
+    assert one["problems"][0]["what"] == "no confirmation after placing an order"   # "problem" is read as "what"
+    assert LR.parse_json('{"a": "x]]", "b": [1, 2]]}') == {"a": "x]]", "b": [1, 2]}   # brackets inside text are kept
+
+
+def test_a_recorded_verdict_with_a_stray_bracket_no_longer_ends_the_review(proj, tmp_path, monkeypatch):
+    both, _ = two_rounds(monkeypatch, tmp_path, [RECORDED_PLAN, RECORDED_VERDICT, verdict(persona="A customer on her phone, "
+                         "looking at the bakery's menu and placing a pickup order")])
+    a, _ = agent(proj)
+    final = a.send(ASK)
+    t = text_of(reviews(a)[0])
+    assert "[blocker] no confirmation is shown after the order form is sent" in t and "measured only" not in final
+    assert final.rstrip().endswith("fixed no confirmation is shown after the order form is sent, no visible keyboard "
+                                   "focus on the Pickup date field and the phone layout was not confirmed.")
+
+
 # ---------- when it stops -----------------------------------------------------------------------------------------------
 def test_a_pass_ends_the_loop_with_no_second_model_loop(proj, tmp_path, monkeypatch):
     render = fake_render([[]], _shots(tmp_path))

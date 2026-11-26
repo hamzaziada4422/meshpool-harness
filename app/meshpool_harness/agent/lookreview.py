@@ -84,35 +84,42 @@ def clean_persona(p: str, request: str, kind: str) -> tuple[str, bool]:
 
 # ---------- reading the reply --------------------------------------------------------------------------------------------
 def parse_json(reply: str) -> dict | None:
-    """The first JSON object in a reply (a code fence or a sentence around it is fine). None when there is none."""
-    t = str(reply or "")
-    t = re.sub(r"```(?:json)?", "", t)
+    """The first JSON object in a reply (a code fence or a sentence around it is fine). A closing bracket that matches
+    nothing open (a model's typo such as "}]]") is left out. None when there is no object."""
+    t = re.sub(r"```(?:json)?", "", str(reply or ""))
+    pairs = {"}": "{", "]": "["}
     i = t.find("{")
     while i != -1:
-        depth, in_s, esc = 0, False, False
-        for j in range(i, len(t)):
-            c = t[j]
+        stack: list = []
+        out: list = []
+        in_s = esc = False
+        for c in t[i:]:
             if in_s:
+                out.append(c)
                 if esc:
                     esc = False
                 elif c == "\\":
                     esc = True
                 elif c == '"':
                     in_s = False
-            elif c == '"':
+                continue
+            if c == '"':
                 in_s = True
-            elif c == "{":
-                depth += 1
-            elif c == "}":
-                depth -= 1
-                if depth == 0:
-                    try:
-                        d = json.loads(t[i:j + 1])
-                        if isinstance(d, dict):
-                            return d
-                    except ValueError:
-                        pass
-                    break
+            elif c in "{[":
+                stack.append(c)
+            elif c in pairs:
+                if not stack or stack[-1] != pairs[c]:
+                    continue                                   # a closer that matches nothing: left out
+                stack.pop()
+            out.append(c)
+            if not stack:
+                try:
+                    d = json.loads("".join(out))
+                    if isinstance(d, dict):
+                        return d
+                except ValueError:
+                    pass
+                break
         i = t.find("{", i + 1)
     return None
 
@@ -133,6 +140,8 @@ def normalize_verdict(d: dict | None, request: str, kind: str, persona_given: st
     for p in d.get("problems") or []:
         if isinstance(p, str) and p.strip():
             p = {"what": p}
+        if isinstance(p, dict):
+            p = dict(p, what=p.get("what") or p.get("problem") or p.get("issue") or p.get("description") or "")
         if isinstance(p, dict) and str(p.get("what") or "").strip():
             probs.append({"what": re.sub(r"\s+", " ", str(p["what"])).strip()[:240],
                           "where": re.sub(r"\s+", " ", str(p.get("where") or "")).strip()[:120],
@@ -453,6 +462,12 @@ def run_actions(browser, url: str, actions: list, out_dir, tag: str, deadline_s:
                 el = _find_click(page, a["target"]) if a["target"] else None
                 if el is not None:
                     el.scroll_into_view_if_needed(timeout=2000)
+                    try:                                         # what a person would read there, for a reviewer with no picture
+                        seen = el.evaluate("e => ((e.closest('section,article,form,main,aside,footer') || e).innerText || '')"
+                                           ".replace(/\\s+/g, ' ').trim()")
+                        note_pre = ("it shows: " + seen[:260] + "; ") if seen else ""
+                    except Exception:  # noqa: BLE001
+                        pass
                 elif a["target"]:
                     ok, note_pre = False, f"could not find '{a['target']}' on the page"
             page.wait_for_timeout(450)
@@ -665,9 +680,11 @@ def review(agent, turn: dict, kind: str, target: dict, res: dict, request: str, 
 
 def default_actions(hold, target: dict, actions: list, out_dir, tag: str) -> list:
     """Run the actions in the browser that drew the pictures (the Hold). No hold: no browser is opened for them."""
-    if hold is None:
-        return []
-    return hold.run(actions) or []
+    got = hold.run(actions) if hold is not None else None
+    if got is None:                                                    # the browser was gone: say so, do not pretend
+        return [{"action": action_text(a), "ok": False, "note": "not tried: the browser was not available", "shot": None}
+                for a in actions]
+    return got
 
 
 # ---------- what the builder reads and the line the user reads --------------------------------------------------------------
