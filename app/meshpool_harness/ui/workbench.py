@@ -1410,10 +1410,8 @@ _OUT_RX = re.compile(r"(?:Saved(?: the [\w ]+)?|[Ww]rote|[Cc]reated)[: ]+((?:[A-
                      r"(?:docx|xlsx|pptx|pdf|csv|md|png|jpg|html|txt|json))(?![\w.])")
 
 
-def outputs_from(evs: list, turns: list, root: Path) -> list[dict]:
-    """Files a session created or changed, from its events (edits and writes, files its tools said they saved) and
-    from what its checkpoints recorded per reply. Only files that still exist inside the folder."""
-    found: dict[str, dict] = {}
+def _found_in_events(evs, root: Path, found: dict) -> None:
+    """Add to found the files these events wrote, edited or said they saved."""
     for e in evs:
         if e.get("type") == "tool_start" and e.get("name") in ("write_file", "edit"):
             rel = _rel(root, e.get("summary") or "")
@@ -1424,6 +1422,17 @@ def outputs_from(evs: list, turns: list, root: Path) -> list[dict]:
                 rel = _rel(root, m.group(1))
                 if rel:
                     found.setdefault(rel, {"path": rel, "how": "saved"})
+
+
+def outputs_from(evs: list, turns: list, root: Path, found: dict | None = None) -> list[dict]:
+    """Files a session created or changed, from its events (edits and writes, files its tools said they saved) and
+    from what its checkpoints recorded per reply. Only files that still exist inside the folder. `found`: what the
+    events gave, when the caller already has it (session_outputs)."""
+    if found is None:
+        found = {}
+        _found_in_events(evs, root, found)
+    else:
+        found = dict(found)
     for t in turns:
         for c in t.get("changed") or []:
             if c.get("status") != "deleted":
@@ -1442,14 +1451,25 @@ def outputs_from(evs: list, turns: list, root: Path) -> list[dict]:
 
 
 def session_outputs(s, root: Path) -> list[dict]:
-    """Files this session created or changed (see outputs_from)."""
+    """Files this session created or changed (see outputs_from). The side panel asks every 4 s while the chat works,
+    and each ask ran the file-name pattern over every tool output of the chat (about 0.1 s for a long one). Events
+    are only appended to the same list (a rewind or a reload makes a new list), so each event is scanned once."""
     with s.lock:
-        evs = list(s.events)
+        lst = s.events
+        evs = list(lst)
+    key = (getattr(s, "epoch", None), str(root))
+    c = getattr(s, "_outputs_scan", None)
+    if c and c[0] is lst and c[1] == key and c[2] <= len(evs):
+        start, found = c[2], dict(c[3])
+    else:
+        start, found = 0, {}
+    _found_in_events(evs[start:], root, found)
+    s._outputs_scan = (lst, key, len(evs), found)
     try:
         turns = s.cp.turns() if s.cp else []
     except Exception:  # noqa: BLE001
         turns = []
-    return outputs_from(evs, turns, root)
+    return outputs_from(evs, turns, root, found)
 
 
 def session_connectors(s) -> dict:

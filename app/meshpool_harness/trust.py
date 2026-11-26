@@ -56,30 +56,63 @@ def _save(d: dict) -> None:
     os.replace(tmp, f)
 
 
+def _json(raw: bytes):
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except ValueError:
+        return None
+
+
+def _hooks_risky(raw: bytes) -> bool:
+    h = _json(raw)
+    return isinstance(h, dict) and any(isinstance(v, list) and v for v in h.values())
+
+
+def _perms_risky(raw: bytes) -> bool:
+    p = _json(raw)
+    return isinstance(p, dict) and bool(p.get("allow"))
+
+
+def _mcp_risky(raw: bytes) -> bool:
+    m = _json(raw)
+    return isinstance(m, dict) and bool(m.get("mcpServers") or m.get("servers"))
+
+
 def risky_files(root) -> list[str]:
-    """The project files that would run code or skip questions, relative to the folder. Empty when there are none."""
+    """The project files that would run code or skip questions, relative to the folder. Empty when there are none.
+    The chat view asks on every poll, so each file's answer is kept while the file is unchanged."""
+    from meshpool_harness import fsio
     out = []
-    base = Path(root) / ".meshpool"
-    try:
-        h = json.loads((base / "hooks.json").read_text(encoding="utf-8"))
-        if isinstance(h, dict) and any(isinstance(v, list) and v for v in h.values()):
-            out.append(".meshpool/hooks.json")
-    except (OSError, ValueError):
-        pass
-    try:
-        p = json.loads((base / "permissions.json").read_text(encoding="utf-8"))
-        if isinstance(p, dict) and p.get("allow"):
-            out.append(".meshpool/permissions.json")
-    except (OSError, ValueError):
-        pass
-    for rel in (".mcp.json", ".meshpool/mcp.json"):
-        try:
-            m = json.loads((Path(root) / rel).read_text(encoding="utf-8"))
-            if isinstance(m, dict) and (m.get("mcpServers") or m.get("servers")):
-                out.append(rel)
-        except (OSError, ValueError):
-            pass
+    for rel, fn in ((".meshpool/hooks.json", _hooks_risky), (".meshpool/permissions.json", _perms_risky),
+                    (".mcp.json", _mcp_risky), (".meshpool/mcp.json", _mcp_risky)):
+        if fsio.parse_cached(Path(root) / rel, fn, "trust-" + fn.__name__, missing=False):
+            out.append(rel)
     return out
+
+
+def _own_folders(raw: bytes) -> tuple:
+    d = _json(raw)
+    return tuple(d["folders"]) if isinstance(d, dict) and isinstance(d.get("folders"), dict) else ()
+
+
+def _old_folders(raw: bytes) -> tuple:
+    old = _json(raw)
+    out = []
+    for f in old if isinstance(old, list) else []:
+        if isinstance(f, str) and f:
+            try:
+                out.append(_norm(f))
+            except (OSError, RuntimeError):
+                continue
+    return tuple(out)
+
+
+def _trusted_folders() -> tuple:
+    """What _load()["folders"] holds, for reading only. is_trusted runs on every tool call (hooks, permission rules)
+    and every chat poll: both stores are parsed again only when they change."""
+    from meshpool_harness import fsio
+    return (fsio.parse_cached(_store(), _own_folders, "trust-own", missing=())
+            + fsio.parse_cached(C.home() / "trusted_projects.json", _old_folders, "trust-old", missing=()))
 
 
 def is_trusted(root) -> bool:
@@ -92,7 +125,7 @@ def is_trusted(root) -> bool:
         return False
     if r == _norm(C.home()):                              # Meshpool's own data folder, not the repos it clones there
         return True
-    for f in _load()["folders"]:
+    for f in _trusted_folders():
         if r == f or r.startswith(f.rstrip(os.sep) + os.sep):
             return True
     return False

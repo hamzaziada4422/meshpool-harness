@@ -3917,7 +3917,14 @@ class Agent:
                 if sq.get("sig") == sig and sq.get("n", 0) >= 10:
                     return ("[Meshpool] Shell checks stopped for this turn: ten runs in a row gave the same result and no "
                             "project file changed. Give your best answer from what you have, and say what is unresolved.")
-        out = self._run_tool(c, cut=cut)
+        # exec_command fingerprints the tree before and after it runs, and this guard did the same around it: four
+        # walks of up to 4,000 files per command. The guard's walk is handed to _run_tool and _run_tool's back.
+        self.__dict__.pop("_sig_post", None)
+        self._sig_pre = (id(c), sig) if sh else None
+        try:
+            out = self._run_tool(c, cut=cut)
+        finally:
+            self._sig_pre = None
         import hashlib
         h = hashlib.md5(str(out).encode("utf-8", "replace")).hexdigest()
         failed = bool(re.search(r"\[exit (?!0\b)\d+\]|Process exited with code (?!0\b)-?\d+|timed out|Traceback|Error|"
@@ -3941,7 +3948,8 @@ class Agent:
             if not last or last[-1][3] != failed:
                 g["wprog"] = g.get("wprog", 0) + 1
         if sh:
-            sig2 = self._tree_sig()
+            post = self.__dict__.pop("_sig_post", None)
+            sig2 = post[1] if post and post[0] == id(c) and post[1] is not None else self._tree_sig()
             sq = g.get("sseq") or {}
             sq = {"sig": sig2, "h": h, "n": sq["n"] + 1} if sq and sq.get("sig") == sig2 and sq.get("h") == h and sig2 is not None \
                 else {"sig": sig2, "h": h, "n": 1}
@@ -6033,10 +6041,13 @@ class Agent:
                 done = sum(i["status"] == "completed" for i in items)
                 out = f"Plan updated: {done} of {len(items)} done."
             elif name == "exec_command":               # Codex 0.171 (profile c171): its result format, as Codex sends it
-                before = self._tree_sig()
+                pre = getattr(self, "_sig_pre", None)  # the repeat guard's fingerprint of this same call
+                before = pre[1] if pre and pre[0] == id(c) else self._tree_sig()
                 out = self.ws.exec_command(**args)
                 ok = T.exec_exit_code(out) == 0
-                if before is not None and self._tree_sig() != before:
+                after = self._tree_sig() if before is not None else None
+                self._sig_post = (id(c), after)
+                if before is not None and after != before:
                     self.ws.edits += 1                 # a heredoc write is an edit: the loop guards see the progress
             else:
                 out = getattr(self.ws, name)(**args)

@@ -2639,7 +2639,7 @@ def _decorate(r: dict, m: dict, legacy: dict, live_pids: set) -> dict:
 def _project_info() -> tuple:
     try:
         from meshpool_harness import project_store as PS
-        return PS.legacy_map(), {p["id"] for p in PS.list_projects()}
+        return PS.link_index()
     except Exception:  # noqa: BLE001
         return {}, set()
 
