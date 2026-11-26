@@ -82,7 +82,31 @@ def ask_claude(system: str, prompt: str) -> str:
     return r.stdout.strip()
 
 
+_INVOKE = re.compile(r'<invoke name="([^"]+)">(.*?)</invoke>', re.S)
+_PARAM = re.compile(r'<parameter name="([^"]+)">(.*?)</parameter>', re.S)
+
+
+def _invokes(out: str) -> tuple[str, list]:
+    """Claude's own tool-call markup (<invoke name=...><parameter name=...>), which it sometimes writes instead of
+    the JSON asked for: the calls, and the text before the first one."""
+    calls = []
+    for name, inner in _INVOKE.findall(out):
+        args = {}
+        for k, v in _PARAM.findall(inner):
+            v = v.strip()
+            try:
+                args[k] = json.loads(v) if v[:1] in "[{" or v in ("true", "false", "null") or v.lstrip("-").isdigit() else v
+            except ValueError:
+                args[k] = v
+        calls.append({"id": "call_" + uuid.uuid4().hex[:12], "type": "function",
+                      "function": {"name": name, "arguments": json.dumps(args)}})
+    text = re.split(r"<(?:function_calls|invoke)\b", out, maxsplit=1)[0].strip()
+    return text, calls
+
+
 def parse(out: str) -> tuple[str, list]:
+    if "<invoke name=" in out and not out.strip().startswith("{"):
+        return _invokes(out)
     s = out.strip()
     s = re.sub(r"^```(?:json)?\s*|\s*```$", "", s)
     i, j = s.find("{"), s.rfind("}")
