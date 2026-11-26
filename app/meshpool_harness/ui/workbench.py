@@ -64,6 +64,8 @@ def _save_projects(rows: list[dict]):
 
 @_projects_locked
 def add_project(path: str, name: str = "") -> dict:
+    if not str(path or "").strip().strip('"').strip():   # Path("") is ".": the folder the app happened to start in
+        raise ValueError("Choose a folder first.")
     p = Path(path.strip().strip('"')).expanduser()
     if not p.is_dir():
         raise ValueError(f"Folder not found: {path}")
@@ -114,6 +116,8 @@ def known_roots() -> list[Path]:
 
 def check_root(root: str) -> Path:
     """Only folders the user added as projects (or a live session's folder) are browsable from the page."""
+    if not str(root or "").strip():                # "" would resolve to the app's own working folder
+        raise ValueError("Choose a folder first.")
     p = Path(root).expanduser().resolve()
     from meshpool_harness import project_store as PS
     if PS.is_scratch(str(p)):                      # a chat's own private folder

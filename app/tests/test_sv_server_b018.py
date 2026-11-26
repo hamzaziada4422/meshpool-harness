@@ -386,6 +386,29 @@ def test_the_address_handed_to_a_browser_or_window_works_once(httpd, monkeypatch
     assert st == 200
 
 
+# ---------------------------------------------------------------------------------------------------- SV-12
+def test_a_blank_folder_is_not_the_apps_own_working_folder(httpd, tmp_path, monkeypatch):
+    """SV-12: POST /api/projects {"action": "add", "path": ""} (or only spaces) turned into Path("") which is ".": the
+    folder the app process happened to start in (the install folder, the home folder, "/") was added as a project,
+    and every route then took root="" as that folder: an empty attach wrote a file named "file" into it. A blank
+    folder is now refused, both when adding a project and as the root of a file route."""
+    from meshpool_harness.ui import workbench as W
+    start = tmp_path / "where-the-app-started"
+    start.mkdir()
+    monkeypatch.chdir(start)
+    for blank in ("", "   "):
+        st, out = _post(httpd, "/api/projects", {"action": "add", "path": blank})
+        assert st == 400, out
+        assert str(start) not in [p["path"] for p in W.projects()]
+    W.add_project(str(start))                             # even when that folder is a project, "" does not name it
+    import base64
+    st, out = _post(httpd, "/api/attach", {"root": "", "name": "", "data": base64.b64encode(b"x").decode()})
+    assert st == 400, out
+    assert list(start.iterdir()) == []
+    st, body, _ = _get(httpd, "/api/files?root=&path=", {"X-Meshpool-Token": S.TOKEN})
+    assert st == 400
+
+
 def _serve_quietly(monkeypatch, tmp_path, desktop: bool, open_browser: bool = False):
     """Run the real serve() on a free port with its background helpers stubbed; returns (port, stop)."""
     from meshpool_harness import autoupdate as AU
