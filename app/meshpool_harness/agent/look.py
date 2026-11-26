@@ -44,9 +44,11 @@ _NOT_UI = re.compile(r"(^|[\\/])(tests?|__tests__|spec|node_modules|\.meshpool|\
 _URL = re.compile(r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d{2,5})?(?:/[^\s'\"<>)\x1b]*)?", re.I)
 _BUILD = re.compile(r"\b(npm|pnpm|yarn|bun)\s+(run\s+)?build\b|\bvite\s+build\b|\bnext\s+build\b|\bastro\s+build\b|"
                     r"\bng\s+build\b|\bparcel\s+build\b|\beleventy\b|\bhugo\b|\bjekyll\s+build\b", re.I)
-# a look after the last write already happened this turn: the engines' own checks and the viewing tools
-_LOOKED = re.compile(r"(^|__)(check_(deck|workbook|document)|view_output|read_document|measure_office_file|"
-                     r"make_deck|make_document|make_workbook|make_report|build_deck|build_report|build_model)$")
+# a look after the last write already happened this turn: the engines' checks that draw the pages, and the viewing tools.
+# check_document, check_workbook, make_document and make_workbook only test the file's structure or values and never
+# draw a page, so a Word file or sheet they handled is still looked at once.
+_LOOKED = re.compile(r"(^|__)(check_deck|view_output|read_document|measure_office_file|"
+                     r"make_deck|make_report|build_deck|build_report|build_model)$")
 _WROTE = re.compile(r"^(write_file|write|edit|edit_file|apply_patch|bash|shell|exec_command|run_python|python)$")
 
 
@@ -599,7 +601,7 @@ def gate(agent, g: dict, final: str, *, render_web_fn=None, render_doc_fn=None) 
             st["changed"] = True
         st["sig"] = sig
         tag = f"t{getattr(agent, '_turn_no', 0)}-r{st['rounds'] + 1}"
-        agent.emit({"type": "status", "text": "Looking at the result" + (" again" if st["rounds"] else "")
+        agent.emit({"type": "status", "look": True, "text": "Looking at the result" + (" again" if st["rounds"] else "")
                     + " before finishing..."})
         req = request_of(agent, g)
         if kind == "web":

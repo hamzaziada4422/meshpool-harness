@@ -406,10 +406,20 @@ def test_docx_made_in_a_chat_gets_a_render_check(proj, monkeypatch):
 def test_no_second_render_when_engine_qa_already_ran(proj):
     _docx(proj / "deck.docx")
     a = _A(proj)
-    a.trace = [{"tool": "bash", "ok": True}, {"tool": "mcp__meshpool-office__check_document", "ok": True}]
+    a.trace = [{"tool": "bash", "ok": True}, {"tool": "mcp__meshpool-office__check_deck", "ok": True}]
     assert L.doc_target(a, {"t0": time.time() - 5, "trace0": 0}, [proj / "deck.docx"]) is None
     a.trace.append({"tool": "edit", "ok": True})                         # changed after the check: look again
     assert L.doc_target(a, {"t0": time.time() - 5, "trace0": 0}, [proj / "deck.docx"])["file"].endswith("deck.docx")
+
+
+def test_a_structure_only_check_is_not_a_look(proj):
+    """make_document and check_document test the package, not the pages: the Word file is still drawn once."""
+    _docx(proj / "memo.docx")
+    for tools in (["make_document"], ["make_document", "check_document", "check_document"],
+                  ["make_workbook", "check_workbook"]):
+        a = _A(proj)
+        a.trace = [{"tool": "mcp__meshpool-office__" + t, "ok": True} for t in tools]
+        assert L.doc_target(a, {"t0": time.time() - 5, "trace0": 0}, [proj / "memo.docx"])["file"].endswith("memo.docx")
 
 
 @pytest.mark.skipif(not (os.environ.get("MH_ALLOW_SYSTEM_SOFFICE") and __import__("shutil").which("soffice")),

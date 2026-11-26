@@ -1608,7 +1608,9 @@ function applyEvRaw(ev) {
     case "retry_ok": clearRetry(); break;
     case "assistant":
       if (ev.append && ev.merged && cur.lastAi && cur.lastAi.isConnected && cur.lastText) {
-        const full = cur.lastText.replace(/\s+$/, "") + "\n\n" + stripGoal(ev.text); mdRender(cur.lastAi, full); cur.lastText = full; break; }
+        const full = cur.lastText.replace(/\s+$/, "") + "\n\n" + stripGoal(ev.text); mdRender(cur.lastAi, full); cur.lastText = full;
+        cur.lookEl?.remove(); cur.lookEl = null;       // "Looking at the result..." is over: the line under the reply says what it saw
+        break; }
       { const txt = stripGoal(ev.text); if (txt) clearRetry();
       if (cur.live) { if (txt) { mdRender(cur.live, txt); easeEnd(cur.live); cur.lastAi = cur.live; } else cur.live.remove(); cur.live = null; cur.liveDirty = false; }
       else if (txt) { closeGroup(); cur.lastAi = add("", "msg-ai"); mdRender(cur.lastAi, txt); } }
@@ -1723,7 +1725,8 @@ function applyEvRaw(ev) {
         if (cur.downEl) cur.downEl.textContent = ev.text; else cur.downEl = add(esc(ev.text), ev.down ? "note retry" : "note");
         cur.down = !!ev.down; if (!ev.down) cur.downEl = null;
         break; }
-      { const nn = add(esc(ev.text) + (ev.detail ? ` <details class="notedet"><summary>Details</summary><div>${esc(ev.detail).replace(/\n/g, "<br>")}</div></details>` : ""), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); } break; }
+      if (ev.look) cur.activity = String(ev.text || "").replace(/\.+$/, "");   // the footer names the wait (agent/look.py)
+      { const nn = add(esc(ev.text) + (ev.detail ? ` <details class="notedet"><summary>Details</summary><div>${esc(ev.detail).replace(/\n/g, "<br>")}</div></details>` : ""), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); if (ev.look) cur.lookEl = nn; } break; }
     case "gate": {                                      // all model slots busy: say so while it waits, drop the line once it runs
       if (cur.gateEl && !cur.gateEl.isConnected) cur.gateEl = null;
       if (ev.state === "waiting") {
