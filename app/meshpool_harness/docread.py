@@ -35,6 +35,9 @@ _SLOTS = threading.BoundedSemaphore(max(1, (os.cpu_count() or 2) // 2))
 PDF_PAGES = 80                           # pages read per call when the caller does not name pages
 _CACHE_MAX = 300                         # files kept in the cache folder
 _NOT_CACHED = ("Could not read", "Meshpool cannot read", "[Meshpool] ")
+# Bumped whenever a reader changes what it returns: the cache outlives upgrades, and a file read by an older reader
+# kept its old text until the file itself changed (review, 0.0.18: tracked changes, footnotes, RTF, CSV encodings).
+READER_VERSION = 18
 
 
 def _cache_dir() -> Path:
@@ -45,7 +48,8 @@ def _cache_dir() -> Path:
 def _cache_key(p: Path, *args) -> str:
     import hashlib
     st = p.stat()
-    return hashlib.sha1(repr((str(p.resolve()), st.st_mtime_ns, st.st_size, PDF_PAGES, *args)).encode("utf-8")).hexdigest()
+    return hashlib.sha1(repr((READER_VERSION, str(p.resolve()), st.st_mtime_ns, st.st_size, PDF_PAGES, *args))
+                        .encode("utf-8")).hexdigest()
 
 
 def _cache_get(key: str) -> str | None:
@@ -604,14 +608,18 @@ def decode_text(raw: bytes, cut: bool = False) -> str:
             if cut and enc.startswith("utf-16"):
                 body = body[:len(body) - len(body) % 2]
             return body.decode(enc, errors="replace")
+    # UTF-16 with no byte-order mark first: NUL bytes are valid UTF-8, so plain ASCII text saved as UTF-16 "decoded"
+    # as UTF-8 with a NUL after every letter (review, 0.0.18)
+    head = raw[:4000]
+    if len(head) >= 4 and head[1::2].count(0) > len(head) // 4 and head[0::2].count(0) < len(head) // 20:
+        return raw[:len(raw) - len(raw) % 2].decode("utf-16-le", errors="replace")
+    if len(head) >= 4 and head[0::2].count(0) > len(head) // 4 and head[1::2].count(0) < len(head) // 20:
+        return raw[:len(raw) - len(raw) % 2].decode("utf-16-be", errors="replace")
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError as e:
         if cut and e.start >= len(raw) - 3 and e.reason == "unexpected end of data":
             return raw[:e.start].decode("utf-8", errors="replace")
-    head = raw[:4000]
-    if len(head) >= 4 and head[1::2].count(0) > len(head) // 4 and head[0::2].count(0) < len(head) // 20:
-        return raw[:len(raw) - len(raw) % 2].decode("utf-16-le", errors="replace")
     return raw.decode("cp1252", errors="replace")
 
 

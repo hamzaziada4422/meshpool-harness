@@ -217,7 +217,7 @@ def nested_instructions(root: Path, path: str, seen: set) -> str:
             except OSError:
                 continue
             seen.add(f.resolve())
-            body = _imports(_read(f), f.parent, {f.resolve()}, fence=_git_root(f.parent).resolve()).strip()   # imports stay in the project
+            body = _imports(_read(f), f.parent, {f.resolve()}, fence=_git_root(Path(root)).resolve()).strip()   # imports stay in the project
             if body:
                 out.append(f"[Instructions from {f.relative_to(root).as_posix()} for work in "
                            f"{folder.relative_to(root).as_posix()}/ (follow them there):]\n{body[:MAX_FILE]}")

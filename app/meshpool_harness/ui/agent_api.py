@@ -1824,7 +1824,7 @@ class Session:
         write_meta(self.id, route=r.spec, route_label=r.label, route_profile=r.profile or None)
         self.emit({"type": "status", "route": r.to_dict(), "text": f"Harness: {r.label} (picked by you)."})
 
-    def set_model(self, model: str):
+    def set_model(self, model: str, check: bool = False):
         model = (model or "").strip()
         from meshpool_harness import providers as PV
         sup = self.harness.get("providers") or []
@@ -1837,10 +1837,14 @@ class Session:
                 and prov != self.harness["provider"] and self.agent.acp_session):
             raise ValueError(f"This chat runs {self.harness['name']} on {self.harness.get('runs_on')}. To use "
                              f"{PV.name(prov)}, start a new chat.")
-        # An agent on the picker's models: a name the known list lacks is refused (the chat's own model stays allowed).
-        if prov and self.harness.get("models") == "meshpool" and model != getattr(self.agent, "model", None):
+        # A pick in the model menu (check=True, the "model" action only) on an agent that uses the picker's models: a
+        # name the endpoint's list lacks is refused. Never when a chat is created or reopened: a chat saved on a model
+        # that is gone must still open (review, 0.0.18: get(sid) raised and the chat's history could not be shown).
+        # A variant suffix (OpenRouter's ":nitro", ":online") counts as its base model, which is what the list has.
+        if check and prov and self.harness.get("models") == "meshpool" and model != getattr(self.agent, "model", None):
             known = _known_models(prov)
-            if known is not None and PV.split(model)[1] not in known:
+            bare = PV.split(model)[1]
+            if known is not None and bare not in known and bare.split(":", 1)[0] not in known:
                 raise ValueError(f"The endpoint does not offer a model named {model}. Pick one from the model list.")
         if hasattr(self.agent, "set_model"):
             self.agent.set_model(model)
@@ -2408,9 +2412,8 @@ def _known_models(prov: str) -> set | None:
     """Model ids (without the provider prefix) a provider is known to serve, from the lists already read; None when
     no list is known, so a model picker that is offline never blocks a name. Never a network call."""
     try:
-        if prov == "chatgpt":
-            from meshpool_harness.core import chatgpt as CG
-            return set(CG._known()) or None
+        if prov == "chatgpt":                  # its list leaves out hidden models that still work: no check
+            return None
         from meshpool_harness.ui import workbench as W
         return W.known_models()
     except Exception:  # noqa: BLE001 - a check that cannot run allows the name
@@ -2598,7 +2601,7 @@ def session_action(sid: str, act: str, b: dict) -> dict:
     elif act == "mode":
         s.set_mode(b.get("mode", "ask"))
     elif act == "model":
-        s.set_model(b.get("model", ""))
+        s.set_model(b.get("model", ""), check=True)
     elif act == "harness":
         s.switch_harness(b.get("harness", ""))
     elif act == "route":

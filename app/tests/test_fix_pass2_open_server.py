@@ -115,15 +115,18 @@ def test_p2_uiserver_16_set_model_checks_the_known_model_list(home, monkeypatch)
     monkeypatch.setattr(W, "_MODELS", {"t": time.time(), "key": base + "|" + key[-6:], "error": "",
                                        "rows": [{"id": "deepseek-v4.1-flash"}, {"id": "gpt-5"}]})
     with pytest.raises(ValueError, match="nonexistent:zz"):
-        s.set_model("nonexistent:zz")
+        s.set_model("nonexistent:zz", check=True)                 # a pick in the model menu
     assert A.read_meta(s.id).get("model") != "nonexistent:zz"
-    s.set_model("gpt-5")
+    s.set_model("gpt-5", check=True)
     assert A.read_meta(s.id)["model"] == "gpt-5"
+    s.set_model("gpt-5:nitro", check=True)                        # a variant of a listed model (OpenRouter)
     C.write({"MH_MODEL": "my-own-finetune"})                      # saved with "use a name not in the list"
-    s.set_model("my-own-finetune")
+    s.set_model("my-own-finetune", check=True)
     assert A.read_meta(s.id)["model"] == "my-own-finetune"
+    s.set_model("retired-model")                                  # creating or reopening a chat: never refused
+    assert A.read_meta(s.id)["model"] == "retired-model"          # (review: a saved chat could not be opened)
     monkeypatch.setattr(W, "_MODELS", {"t": 0, "key": "", "rows": [], "error": ""})   # offline: no list
-    s.set_model("nonexistent:zz")
+    s.set_model("nonexistent:zz", check=True)
     assert A.read_meta(s.id)["model"] == "nonexistent:zz"
     s.close()
 

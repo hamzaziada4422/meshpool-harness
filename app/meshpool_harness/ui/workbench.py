@@ -231,7 +231,7 @@ def known_models() -> set | None:
     if _MODELS["key"] != base + "|" + key[-6:] or not _MODELS["rows"]:
         return None
     vals = C.read()
-    mine = [vals.get("MH_MODEL") or os.environ.get("MH_MODEL") or "",
+    mine = [vals.get("MH_MODEL") or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash",   # the default models() shows
             *(vals.get("MH_FAVORITE_MODELS") or "").split(","), _PV.env_deployment()]
     return {r["id"] for r in _MODELS["rows"]} | {_PV.split(m)[1] for m in mine if m}
 
