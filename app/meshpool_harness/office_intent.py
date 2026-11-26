@@ -181,6 +181,27 @@ _CODE_NAME = re.compile(r"(?<![\w.()-])[.()-]*\w[\w.()-]*\.(?:py|js|mjs|ts|tsx|j
                         r"php|sh|ps1|sql|ipynb)\b", re.I)
 _CODE_ASK = re.compile(r"\b(?:bug|stack ?trace|traceback|exception|unit tests?|pytest|refactor|function|class|module|"
                        r"script|repo(?:sitory)?|endpoint|api|library|parser|compile)\b", re.I)
+# Words that make a request about code even when it names an office file (release review, 0.0.18: "fix the bug where
+# report.xlsx export crashes", "Add support for .pptx uploads in the upload handler", "add a slide-in animation to the
+# sidebar component" all went to Work and out of the Code chat). The office file there is what the code reads or
+# writes, not the deliverable. A sheet function ("the VLOOKUP function", "an Excel function") is not code.
+_CODE_WINS = re.compile(
+    r"\b(?:bugs?|buggy|stack ?traces?|tracebacks?|pytest|unit tests?|refactor\w*|implement\w*|importers?|exporters?|"
+    r"handlers?|components?|carousels?|animations?|animated|endpoints?|codebase|repo(?:sitory)?|compil\w+|parsers?|"
+    r"crash(?:es|ed|ing)?|regressions?|frontend|backend|middleware|"
+    r"(?:failing|broken|flaky|integration|e2e|end-to-end) tests?|tests? (?:fail\w*|pass\w*|suite)|"
+    r"(?:write|add|run|fix) (?:a |the |some )?tests?|"
+    r"(?:to|in|into|from|for|of) (?:the|our|my|this) (?:web ?)?app(?:lication)?|"
+    r"(?:pdf|excel|xlsx?|csv|docx?|word|pptx?|powerpoint)\s+(?:export|import|upload|download)(?:s|ing)?"
+    r"(?!\s+(?:of|the|this|it|my|a)\b)|"
+    r"(?:pdf|excel|xlsx?|csv|docx?|word|pptx?|powerpoint)\s+(?:support|feature|button|endpoint))\b"
+    r"|\w+\.(?:xlsx|xls|docx|pptx|pdf)\s+(?:export|import|upload)(?:s|er|ing)?\b(?!\s+(?:of|the|this|it|my|a)\b)"
+    r"|(?<![\w./\\-])(?-i:[a-z][a-z0-9]*(?:_[a-z0-9]+)+)(?![\w.])"      # generate_report, a code identifier
+    r"|(?-i:\b[a-z_][a-z0-9_]*\(\))", re.I)
+_CODE_FUNCTION = re.compile(r"\bfunctions?\b", re.I)
+_SHEET_FUNCTION = re.compile(r"\b(?:excel|sheet|spreadsheet|workbook|formula|vlookup|xlookup|index|match|sumifs?|"
+                             r"countifs?|averageifs?|if|sum|lookup)\s+functions?\b|\bfunctions?\s+in\s+(?:a |the )?"
+                             r"(?:cell|column|row|sheet|formula)", re.I)
 _OFFICE_SUFFIX = (".xlsx", ".xlsm", ".xls", ".docx", ".doc", ".pptx", ".ppt", ".pdf")
 # A change to a deck, memo or workbook asked in words (Daniel, round 3: "Add two slides to the same deck ... Add short
 # speaker notes to every slide too"): a doing verb a few words before an office deliverable.
@@ -188,6 +209,16 @@ _OFFICE_ASK = re.compile(r"\b(?:make|create|build|add|edit|update|change|write|d
                          r"shorten|extend|insert|remove|delete|rewrite|redo|fix|restyle|rebrand|summari[sz]e)\b"
                          r"(?:\W+[\w&'-]+){0,8}?\W+(?:slides?|decks?|presentations?|speaker notes|memos?|"
                          r"spreadsheets?|workbooks?|word documents?|power ?points?|excel)\b", re.I)
+
+
+def code_first(text: str) -> bool:
+    """True when a request is about code even if it names an office file: "fix the bug where report.xlsx export
+    crashes", "implement generate_report so it writes report.docx", "Add PDF export to the app". The file there is
+    what the code reads or writes, so the request stays with the Code agent."""
+    t = str(text or "").split(SEP)[0]
+    if _CODE_WINS.search(t):
+        return True
+    return bool(_CODE_FUNCTION.search(t)) and not _SHEET_FUNCTION.search(t)
 
 
 def office_work(text: str, files=()) -> bool:
@@ -199,13 +230,14 @@ def office_work(text: str, files=()) -> bool:
     office_work("Turn sales.csv into a workbook with a chart")                                -> True
     office_work("clean this csv and chart revenue")                                           -> False (no office file)
     office_work("fix the bug in export.py that writes report.xlsx")                           -> False (code)
+    office_work("Add support for .pptx uploads in the upload handler")                         -> False (code)
     """
     t = str(text or "").split(SEP)[0]
     if not t.strip():
         return False
     office_file = bool(_OFFICE_NAME.search(t)) or any(
         Path(str(f)).suffix.lower() in _OFFICE_SUFFIX for f in files or [])
-    if _CODE_NAME.search(t) or (_CODE_ASK.search(t) and not office_file):
+    if _CODE_NAME.search(t) or (_CODE_ASK.search(t) and not office_file) or code_first(t):
         return False
     if office_file or _OFFICE_ASK.search(t):
         return True
