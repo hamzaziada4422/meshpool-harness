@@ -1,0 +1,588 @@
+[
+ {
+  "id": "S0",
+  "node": "0",
+  "archetype": "cover",
+  "title": "Start with one pilot line: predictive maintenance pays back in 19 months",
+  "title_prov": [
+   "F1"
+  ],
+  "subtitle": "A pilot-first route for mid-market plants, built on the 2025 benchmark of 412 plant managers",
+  "date": "Board meeting, November 2026",
+  "footer": "Ridgeway Advisory | Confidential",
+  "source": {
+   "text": "Industry benchmark report 2025, survey of 412 plant managers in Germany, Italy, Poland and the Netherlands, March to May 2025",
+   "prov": [
+    "F1",
+    "F2"
+   ]
+  },
+  "footnotes": [],
+  "notes": "Our answer in one sentence: start predictive maintenance on one high-downtime line with a written business case, and scale only once that line proves out. In the benchmark, this single-pilot route has a median payback of 19 months. The evidence is a 2025 survey of 412 plant managers in Germany, Italy, Poland and the Netherlands, run from March to May 2025. The next slides cover where adoption stands, what holds plants back, the economics, how the approaches compare, and the steps we recommend.",
+  "section": "Cover",
+  "section_icon": "start"
+ },
+ {
+  "id": "S0",
+  "node": "0.1",
+  "archetype": "executive_summary",
+  "title": "Start with one pilot line and a written business case, then scale",
+  "title_prov": [
+   "F46"
+  ],
+  "points": [
+   {
+    "lead": "Half of plants have adopted",
+    "bullets": [
+     {
+      "text": "**53%** have not started; unclear return is a main blocker",
+      "prov": [
+       "F14"
+      ]
+     }
+    ],
+    "prov": [
+     "F14"
+    ]
+   },
+   {
+    "lead": "Pilot-first succeeds most often",
+    "bullets": [
+     {
+      "text": "**71%** success, against **44%** for plant-wide launch",
+      "prov": [
+       "F37",
+       "F38",
+       "F39",
+       "F40"
+      ]
+     }
+    ],
+    "prov": [
+     "F37",
+     "F38",
+     "F39",
+     "F40"
+    ]
+   },
+   {
+    "lead": "The five-plant rollout is affordable",
+    "bullets": [
+     {
+      "text": "Costs **EUR 3.4m** over three years",
+      "prov": [
+       "F31"
+      ]
+     }
+    ],
+    "prov": [
+     "F31"
+    ]
+   },
+   {
+    "lead": "Five steps, gated before scaling",
+    "bullets": [
+     {
+      "text": "Step one: one high-downtime line",
+      "prov": [
+       "F46"
+      ]
+     }
+    ],
+    "prov": [
+     "F46"
+    ]
+   }
+  ],
+  "decision": "Decision today: approve one pilot line and its written business case, starting January 2027.",
+  "metrics": [
+   {
+    "value": "47%",
+    "label": "of plants adopted, 2025",
+    "prov": [
+     "F11"
+    ]
+   },
+   {
+    "value": "19 months",
+    "label": "median payback, pilot-first",
+    "prov": [
+     "F16"
+    ]
+   },
+   {
+    "value": "EUR 3.1m",
+    "label": "net benefit by year 3, modelled",
+    "prov": [
+     "F32"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Northfield Research, Industry Benchmark Report 2025; survey of 412 plant managers, March to May 2025",
+   "prov": [
+    "F1",
+    "F10"
+   ]
+  },
+  "footnotes": [
+   "Economics are modelled from 37 case studies; survey margin of error plus or minus 4.8 points at 95% confidence."
+  ],
+  "notes": "The answer first: start with one high-downtime pilot line and a written business case, then scale only once it has proved itself. Almost half of plants, 47%, already use predictive maintenance, but 53% have not started, and unclear return is a main blocker. A written business case is what closes that gap. Companies that began with a single pilot reached payback in a median of 19 months, with 71% success against 44% for plant-wide launches, which take 31 months. A typical five-plant rollout costs EUR 3.4m over three years and, on the modelled economics, reaches EUR 3.1m cumulative net benefit by year 3. The ask today is to approve one pilot line and its written business case, starting January 2027, with a gate before any scale-up.",
+  "section": "Summary",
+  "section_icon": "answer"
+ },
+ {
+  "id": "S1.1",
+  "node": "1.1",
+  "archetype": "grid",
+  "title": "47% of plants use predictive maintenance, but unclear ROI holds back the rest",
+  "title_prov": [
+   "F11",
+   "F14",
+   "F26"
+  ],
+  "layout": "halves",
+  "look": "editorial",
+  "parts": [
+   {
+    "type": "chart",
+    "heading": "Plants using predictive maintenance by country, % of plants",
+    "chart": {
+     "kind": "column",
+     "categories": [
+      "Germany",
+      "Netherlands",
+      "Italy",
+      "Poland"
+     ],
+     "series": [
+      {
+       "name": "Plants using PdM (%)",
+       "values": [
+        58,
+        51,
+        42,
+        31
+       ]
+      }
+     ],
+     "unit": "%",
+     "decimals": 0,
+     "highlight_categories": [],
+     "target": 47,
+     "target_label": "All-plant average 47%"
+    },
+    "prov": [
+     "F1",
+     "F11",
+     "F20",
+     "F50"
+    ]
+   },
+   {
+    "type": "chart",
+    "heading": "Unclear ROI is the top barrier, % of plants citing",
+    "chart": {
+     "kind": "bar",
+     "categories": [
+      "Unclear ROI",
+      "Legacy PLC equipment",
+      "Poor data quality",
+      "No in-house data engineers"
+     ],
+     "series": [
+      {
+       "name": "Plants citing barrier (%)",
+       "values": [
+        58,
+        52,
+        47,
+        41
+       ]
+      }
+     ],
+     "unit": "%",
+     "decimals": 0,
+     "highlight_categories": [
+      "Unclear ROI"
+     ]
+    },
+    "prov": [
+     "F14",
+     "F26",
+     "F27"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Online survey of plants with 250 to 2,000 employees, March to May 2025, 412 respondents",
+   "prov": [
+    "F11",
+    "F50"
+   ]
+  },
+  "footnotes": [
+   "Up from 18% in 2021. Margin of error plus or minus 4.8 points at 95% confidence; Germany's 7-point lead over the Netherlands is outside it."
+  ],
+  "notes": "Adoption of predictive maintenance among plants with 250 to 2,000 employees has reached 47%, up from 18% in 2021. That is growth of roughly 7 points a year. Germany leads at 58% and Poland trails at 31%. Germany's 7-point lead over the Netherlands is larger than the survey margin of error of plus or minus 4.8 points, so the gap is real. The other side of the adoption number is that 53% of plants have not started. The most cited reason is unclear return on investment, at 58%, ahead of legacy PLC equipment at 52%. What a written business case does for scaling comes later in the deck.",
+  "section": "Where we stand",
+  "section_icon": "position"
+ },
+ {
+  "id": "S2.1",
+  "node": "2.1",
+  "archetype": "grid",
+  "layout": "main_stack",
+  "look": "editorial",
+  "title": "Pilot-first pays back in 19 months, 12 months faster than a plant-wide launch",
+  "title_prov": [
+   "F37",
+   "F39",
+   "S2C1"
+  ],
+  "parts": [
+   {
+    "type": "chart",
+    "heading": "Median payback, months (2025)",
+    "chart": {
+     "kind": "bar",
+     "categories": [
+      "Single pilot, then scale",
+      "Vendor-managed service",
+      "Plant-wide launch"
+     ],
+     "series": [
+      {
+       "name": "Median payback (months)",
+       "values": [
+        19,
+        24,
+        31
+       ]
+      }
+     ],
+     "unit": "months",
+     "decimals": 0,
+     "highlight_categories": [
+      "Single pilot, then scale"
+     ],
+     "delta": {
+      "from": "Single pilot, then scale",
+      "to": "Plant-wide launch",
+      "label": "12 months faster"
+     },
+     "descriptors": [
+      "One high-downtime line first, then extend",
+      "Vendor runs monitoring as a service",
+      "All plants launched at once"
+     ],
+     "prov": [
+      "F37",
+      "F41",
+      "F39",
+      "S2C1"
+     ]
+    }
+   },
+   {
+    "type": "stats",
+    "heading": "Odds of success and lock-in risk",
+    "items": [
+     {
+      "value": "71%",
+      "label": "Pilot-first success rate, against 44% for plant-wide launch",
+      "delta": "27 points higher",
+      "prov": [
+       "F38",
+       "F40",
+       "S2C2",
+       "F1"
+      ]
+     },
+     {
+      "value": "38%",
+      "label": "Share of vendor service adopters who would not renew",
+      "prov": [
+       "F43",
+       "F1"
+      ]
+     }
+    ],
+    "prov": [
+     "F38",
+     "F40",
+     "S2C2",
+     "F43",
+     "F1"
+    ]
+   },
+   {
+    "type": "callout",
+    "heading": "So what",
+    "text": "**Start with one pilot line**: faster, more likely to succeed, avoids lock-in",
+    "prov": [
+     "F37",
+     "F38"
+    ]
+   }
+  ],
+  "calcs": [
+   {
+    "id": "S2C1",
+    "value": "12",
+    "formula": "31 - 19",
+    "from": [
+     "F37",
+     "F39"
+    ]
+   },
+   {
+    "id": "S2C2",
+    "value": "27",
+    "formula": "71 - 44",
+    "from": [
+     "F38",
+     "F40"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Median payback by option, 2025; success rates and vendor renewal intent from the project fact base",
+   "prov": [
+    "F37",
+    "F38",
+    "F39",
+    "F40",
+    "F41",
+    "F42",
+    "F43",
+    "F1"
+   ]
+  },
+  "footnotes": [
+   "Payback is the median months to recover the investment, by option, 2025."
+  ],
+  "notes": "Pilot-first pays back in a median of 19 months, against 24 for a vendor-managed service and 31 for a plant-wide launch, so it is 12 months faster than launching everywhere at once. It also succeeds most often: 71%, against 63% for the vendor service and 44% for plant-wide launch, a gap of 27 points over the plant-wide launch. A single pilot surfaces data issues early, before they are multiplied across plants. A vendor-managed service lowers upfront effort but trades that for higher long-run cost and lock-in, and 38% of its adopters would not renew on current terms. We are comparing medians by option and are not claiming a break-even point.",
+  "section": "Options compared",
+  "section_icon": "choice"
+ },
+ {
+  "id": "S3.1",
+  "node": "3.1",
+  "archetype": "grid",
+  "title": "A five-plant rollout costs EUR 3.4m and nets EUR 3.1m by year 3",
+  "title_prov": [
+   "F31",
+   "F32"
+  ],
+  "layout": "thirds",
+  "look": "editorial",
+  "parts": [
+   {
+    "type": "chart",
+    "heading": "Cost by category, % of EUR 3.4m over three years",
+    "chart": {
+     "kind": "bar",
+     "categories": [
+      "Sensors",
+      "Software",
+      "Integration",
+      "Training"
+     ],
+     "series": [
+      {
+       "name": "Share of three-year cost",
+       "values": [
+        38,
+        27,
+        22,
+        13
+       ]
+      }
+     ],
+     "unit": "%",
+     "decimals": 0,
+     "highlight_categories": [
+      "Integration"
+     ],
+     "prov": [
+      "F31",
+      "F32"
+     ]
+    }
+   },
+   {
+    "type": "chart",
+    "heading": "Benefit by source, % of total benefit to year 3",
+    "chart": {
+     "kind": "bar",
+     "categories": [
+      "Avoided downtime",
+      "Lower spare parts inventory",
+      "Energy savings"
+     ],
+     "series": [
+      {
+       "name": "Share of benefit",
+       "values": [
+        62,
+        21,
+        17
+       ]
+      }
+     ],
+     "unit": "%",
+     "decimals": 0,
+     "highlight_categories": [
+      "Avoided downtime"
+     ],
+     "prov": [
+      "F33",
+      "F34"
+     ]
+    }
+   },
+   {
+    "type": "text",
+    "heading": "Three risks, each with a handled response",
+    "lead": "Each risk has a **named fix**",
+    "bullets": [
+     {
+      "text": "**Legacy PLCs (machine controllers):** retrofit gateways cut integration cost by about 40%",
+      "prov": [
+       "F46",
+       "F47"
+      ]
+     },
+     {
+      "text": "**Unclear ROI:** a business case makes plants 2.4 times likelier to scale",
+      "prov": [
+       "F26",
+       "F27"
+      ]
+     },
+     {
+      "text": "**Skills:** 41% lack data engineers; one reliability engineer per two plants",
+      "prov": [
+       "F27",
+       "F47"
+      ]
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Predictive maintenance report; economics modelled from 37 case studies",
+   "prov": [
+    "F31",
+    "F32",
+    "F33",
+    "F34",
+    "F26",
+    "F27",
+    "F46",
+    "F47"
+   ]
+  },
+  "footnotes": [
+   "Economics are modelled from 37 case studies."
+  ],
+  "notes": "A typical five-plant rollout costs EUR 3.4m over three years. Sensors are the largest share at 38%, then software at 27%, integration at 22% and training at 13%. Integration is the line we can most influence, because retrofitting gateways to legacy PLCs cuts that cost by roughly 40%. On the benefit side, the report shows net benefit turning positive in year 1 and reaching EUR 3.1m cumulative by year 3. Avoided downtime drives 62% of the benefit, with spare parts inventory at 21% and energy savings at 17%. The figures are modelled, not measured at our plants, which is why the pilot and a written business case come first. Plants that ran a structured business case were 2.4 times more likely to scale, and the skills gap is handled by one reliability engineer per two plants.",
+  "section": "Why pilot-first wins",
+  "section_icon": "economics"
+ },
+ {
+  "id": "S6",
+  "node": "4.1",
+  "archetype": "closing",
+  "title": "Five steps from January 2027 start the pilot and decide when to scale up",
+  "title_prov": [
+   "F46",
+   "F47",
+   "F48",
+   "F49"
+  ],
+  "steps": [
+   {
+    "action": "Choose one high-downtime line and write the business case",
+    "detail": "Plants with a structured business case were more likely to scale beyond the pilot. Funds are released only after board review.",
+    "milestones": [
+     "Gate: board reviews the business case before funds are released"
+    ],
+    "owner": "Plants",
+    "timing": "29 Jan 2027",
+    "prov": [
+     "F46",
+     "F26"
+    ]
+   },
+   {
+    "action": "Review vendor lock-in clauses before signing",
+    "detail": "Check renewal, exit and data-ownership terms in any multi-year services contract before signature.",
+    "milestones": [
+     "Vendor lock-in clauses reviewed before any multi-year signature"
+    ],
+    "owner": "Sourcing",
+    "timing": "26 Feb 2027",
+    "prov": [
+     "F48"
+    ]
+   },
+   {
+    "action": "Hire or train one reliability engineer per two plants",
+    "detail": "Close the skills gap early so the pilot team can run the analytics once the line is live.",
+    "milestones": [
+     "Engineer hired or trained before the pilot line goes live"
+    ],
+    "owner": "HR",
+    "timing": "30 Apr 2027",
+    "prov": [
+     "F47",
+     "F48"
+    ]
+   },
+   {
+    "action": "Add gateways to existing programmable logic controllers instead of replacing them",
+    "detail": "Retrofitting cuts integration cost by roughly 40% and brings the pilot line onto the data platform.",
+    "milestones": [
+     "Pilot line live and streaming data"
+    ],
+    "owner": "Ops",
+    "timing": "30 Jun 2027",
+    "prov": [
+     "F47"
+    ]
+   },
+   {
+    "action": "Track three KPIs from day one",
+    "detail": "Measure unplanned downtime hours, maintenance cost per unit and mean time between failures.",
+    "milestones": [
+     "Scaling beyond the pilot depends on passing the first KPI review"
+    ],
+    "owner": "Engineers",
+    "timing": "30 Sep 2027",
+    "prov": [
+     "F49"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Northfield Research, Industry Benchmark Report 2025; survey of 412 plant managers",
+   "prov": [
+    "F10",
+    "F46",
+    "F47",
+    "F48",
+    "F49",
+    "F26"
+   ]
+  },
+  "footnotes": [
+   "Owners and dates are proposed, for client confirmation."
+  ],
+  "notes": "The plan is five steps, each with an owner and a date. We start in January 2027 with one high-downtime line and a written business case, due 29 January 2027, and the board reviews it before any funds are released. Plants that ran a structured business case were more likely to scale beyond the pilot. In parallel we review vendor lock-in clauses, hire or train a reliability engineer, and retrofit gateways to legacy PLCs, which cuts integration cost by roughly 40%. From day one we track unplanned downtime hours, maintenance cost per unit and mean time between failures. The first review on 30 September 2027 is the gate to scale beyond the pilot. Owners and dates are proposals for you to confirm today.",
+  "section": "The plan",
+  "section_icon": "roadmap"
+ }
+]

@@ -258,7 +258,8 @@ def _free(p: Path) -> Path:
 
 def _home_for(j: dict, f: Path, root: Path) -> Path:
     """The folder a deliverable lands in: next to the input it was made from when that input is in the user's folder
-    ("Board deck (updated).pptx" beside "Board deck.pptx"), else the top of the user's folder."""
+    ("Board deck (summary).docx" beside "Board deck.pptx"), else the top of the user's folder. Slides added to a deck are
+    saved by the engine into that deck itself (engines/forge/engine.py deck_target), not delivered from here."""
     for p, *_ in j.get("paths") or []:
         src = Path(p)
         try:
