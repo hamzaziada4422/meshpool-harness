@@ -92,12 +92,12 @@ def test_search_opens_the_matching_message_with_the_word_marked_and_shows_the_da
 
 def test_the_empty_search_says_new_chat_and_not_new_session_in_chat_mode(app, page):
     page.evaluate("() => { S.mode = 'chat'; openSearch('all', ''); }")
-    page.wait_for_selector("#srchList .sres")
+    page.wait_for_selector("#srchList .sres:not(.sk)")
     labels = page.eval_on_selector_all("#srchList .sres .stt", "xs => xs.map(x => x.textContent)")
     assert "New chat" in labels and "New session" not in labels, labels
     page.keyboard.press("Escape")
     page.evaluate("() => { S.mode = 'code'; openSearch('all', ''); }")
-    page.wait_for_selector("#srchList .sres")
+    page.wait_for_selector("#srchList .sres:not(.sk)")
     labels = page.eval_on_selector_all("#srchList .sres .stt", "xs => xs.map(x => x.textContent)")
     assert "New session" in labels, labels                                           # Code mode keeps it
     page.keyboard.press("Escape")
