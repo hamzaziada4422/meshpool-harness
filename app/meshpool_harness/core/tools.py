@@ -1298,10 +1298,8 @@ class Workspace:
             raise ToolError("glob patterns are relative to the working directory (no absolute paths or '..')")
         try:
             res = []
-            for p in self.root.glob(pattern):
-                if self.should_stop and self.should_stop():
-                    raise ToolError("stopped by the user")
-                if SKIP_DIRS.isdisjoint(p.relative_to(self.root).parts) and (not inside_only or self._inside(p)):
+            for p in self._glob_paths(pattern):
+                if not inside_only or self._inside(p):
                     res.append(str(p.relative_to(self.root)))
             if not any(ch in pattern for ch in ("node_modules", "dist/", "build/")):   # unless asked for by name
                 skip = {str(x.relative_to(self.root)) for x in self._ignored([self.root / r for r in res])}
@@ -1310,6 +1308,57 @@ class Workspace:
         except (NotImplementedError, ValueError) as e:
             raise ToolError(f"invalid glob pattern: {e}")
         return self._cap("\n".join(res[:2000]) or "no files", "glob")
+
+    @staticmethod
+    def _glob_hit(pat: list, parts: list) -> bool:
+        """parts (a path's names) matches pat (a glob's names, "**" for any number of folders), as pathlib does."""
+        if not pat:
+            return not parts
+        if pat[0] == "**":
+            return Workspace._glob_hit(pat[1:], parts) or (bool(parts) and Workspace._glob_hit(pat, parts[1:]))
+        return bool(parts) and fnmatch.fnmatch(parts[0], pat[0]) and Workspace._glob_hit(pat[1:], parts[1:])
+
+    def _glob_paths(self, pattern: str):
+        """What root.glob(pattern) finds outside SKIP_DIRS, found without entering them (H-11: pathlib walked all of
+        node_modules for **/*.py and the results were dropped afterwards, with no Stop check while it walked), and
+        no deeper than the pattern can match."""
+        parts = [x for x in pattern.replace("\\", "/").split("/") if x not in ("", ".")]
+        if not parts:
+            raise ValueError(f"Unacceptable pattern: {pattern!r}")
+        dirs_only = pattern.replace("\\", "/").endswith("/") or parts[-1] == "**"
+        magic = re.compile(r"[*?\[]")
+        n = 0
+        while n < len(parts) and not magic.search(parts[n]) and parts[n] != "**":
+            n += 1
+        lit, rest = parts[:n], parts[n:]
+        if any(x in SKIP_DIRS for x in lit):
+            return
+        base = self.root.joinpath(*lit)
+        if not rest:                                          # no wildcard: the path itself, when it is there
+            if base.exists() and (not dirs_only or base.is_dir()):
+                yield base
+            return
+        if not base.is_dir():
+            return
+        depth = None if "**" in rest else len(rest)
+        if not rest or all(x == "**" for x in rest):
+            yield base                                        # "**" includes the folder itself, as pathlib does
+        # a fixed depth follows symlinked folders as pathlib's * does; ** never enters them (no loops), as in pathlib
+        for dp, dns, fns in os.walk(base, followlinks=depth is not None):
+            if self.should_stop and self.should_stop():
+                raise ToolError("stopped by the user")
+            rel = list(Path(dp).relative_to(base).parts)
+            dns[:] = [d for d in dns if d not in SKIP_DIRS]
+            names = [(d, True) for d in dns] + [(f, False) for f in fns if not dirs_only]
+            for nm, is_dir in names:
+                if self._glob_hit(rest, rel + [nm]):
+                    p = Path(dp, nm)
+                    if rest[-1] == "**" and p.is_symlink():
+                        continue                              # a final ** lists real folders only, as pathlib's
+                    if not dirs_only or is_dir or p.is_dir():
+                        yield p
+            if depth is not None and len(rel) + 1 >= depth:
+                dns[:] = []                                   # deeper names cannot match the pattern
 
     def _walk(self, base: Path):
         """H-11: files under base, never entering SKIP_DIRS, and checking the Stop flag as it walks."""

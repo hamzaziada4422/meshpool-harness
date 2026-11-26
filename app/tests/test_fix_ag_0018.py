@@ -285,3 +285,43 @@ def test_hook_timeout_kills_the_whole_process_tree(env):
     else:
         os.kill(pid, 9)
         pytest.fail("the hook's child process outlived the hook's timeout")
+
+
+def _glob_tree(root):
+    for rel in ("src/a.py", "src/pkg/b.py", "src/pkg/deep/c.py", "docs/readme.md", ".hidden/h.py", "top.txt",
+                "node_modules/x/y.py", "build/out.py", "sp ace/[x].py", "src/pkg/deep/notes.md"):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("x\n")
+    for i in range(40):                                 # a dependency tree the agent never asked about
+        (root / "node_modules" / f"p{i}" / "lib").mkdir(parents=True)
+    if os.name != "nt":
+        (root / "link").symlink_to(root / "src" / "pkg")
+
+
+# AG-13: glob walked every folder pathlib's glob visits (all of node_modules, .venv, build for **/*.py) and only then
+# dropped the results inside them; Stop was not checked while it walked (the H-11 fix covered grep only).
+def test_glob_never_enters_skipped_folders_and_finds_the_same_files(tmp_path, monkeypatch):
+    _glob_tree(tmp_path)
+    ws = _ws(tmp_path)
+    pats = ["*", "*.py", "**/*.py", "src/**", "src/*/", "**", "*/*.py", "src/**/c.py", "link/*.py", "*/b.py",
+            "**/*.md", "sp ace/*.py", "sp ace/[[]x].py", "src/pkg/b.py", "src", "missing/*", "**/deep", "?op.txt",
+            "./src/*.py", "src/**/*.md", "*/*/", "**/pkg/**/*.py"]
+    for pat in pats:
+        want = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.glob(pat)
+                      if T.SKIP_DIRS.isdisjoint(p.relative_to(tmp_path).parts) and ".run" not in str(p))
+        got = [x for x in ws.glob(pat).split("\n") if x and x != "no files" and ".run" not in x]
+        assert got == want, pat
+    seen = []
+    real = os.scandir
+
+    def spy(p="."):
+        seen.append(str(p))
+        return real(p)
+    monkeypatch.setattr(os, "scandir", spy)
+    assert ws.glob("**/*.py").split("\n") == [".hidden/h.py", "sp ace/[x].py", "src/a.py", "src/pkg/b.py",
+                                              "src/pkg/deep/c.py"]
+    assert not [p for p in seen if "node_modules" in p or "build" in p]
+    stops = iter([False, False, True])
+    ws.should_stop = lambda: next(stops, True)
+    with pytest.raises(T.ToolError):                 # Stop is seen while it walks, not only between results
+        ws.glob("**/*.zzz")
