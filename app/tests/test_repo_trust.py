@@ -109,3 +109,22 @@ def test_cache_folder_is_gitignored_and_not_tracked():
     tracked = subprocess.run(["git", "ls-files", "cache"], cwd=ROOT, capture_output=True, text=True)
     if tracked.returncode == 0:                      # a source tarball has no git: the .gitignore line is the check
         assert tracked.stdout.strip() == ""
+
+
+# ---- security policy: SECURITY.md was three bullets with no contact, versions or threat model --------------------------
+def test_security_policy_names_contact_versions_times_and_real_risks():
+    s = _text("SECURITY.md")
+    for heading in ("## Supported versions", "## Reporting a problem", "## Threat model", "## Running it safely"):
+        assert heading in s
+    assert "/security/advisories/new" in s                         # a private channel, not "the maintainers"
+    assert "working days" in s                                     # a response time
+    assert "0.0.x" in s
+    for risk in ("shell commands", "mcp-auth.json", "MCP server", "container"):
+        assert risk in s, risk
+
+
+def test_issue_chooser_sends_security_reports_to_a_private_advisory():
+    import yaml
+    cfg = yaml.safe_load(_text(".github/ISSUE_TEMPLATE/config.yml"))
+    links = [l["url"] for l in cfg.get("contact_links", [])]
+    assert any(u.endswith("/hamzaziada4422/meshpool-harness/security/advisories/new") for u in links)
