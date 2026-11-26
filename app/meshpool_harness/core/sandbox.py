@@ -151,6 +151,23 @@ def _under(p: str, base: str) -> bool:
     return p == base or p.startswith(base.rstrip(os.sep) + os.sep)
 
 
+def _office_profile() -> str | None:
+    """A LibreOffice user profile for sandboxed commands, kept in ~/.cache so it is made once, not per command.
+    LibreOffice writes its profile at every start. The usual one (~/.config/libreoffice, ~/Library/Application
+    Support/LibreOffice) is read-only in the sandbox, so `soffice --convert-to` crashed at once with a
+    DeploymentException. Its own bootstrap reads the UserInstallation variable from the environment; a command
+    that passes -env:UserInstallation still wins. None when the user set the variable, or the folder cannot be made."""
+    if os.environ.get("UserInstallation"):
+        return None
+    d = Path.home() / ".cache" / "meshpool" / "sandbox-office-profile"
+    if not d.is_dir():
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return None
+    return str(d)
+
+
 def wrap(argv: list[str], root, platform: str | None = None, which=shutil.which, cwd=None, mode: str | None = None) -> list[str]:
     """argv, wrapped so it can only write where it should. Unchanged when the sandbox is off or unavailable (with a
     notice, once, when it was wanted)."""
@@ -176,7 +193,10 @@ def wrap(argv: list[str], root, platform: str | None = None, which=shutil.which,
                 rw = os.path.realpath(w)
                 if _under(rw, data) and (rw != data or rw == str(root)):
                     out += ["--bind", w, w]
-        return out + ["--chdir", str(Path(cwd).resolve() if cwd else root), "--"] + argv
+        prof = _office_profile()
+        if prof:
+            out += ["--bind", prof, prof, "--setenv", "UserInstallation", Path(prof).as_uri()]
+        return out + ["--chdir",str(Path(cwd).resolve() if cwd else root), "--"] + argv
     if plat == "darwin" and which("sandbox-exec"):
         ws = _writable(root)
         allow = "".join(f'(subpath "{p}")' for p in ws + ["/private/tmp", "/private/var/folders"])
@@ -191,6 +211,10 @@ def wrap(argv: list[str], root, platform: str | None = None, which=shutil.which,
             profile += f'(deny file-write* (subpath "{data}"))'
             if back:
                 profile += "(allow file-write* " + "".join(f'(subpath "{rw}")' for rw in back) + ")"
+        prof = _office_profile()
+        if prof:
+            profile += f'(allow file-write* (subpath "{os.path.realpath(prof)}"))'
+            return ["sandbox-exec", "-p", profile, "/usr/bin/env", f"UserInstallation={Path(prof).as_uri()}"] + argv
         return ["sandbox-exec", "-p", profile] + argv
     _say("unavailable", unavailable_notice(plat))
     return argv
