@@ -1446,7 +1446,7 @@ function applyEvRaw(ev) {
       if (String(ev.text).trim() === GOAL_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Continuing toward the goal</span>`, "goalturn"); break; }
       if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span> <button class="linkbtn" data-takeback title="Take it back before the agent reads it">Take back</button><br><span class="stx">${esc(ev.text)}</span></div>`, "msg-user steer"); $("#queuedChip")?.remove(); break; }
       closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; cur.tpaths = []; cur.lastAi = null; cur.lastText = "";
-      { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button><button class="iconbtn" data-ma="rewind" data-tip="Rewind to here" data-tip-pos="below" aria-label="Rewind to here">${ICON.undo}</button><button class="iconbtn" data-ma="fork" data-tip="Fork from here" data-tip-pos="below" aria-label="Fork from here">${ICON.branch}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.ei = ev.i; cur.turnEi = ev.i; cur.lastFoot = null; }
+      { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button><button class="iconbtn" data-ma="rewind" data-tip="Rewind to here" data-tip-pos="below" aria-label="Rewind to here">${ICON.undo}</button><button class="iconbtn" data-ma="fork" data-tip="Fork from here" data-tip-pos="below" aria-label="Fork from here">${ICON.branch}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.ei = ev.i; mu._text = String(ev.text ?? ""); cur.turnEi = ev.i; cur.lastFoot = null; }
       break; }
     case "text_delta":
       if (!cur.live) { closeGroup(); cur.live = add("", "msg-ai"); cur.liveText = ""; mdRoot(cur.live); if (!cur.stage) easeStart(cur.live); }
@@ -1718,6 +1718,15 @@ async function drawRules(box, r) {
 }
 // Put a message back into the box (Undo, Rewind, Edit) without losing what is typed there: a draft stays first, the
 // message goes after it, unless the draft already is that message.
+// The text of one of your messages as you sent it. The bubble's text also holds the "Plan mode" tag and the names of
+// the pictures sent with it, so Copy and Edit put "describe this photo.png" in place of "describe this".
+function userText(mu) {
+  if (!mu) return "";
+  if (typeof mu._text === "string") return mu._text.trim();
+  const b = $(".b", mu); if (!b) return "";
+  const c = b.cloneNode(true); c.querySelectorAll(".att, .tag").forEach(x => x.remove());
+  return (c.textContent || "").trim();
+}
 function fillInput(text) {
   const inp = $("#input"); if (!inp || !text) return;
   const draft = inp.value;
@@ -3098,7 +3107,7 @@ async function restartApp(bootBefore) {
   shell();
   document.addEventListener("click", e => {          // the buttons that appear on hover under a message of yours
     const ma = e.target.closest("[data-ma]"); if (!ma || !ma.closest(".msg-user")) return;   // the MCP library's Add button also has data-ma
-    const text = $(".b", ma.closest(".msg-user"))?.innerText.replace(/^Plan mode\n?/, "").trim() || "";
+    const text = userText(ma.closest(".msg-user"));
     if (ma.dataset.ma === "copy") navigator.clipboard.writeText(text).then(() => toast("Copied"), () => toast("Could not copy."));
     else if (ma.dataset.ma === "rewind" || ma.dataset.ma === "fork") rewindFork(ma.dataset.ma, ma.closest(".msg-user"));
     else { const i = $("#input"); i.value = text; i.focus(); i.dispatchEvent(new Event("input")); toast("Edit it and send to ask again.", 3500); }
