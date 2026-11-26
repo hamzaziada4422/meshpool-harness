@@ -1296,7 +1296,7 @@ function workTick(cur) {
   const g = cur.group; if (g && g.isConnected && !g.dataset.done && g._t0) { const el = $(".gel", g), s = Math.round((Date.now() - g._t0) / 1000) + "s"; if (el && el.textContent !== s) el.textContent = s; }
   const waiting = cur.view?.state === "waiting";   // the server says what it waits on; a stale card in the column must not hide Working
   const pd = cur.working ? planData() : null;
-  if (cur.working && !waiting) setWorking(pd ? planLine(pd) : cur.live ? "Writing" : String(cur.activity || "Working").split(" ").slice(0, 3).join(" ").replace(/[:,]$/, ""), Math.round((Date.now() - (cur.since || Date.now())) / 1000));
+  if (cur.working && !waiting) setWorking(cur.down ? "Waiting for the model service" : pd ? planLine(pd) : cur.live ? "Writing" : String(cur.activity || "Working").split(" ").slice(0, 3).join(" ").replace(/[:,]$/, ""), Math.round((Date.now() - (cur.since || Date.now())) / 1000));
   else if (cur.view?.state !== "starting" && Date.now() > (S.sendHold || 0)) setWorking(null);
 }
 // ---- scrolling: follow the end while the reader is at the end; never pull them back once they scroll up
@@ -1491,8 +1491,8 @@ function applyEvRaw(ev) {
       if (String(ev.text).trim() === RESUME_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Picking up where it left off</span>`, "goalturn"); break; }
       if (String(ev.text).trim() === GOAL_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Continuing toward the goal</span>`, "goalturn"); break; }
       if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span> <button class="linkbtn" data-takeback title="Take it back before the agent reads it">Take back</button><br><span class="stx">${esc(ev.text)}</span></div>`, "msg-user steer"); $("#queuedChip")?.remove(); break; }
-      closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; cur.tpaths = []; cur.lastAi = null; cur.lastText = "";
-      { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button><button class="iconbtn" data-ma="rewind" data-tip="Rewind to here" data-tip-pos="below" aria-label="Rewind to here">${ICON.undo}</button><button class="iconbtn" data-ma="fork" data-tip="Fork from here" data-tip-pos="below" aria-label="Fork from here">${ICON.branch}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.ei = ev.i; mu._text = String(ev.text ?? ""); cur.turnEi = ev.i; cur.lastFoot = null; }
+      closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; cur.tpaths = []; cur.lastAi = null; cur.lastText = ""; cur.down = false; cur.downEl = null;
+      { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button><button class="iconbtn" data-ma="rewind" data-tip="Rewind to here" data-tip-pos="below" aria-label="Rewind to here">${ICON.undo}</button><button class="iconbtn" data-ma="fork" data-tip="Fork from here" data-tip-pos="below" aria-label="Fork from here">${ICON.branch}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${userBody(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.ei = ev.i; mu._text = String(ev.text ?? ""); cur.turnEi = ev.i; cur.lastFoot = null; }
       break; }
     case "text_delta":
       if (!cur.live) { closeGroup(); cur.live = add("", "msg-ai"); cur.liveText = ""; mdRoot(cur.live); if (!cur.stage) easeStart(cur.live); }
@@ -1605,6 +1605,11 @@ function applyEvRaw(ev) {
       if (ev.route) { cur.route = {label: String(ev.text || "").replace(/^(Harness|Working as): /, "").replace(/ \(.*$/, "").replace(/\.$/, ""), why: ""}; sessionSoon(); break; }
       if (/^Starting MCP|^MCP:|^MCP did not start|^No MCP servers/.test(ev.text || "")) { cur.mcpNote = ev.text; sessionSoon(); break; }
       if (/ is ready\. ?/.test(ev.text || "") && !cur.turn) break;
+      if (ev.down !== undefined) {                     // the model service is down: one line, updated at each check
+        if (cur.downEl && !cur.downEl.isConnected) cur.downEl = null;
+        if (cur.downEl) cur.downEl.textContent = ev.text; else cur.downEl = add(esc(ev.text), ev.down ? "note retry" : "note");
+        cur.down = !!ev.down; if (!ev.down) cur.downEl = null;
+        break; }
       { const nn = add(esc(ev.text), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); } break; }
     case "gate": {                                      // all model slots busy: say so while it waits, drop the line once it runs
       if (cur.gateEl && !cur.gateEl.isConnected) cur.gateEl = null;
@@ -1615,7 +1620,7 @@ function applyEvRaw(ev) {
       break; }
     case "error": { closeGroup(); const n = add(esc(ev.text) + (/settings/i.test(ev.text || "") ? ` <button class="linkbtn" data-os="1">Open Settings</button>` : "") + ` <button class="linkbtn" data-rp="1" title="Opens a GitHub issue with this error, your version and system. Your chat is not included.">Report this</button>`, "note bad"); $("[data-os]", n)?.addEventListener("click", () => openSettings("general")); $("[data-rp]", n)?.addEventListener("click", () => reportProblem(ev.text)); break; }
     case "interrupted": {
-      cur.gateEl?.remove(); cur.gateEl = null;
+      cur.gateEl?.remove(); cur.gateEl = null; cur.down = false; cur.downEl = null;
       settleSteps("stopped"); closeGroup();
       const n = add(esc(ev.text) + (ev.restarted ? ` <button class="linkbtn" data-cont="1">Continue</button>` : "") + (ev.resend ? ` <button class="linkbtn" data-resend="1">Put it back in the message box</button>` : ""), "note warn");
       $("[data-cont]", n)?.addEventListener("click", () => { if (cfg().busy) return; const inp = $("#input"); inp.value = RESUME_NEXT; inp.dispatchEvent(new Event("input")); sendNow(false); });
@@ -1626,7 +1631,7 @@ function applyEvRaw(ev) {
       if (t && cur.lastFoot && t.changed && t.changed.length && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; safe(() => pvTurnCards(cur, cur.lastFoot, t.n)); cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }
       break; }
     case "turn_end": {
-      cur.gateEl?.remove(); cur.gateEl = null;
+      cur.gateEl?.remove(); cur.gateEl = null; cur.down = false; cur.downEl = null;
       settleSteps("");
       closeGroup();
       if (ev.synthetic) break;                  // a turn that never ran (or one cut short by a restart): no footer, no Build this plan
@@ -1778,12 +1783,22 @@ function userText(mu) {
 // again in the same words when the message is sent (they are still in the folder). A box that holds only what the last
 // fill put there is replaced, not added to: undoing two replies in a row ran both messages together.
 const ATT_LINE = /\n*Attached files \((in [^)\n]*)\): ([^\n]*)\s*$/;
+function splitAtt(text) {
+  text = String(text ?? ""); const m = text.match(ATT_LINE);
+  return m ? {text: text.slice(0, m.index).replace(/\s+$/, ""), where: m[1], files: m[2].split(", ").map(x => x.trim()).filter(Boolean)}
+    : {text, where: "", files: []};
+}
+// A message of yours as the chat shows it: the files sent with it as chips (a click opens them), not the line the
+// server adds for the model ("Attached files (in this chat's folder): ..."). What was sent is unchanged.
+function userBody(text) {
+  const a = splitAtt(text);
+  return esc(a.text) + (a.files.length ? `<span class="att">${a.files.map(f => `<button class="flink" data-open="${esc(f)}" title="${esc(f)}">${ICON.file}${esc(f.split("/").pop())}</button>`).join(" ")}</span>` : "");
+}
 function fillInput(text) {
   const inp = $("#input"); if (!inp || !text) return;
-  text = String(text);
-  let refs = [], where = "";
-  const m = text.match(ATT_LINE);
-  if (m) { where = m[1]; refs = m[2].split(", ").map(x => x.trim()).filter(Boolean); text = text.slice(0, m.index).replace(/\s+$/, ""); }
+  const sp = splitAtt(text);
+  text = sp.text;
+  const refs = sp.files, where = sp.where;
   const draft = inp.value, ours = S.filled != null && draft === S.filled;
   if (ours) S.attachments = S.attachments.filter(a => !a.filled);
   if (!draft.trim() || ours) inp.value = text;
