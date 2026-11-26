@@ -1,7 +1,0 @@
-# book.xlsx
-Sheets: Sheet
-
-## Sheet: Sheet (2 rows x 2 columns)
-| Revenue | 15432198.75 |
-|---|---|
-| Margin | 0.123456789 |

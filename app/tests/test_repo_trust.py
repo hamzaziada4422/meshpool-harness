@@ -43,3 +43,12 @@ def test_spdx_licence_string_needs_setuptools_77():
     req = _pyproject()["build-system"]["requires"]
     m = next(re.match(r"setuptools>=(\d+)", r) for r in req if r.startswith("setuptools"))
     assert m and int(m.group(1)) >= 77
+
+
+# ---- caches: cache/docread/ with document text was committed at the repo root ----------------------------------------
+def test_cache_folder_is_gitignored_and_not_tracked():
+    import subprocess
+    assert "/cache/" in _text(".gitignore").splitlines()
+    tracked = subprocess.run(["git", "ls-files", "cache"], cwd=ROOT, capture_output=True, text=True)
+    if tracked.returncode == 0:                      # a source tarball has no git: the .gitignore line is the check
+        assert tracked.stdout.strip() == ""

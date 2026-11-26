@@ -63,3 +63,5 @@ Meshpool outputs/
 
 # runtime caches written when MESHPOOL_HOME is unset (C-90 stops writing them into the source tree)
 mcp-tools-cache.json
+# the document-text cache (docread) once landed here and was committed; it belongs in MESHPOOL_HOME
+/cache/
