@@ -722,7 +722,7 @@ def _evidence(kind: str, target: dict, res: dict, request: str, blind: bool, fin
     from meshpool_harness.agent import look as L
     steps = [s for s in res.get("steps") or [] if isinstance(s, dict)]
     what = (f"{target['label']}, opened in a headless browser at desktop width and at phone width" if kind == "web"
-            else f"{target['label']}, drawn as pictures of its first pages")
+            else f"{target['label']}, drawn as pictures of {L.shown_pages(res)}")
     t = ["The request that led to this being made:", request or "(not available)", "", f"What was made: {what}.", ""]
     t += _files_line(target)
     if SCOPE_NOTE.get(request_scope(request)):
@@ -1071,6 +1071,18 @@ def _things(n: int) -> str:
     return f"{n} thing" + ("" if n == 1 else "s")
 
 
+# The reviewer says it could not see part of what it was asked to judge (Sara: "the pages shown only cover section 1
+# ... I can't see section 3's tracked deletions"): its "pass" then covers less than the request.
+_BLIND = re.compile(r"\b(?:can(?:'|’|no)?t|cannot|could ?not|couldn(?:'|’)t|unable to|did ?not|didn(?:'|’)t"
+                    r"|was not able to|wasn(?:'|’)t able to)\s+(?:see|view|check|verify|confirm|find|judge|tell)\b"
+                    r"|\bonly (?:covers?|shows?|includes?)\b|\bnot (?:shown|visible|included|in the pictures?|on the pages? "
+                    r"shown)\b|\b(?:pages?|slides?|pictures?) shown (?:only|do not|don't)\b", re.I)
+
+
+def blind_spot(text: str) -> bool:
+    return bool(_BLIND.search(str(text or "")))
+
+
 def _also_offer(st: dict) -> str:
     """"I also noticed <one thing outside the request>, want me to fix it?" for the user, or "". It is never sent to the
     builder."""
@@ -1080,8 +1092,8 @@ def _also_offer(st: dict) -> str:
     known = [p for v in evals for p in v["problems"]]
     for v in reversed(evals):
         t = _also_line(v.get("also"))
-        if not t:
-            continue
+        if not t or blind_spot(t):
+            continue                                            # the reviewer's own view, not a thing to fix
         w = _words(t)
         if w and any(len(w & _words(p["what"] + " " + p["where"])) / len(w) >= 0.4 for p in known):
             continue                                            # the builder was told about it: not news
@@ -1133,10 +1145,14 @@ def summary_line(kind: str, st: dict, extra: list | None = None, note: str = "")
         body = f"fixed {_things(len(fixed))}{tail}"
     elif n_open:
         body = "fixed nothing"
-    elif shaky:
-        body = ""                                               # unsure or contradictory: no claims at all
+    elif shaky or blind_spot(last.get("also")):
+        body = ""                                               # unsure, contradictory, or it could not see it all
     else:
         body = "found nothing to fix"
+        pg = (st.get("last") or {}).get("pages") or {} if kind != "web" else {}
+        if pg.get("shown") and pg.get("total") and len(pg["shown"]) < pg["total"]:
+            from meshpool_harness.agent import look as L
+            body += " on " + L.pages_phrase(pg["shown"], pg["total"])    # no more than it looked at
     if not body:
         parts = [f"Checked it as {persona}." if persona else "Checked it."]
     else:

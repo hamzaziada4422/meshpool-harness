@@ -683,7 +683,7 @@ def test_oss09_a_hung_harness_ends_the_turn_and_restarts_next_time(fake_acp, mon
     t0 = time.time()
     a.send("SLOW forever")                                        # the fake never answers this prompt
     assert time.time() - t0 < 15
-    assert any(e.get("type") == "error" and "sent nothing" in e["text"] for e in evs)
+    assert any(e.get("type") == "error" and e["text"] == ACP.STALL_TEXT and e.get("again") for e in evs)
     assert a.send("again") == "fresh:again"                      # the next message restarts it
 
 

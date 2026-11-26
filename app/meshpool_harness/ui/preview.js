@@ -377,7 +377,8 @@ function pvFitCols(wrap, t, cols) {
 
 // ---- cards under a reply
 const PV_CARD_RX = /\.(pptx?|pptm|ppsx|odp|docx?|odt|rtf|xlsx?|xlsm|ods|csv|tsv|pdf|html?|md|markdown|svg|png|jpe?g|gif|webp)$/i;
-const PV_THUMB_RX = /\.(pptx?|pptm|ppsx|odp|docx?|odt|rtf|pdf)$/i;
+// Workbooks too: the card asks for thumb=1, and the server draws the first sheet as a page (previews.meta).
+const PV_THUMB_RX = /\.(pptx?|pptm|ppsx|odp|docx?|odt|rtf|pdf|xlsx|xlsm|xls|ods)$/i;
 // One card per file for the turn, newest version (the thumbnail carries the file's modified time). Idempotent: called again
 // when the turn's file list arrives (checkpoint), it fills the same row.
 // A file an engine keeps for its build and checks (qa.json, slides.json, deck.provenance.json...), not the user's
@@ -452,7 +453,7 @@ async function pvThumb(root, path, box) {
   // be on the page instead of giving up at once, which left every card without its thumbnail after Undo.
   for (let w = 0; w < 50 && !box.isConnected; w++) await new Promise(r => setTimeout(r, 100));
   for (let i = 0; i < 90 && box.isConnected; i++) {
-    let m; try { m = await api(`/api/preview?${pvQuery(root, path)}`); } catch (e) { box.classList.remove("wait"); return; }
+    let m; try { m = await api(`/api/preview?${pvQuery(root, path)}&thumb=1`); } catch (e) { box.classList.remove("wait"); return; }
     if (m.state === "ready" && m.pages) {
       const im = new Image(); im.alt = ""; im.onload = () => { if (box.isConnected) { box.innerHTML = ""; box.appendChild(im); box.classList.remove("wait"); box.classList.add("page"); } };
       im.src = pvPage(root, path, 0, 320, m.mtime); return;
