@@ -422,7 +422,7 @@ function goPage(name) {
 }
 
 /* ================================== search dialog ================================== */
-const SRCH_TABS = [["all", "All"], ["artifacts", "Artifacts"], ["sessions", "Sessions"], ["code", "Code"], ["projects", "Projects"], ["scheduled", "Scheduled"]];
+const SRCH_TABS = [["all", "All"], ["artifacts", "Artifacts"], ["sessions", "Chats"], ["code", "Code"], ["projects", "Projects"], ["scheduled", "Scheduled"]];
 function closeSearch() { const s = $("#srch"); if (!s) return; s.remove(); document.removeEventListener("keydown", s._key, true); }
 function srchIcon(it) {
   const ic = {chat: ICON.chat, code: ICON.codebr, project: ICON.stack, artifact: ICON.cube, scheduled: ICON.clock, action: it.id === "new_session" ? ICON.codebr : it.id === "settings" ? ICON.gear : ICON.plus}[it.kind] || ICON.chat;
@@ -433,7 +433,7 @@ function openSearch(tab = "all", q0 = "") {
   const sc = document.createElement("div"); sc.className = "scrim srch-scrim"; sc.id = "srch";
   sc.innerHTML = `<div class="srch" role="dialog" aria-modal="true" aria-label="Search">
     <div class="srch-top"><input id="srchIn" placeholder="Search" aria-label="Search" autocomplete="off" spellcheck="false" value="${esc(q0)}"><span class="spin" id="srchSpin" hidden></span><button class="iconbtn" id="srchX" aria-label="Close search">${ICON.x}</button></div>
-    <div class="srch-tabs" role="tablist">${SRCH_TABS.map(([k, l]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${l}</button>`).join("")}</div>
+    <div class="srch-tabs" role="tablist">${SRCH_TABS.filter(([k]) => k !== "code" || (S.threads || []).some(isCodeThread) || tab === "code").map(([k, l]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${l}</button>`).join("")}</div>
     <div class="srch-list" id="srchList" role="listbox"></div>
     <div class="srch-keys"><span>Close <kbd>Esc</kbd></span><span>Change type <kbd>←</kbd><kbd>→</kbd></span><span>Open <kbd>↵</kbd></span><span>Actions <kbd>${isMac ? "⌥" : "Alt+"}↵</kbd></span><span class="sp"></span><span>Compose <kbd>Tab</kbd></span></div></div>`;
   document.body.appendChild(sc);
@@ -621,8 +621,8 @@ function devPop(e) {
   const a = S.acct || {}, v = S.cur?.view || {}, root = curRoot();
   const own = !!v.scratch;
   ctxMenu({type: "click", currentTarget: e.currentTarget}, [
-    {head: `<b>${esc(a.device?.name || "This computer")}</b><span class="conn"><i class="gdot"></i>Connected</span><small>${own ? "This chat works in its own private folder on this computer." : `meshpool can read and change files in ${esc(shortPath(root))} on this computer.`}</small>`, html: true},
-    {label: own ? "Browse the chat's folder" : "Open in meshpool editor", icon: ICON.folderopen, fn: () => root && openFolderInApp(root, "")},
+    {head: `<b>This computer</b><small>${own ? "This chat works in its own private folder on this computer." : `meshpool can read and change files in ${esc(shortPath(root))} on this computer.`}</small>`, html: true},
+    {label: own ? "See the chat's files" : "See the files in this folder", icon: ICON.folderopen, fn: () => root && openFolderInApp(root, "")},
   ], {cls: "devmenu"});
 }
 // What the chat says, as Markdown: copied, or saved as a file.
@@ -682,7 +682,14 @@ const PANELS = {cowork: ["session", "progress", "outputs", "browser"], code: ["s
 function curMode() { return S.cur?.view?.kind || "cowork"; }
 // A chat with its own private folder has no repository, so it gets the simple tabs; a chat in a real folder gets
 // the developer tabs when it is a code chat.
-function panelSet() { const v = S.cur?.view; return !v || v.scratch ? PANELS.cowork : v.worktree ? ["worktree", ...PANELS[curMode()]] : PANELS[curMode()]; }
+// Chat mode (a chat that was not started from the Code tab, even one in a folder) never gets the developer tabs
+// (Changes, Files, Terminal, Git and CI): it gets Session, Progress, Artifacts and Browser, in plain words.
+function chatMode() {
+  const v = S.cur?.view; if (!v) return S.mode !== "code";
+  const row = v.code_mode === undefined ? (S.threads || []).find(t => t.id === v.id) : null;     // an older view lacks the flag: the list has it
+  return !isCodeThread(row ? Object.assign({}, v, {code_mode: row.code_mode}) : v);
+}
+function panelSet() { const v = S.cur?.view; return !v || v.scratch || chatMode() ? PANELS.cowork : v.worktree ? ["worktree", ...PANELS[curMode()]] : PANELS[curMode()]; }
 function linkOf(pid) { return (S.pj.find(p => p.id === pid) || {}).link || null; }
 function curRoot() { return S.cur?.view?.workdir || S.draft.project || linkOf(S.draft.pid)?.path || ""; }
 

@@ -112,7 +112,8 @@ function receiptBits010(ev) {
   const own = /^meshpool/i.test(String(ev.harness || ev.harness_name || ""));
   const who = [own ? "" : lowBrand(ev.harness_name || ""), ev.model ? modelName(ev.model) : ""].filter(Boolean).join(" on ");
   const why = String(ev.text || "").match(/, (chosen for [^·]+|[^,·]+)$/);
-  if (who) bits.push(who + (why && ev.reason ? ", " + why[1].trim() : ""));
+  const whyText = why && ev.reason && !/\b(code|chat|work|cowork) mode\b/i.test(why[1]) ? ", " + why[1].trim() : "";   // "code mode" is the router's note, not for people
+  if (who) bits.push(who + whyText);
   return bits;
 }
 
@@ -149,15 +150,25 @@ function ev010(ev) {
     }
     return;
   }
-  if (ev.type === "turn_end") sources010();
+  if (ev.type === "turn_end") {
+    sources010();
+    // the Plan tip: once, in a Code chat, after its first reply, and never again once it is dismissed or used
+    if (S.mode === "code" && S.cur && S.cur.ready && !ev.synthetic && !(store("tips_off") || []).includes("plan"))
+      insightCard010({id: "tip-plan", title: "Tip:", body: "for bigger changes, turn on Plan first in the plus menu. meshpool shows its plan before it edits anything.", action: {label: "Try it"},
+        local: () => { setPlan(true); store("tips_off", [...(store("tips_off") || []), "plan"]); }});
+  }
 }
 function insightUnder010(c) {
   if (c.type === "followup") {            // one card per chip: they share one row under the reply
     const f = foot010(); if (!f) return;
     const box = under010("", "chips010 schips"); if (!box) return;
     const row = box.parentElement.querySelector(".chips010") || box;
-    const b = document.createElement("button"); b.className = "schip"; b.textContent = c.action?.label || c.title;
-    b.onclick = () => { post("/api/insights/act", {id: c.id, event: "accepted"}).catch(() => {}); $("#input").value = c.action?.payload?.text || b.textContent; sendNow(false); };
+    const used = (S.cur.usedChips ||= new Set()), label = c.action?.label || c.title;
+    if (used.has(label)) { if (!row.children.length) box.parentElement?.remove(); return; }       // already used: it does not come back
+    const b = document.createElement("button"); b.className = "schip"; b.textContent = label;
+    b.onclick = () => {
+      used.add(label); b.remove(); if (!$(".schip", row)) (row.closest(".after010 > .chips010") || row).remove();     // a used chip goes at once
+      post("/api/insights/act", {id: c.id, event: "accepted"}).catch(() => {}); $("#input").value = c.action?.payload?.text || label; sendNow(false); };
     row.appendChild(b); post("/api/insights/act", {id: c.id, event: "shown"}).catch(() => {});
     return;
   }
@@ -165,7 +176,11 @@ function insightUnder010(c) {
 }
 /* A suggestion is one quiet line above the composer: what it is, one button, a way to dismiss. One at a time. */
 const nudgeQ010 = [];
+// Tips are rare: never on a fresh page (before the first message), one at a time, and one that was dismissed is gone for
+// good. Dismissing or using one also drops the rest of the queue for this visit.
+const nudgeOff010 = () => store("nudge_off") || [];
 function insightCard010(c) {
+  if (!S.cur || nudgeOff010().includes(String(c.id))) return;
   if (nudgeQ010.some(x => x.id === c.id) || $(`.nudge010[data-id="${CSS.escape(String(c.id))}"]`)) return;
   nudgeQ010.push(c); nextNudge010();
 }
@@ -177,8 +192,8 @@ function nextNudge010() {
   const el = document.createElement("div"); el.className = "nudge010"; el.dataset.id = c.id; el.setAttribute("role", "status");
   el.innerHTML = `<span class="n-t" title="${esc(c.body || "")}"><b>${esc(c.title)}</b> <span class="n-b">${esc(c.body || "")}</span></span><button class="btn primary sm" data-ic="accepted">${esc(c.action?.label || "Do it")}</button><button class="iconbtn" data-ic="more" aria-label="More" aria-haspopup="menu">${ICON.more}</button><button class="iconbtn" data-ic="dismissed" aria-label="Dismiss">${ICON.x}</button>`;
   wrap.insertBefore(el, $("#sugg", wrap) || $("#composer", wrap));   // in the flow above the box: it never covers the chat
-  post("/api/insights/act", {id: c.id, event: "shown"}).catch(() => {});
-  const done = () => { el.remove(); setTimeout(nextNudge010, 400); };
+  if (!c.local) post("/api/insights/act", {id: c.id, event: "shown"}).catch(() => {});
+  const done = () => { el.remove(); nudgeQ010.length = 0; store("nudge_off", [...new Set([...nudgeOff010(), String(c.id)])].slice(-200)); };
   el.addEventListener("click", async e => {
     const b = e.target.closest("[data-ic]"); if (!b) return;
     const event = b.dataset.ic;
@@ -189,6 +204,7 @@ function nextNudge010() {
         {label: "Show me less like this", fn: async () => { done(); const r = await post("/api/insights/act", {id: c.id, event: "muted"}).catch(() => null); toast("Okay, fewer like this.", 7000, {label: "Undo", fn: () => post("/api/insights/settings", {action: "undo_mute", id: r?.mute?.id}).catch(() => {})}); }}]);
     }
     done();
+    if (c.local) { if (event === "accepted") c.local(); return; }
     let r = null;
     try { r = await post("/api/insights/act", {id: c.id, event}); } catch (err) { /* the card is gone either way */ }
     if (event === "accepted") runInsightAction(r?.action || c.action, {card: c});

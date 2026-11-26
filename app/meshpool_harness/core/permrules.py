@@ -450,6 +450,20 @@ def _home() -> Path | None:
         return None
 
 
+def url_argument(cmd: str) -> bool:
+    """A program is handed a web address as a plain word (`python3 fetch.py https://x/y.csv`): it will reach the
+    internet, which the offline sandbox would only let fail. A URL inside quoted code or printed by echo is not."""
+    for seg in _segments(cmd):
+        w = _tokens(seg) or seg.split()
+        while w and re.match(r"^[A-Za-z_]\w*=", w[0]):
+            w = w[1:]
+        if not w or os.path.basename(w[0]) in ("echo", "printf", "true", ":"):
+            continue
+        if re.search(r"(?:^|\s)(?:https?|ftp|wss?)://", _scan(seg)[0]):
+            return True
+    return False
+
+
 def sandbox_auto_ok(cmd: str, root, cwd=None, made=None) -> bool:
     """A command that may run without a question inside the OS sandbox (writes only in the project and temp folders,
     network cut): it does not reach the network or install software, and every path it names is in the project, a
@@ -457,7 +471,8 @@ def sandbox_auto_ok(cmd: str, root, cwd=None, made=None) -> bool:
     (~/.ssh, ~/Documents outside the project) still asks, as do deletes of the user's files (`made`: the files this
     chat made, which it may delete) and git's risky verbs (GIT_ASK). Compound commands are fine: the sandbox confines
     them all."""
-    if not cmd or not cmd.strip() or NETWORK.search(cmd) or _HOME_REF.search(cmd) or GIT_ASK.search(cmd):
+    if not cmd or not cmd.strip() or NETWORK.search(cmd) or _HOME_REF.search(cmd) or GIT_ASK.search(cmd) or \
+            url_argument(cmd):
         return False
     if cwd is not None and not _inside(str(cwd), root):
         return False
@@ -525,6 +540,17 @@ _COMMIT_VALUE = {"-m", "--message", "-F", "--file", "-C", "-c", "--reuse-message
 _COMMIT_BAD = {"-p", "--patch", "--interactive", "-i", "--include", "-o", "--only", "-e", "--edit", "--pathspec-from-file"}
 
 
+def _git_dirty(root, cwd, files) -> bool:
+    """Any of these files has changes not yet committed (or git cannot tell): restoring it throws them away."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", str(cwd or root), "diff", "--quiet", "HEAD", "--"] + list(files),
+                           capture_output=True, timeout=10, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return r.returncode != 0
+
+
 def _git_local_seg(w: list, root, cwd) -> bool:
     """One `git <verb> ...` (already split into words) that only writes the local repository."""
     if len(w) < 2 or w[0] != "git":
@@ -564,8 +590,11 @@ def _git_local_seg(w: list, root, cwd) -> bool:
         return "--soft" in rest and not any(a in ("--hard", "--merge", "--keep", "--mixed") for a in rest)
     if verb == "restore":
         paths = [a for a in rest if not a.startswith("-")]
-        return bool(paths) and all(a not in (".", ":/", "*") and inside(a) for a in paths) and \
-            not any(a.startswith(("--pathspec-from", "-p", "--patch")) for a in rest)
+        ok = bool(paths) and all(a not in (".", ":/", "*") and inside(a) for a in paths) and \
+            not any(a.startswith(("--pathspec-from", "-p", "--patch", "-s", "--source")) for a in rest)
+        unstage = any(a in ("--staged", "-S") for a in rest) and not any(a in ("--worktree", "-W") for a in rest)
+        # release review: restoring the working copy throws away uncommitted work (perhaps the user's): ask then
+        return ok and (unstage or not _git_dirty(root, cwd, paths))
     if verb in ("checkout", "switch"):
         if any(a in ("-B", "-C", "--force", "-f", "--orphan", "-p", "--patch", "--force-create") for a in rest):
             return False
@@ -574,7 +603,8 @@ def _git_local_seg(w: list, root, cwd) -> bool:
         if verb == "switch":
             return False                                        # switching branches: ask
         files = rest[rest.index("--") + 1:] if "--" in rest else [a for a in rest if not a.startswith("-")]
-        return bool(files) and all(a not in (".", ":/", "*") and inside(a) and exists(a) for a in files)
+        return bool(files) and all(a not in (".", ":/", "*") and inside(a) and exists(a) for a in files) and \
+            not _git_dirty(root, cwd, files)                    # it would throw away uncommitted changes: ask
     if verb == "branch":
         pos = [a for a in rest if not a.startswith("-")]
         return 1 <= len(pos) <= 2 and all(a in ("--track", "--no-track", "-q", "--quiet") for a in rest
