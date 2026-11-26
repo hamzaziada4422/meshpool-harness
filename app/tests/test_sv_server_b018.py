@@ -238,6 +238,52 @@ def test_office_install_replaces_a_certificate_the_listener_cannot_load(httpd, m
             srv.server_close()
 
 
+# ---------------------------------------------------------------------------------------------------- SV-08
+def test_account_and_search_build_the_chat_list_once(httpd, tmp_path, monkeypatch):
+    """SV-08: the sidebar asks for /api/hub/account every 8 s while a chat runs. It built the whole chat list twice
+    (once itself, once again inside scheduled() just to count unread tasks) and read projects.json once per
+    scheduled task with a folder. The empty search built the list three times. Each answer now builds it once and
+    reads the project list at most once."""
+    from meshpool_harness import assistant as AS
+    from meshpool_harness.ui import hub as HUB
+    from meshpool_harness.ui import workbench as W
+    folders = []
+    for i in range(6):
+        d = tmp_path / f"p{i}"
+        d.mkdir()
+        W.add_project(str(d), f"Project {i}")
+        folders.append(str(d.resolve()))
+    tasks = [{"id": f"t{i}", "name": f"Task {i}", "prompt": "x", "enabled": True, "when": "daily", "time": "09:00",
+              "folder": folders[i], "last_thread": "c1" if i == 0 else ""} for i in range(6)]
+    monkeypatch.setattr(AS, "tasks", lambda: [dict(t) for t in tasks])
+    rows = [{"id": "c1", "title": "Chat", "workdir": folders[0], "updated": 1, "state": "saved", "kind": "cowork",
+             "unread": True}]
+    calls = {"listing": 0, "projects": 0}
+    real_projects = W.projects
+
+    def listing():
+        calls["listing"] += 1
+        return [dict(r) for r in rows]
+
+    def projects():
+        calls["projects"] += 1
+        return real_projects()
+    monkeypatch.setattr(A, "listing", listing)
+    monkeypatch.setattr(W, "projects", projects)
+    st, body, _ = _get(httpd, "/api/hub/account", {"X-Meshpool-Token": S.TOKEN})
+    assert st == 200 and json.loads(body)["scheduled_unread"] == 1
+    assert calls == {"listing": 1, "projects": 1}, calls
+    calls.update(listing=0, projects=0)
+    st, body, _ = _get(httpd, "/api/hub/scheduled", {"X-Meshpool-Token": S.TOKEN})
+    got = json.loads(body)["tasks"]
+    assert st == 200 and [t["project"] for t in got] == [f"Project {i}" for i in range(6)]
+    assert calls["projects"] == 1, calls
+    calls.update(listing=0, projects=0)
+    st, body, _ = _get(httpd, "/api/hub/search?q=", {"X-Meshpool-Token": S.TOKEN})
+    assert st == 200 and calls["listing"] == 1, calls
+    assert HUB.TABS                                       # the module under test, imported for the patch above
+
+
 def _serve_quietly(monkeypatch, tmp_path, desktop: bool):
     """Run the real serve() on a free port with its background helpers stubbed; returns (port, stop)."""
     from meshpool_harness import autoupdate as AU
