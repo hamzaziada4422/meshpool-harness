@@ -1639,7 +1639,7 @@ function applyEvRaw(ev) {
     case "review_round": {                               // the reply above was written before the check: fold it away
       const el = cur.lastAi;
       if (el && el.isConnected && !el.closest("details")) {
-        const d = document.createElement("details"); d.className = "notedet";
+        const d = document.createElement("details"); d.className = "notedet fold";
         d.innerHTML = `<summary>First answer, before the check</summary>`; el.replaceWith(d); d.appendChild(el);
       }
       cur.lastAi = null; cur.lastText = ""; break; }
@@ -2009,12 +2009,53 @@ async function rewindFork(kind, el) {
 
 /* ================================== right panel ================================== */
 const PTABS_ALL = {session: "Session", progress: "Progress", outputs: "Artifacts", diff: "Changes", files: "Files", term: "Terminal", git: "Git and CI", preview: "Preview", browser: "Browser", worktree: "Isolated copy"};
+/* The sidebar and the side panel change how wide the chat is. The grid commits that in one frame, and what moved
+   (the main area, the top bar buttons, the column, the composer parts) then glides from where it was by transform
+   alone, so nothing jumps and nothing is laid out again while it moves (FLIP). The panel slides in over the space it
+   reserved. A column that would have to shrink does not: fitPanel folds the sidebar first, so the text keeps its
+   width and only its position changes. Reduced motion commits the change at once. */
+let flipBusy = false;
+function flipLayout(change) {
+  const main = $("#main");
+  if (flipBusy || !main || !main.animate) return change();
+  flipBusy = true;
+  try {
+    // Every piece that can move, keyed by its place in the tree (the top bar is drawn again by renderTop, so ids are not enough).
+    const pick = () => {
+      const m = new Map(), top = $("#topbar"), bar = $(".composer-wrap");
+      const walk = (e, key, depth) => { m.set(key, e); if (depth) [...e.children].forEach((c, i) => walk(c, key + "." + i, depth - 1)); };
+      m.set("m", main);
+      if (top) [...top.children].forEach((c, i) => walk(c, "t" + i, 3));
+      if (bar) [...bar.children].forEach((c, i) => walk(c, "c" + i, 2));
+      const col = $("#col"); if (col) m.set("col", col);
+      return m;
+    };
+    const left = m => new Map([...m].map(([k, e]) => [k, e.getBoundingClientRect().left]));
+    const clear = m => { for (const e of m.values()) for (const a of e.getAnimations()) if (a.id === "flip") a.cancel(); };
+    const was = pick(), wasLeft = left(was);
+    clear(was);
+    change();
+    if (lessMotion()) return;
+    const now = pick(), nowLeft = left(now);
+    clear(now);
+    const moved = new Map([...now].filter(([k]) => wasLeft.has(k)).map(([k]) => [k, nowLeft.get(k) - wasLeft.get(k)]));
+    const near = e => { for (let p = e.parentElement; p && p !== main.parentElement; p = p.parentElement) for (const [k, n] of now) if (n === p && moved.has(k)) return k; return null; };
+    const cs = getComputedStyle(document.documentElement);
+    const duration = parseFloat(cs.getPropertyValue("--t-side")) || 200, easing = cs.getPropertyValue("--ease").trim() || "ease-out";
+    for (const [k, e] of now) {
+      if (!moved.has(k)) continue;
+      const up = near(e), from = -(moved.get(k) - (up ? moved.get(up) : 0));
+      if (Math.abs(from) < 0.5) continue;
+      e.animate({transform: [`translateX(${from}px)`, "none"]}, {duration, easing}).id = "flip";
+    }
+  } finally { flipBusy = false; }
+}
 function togglePanel(name, force) {
   if (!panelSet().includes(name)) name = panelSet()[0];
   if (S.panel === name && !force && curMode() === "cowork") store("cw_panel_closed", true);
   if (force) store("cw_panel_closed", false);
   S.panel = (S.panel === name && !force) ? null : name; store("panel", S.panel);
-  renderPanel(); renderTop();
+  flipLayout(() => { renderPanel(); renderTop(); });
 }
 function setupPanelResize() {
   const w = store("pw"); if (w) document.documentElement.style.setProperty("--pw", w + "px");
@@ -2024,8 +2065,10 @@ function setupPanelResize() {
   });
 }
 function fitPanel() {
-  const pv = typeof PVX !== "undefined" && PVX.open;   // the preview needs more room than the panel: 560px of chat beside it
-  const want = ((!!S.panel && innerWidth < 1180) || (pv && innerWidth < 1366)) && innerWidth > 760 && !S.keepSide;   // only where both cannot fit
+  // The sidebar folds while the panel or the preview is open wherever the chat column would otherwise get narrower than
+  // it is (656px): the text keeps its width and the column only moves, which is also what keeps the open and close smooth.
+  const pv = typeof PVX !== "undefined" && PVX.open;
+  const want = ((!!S.panel || pv) && innerWidth < 1366) && innerWidth > 760 && !S.keepSide;
   if ($("#app").classList.contains("autoside") !== want) { $("#app").classList.toggle("autoside", want); renderTop(); }
 }
 // Each drawing of the side panel gets a number. A tab that loads its data (Git and CI, Changes) checks it after the
@@ -2037,12 +2080,17 @@ function renderPanel() {
   clearTimeout(S.spT);
   { const pb = $("#pbody"); if (pb) pb._gen = panelGen(pb) + 1; }
   if (S.panel && !panelSet().includes(S.panel)) { S.panel = panelSet()[0]; store("panel", S.panel); }
-  fitPanel(); if (S.panel !== "browser") brwStop();
-  if (!S.panel) { p.hidden = true; return; }
-  p.hidden = false;
+  flipLayout(() => { fitPanel(); p.hidden = !S.panel; });
+  if (S.panel !== "browser") brwStop();
+  if (!S.panel) return;
   $("#ptabs").innerHTML = `<div class="pstrip" role="tablist" aria-label="Side panel tabs">` + panelSet().map(k => [k, PTABS_ALL[k]]).map(([k, lb]) => `<button role="tab" aria-selected="${S.panel === k}" data-t="${k}">${lb}</button>`).join("") + `</div><span class="sp"></span><button class="iconbtn" id="pclose" aria-label="Close panel">${ICON.x}</button>`;
   $$("#ptabs [data-t]").forEach(b => b.onclick = () => togglePanel(b.dataset.t, true));
   $("#pclose").onclick = () => togglePanel(S.panel);
+  { const st = $("#ptabs .pstrip"), on = $('[aria-selected="true"]', st);   // one row that scrolls: the open tab is brought into view, the wheel scrolls it sideways
+    if (on && st.scrollWidth > st.clientWidth) st.scrollLeft += on.getBoundingClientRect().left - st.getBoundingClientRect().left - (st.clientWidth - on.offsetWidth) / 2;
+    const fade = () => { st.classList.toggle("fl", st.scrollLeft > 1); st.classList.toggle("fr", st.scrollLeft + st.clientWidth < st.scrollWidth - 1); };
+    fade(); st.addEventListener("scroll", fade, {passive: true});
+    st.addEventListener("wheel", e => { if (e.deltaY && !e.deltaX && st.scrollWidth > st.clientWidth) { st.scrollLeft += e.deltaY; e.preventDefault(); } }, {passive: false}); }
   const body = $("#pbody"); body.innerHTML = "";
   if (!S.cur && S.panel !== "session" && S.panel !== "browser") { body.innerHTML = `<div class="pnote">Start a chat and what it makes, changes or runs shows up here.</div>`; return; }
   ({session: panelSession, progress: panelProgress, outputs: panelOutputs, diff: panelDiff, files: panelFiles, term: panelTerm, git: panelGit,
@@ -2159,9 +2207,10 @@ async function panelDiff(body) {
   const turns = S.cur.view?.turns || [];
   const sel = S.diffTurn ?? "";
   const gone = S.diffUndone && S.diffUndone.cid === S.cur.id && !sel ? `<div class="pnote" id="dgone">This turn was undone, so it has no changes to show. Below: every change still in this chat.</div>` : "";
-  body.innerHTML = `<div class="pbar"><select id="dturn" aria-label="Which changes"><option value="">All changes in this chat</option>${turns.slice().reverse().map(t => `<option value="${t.n}" ${+sel === t.n ? "selected" : ""}>Reply ${t.n}${t.title ? ": " + esc(clip(t.title, 50)) : ""}</option>`).join("")}</select>
+  body.innerHTML = `<div class="pbar"><select id="dturn" aria-label="Which changes"><option value="">All changes</option>${turns.slice().reverse().map(t => `<option value="${t.n}" ${+sel === t.n ? "selected" : ""}>Reply ${t.n}${t.title ? ": " + esc(clip(t.title, 50)) : ""}</option>`).join("")}</select>
     <button class="btn" id="dref" title="Refresh">${ICON.refresh}</button><button class="btn" id="dsplit" aria-pressed="${store("diffSplit") === "1"}" title="Show old and new next to each other">${store("diffSplit") === "1" ? "Unified" : "Side by side"}</button>${sel && (turns.find(t => t.n === +sel)?.changed || []).length ? `<button class="btn danger" id="dundo">${ICON.undo} Undo</button>` : ""}</div>${gone}<div id="dbody" class="pbody"><div class="pnote">Loading...</div></div>`;
-  $("#dturn").onchange = () => { S.diffTurn = $("#dturn").value ? +$("#dturn").value : null; S.diffUndone = null; renderPanel(); };
+  const dt = $("#dturn"), dtTitle = () => { dt.title = dt.options[dt.selectedIndex]?.text || ""; }; dtTitle();   // a long reply title is cut by the narrow bar: the full text is in the tooltip
+  dt.onchange = () => { S.diffTurn = dt.value ? +dt.value : null; S.diffUndone = null; renderPanel(); };
   $("#dref").onclick = renderPanel;
   $("#dsplit").onclick = () => { store("diffSplit", store("diffSplit") === "1" ? "0" : "1"); renderPanel(); };
   $("#dundo")?.addEventListener("click", () => undoTurn(+sel));
@@ -2932,7 +2981,7 @@ function showOnboarding() {
   if ($("#onb")) return;
   store("onbFull", 1);
   const o = document.createElement("div"); o.className = "onb"; o.id = "onb";
-  o.innerHTML = `<div class="onb-card" id="onbKey">
+  o.innerHTML = `<div class="onb-card" id="onbKey"><div class="onb-body">
     <img class="logo mlogo" src="${logoSrc()}" alt="meshpool">
     ${onbSteps(1)}<h1>Choose what meshpool runs on</h1><p>It stays on this computer, and you can change it any time in Settings.</p>
     <div class="scope prov" role="radiogroup" aria-label="What meshpool runs on">${PROVIDERS.filter(p => p[0] !== "chatgpt" || !chatgptSignInGone()).map(([id, name, desc], i) => `<button class="scopeopt" data-prov="${id}" role="radio" aria-checked="${i === 0}"><b>${name}</b><small>${desc}</small></button>`).join("")}</div>
@@ -2943,7 +2992,7 @@ function showOnboarding() {
       <label class="field" style="max-width:none"><span>API key</span><span class="keyrow"><input id="oKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key"><button class="btn" id="oShow" type="button">Show</button></span></label>
     </div>
     <div id="oSubBox" hidden><p class="credit" id="oSubTxt"></p><button class="btn primary" id="oSign">Sign in</button></div>
-    <div class="res" id="oRes"></div>
+    <div class="res" id="oRes"></div></div>
     <div class="onb-go"><button class="bigbtn" id="oGo">Continue</button></div></div>
     <div class="onb-card" id="onbPerm" hidden></div>`;
   document.body.appendChild(o);
@@ -3184,7 +3233,7 @@ function permStep(host) {
   let card = $("#onbPerm", o);
   if (!card) { card = document.createElement("div"); card.className = "onb-card"; card.id = "onbPerm"; o.appendChild(card); }
   card.hidden = false;
-  card.innerHTML = `<img class="logo mlogo" src="${logoSrc()}" alt="meshpool">
+  card.innerHTML = `<div class="onb-body"><img class="logo mlogo" src="${logoSrc()}" alt="meshpool">
     ${onbSteps(2)}<h1>Choose where meshpool can work</h1><p>meshpool only works in the places you allow. You can change this any time in Settings → Permissions.</p>
     <div class="scope" role="radiogroup" aria-label="Where meshpool can work">
       <button class="scopeopt" data-scope="pick" role="radio"><b>Folders I choose</b><small>Add one or more folders now.</small></button>
@@ -3192,7 +3241,7 @@ function permStep(host) {
       <button class="scopeopt" data-scope="later" role="radio"><b>Start without a folder</b><small>Each chat keeps its files in its own folder. Open it from the chat's Files panel.</small></button>
     </div><div class="res" id="oScope"></div>
     <div id="oPermH"><h3 class="onb-h">What meshpool can do</h3>
-    <ul class="rows2" id="oPerms"></ul></div>
+    <ul class="rows2" id="oPerms"></ul></div></div>
     <div class="onb-go"><button class="bigbtn" id="oAll">Allow all</button><button class="btn" id="oDone">Continue</button></div>`;
   const draw = async body => {
     try {
@@ -3232,11 +3281,11 @@ function permStep(host) {
 function setupStep(o, prev) {
   prev?.remove();
   const card = document.createElement("div"); card.className = "onb-card"; card.id = "onbSetup"; o.appendChild(card);
-  card.innerHTML = `<img class="logo mlogo" src="${logoSrc()}" alt="meshpool">
+  card.innerHTML = `<div class="onb-body"><img class="logo mlogo" src="${logoSrc()}" alt="meshpool">
     ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. You can skip this.</p>
     <div id="oImport"></div>
     <div id="oContext"></div>
-    <label class="switchrow" id="oLocalRow" hidden><input type="checkbox" id="oLocal"> <span id="oLocalTxt"></span></label>
+    <label class="switchrow" id="oLocalRow" hidden><input type="checkbox" id="oLocal"> <span id="oLocalTxt"></span></label></div>
     <div class="onb-go"><button class="bigbtn" id="oFinish">Start using meshpool</button></div>`;
   importPanel($("#oImport", card)).then(() => { const b = $("#impGo", card); if (b) b.hidden = true; });
   contextPanel($("#oContext", card));

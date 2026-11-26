@@ -563,15 +563,15 @@ table.t td.n,table.t th:not(:first-child){text-align:right}
 .onb-card{width:min(440px,100%);padding:8px 0 88px}
 .onb-card img.logo{display:block;height:32px;width:auto;margin:0 0 32px}
 .onb-card h1{font:500 var(--fs-2xl)/1.15 var(--display);letter-spacing:0;margin:0 0 8px}
-.onb-card>p{color:var(--ink-2);margin:0 0 24px}
+.onb-card>p,.onb-body>p{color:var(--ink-2);margin:0 0 24px}
 #onbPerm,#onbSetup{max-width:640px}
 .onb-h{font-size:var(--fs-s);font-weight:600;color:var(--ink);margin:16px 0 8px}
 .onb-steps{display:flex;align-items:center;gap:8px;margin:-16px 0 24px}
 .onb-steps span{width:20px;height:3px;border-radius:3px;background:var(--line);transition:background-color var(--t-side) var(--ease)}
 .onb-steps span.on{background:var(--pool)}
 .onb-steps small{margin-left:4px;color:var(--ink-3);font-size:var(--fs-xs)}
-/* The step's button closes the card, in the flow: kept sticky, it covered the key field at 1024x700 and the last
-   controls of step 3 ("3. Add to memory") at 1366 and 1024 (UX audit 0.0.18). */
+/* The step's button closes the card. A step taller than the window scrolls its fields in .onb-body and keeps the button
+   below them, always on screen and never over a field (shell.css); a card without .onb-body keeps the button in the flow. */
 .onb-go{display:flex;align-items:center;gap:16px;padding:12px 0 4px;margin-top:8px}
 .onb-go .sp{flex:1}
 .onb .res:empty{display:none}
@@ -1088,8 +1088,10 @@ details .keyrow input{flex:1;min-width:0;padding:8px 12px;border:1px solid var(-
    message of the user, whose top margin is the larger one, so the last item's bottom margin is dropped. */
 .hist { content-visibility: auto; contain-intrinsic-size: auto 2000px; }
 #pjBrief:empty { display: none; }   /* the brief card before (or without) its text: no empty pill above Instructions */
-/* A chat that just opened: its newest items are laid out at their real size before the first paint (commitStage). */
-#col.settle > :nth-last-child(-n+12) { content-visibility: visible; }
+/* A chat that just opened: its newest items are laid out at their real size before the first paint (commitStage).
+   They keep the containment that content-visibility:auto applies (layout, style, paint), so dropping .settle two frames later changes
+   nothing: without it the margins inside no longer collapsed through the item and the text moved by 27 px (CLS 0.04 on every open). */
+#col.settle > :nth-last-child(-n+12) { content-visibility: visible; contain: layout style paint; }
 .hist > :last-child { margin-bottom:0; }
 .msg-ai p, .msg-ai li, .msg-ai h3, .msg-ai blockquote, .msg-user .b, .sidelist .tt, .tt { unicode-bidi: plaintext; text-align: start; }
 /* In-app files: the folder tree and the editor (editor.js). Colours come from the theme tokens, so both themes work. */

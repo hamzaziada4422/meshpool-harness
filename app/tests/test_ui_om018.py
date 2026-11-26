@@ -103,6 +103,7 @@ def test_om10_a_long_line_in_the_changes_diff_wraps_instead_of_being_cut(page):
     _fake_diff(page, cid)
     page.evaluate("() => togglePanel('diff', true)")
     page.wait_for_selector("#patch .l.a")
+    page.wait_for_timeout(300)                  # the panel finishes sliding in (its edge is past the window until then)
     got = _fits(page, "#patch")
     assert got
     for el in got:
@@ -128,7 +129,8 @@ def test_om10_a_long_command_in_the_approval_card_wraps(page):
 
 def test_om10_at_1024_px_every_panel_tab_shows_whole_and_only_the_open_one_looks_open(narrow):
     """OM-10: at 1024 px "Git and CI" was cut in half and the tabs after it could not be reached; and a tab under the
-    mouse looked exactly like the open one, so two tabs looked open (shots/018/14_1024_panel.png)."""
+    mouse looked exactly like the open one, so two tabs looked open (shots/018/14_1024_panel.png). The tabs are one row that
+    scrolls sideways now (J-03): none is cut in half and each one can be reached."""
     page = narrow
     _code_chat(page, page.app["work"])
     page.evaluate("() => togglePanel('session', true)")
@@ -137,10 +139,13 @@ def test_om10_at_1024_px_every_panel_tab_shows_whole_and_only_the_open_one_looks
         const strip = document.querySelector('.ptabs .pstrip'), sr = strip.getBoundingClientRect();
         return [...strip.querySelectorAll('button')].map(b => { const r = b.getBoundingClientRect();
           return {t: b.textContent.trim(), l: r.left, r: r.right, sl: sr.left, sr: sr.right, close: close.left,
-                  h: r.height}; }); }""")
+                  h: r.height, top: Math.round(r.top), cut: b.scrollWidth > b.clientWidth + 1, on: b.getAttribute('aria-selected') === 'true'}; }); }""")
     assert any(t["t"] == "Git and CI" for t in tabs)
-    for t in tabs:                                              # whole, inside the strip, never under the close button
-        assert t["l"] >= t["sl"] - 1 and t["r"] <= t["sr"] + 1 and t["r"] <= t["close"] + 1 and t["h"] > 10, t
+    assert len({t["top"] for t in tabs}) == 1, tabs             # one row (J-03): it scrolls sideways, tabs are never wrapped to three rows
+    for t in tabs:                                              # no tab cut in half; the open one is whole inside the strip, never under the close button
+        assert not t["cut"] and t["h"] > 10, t
+        if t["on"]:
+            assert t["l"] >= t["sl"] - 1 and t["r"] <= t["sr"] + 1 and t["r"] <= t["close"] + 1, t
     page.hover(".ptabs .pstrip button:has-text('Terminal')")
     looks = page.evaluate("""() => [...document.querySelectorAll('.ptabs .pstrip button')].map(b => ({
         t: b.textContent.trim(), sel: b.getAttribute('aria-selected') === 'true', bg: getComputedStyle(b).backgroundColor,

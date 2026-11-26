@@ -324,8 +324,10 @@ def test_hiding_and_showing_the_sidebar_lays_the_page_out_once(app, page):
     The columns now change once and the sidebar slides with transform and opacity: the composer moves on at most one
     frame per toggle, and no transition runs on the grid."""
     _fake_chat(page)
-    page.evaluate("""() => { window.__x = []; const t = () => { __x.push(Math.round(document.querySelector('#composer').getBoundingClientRect().x));
-        if (!window.__xs) requestAnimationFrame(t); }; requestAnimationFrame(t); }""")
+    # the layout position of the composer (offsets add up through the parents and ignore transforms): the page glides over by
+    # transform after the change (J-01), which is not a new layout
+    page.evaluate("""() => { window.__x = []; const t = () => { let x = 0; for (let e = document.querySelector('#composer'); e; e = e.offsetParent) x += e.offsetLeft;
+        __x.push(Math.round(x)); if (!window.__xs) requestAnimationFrame(t); }; requestAnimationFrame(t); }""")
     for _ in range(2):
         page.click("#hideSide")
         page.wait_for_timeout(400)
@@ -486,6 +488,8 @@ def test_the_side_panel_slides_in_and_the_model_button_keeps_auto(page):
     page.evaluate("() => { if (S.panel) togglePanel(S.panel); renderBar(); }")
     page.click("#panelBtn")
     anim = page.evaluate("() => document.querySelector('#panel').getAnimations().map(a => a.animationName || '')")
+    page.wait_for_timeout(400)
+    page.click("#showSide")             # the sidebar folds while the panel is open (J-01); a person who brings it back gets the 580 px column
     page.wait_for_timeout(400)
     got = page.evaluate("""() => { const em = document.querySelector('#mPill em'), l = document.querySelector('#mPill .lbl'); l.textContent = 'DeepSeek V4.1 Flash';
         return {main: Math.round(document.querySelector('#main').getBoundingClientRect().width), em: em && getComputedStyle(em).display, sw: l.scrollWidth, cw: l.clientWidth}; }""")

@@ -392,10 +392,16 @@
 .work[data-done] .gdots{display:none}
 .panel .ptabs{gap:0}.ptabs .pstrip{display:flex;gap:2px;min-width:0;overflow-x:auto;scrollbar-width:none}.ptabs .pstrip::-webkit-scrollbar{display:none}.ptabs #pclose{flex:none;margin-left:auto}
 .ptabs .sp{flex:0 0 0}.ptabs button[aria-selected="true"]{background:var(--sel);color:var(--ink)}
-/* OM-10: a narrow window (1024 px) cut "Git and CI" in half and hid the tabs after it; they wrap to a second row now.
-   The open tab no longer shares its look with a hovered one (two tabs looked open at once). */
-.panel .ptabs{height:auto;min-height:44px;align-items:flex-start}.ptabs .pstrip{flex-wrap:wrap;padding:8px 0;flex:1}
-.ptabs #pclose{margin-top:8px}.ptabs button[aria-selected="true"]:hover{background:var(--sel)}
+/* The open tab no longer shares its look with a hovered one (two tabs looked open at once). */
+.panel .ptabs{height:44px;min-height:44px;align-items:center}.ptabs .pstrip{flex-wrap:nowrap;padding:0;flex:1}
+.ptabs button[aria-selected="true"]:hover{background:var(--sel)}
+/* Design-pass check 2 (0.0.18): seven tabs wrapped to three rows at 1024px. They are one row now that scrolls sideways,
+   each tab whole (no cut text); the open tab is scrolled into view (renderPanel). */
+.ptabs .pstrip button{flex:none;white-space:nowrap}
+.ptabs .pstrip.fr{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 24px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 24px),transparent)}
+.ptabs .pstrip.fl{-webkit-mask-image:linear-gradient(270deg,#000 calc(100% - 24px),transparent);mask-image:linear-gradient(270deg,#000 calc(100% - 24px),transparent)}
+.ptabs .pstrip.fl.fr{-webkit-mask-image:linear-gradient(90deg,transparent,#000 24px,#000 calc(100% - 24px),transparent);mask-image:linear-gradient(90deg,transparent,#000 24px,#000 calc(100% - 24px),transparent)}
+.pbar select{text-overflow:ellipsis}
 .pbody{background:var(--bg)}
 .col:has(>.gal){max-width:none;padding:0}
 .ctx .mi-i:empty{display:none}
@@ -430,3 +436,26 @@
 /* The checked menu item carries the class "sel", which the composer pills use for height:32px, so a long description spilled
    over the next item. */
 .ctx .mi.sel{display:flex;height:auto;color:var(--ink);white-space:normal}
+
+/* Design-pass check 2 (0.0.18): the fold around the first answer ("First answer, before the check") was louder than the grey
+   "Looking at the result" line: ink coloured, underlined, 14px, and its opened text 12px. It is a quiet note line now (muted,
+   no underline, the size of a note) with a chevron to show it opens, and the opened reply reads at the body size of replies. */
+.notedet.fold{display:block;margin:8px 0}
+.notedet.fold>summary{display:flex;align-items:center;gap:8px;width:fit-content;color:var(--ink-3);font-size:var(--fs-s);text-decoration:none;cursor:pointer;list-style:none;transition:color var(--t-hover) var(--ease)}
+.notedet.fold>summary::-webkit-details-marker{display:none}
+.notedet.fold>summary::before{content:"";width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);flex:none;transition:transform var(--t-fast) var(--ease)}
+.notedet.fold[open]>summary::before{transform:rotate(45deg)}
+.notedet.fold>summary:hover{color:var(--ink-2)}
+.notedet.fold[open]>.msg-ai{margin-top:4px;font-size:var(--fs-m)}
+
+/* Design-pass check 2 (0.0.18): in dark the settings modal sat on --side (#0f0f10), a hair from the dimmed page behind it
+   (about #0a0a0a), so its edge read only through the 8% border. It takes the next step up the ramp, --surface, in dark. */
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .modal{background:var(--surface)}:root:not([data-theme="light"]) .mnav{background:var(--bg)}}
+:root[data-theme="dark"] .modal{background:var(--surface)}:root[data-theme="dark"] .mnav{background:var(--bg)}
+
+/* Design-pass check 2 (0.0.18): the last onboarding step is long (agents to import, chats to bring), and Start sat 800px below
+   the fold at 1024x700. The fields scroll in .onb-body and the button row stays under them: always on screen, and it covers
+   nothing because the fields end above it. */
+.onb-card:has(>.onb-body){display:flex;flex-direction:column;padding-bottom:0;max-height:calc(100vh - 48px - min(12vh,112px));max-height:calc(100dvh - 48px - min(12vh,112px))}
+.onb-card>.onb-body{flex:0 1 auto;min-height:0;overflow-y:auto;margin:0 -4px;padding:0 4px 16px;-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 16px),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 16px),transparent)}
+.onb-card:has(>.onb-body)>.onb-go{flex:none;margin-top:0;padding:16px 0 24px;background:var(--bg)}
