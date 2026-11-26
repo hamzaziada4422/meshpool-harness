@@ -991,7 +991,8 @@ class Session:
         except Exception:  # noqa: BLE001
             folder = True
         self.emit({"type": "approval", "id": aid, "kind": kind, "title": title, "detail": redact(detail),
-                   "options": options, "scope": scope, "folder": folder})
+                   "options": options, "scope": scope, "folder": folder,
+                   "folder_name": os.path.basename(str(getattr(self, "workdir", "") or "").rstrip("/\\")) if folder else ""})
         if time.time() - getattr(self, "t_turn", time.time()) > 60:
             _notify(f"{self.agent.title or 'A task'} needs your approval", title)
         try:

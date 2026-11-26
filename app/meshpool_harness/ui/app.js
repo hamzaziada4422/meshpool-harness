@@ -1613,8 +1613,11 @@ function applyEv(ev) {
 }
 // "Looking at the result..." must not stay in the thread when no Checked line follows (an error, a stop, a turn that ends)
 function endLook(cur, why) {
-  const n = cur.lookEl; cur.lookEl = null; if (!n) return;
-  if (why) n.textContent = "Could not finish the check: " + why; else n.remove();
+  const n = cur.lookEl; cur.lookEl = null;
+  colEl().querySelectorAll(".note[data-look]").forEach(x => { if (x !== n) x.remove(); });   // an earlier round's line that lost its handle
+  cur.officeEl?.remove(); cur.officeEl = null;      // "Starting the office tools..." is a wait, not history
+  if (!n) return;
+  if (why) { n.textContent = "Could not finish the check: " + why; n.removeAttribute("data-look"); } else n.remove();   // settled: it stays as history
 }
 function applyEvRaw(ev) {
   const cur = S.cur, col = colEl();
@@ -1635,6 +1638,7 @@ function applyEvRaw(ev) {
       if (String(ev.text).trim() === RESUME_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Picking up where it left off</span>`, "goalturn"); break; }
       if (String(ev.text).trim() === GOAL_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Continuing toward the goal</span>`, "goalturn"); break; }
       if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span> <button class="linkbtn" data-takeback title="Take it back before the agent reads it">Take back</button><br><span class="stx">${esc(ev.text)}</span></div>`, "msg-user steer"); $("#queuedChip")?.remove(); break; }
+      cur.officeEl?.remove(); cur.officeEl = null;   // "Starting the office tools..." was the wait before this message
       closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; cur.tpaths = []; cur.lastAi = null; cur.lastText = ""; cur.down = false; cur.downEl = null;
       { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button><button class="iconbtn" data-ma="rewind" data-tip="Rewind to here" data-tip-pos="below" aria-label="Rewind to here">${ICON.undo}</button><button class="iconbtn" data-ma="fork" data-tip="Fork from here" data-tip-pos="below" aria-label="Fork from here">${ICON.branch}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${userBody(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.ei = ev.i; mu._text = String(ev.text ?? ""); cur.turnEi = ev.i; cur.lastFoot = null; }
       break; }
@@ -1644,6 +1648,7 @@ function applyEvRaw(ev) {
     case "stream_reset": if (cur.live) { cur.live.remove(); cur.live = null; cur.liveDirty = false; } break;
     case "retry_ok": clearRetry(); break;
     case "assistant":
+      if (ev.look) endLook(cur, "");                  // the line under the reply says what the look saw: the wait is over
       if (ev.append && ev.merged && cur.lastAi && cur.lastAi.isConnected && cur.lastText) {
         const full = cur.lastText.replace(/\s+$/, "") + "\n\n" + stripGoal(ev.text); mdRender(cur.lastAi, full); cur.lastText = full;
         cur.lookEl?.remove(); cur.lookEl = null;       // "Looking at the result..." is over: the line under the reply says what it saw
@@ -1654,6 +1659,7 @@ function applyEvRaw(ev) {
       cur.lastText = stripGoal(ev.text || "") || cur.lastText;
       break;
     case "review_round": {                               // the reply above was written before the check: fold it away
+      endLook(cur, "");                                  // this look is over: a second round writes its own line
       const el = cur.lastAi;
       if (el && el.isConnected && !el.closest("details")) {
         const d = document.createElement("details"); d.className = "notedet fold";
@@ -1700,12 +1706,19 @@ function applyEvRaw(ev) {
       const gKeep = cur.group && cur.group === col.lastElementChild ? cur.group : null;
       for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st) { st.textContent = "Needs your approval"; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_BASE[nm] || TOOL_LABEL[nm] || nm; } }
       closeGroup();
-      const OPT = {allow_once: "Allow", allow_always: "Allow for this chat", reject_once: "Deny", reject_always: "Always deny"};
+      const OPT = {allow_once: "Allow just this", allow_always: "Allow for this whole chat", reject_once: "Deny", reject_always: "Always deny"};
+      // 0.0.19 wording, the same on every card: each answer says what it covers (the chat grant's reach is in its tip)
+      const fname = ev.folder_name || String(cur.view?.workdir || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "this folder";
       const opts = ev.options && ev.options.length ? ev.options.map(o => `<button class="btn ${o.kind === "allow_once" ? "primary" : String(o.kind).startsWith("reject") ? "danger" : ""}" data-d="${esc(o.id)}">${esc(OPT[o.kind] || o.label)}</button>`).join("")
-        : `<button class="btn primary" data-d="yes">Allow</button>${ev.scope === "once" ? "" : `<button class="btn" data-d="always">Allow ${ev.scope ? esc(ev.scope) : ev.kind === "edit" ? "all edits" : ev.kind === "bash" ? "all commands" : "this tool"} in this chat</button>`}${ev.scope !== "once" && ev.folder !== false && ["edit", "bash", "mcp"].includes(ev.kind) ? `<button class="btn" data-d="save" title="Saves a rule for this folder in your own settings: this command and its subcommand with any arguments, file edits, or this tool. A test or build command that runs project code then runs whatever that code holds.">Always in this folder</button>` : ""}<button class="btn danger" data-d="no">Deny</button><input placeholder="Note for the agent (optional)" aria-label="Note for the agent">`;
+        : `<button class="btn primary" data-d="yes">Allow just this</button>${ev.scope === "once" ? "" : `<button class="btn" data-d="always" title="For the rest of this chat: ${esc(ev.scope || (ev.kind === "edit" ? "all edits" : ev.kind === "bash" ? "all commands" : "this tool"))}">Allow for this whole chat</button>`}${ev.scope !== "once" && ev.folder !== false && ["edit", "bash", "mcp"].includes(ev.kind) ? `<button class="btn" data-d="save" title="Saves a rule for this folder in your own settings: this command and its subcommand with any arguments, file edits, or this tool. A test or build command that runs project code then runs whatever that code holds.">Always allow in ${esc(fname)}</button>` : ""}<button class="btn danger" data-d="no">Deny</button><input placeholder="Note for the agent (optional)" aria-label="Note for the agent">`;
       const title = String(ev.title || "").replace(/^(run a command|execute terminal|terminal)\s*:.*$/is, "Run this command?").replace(/^Approve edit:\s*(.+)$/i, "Change $1?");
       const g0 = gKeep;
-      const d = add(`<b>${esc(title)}</b>${ev.detail ? (ev.kind === "doc" ? `<div class="docprev">${md(ev.detail)}</div>` : `<pre>${ev.kind === "edit" ? diffLines(ev.detail) : esc(ev.detail)}</pre>`) : ""}<div class="acts">${opts}</div>`, "appr");
+      // An office card: plain lines of what will change, and the exact call folded under "Details" (0.0.19: the cards
+      // showed edit_office_file's raw JSON and the model's own brief).
+      const [plain, more] = String(ev.detail || "").split("\n\nDetails:\n");
+      const body = more !== undefined ? `${plain ? `<ul class="apsum">${plain.split("\n").filter(Boolean).map(l => `<li>${esc(l)}</li>`).join("")}</ul>` : ""}<details class="apdet"><summary>Details</summary><pre>${esc(more)}</pre></details>`
+        : ev.detail ? (ev.kind === "doc" ? `<div class="docprev">${md(ev.detail)}</div>` : `<pre>${ev.kind === "edit" ? diffLines(ev.detail) : esc(ev.detail)}</pre>`) : "";
+      const d = add(`<b>${esc(title)}</b>${body}<div class="acts">${opts}</div>`, "appr");
       if (g0) { $(".rows", g0).appendChild(d); cur.group = g0; bumpGroup(g0); g0.open = true; }   // the Allow buttons must stay visible
       d.id = "appr-" + ev.id; if (typeof ev.i === "number") d.dataset.i = ev.i;
       $$("button", d).forEach(b => b.onclick = async () => {
@@ -1716,7 +1729,7 @@ function applyEvRaw(ev) {
       });
       scrollConv(true); break; }
     case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /approval|waiting/i.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
-      const d = cardEl("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.closed ? "Closed when meshpool restarted." : ev.decision === "stopped" ? "Stopped before running." : ev.decision === "timeout" ? "No answer in time." : ev.reason ? esc(ev.reason) : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "save" ? "Allowed, and saved for this folder." : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
+      const d = cardEl("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); $(".apdet", d)?.remove(); $(".apsum", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.closed ? "Closed when meshpool restarted." : ev.decision === "stopped" ? "Stopped before running." : ev.decision === "timeout" ? "No answer in time." : ev.reason ? esc(ev.reason) : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "save" ? "Allowed, and saved for this folder." : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
         const g = d.previousElementSibling; if (g?.classList.contains("work") && d === col.lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
       if (ev.final && cur.thoughtLive) {      // the saved copy of what streamed live: add only what this page missed
@@ -1774,7 +1787,7 @@ function applyEvRaw(ev) {
         break; }
       if (ev.look) cur.activity = String(ev.text || "").replace(/\.+$/, "");   // the footer names the wait (agent/look.py)
       if (ev.look && ev.persona && cur.lookEl && cur.lookEl.isConnected) { cur.lookEl.textContent = ev.text; break; }   // the same note says who is checking it
-      { const nn = add(esc(plainStatus(ev.text)) + (ev.detail ? ` <details class="notedet"><summary>Details</summary><div>${esc(ev.detail).replace(/\n/g, "<br>")}</div></details>` : ""), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); if (ev.look) cur.lookEl = nn; } break; }
+      { const nn = add(esc(plainStatus(ev.text)) + (ev.detail ? ` <details class="notedet"><summary>Details</summary><div>${esc(ev.detail).replace(/\n/g, "<br>")}</div></details>` : ""), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); if (ev.look) { endLook(cur, ""); cur.lookEl = nn; nn.dataset.look = "1"; } else if (/^Starting the office tools/.test(ev.text || "")) { cur.officeEl?.remove(); cur.officeEl = nn; } } break; }
     case "gate": {                                      // all model slots busy: say so while it waits, drop the line once it runs
       if (cur.gateEl && !cur.gateEl.isConnected) cur.gateEl = null;
       if (ev.state === "waiting") {

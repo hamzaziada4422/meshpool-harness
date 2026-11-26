@@ -537,6 +537,59 @@ def patch_from_shell(argv):
     return m.group("body"), cd
 
 
+_PATCH_HEAD = re.compile(r"\A\s*(?:cd\s+(?P<cd>'[^']*'|\"[^\"]*\"|[^\s&;|<>]+)\s*&&\s*)?(?:apply_patch|applypatch)\s*"
+                         r"<<-?\s*(?P<q>['\"]?)(?P<tag>\w+)(?P=q)(?P<inline>[^\n]*)\n")
+
+
+def split_patch_script(argv):
+    """(patch, working folder or None, rest, rest only if the patch applied) for a script that starts with an
+    apply_patch heredoc and then runs other commands: `apply_patch <<'EOF' ... EOF` and `python -m pytest` on the
+    next line (Omar, 0.0.19: such a script was judged as one command of 50 "steps" and refused in Accept edits).
+    The rest keeps the `cd dir &&` the script started with. None when the script is not of that form, or when the
+    heredoc line pipes or redirects (`apply_patch <<EOF | tee`): those are judged as one command."""
+    script = argv if isinstance(argv, str) else shell_script(argv)
+    m = _PATCH_HEAD.match(script or "")
+    if not m:
+        return None
+    tag, lines = m.group("tag"), script[m.end():].split("\n")
+    end = next((i for i, ln in enumerate(lines) if ln.strip() == tag), None)
+    if end is None:
+        return None
+    body, after = "\n".join(lines[:end]), "\n".join(lines[end + 1:]).strip()
+    inline, strict = m.group("inline").strip(), False
+    if inline:
+        mm = re.match(r"(&&|;)\s*(.*)\Z", inline, re.S)
+        if not mm:
+            return None
+        strict, inline = mm.group(1) == "&&", mm.group(2).strip()
+    rest = "\n".join(x for x in (inline, after) if x).strip()
+    cd = (m.group("cd") or "").strip("'\"") or None
+    if rest and m.group("cd"):
+        rest = f"cd {m.group('cd')} && {rest}"          # the cd holds for the whole script, as in the shell
+    return body, cd, rest, strict
+
+
+_VAR = re.compile(r"\$\{(\w+)\}|\$(\w+)")
+
+
+def expand_path(p: str) -> str:
+    """A path as a shell would read it: ~ and ~user, $HOME, ${VAR} and $VAR expanded. Omar, 0.0.19: an apply_patch to
+    `$HOME/omar_notes.txt` made a folder named "$HOME" in the project. A variable that is not set is an error, never
+    an empty string or a literal "$NAME" folder."""
+    s = str(p or "")
+    if "$" in s:
+        def var(m):
+            name = m.group(1) or m.group(2)
+            v = os.environ.get(name)
+            if v is None and name in ("HOME", "USERPROFILE"):
+                v = os.path.expanduser("~")
+            if v is None:
+                raise ToolError(f"the path {s} names ${name}, which is not set here. Give the full path instead.")
+            return v
+        s = _VAR.sub(var, s)
+    return os.path.expanduser(s) if s.startswith("~") else s
+
+
 _BG_ALL: set = set()
 
 
@@ -1071,6 +1124,8 @@ class Workspace:
         if self.container and self.mounted and self.cdir and os.path.isabs(p) and (p == self.cdir or p.startswith(self.cdir.rstrip("/") + "/")):
             p = str(self.root / os.path.relpath(p, self.cdir))     # container path -> host copy
         p = fix_win_path(p)
+        if write and ("$" in p or p.startswith("~")):
+            p = expand_path(p)                    # a shell's reading, never a literal "$HOME" or "~" folder
         if write and (bad := reserved_name(p)):
             raise ToolError(f"'{bad}' is a reserved device name on Windows and cannot be used as a file name")
         q = (self.root / p).resolve() if not os.path.isabs(p) else Path(p).resolve()
@@ -2185,6 +2240,16 @@ class Workspace:
         if hit:
             patch, cd = hit
             return self.apply_patch(patch, base=cd or workdir)
+        sp = split_patch_script(command)
+        if sp and sp[2]:                              # a patch, then other commands: the patch as an edit, then the rest
+            patch, cd, rest, strict = sp
+            try:
+                done = self.apply_patch(patch, base=cd or workdir)
+            except ToolError as e:
+                if strict:
+                    raise ToolError(f"{e}\nThe commands after the patch were not run.") from None
+                done = f"apply_patch failed: {e}"
+            return done.rstrip("\n") + "\n" + self.shell(rest, workdir=workdir, timeout_ms=timeout_ms)
         script = shell_script(command)
         if not script.strip():
             raise ToolError("shell: `command` is empty")
@@ -2236,12 +2301,32 @@ class Workspace:
             except ToolError as e:
                 out, code = str(e), 1
             return exec_result(out if out.endswith("\n") else out + "\n", code, time.time() - t0, max_output_tokens)
+        pre = ""
+        for _ in range(20):                           # a patch (or several), then other commands: each patch as an
+            sp = split_patch_script(cmd)              # edit, then the rest as commands of their own
+            if not (sp and sp[2]):
+                break
+            try:
+                done = self.apply_patch(sp[0], base=sp[1] or workdir)
+            except ToolError as e:
+                if sp[3]:
+                    return exec_result(f"{pre}{e}\nThe commands after the patch were not run.\n", 1, time.time() - t0,
+                                       max_output_tokens)
+                done = f"apply_patch failed: {e}"
+            pre, cmd = pre + done.rstrip("\n") + "\n", sp[2]
+        hit = patch_from_shell(cmd) if pre else None
+        if hit:                                       # the last part is a patch too
+            try:
+                out, code = pre + self.apply_patch(hit[0], base=hit[1] or workdir), 0
+            except ToolError as e:
+                out, code = pre + str(e), 1
+            return exec_result(out if out.endswith("\n") else out + "\n", code, time.time() - t0, max_output_tokens)
         secs = None
         if isinstance(yield_time_ms, (int, float)) and not isinstance(yield_time_ms, bool):
             secs = max(1, -(-int(max(250, yield_time_ms)) // 1000))
         text, code = self._run(cmd, secs, "bash", raw=True, cwd=cwd, login=login is not False)
         out = text.split("\n", 1)[1] if text.startswith("[exit ") and "\n" in text else text
-        return exec_result(out, code, time.time() - t0, max_output_tokens)
+        return exec_result(pre + out, code, time.time() - t0, max_output_tokens)
 
     # -- subsumed retrieval: a whole-file read of text the model already has, unchanged, is answered from memory.
     # Measured on coding agents, re-reading code already in context occurs 2-6 times per task (arXiv 2609.30725);
@@ -2309,6 +2394,8 @@ class Workspace:
         shown: dict = {}                              # key -> path as the patch names it
 
         def loc(path: str):
+            if "$" in path or path.startswith("~"):
+                path = expand_path(path)           # before the base is joined: $HOME/x is the home folder's x
             full = os.path.join(base, path) if base and not os.path.isabs(path) else path
             if remote:
                 return self._cpath(full), None
