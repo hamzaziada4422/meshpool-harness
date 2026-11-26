@@ -21,8 +21,17 @@ HONESTY = ("Honesty comes first. Never make something up to fill a gap. If you o
 # consulting house style (takeaway titles, one message per slide, an exhibit on every page) and the checks.
 # What Pi (tools="deferred") gets instead of HONESTY and PLAIN: the same rules in about a fifth of the words. Every word
 # here is in Pi's first request.
+# Sara, round 3: a lock file named "Sara Finance" and the reply said "she appears to have the workbook open ... ask her
+# to close it". The person reading the reply is the user: always "you".
+ADDRESS = ("Address the user as \"you\". Never refer to them in the third person (\"she\", \"he\", \"they\", \"the "
+           "user\" or their name), even when you read their name in a file, a lock file or a document's author field.")
+# Sara, round 3: Codex's reply pointed to a backup it had made in a temporary folder outside the project; the link
+# opened "That folder is not one of your projects."
+NO_SCRATCH_COPIES = ("Do not make backup copies of the user's files outside the project folder, and never point the "
+                     "user to a file outside it: they cannot open it. meshpool keeps every change and Undo takes it back.")
 LEAN_RULES = ("Never invent facts, numbers or sources: say \"I don't know\". Never say something was done or tested "
-              "when it was not. Write plainly: answer first, no preamble or closing offers, no em dashes, no emoji.")
+              "when it was not. Write plainly: answer first, no preamble or closing offers, no em dashes, no emoji. "
+              "Address the user as \"you\", never in the third person, even when a file names them.")
 # The office rules for Pi, only in a chat that asked for an office file.
 ENGINES_LEAN = ("Slides and workbooks: make_deck, add_slides, make_spreadsheet or office_task, never python-pptx, "
                 "openpyxl or xlsxwriter by hand. To change a file the user has (.docx, .xlsx, .pptx), use "
@@ -65,7 +74,7 @@ PLAIN = ("Write plainly, like a senior colleague, not a chatbot: the answer firs
          "machine text: delve, leverage, robust, seamless, crucial, pivotal, tapestry, landscape, realm, embark, "
          "elevate, unlock, streamline, game-changer, cutting-edge, \"in today's fast-paced world\", \"it's important "
          "to note\". Prose by default, one idea per paragraph; headings, bold and bullets only where they help. Files "
-         "you make look like a professional's work: one consistent style, restrained colour, no filler.")
+         "you make look like a professional's work: one consistent style, restrained colour, no filler. " + ADDRESS)
 
 
 def dashless(text: str) -> str:
@@ -463,6 +472,8 @@ def build_context(task: str = "", root: str = "", project_id: str = "", chat_id:
     if rules or data_rule:                     # an agent whose system prompt is someone else's text gets it here
         from meshpool_harness.agent.core import DATA_RULE
         parts.append(DATA_RULE)
+    if rules:                                  # meshpool's own agents have SCRATCH_RULE in their system prompt
+        parts.append(NO_SCRATCH_COPIES)
     sections.append({"title": "Meshpool's own rules", "text": "\n".join(parts), "ids": []})
     try:                                       # who the user is and the language to answer in (Settings, General)
         from meshpool_harness.ui import settings_v2 as SV

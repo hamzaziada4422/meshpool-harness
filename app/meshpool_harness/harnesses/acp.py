@@ -96,6 +96,17 @@ class ACPStopped(ACPError):
     pass
 
 
+# Sara, round 3: "Codex sent nothing for 300 seconds, so this turn was ended. It restarts with your next message
+# (MH_ACP_IDLE_S sets the limit)." Codex was waiting on model calls that never answered. The chat says it in plain
+# words and offers Try again (the error event's "again").
+STALL_TEXT = "The model stopped answering. Your files are as the last step left them."
+
+
+class ACPStall(ACPError):
+    """The harness sent nothing for MH_ACP_IDLE_S during a turn (it is usually waiting on a model call that never
+    answers). The turn was ended and the process restarted."""
+
+
 def _text_of(content) -> str:
     """Flatten ACP tool-call content into text for the UI."""
     out = []
@@ -134,6 +145,20 @@ def _raw_text(raw) -> str:
                 return str(raw[k])
         return ""
     return str(raw or "")
+
+
+def _command_of(raw) -> str:
+    """The shell command in a permission request's rawInput (Codex: {"command": ["bash", "-lc", "..."]} or a
+    string), or ""."""
+    if not isinstance(raw, dict):
+        return ""
+    c = raw.get("command") if raw.get("command") is not None else raw.get("cmd")
+    if isinstance(c, (list, tuple)):
+        c = [str(x) for x in c]
+        if len(c) >= 3 and os.path.basename(c[0]) in ("bash", "sh", "zsh") and c[1] in ("-c", "-lc", "-ic"):
+            return c[2]
+        return " ".join(c)
+    return str(c or "")
 
 
 def _label(u: dict) -> tuple[str, str]:
@@ -550,8 +575,7 @@ class ACPAgent:
                 return msg.get("result") or {}
         self._hard_restart()
         if self._idle_s() and not self._stop and method == "session/prompt":
-            raise ACPError(f"{self.manifest.get('name', 'The harness')} sent nothing for {int(self._idle_s())} seconds, so "
-                           "this turn was ended. It restarts with your next message (MH_ACP_IDLE_S sets the limit).")
+            raise ACPStall(STALL_TEXT)
         raise ACPStopped("stopped")
 
     @staticmethod
@@ -643,16 +667,33 @@ class ACPAgent:
         if self.plan and (tc.get("kind") in PLAN_BLOCKED or _diff_of(tc.get("content"))):
             # Plan mode only investigates, as the built-in agents' plan tools do: no edits, commands or moves.
             return {"outcome": "selected", "optionId": reject["optionId"]} if reject else {"outcome": "cancelled"}
-        if self.mode == "auto" and allow:
+        raw = tc.get("rawInput")
+        cmd = _command_of(raw) or str(tc.get("title") or "")
+        from meshpool_harness.core import permrules as PR
+        try:                                   # a command that would write over a file open in Office always asks
+            held = PR.open_office_write(cmd, self.root, self.root) if tc.get("kind") == "execute" else ""
+        except Exception:  # noqa: BLE001
+            held = ""
+        if self.mode == "auto" and allow and not held:
             return {"outcome": "selected", "optionId": allow["optionId"]}
-        if self.mode == "edits" and allow and (tc.get("kind") == "edit" or _diff_of(tc.get("content"))):
+        if self.mode == "edits" and allow and not held and (tc.get("kind") == "edit" or _diff_of(tc.get("content"))):
             return {"outcome": "selected", "optionId": allow["optionId"]}
         if not self.approve or self._stop:
             return {"outcome": "cancelled"}
         title = tc.get("title") or "The harness asks for permission"
-        raw = tc.get("rawInput")
         detail = _diff_of(tc.get("content")) or _text_of(tc.get("content")) or \
             (json.dumps(raw, indent=1, ensure_ascii=False)[:3000] if raw else "")
+        from meshpool_harness import office_guard as OG
+        if held:
+            # a file open in Office: an office card, its plain lines and the exact command under "Details"
+            title = f"Change {held}? It is open in Office right now"
+            detail = "If Office saves its own copy later, this change is lost.\n\nDetails:\n" + (cmd or detail)[:3000]
+        elif tc.get("kind") == "execute" and cmd:
+            # Sara: the card's title was the raw soffice command and its body a JSON blob of rawInput. The card is a
+            # command card like the built-in agent's: the plain line comes from core.approval_view (the title when it
+            # is plain words, "Convert Board_Update_Q3.pptx to PDF"), the command alone sits in its Details fold.
+            title = OG.plain_command_title(cmd) or title
+            detail = cmd[:3000]
         kind = "edit" if (tc.get("kind") == "edit" or _diff_of(tc.get("content"))) else \
             ("bash" if tc.get("kind") == "execute" else "mcp")
         choice, _note = self.approve(kind, title, detail,
@@ -745,6 +786,103 @@ class ACPAgent:
             txt = re.sub(r"^\s*Warning: Model metadata for [^\n]*not found[^\n]*\n*", "", "".join(self._text))
             self._text = []
             self._emit({"type": "assistant", "text": txt, "streamed": True, "has_tools": has_tools})
+
+    # ---------- office work meshpool does or guards itself (office_guard.py) -----------------------------------
+    def _office_direct(self, text: str) -> str | None:
+        """A message that only asks for a PDF of one office file in the folder: meshpool's own converter makes it, in
+        one step (Codex's sandbox cannot run LibreOffice: it took 9 steps and a raw approval card for Sara). In Ask
+        mode the card says "Convert Board_Update_Q3.pptx to PDF". Returns the reply, or None to let the engine work."""
+        if self.plan or os.environ.get("MH_OFFICE_DIRECT_CONVERT", "1") == "0":
+            return None
+        from meshpool_harness import office_guard as OG
+        try:
+            req = OG.conversion_request(text, self.root)
+        except Exception:  # noqa: BLE001 - never blocks a message
+            req = None
+        if req is None or not OG.can_convert():
+            return None
+        src, fmt = req
+        title = OG.convert_title(src, fmt)
+        dst_name = src.with_suffix("." + fmt).name
+        if self.mode not in ("auto", "edits"):
+            if not self.approve:
+                return None
+            body = (f"Makes {dst_name} from {src.name}, in the same folder.\n"
+                    + (f"It replaces the {dst_name} that is there now. Undo can bring it back.\n"
+                       if src.with_suffix("." + fmt).exists() else "")
+                    + f"\nDetails:\nmeshpool's own office converter (LibreOffice), outside the command sandbox.\n"
+                    f"Source: {src}")
+            from meshpool_harness.core import permrules as PR
+            choice, _note = PR.approve_with_scope(self.approve, "edit", title, body, "once")
+            if choice in (None, "", "no") or self._stop:
+                if self._stop:
+                    raise ACPStopped("stopped")
+                reply = f"I did not make {dst_name}: you chose not to convert {src.name}."
+                self._text = [reply]
+                self._flush_text()
+                return reply
+        tid = "convert-" + uuid.uuid4().hex[:8]
+        self._turn_tools = getattr(self, "_turn_tools", 0) + 1
+        self._emit({"type": "tool_start", "id": tid, "name": "convert_document", "summary": title, "mcp": False,
+                    "diff": ""})
+        dst, why = OG.convert(src, fmt)
+        if dst is None:
+            self._emit({"type": "tool_end", "id": tid, "name": "convert_document", "ok": False, "denied": False,
+                        "output": why})
+            self._turn_tools -= 1                        # the engine tries instead, told what happened
+            return None
+        n = OG.page_count(dst) if fmt == "pdf" else 0
+        self._emit({"type": "tool_end", "id": tid, "name": "convert_document", "ok": True, "denied": False,
+                    "output": f"Saved: {dst}" + (f" ({n} page{'s' if n != 1 else ''})" if n else "")})
+        reply = (f"{dst.name} is ready, made from {src.name}" + (f", {n} page{'s' if n != 1 else ''}" if n else "")
+                 + ". It is in the same folder, next to the original.")
+        self._text = [reply]
+        self._flush_text()
+        return reply
+
+    SANDBOX_NOTE = ("\n\n​LibreOffice (soffice) cannot run inside your command sandbox here: it needs a local "
+                    "socket the sandbox blocks, so it exits 1 even on a text file. Do not try it or work around it. To "
+                    "make a PDF of an office file, or pictures of its pages to check the layout, call the meshpool-office "
+                    "tool convert_document (to \"pdf\", or \"png\" for page pictures); it runs outside the sandbox. "
+                    "Then look at the pictures with view_image.")
+
+    def _sandbox_note(self) -> str:
+        """Daniel and Sara, round 3: in Codex's sandbox (Ask and Accept edits) `soffice --convert-to` always failed, so
+        the model said "LibreOffice would not convert in this environment" and asked the user to check the layout, or
+        spent 9 steps and asked to run it outside the sandbox. Once per session of a chat with the office tools, the
+        engine is told how to convert and render instead (meshpool-office convert_document runs outside it)."""
+        modes = self.manifest.get("no_soffice_in") or []
+        if self.mode not in modes or not self.office_on or not self.manifest.get("office", True):
+            return ""
+        key = (self.acp_session, self.mode)
+        if getattr(self, "_sandbox_noted", None) == key:
+            return ""
+        self._sandbox_noted = key
+        return self.SANDBOX_NOTE
+
+    def _open_file_guard(self, text: str) -> str:
+        """Before an outside engine works on a message that changes an office file open in Excel, Word or PowerPoint
+        (its lock file is next to it): ask first, as meshpool's own agent does. The engine writes files itself, in its
+        own sandbox, so this is the one moment meshpool can stop it. Returns the hidden note for the engine ("" when
+        the user said go ahead, or nothing is open)."""
+        if self.plan or self.mode == "auto" or not self.approve:
+            return ""
+        from meshpool_harness import office_guard as OG
+        try:
+            found = OG.open_files(text, self.root)
+        except Exception:  # noqa: BLE001
+            return ""
+        keep = []
+        for name, app, lock in found:
+            title, body = OG.guard_card(name, app, lock)
+            opts = [{"id": "change", "label": "Change it anyway", "kind": "anyway"},
+                    {"id": "keep", "label": "Don't change it", "kind": "reject_once"}]
+            choice, _note = self.approve("edit", title, body, opts)
+            if choice != "change" or self._stop:
+                keep.append(name)
+        if self._stop:
+            raise ACPStopped("stopped")
+        return OG.keep_note(keep) if keep else ""
 
     # ---------- session ------------------------------------------------------------------------------------------
     def _before_turn(self) -> list:
@@ -1007,9 +1145,14 @@ class ACPAgent:
         try:
             self._emit({"type": "model_start"})
             self._turn_tools = 0
+            done = self._office_direct(shown)
+            if done is not None:                         # a plain "make a PDF of X": meshpool did it, no engine call
+                return done
+            body += self._open_file_guard(shown)
             self._ensure_session_tracked()
             if self._stop:                               # Stop pressed while the harness was starting
                 raise ACPStopped("stopped")
+            body += self._sandbox_note()
             self._before = self._descendants()           # Stop then ends only what this turn starts
             if getattr(self, "_carry", False):
                 self._carry = False
@@ -1075,7 +1218,9 @@ class ACPAgent:
             else:
                 if getattr(self, "_turn_tools", 0) == 0:
                     self.turn_failed = str(e)            # the engine refused the prompt before doing anything
-                self._emit({"type": "error", "text": str(e)})
+                # A stall: the line offers Try again (Session.retry runs the message again, files as they are). With
+                # nothing done yet, Session moves an Auto chat to meshpool's own agent (_engine_fallback).
+                self._emit({"type": "error", "text": str(e), **({"again": True} if isinstance(e, ACPStall) else {})})
         finally:
             self._in_turn = False
             self._close_open_tools()

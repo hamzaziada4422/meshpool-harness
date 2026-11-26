@@ -847,16 +847,131 @@ def render_web(url: str, out_dir, tag: str = "r1", request: str = "", launch=Non
     return {"error": f"could not open a browser to look at it: {str(why)[:200]}", "findings": [], "shots": []}
 
 
-def render_doc(path: str, out_dir, tag: str = "r1") -> dict:
+MAX_LOOK_PAGES = 4
+_ANCHOR = re.compile(r"\b(section|slide|page|chapter|part|appendix|table|figure|step|clause|article)\s+(\d+(?:\.\d+)*|"
+                     r"[ivxlc]+)\b", re.I)
+_QUOTED = re.compile(r"[\"\u201c']([^\"\u201d']{4,60})[\"\u201d']")
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", str(s or "")).strip().lower()
+
+
+def _tracked_texts(path: Path) -> list[str]:
+    """The text of a Word file's tracked insertions and deletions (what the turn marked as changed)."""
+    if path.suffix.lower() not in (".docx", ".docm"):
+        return []
+    try:
+        import zipfile
+        with zipfile.ZipFile(path) as z:
+            xml = z.read("word/document.xml").decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for m in re.finditer(r"<w:(ins|del)\b[^>]*>(.*?)</w:\1>", xml, re.S):
+        t = "".join(re.findall(r"<w:(?:t|delText)\b[^>]*>([^<]*)</w:(?:t|delText)>", m.group(2)))
+        t = _norm(t)
+        if len(t) >= 12:
+            out.append(t[:40])
+    return list(dict.fromkeys(out))[:40]
+
+
+def changed_pages(path, texts: list[str], request: str = "", limit: int = MAX_LOOK_PAGES) -> list[int]:
+    """1-based pages to look at: the ones the change touched (a Word file's tracked changes), else the ones the request
+    names ("section 3", "slide 4", a quoted phrase), else the first two. Sara: the look drew pages 1 and 2 of a policy
+    whose section 3 had changed and said "found nothing to fix"."""
+    n = len(texts)
+    if not n:
+        return []
+    pages = [_norm(t) for t in texts]
+    score = [0] * n
+    for snip in _tracked_texts(Path(path)):
+        for i, t in enumerate(pages):
+            if snip in t:
+                score[i] += 3
+    req = str(request or "")
+    for m in _ANCHOR.finditer(req):
+        kind, num = m.group(1).lower(), m.group(2).lower()
+        if kind in ("slide", "page") and num.isdigit() and 0 < int(num) <= n:
+            score[int(num) - 1] += 5
+            continue
+        rx = re.compile(r"\b" + re.escape(kind) + r"\s+" + re.escape(num) + r"\b")
+        hit = [i for i, t in enumerate(pages) if rx.search(t)]
+        for i in hit:
+            score[i] += 2
+        if hit and hit[-1] + 1 < n:                      # a section goes on over the page after its heading
+            nxt = pages[hit[-1] + 1]
+            if not re.search(r"\b" + re.escape(kind) + r"\s+(?!" + re.escape(num) + r"\b)\w+", nxt):
+                score[hit[-1] + 1] += 1
+    for m in _QUOTED.finditer(req):
+        q = _norm(m.group(1))
+        for i, t in enumerate(pages):
+            if q in t:
+                score[i] += 2
+    best = sorted((i for i in range(n) if score[i] > 0), key=lambda i: (-score[i], i))[:limit]
+    return sorted(i + 1 for i in best) or list(range(1, min(n, 2) + 1))
+
+
+def _pdf_texts(pdf: Path) -> list[str]:
+    import pypdfium2 as pdfium
+    doc = pdfium.PdfDocument(str(pdf))
+    try:
+        out = []
+        for i in range(len(doc)):
+            try:
+                out.append(doc[i].get_textpage().get_text_range())
+            except Exception:  # noqa: BLE001
+                out.append("")
+        return out
+    finally:
+        doc.close()
+
+
+def pages_phrase(shown: list[int], total: int) -> str:
+    """"page 3 of 5", "pages 3 and 4 of 5", "pages 1, 3 and 4 of 5"."""
+    s = [str(x) for x in shown]
+    if not s:
+        return ""
+    if len(s) == 1:
+        return f"page {s[0]} of {total}"
+    return f"pages {', '.join(s[:-1])} and {s[-1]} of {total}"
+
+
+def shown_pages(res: dict) -> str:
+    """Which pages a look drew, for the reviewer: "pages 3 and 4 of 5, the ones the change touched"."""
+    pg = (res or {}).get("pages") or {}
+    if pg.get("shown") and pg.get("total"):
+        p = pages_phrase(pg["shown"], pg["total"])
+        return p if len(pg["shown"]) >= pg["total"] else p + ", the ones the change touched or the request names"
+    return "its first pages"
+
+
+def render_doc(path: str, out_dir, tag: str = "r1", request: str = "") -> dict:
     """Pages of a document, deck, sheet, PDF or image as pictures (view.render, through the kept LibreOffice for
-    Office files), with what can be measured from their text."""
+    Office files), with what can be measured from their text. For a document or PDF, the pages the change touched
+    (changed_pages), up to MAX_LOOK_PAGES; "pages" says which were shown out of how many."""
     from meshpool_harness import view as V
     t = time.time()
+    pages = None
     try:
         out = Path(out_dir) / tag
-        if V.kind(path) == "web":                              # an SVG chart: drawn by the same headless browser
+        k = V.kind(path)
+        if k == "web":                                         # an SVG chart: drawn by the same headless browser
             return render_web(Path(path).resolve().as_uri(), out_dir, tag)
-        r = V.render(path, pages="1-2", out_dir=out)
+        if k in ("office", "pdf"):
+            import tempfile
+            with tempfile.TemporaryDirectory(prefix="mh_look_") as tmp:
+                if k == "pdf":
+                    pdf = Path(path)
+                else:
+                    from engines.forge.common import soffice_convert
+                    pdf = Path(soffice_convert(str(path), "pdf", tmp))
+                texts = _pdf_texts(pdf)
+                pick = changed_pages(path, texts, request)
+                r = V.render(str(pdf), pages=",".join(map(str, pick)) or "1-2", out_dir=out)
+                pages = {"shown": pick, "total": len(texts)}
+        else:
+            r = V.render(path, pages="1-2", out_dir=out)
     except Exception as e:  # noqa: BLE001
         return {"error": f"could not draw {Path(path).name}: {str(e)[:200]}", "findings": [], "shots": []}
     shots = list(r.get("shots") or [])
@@ -871,8 +986,9 @@ def render_doc(path: str, out_dir, tag: str = "r1") -> dict:
                              "sel": "", "views": []})
         if V.kind(path) in ("office", "pdf") and not txt.strip():
             findings.append({"rule": "empty", "msg": f"{label} has no text", "sel": "", "views": []})
-    return {"findings": findings, "shots": shots[:2], "notes": r.get("notes") or [], "text": "\n".join(texts)[:3000],
-            "secs": round(time.time() - t, 2)}
+    return {"findings": findings, "shots": shots[:MAX_LOOK_PAGES], "notes": r.get("notes") or [],
+            "text": "\n".join(texts)[:3000 if not pages else 1500 * MAX_LOOK_PAGES], "secs": round(time.time() - t, 2),
+            **({"pages": pages} if pages else {})}
 
 
 # ---------- the review message ------------------------------------------------------------------------------------------
@@ -928,7 +1044,7 @@ def message(kind: str, target: dict, res: dict, request: str, blind: bool, verdi
                 f"({PHONE[0]}x{PHONE[1]})")
         rubric = RUBRIC_WEB
     else:
-        what = f"{target['label']} as pictures of its first pages"
+        what = f"{target['label']} as pictures of {shown_pages(res)}"
         rubric = RUBRIC_DOC
     lines = finding_lines(res)
     steps = [s for s in res.get("steps") or [] if isinstance(s, dict)]
@@ -1191,7 +1307,13 @@ def gate(agent, g: dict, final: str, *, render_web_fn=None, render_doc_fn=None, 
             res = (render_web_fn or render_web)(target["url"], out_dir(agent), tag, req, **kw)
         else:
             st["label"] = target["label"]
-            res = (render_doc_fn or render_doc)(target["file"], out_dir(agent), tag)
+            fn = render_doc_fn or render_doc
+            try:                                       # the request picks the pages (changed_pages), where it is taken
+                import inspect
+                takes = "request" in inspect.signature(fn).parameters
+            except (TypeError, ValueError):
+                takes = False
+            res = fn(target["file"], out_dir(agent), tag, **({"request": req} if takes else {}))
         agent._check_stop()
         st.setdefault("first", res)
         st["last"] = res

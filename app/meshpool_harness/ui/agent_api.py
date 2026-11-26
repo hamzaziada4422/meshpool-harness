@@ -931,6 +931,23 @@ class Session:
             self.state = to
             return True
 
+    def _no_dead_links(self, ev: dict) -> dict:
+        """A reply that names a file in a folder the app cannot open (a model's own scratch folder: Sara's
+        "A copy ... is at /tmp/.../Budget_2026.backup.xlsx") says its name as plain text, not a link that opens on
+        "That folder is not one of your projects." (office_guard.unlink_dead_paths). Never raises."""
+        try:
+            from meshpool_harness import office_guard as OG
+            from meshpool_harness.ui import workbench as WB
+
+            def can_open(d):
+                WB.check_root(d)
+                return True
+            text = str(ev.get("text") or "")
+            new = OG.unlink_dead_paths(text, str(getattr(self, "workdir", "") or ""), can_open)
+            return dict(ev, text=new) if new != text else ev
+        except Exception:  # noqa: BLE001
+            return ev
+
     def emit(self, ev: dict):
         self._question_state(ev)
         t = ev.get("type")
@@ -960,6 +977,8 @@ class Session:
             offer = NF.wants_folder(ev["text"])                  # offer and an "Add a folder" button instead
             if offer:
                 ev = dict(ev, text=NF.plain(ev["text"]))
+        if t == "assistant" and "/" in str(ev.get("text") or ""):
+            ev = self._no_dead_links(ev)
         if t == "turn_end":
             self._mark_retried_steps()               # failed steps a later step redid: not problems in the count
         if t == "status" and _RETRY_RE.search(str(ev.get("text") or "")):
@@ -1810,7 +1829,11 @@ class Session:
                     ll = getattr(self.agent, "last_look", None)      # the look line of this turn is in the reply: one line, not two
                     if isinstance(ll, dict) and ll.get("turn") == getattr(self.agent, "_turn_no", 0) and ll.get("line"):
                         look = str(ll["line"]).split("\n\n")[0]
-                        merged = CK.merge_line(look, line)
+                        with self.lock:                      # the turn's own reply, and the look's offer after it
+                            said = next((str(e.get("text") or "") for e in reversed(self.events)
+                                         if e.get("type") == "assistant" and not e.get("look")
+                                         and str(e.get("text") or "").strip()), "")
+                        merged = CK.merge_line(look, line, reply=[said, str(ll["line"])])
                         if merged:
                             line, extra = merged, {"look": look}
                     self.emit({"type": "checks_line", "text": line, "items": sm.get("items", []),

@@ -444,12 +444,19 @@ def _csv_sheet(p: Path) -> list[dict]:
 
 
 # ------------------------------------------------------------------ public API
-def meta(root: str, rel: str) -> dict:
+def meta(root: str, rel: str, thumb: bool = False) -> dict:
+    """What the viewer shows for a file. thumb=True (a file card's thumbnail): a workbook comes as pages, its first
+    sheet drawn by LibreOffice like a deck or a document, instead of rows and columns (Sara: the .xlsx card had a
+    generic icon next to the .pptx, .docx and .pdf thumbnails)."""
     p = resolve(root, rel)
     st = p.stat()
     k = kind_of(p)
     base = {"name": p.name, "path": rel, "ext": p.suffix.lower().lstrip("."), "size": st.st_size, "mtime": st.st_mtime,
             "kind": k}
+    if thumb and k == "sheet" and p.suffix.lower() in (".xlsx", ".xlsm") and st.st_size <= SHEET_MAX_BYTES:
+        import zipfile
+        if zipfile.is_zipfile(p):
+            return base | {"kind": "pages"} | _office_state(p)
     if k == "pdf":
         try:
             n = _page_count(p, _key(p))

@@ -684,7 +684,8 @@ class Handler(BaseHTTPRequestHandler):
                     png = PV.page_png(q.get("root", [""])[0], q.get("path", [""])[0], int(q["page"][0] or 0),
                                       int(q.get("w", [PV.MAX_WIDTH])[0] or PV.MAX_WIDTH))
                     return self._send(200, png, "image/png")
-                return self._send(200, PV.meta(q.get("root", [""])[0], q.get("path", [""])[0]))
+                return self._send(200, PV.meta(q.get("root", [""])[0], q.get("path", [""])[0],
+                                               thumb=q.get("thumb", [""])[0] == "1"))
             except (ValueError, OSError, KeyError) as e:
                 return self._send(400, {"error": str(e).strip("'\"") or "Could not preview this file."})
             except (BrokenPipeError, ConnectionResetError):

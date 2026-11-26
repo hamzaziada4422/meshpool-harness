@@ -43,6 +43,9 @@ CODEX = {"id": "codex", "name": "Codex", "mode": "code", "type": "acp", "models"
          # asks before anything outside it. Meshpool's Undo covers every change.
          "modes": {"ask": "workspace-write", "edits": "workspace-write", "auto": "agent-full-access"},
          "command": "npx", "args": ["-y", CODEX_ACP], "share_mcp": True, "lean": True, "install": NODE_NOTE,
+         # the modes Codex runs commands in its own sandbox, which refuses the local socket LibreOffice needs
+         # (acp.ACPAgent._sandbox_note: office conversions and page pictures go through meshpool's office tools)
+         "no_soffice_in": ["ask", "edits"],
          "tagline": "Terminal and command-line work, on GPT models",
          "description": ("Best for terminal and command-line work. OpenAI's open-source Codex agent, on your Meshpool "
                          "key, another API key or your ChatGPT sign-in. It edits files in your project without "

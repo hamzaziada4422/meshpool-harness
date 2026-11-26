@@ -1494,7 +1494,10 @@ function waitNote(secs, stuck, again) {
     $("[data-retry]", n).onclick = () => retryLast();
     col.appendChild(n); scrollConv();
   }
-  setTxt($(".wn", n), stuck ? "This is taking longer than it should. Try again?" : `Still waiting for the model (${t}). Some answers take a while; you can stop it any time.`);
+  // The last step in plain words, so a long wait says where the work stands ("Last step: converted. Waiting for the
+  // model's next move."), not only that it waits (Sara, round 3).
+  const ls = String(S.cur?.lastStep || "").trim().replace(/\.$/, ""), lw = ls ? `Last step: ${ls.charAt(0).toLowerCase() + ls.slice(1)}. ` : "";
+  setTxt($(".wn", n), stuck ? `${lw}This is taking longer than it should. Try again?` : lw ? `${lw}Waiting for the model's next move (${t}). You can stop it any time.` : `Still waiting for the model (${t}). Some answers take a while; you can stop it any time.`);
   const rb = $("[data-retry]", n); if (rb) rb.hidden = !(stuck || again);
 }
 // ---- scrolling: follow the end while the reader is at the end; never pull them back once they scroll up
@@ -1784,7 +1787,7 @@ function applyEvRaw(ev) {
       if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span> <button class="linkbtn" data-takeback title="Take it back before the agent reads it">Take back</button><br><span class="stx">${esc(ev.text)}</span></div>`, "msg-user steer"); $("#queuedChip")?.remove(); break; }
       cur.officeEl?.remove(); cur.officeEl = null;   // "Starting the office tools..." was the wait before this message
       closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; cur.tpaths = []; cur.lastAi = null; cur.lastText = ""; cur.down = false; cur.downEl = null;
-      { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button><button class="iconbtn" data-ma="rewind" data-tip="Rewind to here" data-tip-pos="below" aria-label="Rewind to here">${ICON.undo}</button><button class="iconbtn" data-ma="fork" data-tip="Fork from here" data-tip-pos="below" aria-label="Fork from here">${ICON.branch}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${userBody(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.ei = ev.i; mu._text = String(ev.text ?? ""); cur.turnEi = ev.i; cur.lastFoot = null; }
+      { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button><button class="iconbtn" data-ma="rewind" data-tip="Rewind to here" data-tip-pos="below" aria-label="Rewind to here">${ICON.undo}</button><button class="iconbtn" data-ma="fork" data-tip="Fork from here" data-tip-pos="below" aria-label="Fork from here">${ICON.branch}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${userBody(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.ei = ev.i; mu._text = String(ev.text ?? ""); cur.turnEi = ev.i; cur.lastFoot = null; cur.lastStep = ""; }
       break; }
     case "text_delta":
       if (!cur.live) { closeGroup(); cur.live = add("", "msg-ai"); cur.liveText = ""; mdRoot(cur.live); if (!cur.stage) easeStart(cur.live); }
@@ -1852,6 +1855,7 @@ function applyEvRaw(ev) {
       const nm = d.dataset.name || "";
       if (d.dataset.pdone) $(".tn", d).textContent = ev.ok ? d.dataset.pdone : d.dataset.pbase;
       else $(".tn", d).textContent = ev.ok ? (TOOL_DONE[nm] || TOOL_LABEL[nm] || plainTool(nm, d.dataset.mcp, "done")) : (TOOL_BASE[nm] || TOOL_LABEL[nm] || plainTool(nm, d.dataset.mcp, "base"));
+      cur.lastStep = ev.ok ? $(".tn", d).textContent : "";    // the long-wait line says it (waitNote)
       const shown = cleanToolOut(ev.output);
       if (shown && !$("pre:not(.script)", d)) d.insertAdjacentHTML("beforeend", `<pre class="out">${esc(shown)}</pre>`);
       if (ev.ok) markRetried(d);
@@ -1963,7 +1967,10 @@ function applyEvRaw(ev) {
         if (cur.gateEl) cur.gateEl.innerHTML = esc(t); else cur.gateEl = add(esc(t), "note gate");
       } else if (cur.gateEl) { cur.gateEl.remove(); cur.gateEl = null; }
       break; }
-    case "error": { endLook(cur, String(ev.text || "").split("\n")[0].slice(0, 120)); closeGroup(); const n = add(esc(ev.text) + (/settings/i.test(ev.text || "") ? ` <button class="linkbtn" data-os="1">Open Settings</button>` : "") + ` <button class="linkbtn" data-rp="1" title="Opens a GitHub issue with this error, your version and system. Your chat is not included.">Report this</button>`, "note bad"); $("[data-os]", n)?.addEventListener("click", () => openSettings("general")); $("[data-rp]", n)?.addEventListener("click", () => reportProblem(ev.text)); break; }
+    case "error": { endLook(cur, String(ev.text || "").split("\n")[0].slice(0, 120)); closeGroup();
+      // ev.again: the engine stopped answering mid-turn (harnesses/acp.py STALL_TEXT). Try again runs the message once
+      // more with the files as they are now (Session.retry), so it is the first thing on the line.
+      const n = add(esc(ev.text) + (ev.again ? ` <button class="linkbtn" data-again="1" type="button">Try again</button>` : "") + (/settings/i.test(ev.text || "") ? ` <button class="linkbtn" data-os="1">Open Settings</button>` : "") + (ev.again ? "" : ` <button class="linkbtn" data-rp="1" title="Opens a GitHub issue with this error, your version and system. Your chat is not included.">Report this</button>`), "note bad"); $("[data-os]", n)?.addEventListener("click", () => openSettings("general")); $("[data-rp]", n)?.addEventListener("click", () => reportProblem(ev.text)); $("[data-again]", n)?.addEventListener("click", () => { if (S.cur?.busy) return toast("Wait for it to finish, or stop it first."); retryLast(); }); break; }
     case "interrupted": {
       endLook(cur, "it was stopped");
       cur.gateEl?.remove(); cur.gateEl = null; cur.down = false; cur.downEl = null;

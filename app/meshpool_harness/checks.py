@@ -378,7 +378,26 @@ _LOOK_RX = re.compile(r"Checked(?: as (?P<who>[^:]+?))?: (?P<body>.+)", re.S)
 _GENERIC_WHO = re.compile(r"^(?:someone|anyone|a (?:first-time )?(?:visitor|user)|the (?:visitor|user)|people|a person)\b", re.I)
 
 
-def merge_line(look: str, checks: str) -> str:
+# The reply ends unsure of its own result: a question back to the user, or words of doubt about the output. Sara: a
+# reply that asked "I can't see section 3's ..., want me to fix it?" sat over "Checked it ...: all good."
+_DOUBT = re.compile(r"\b(?:can(?:'|’|no)?t|cannot|could ?not|couldn(?:'|’)t|unable to|did ?not|didn(?:'|’)t|"
+                    r"have ?not|haven(?:'|’)t)\s+(?:see|view|check|verify|confirm|open|test|look at|recalculate)\b|"
+                    r"\b(?:not sure|unsure|may be wrong|might be wrong|please check|double-check)\b", re.I)
+
+
+def open_doubt(reply) -> bool:
+    """The reply ends with an open question or says it could not confirm part of the result. A list: any of its
+    texts (the reply, the look's own line with its offer)."""
+    if isinstance(reply, (list, tuple)):
+        return any(open_doubt(r) for r in reply)
+    paras = [p.strip() for p in re.split(r"\n\s*\n", str(reply or "")) if p.strip()]
+    if not paras:
+        return False
+    last = paras[-1]
+    return last.rstrip("*_ )\"'").endswith("?") or bool(_DOUBT.search(last))
+
+
+def merge_line(look: str, checks: str, reply: str = "") -> str:
     """One line from the look line ("Checked as a florist shop owner: found nothing to fix.") and the checks line ("Checked
     the formulas, and that the file opens cleanly."): "Checked it the way a florist shop owner would, and the formulas, and
     that the file opens: all good." The persona is left out when it adds nothing ("someone opening this file"). "" when the
@@ -402,6 +421,8 @@ def merge_line(look: str, checks: str) -> str:
         head += (", and " if what.startswith(("that ", "the ")) else ", ") + what
     first = body.rstrip(".")
     verdict = "all good" if first.lower() == "found nothing to fix" and not rest else first
+    if verdict == "all good" and open_doubt(reply):
+        verdict = ""                                   # the reply itself is unsure: the line claims nothing it is not
     return " ".join([f"{head}: {verdict}." if verdict else f"{head}."] + rest)
 
 
