@@ -146,10 +146,10 @@ def test_7_the_terminal_shows_the_same_text_in_status_and_first_run(monkeypatch)
 
 
 # ---------------------------------------------------------------------------------------- 5: the shared slot cap
-def test_5_a_local_endpoint_takes_six_calls_and_the_setting_still_wins(monkeypatch):
+def test_5_a_local_endpoint_takes_two_calls_and_the_setting_still_wins(monkeypatch):
     from meshpool_harness.core import gateway as GW
-    assert GW.provider_cap("http://localhost:11434/v1") == 6
-    assert GW.provider_cap("http://127.0.0.1:8080/v1") == 6
+    assert GW.provider_cap("http://localhost:11434/v1") == 2       # release review: 6 at once thrashed Ollama
+    assert GW.provider_cap("http://127.0.0.1:8080/v1") == 2
     assert GW.provider_cap("https://llm.meshpool.ai/v1") == 16
     assert GW.wait_line(2, 6) == "Waiting: other meshpool chats are using the model right now (2 of 6)."
     monkeypatch.setitem(GW._CFG, "v", "3")

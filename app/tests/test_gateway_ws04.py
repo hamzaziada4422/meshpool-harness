@@ -101,8 +101,16 @@ def test_limit_follows_the_provider(env):
         assert GW.health(f"https://{host}/v1", "k").gate.limit == 32, host
     for base in ("http://localhost:11434/v1", "http://127.0.0.1:8080/v1", "http://[::1]:8080/v1",
                  "http://0.0.0.0:1/v1"):
-        assert GW.health(base, "k").gate.limit == 6, base
+        assert GW.health(base, "k").gate.limit == 2, base
     assert GW.health("https://models.example.org/v1", "k").gate.limit == 8
+
+
+def test_a_local_or_ollama_endpoint_takes_two_calls_at_once(env):
+    """Release review, 0.0.18: the local cap went from 2 to 6, which thrashes a model served by Ollama."""
+    for base in ("http://localhost:11434/v1", "http://127.0.0.1:1234/v1", "http://gpu-box.lan:11434/v1",
+                 "http://ollama:8000/v1"):
+        assert GW.provider_cap(base) == 2, base
+    assert GW.provider_cap("https://models.example.org/v1") == 8
 
 
 def test_a_fixed_setting_stays_a_cap(env, monkeypatch):

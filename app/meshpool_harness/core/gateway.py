@@ -71,17 +71,26 @@ def _host(base: str) -> str:
         return ""
 
 
+def _ollama(base: str) -> bool:
+    """An Ollama server: its port (11434) or its name, on this computer or another."""
+    try:
+        u = urlparse(base or "")
+        return u.port == 11434 or "ollama" in (u.hostname or "").lower()
+    except ValueError:
+        return False
+
+
 def provider_cap(base: str) -> int:
     """How many model calls an endpoint takes at once when MH_MAX_INFLIGHT is not set: the Meshpool gateway 16, the
-    known cloud APIs 32, a local server 6 (three or four meshpool windows and their sub-agents at once), anything
-    else 8."""
+    known cloud APIs 32, a local server or Ollama 2 (one model on one machine: more calls at once only make each one
+    slower and can push the model out of memory), anything else 8."""
     host = _host(base)
     if host == "meshpool.ai" or host.endswith(".meshpool.ai"):
         return 16
     if host in _CLOUD_HOSTS:
         return 32
-    if host in _LOCAL_HOSTS:
-        return 6
+    if host in _LOCAL_HOSTS or _ollama(base):
+        return 2
     return 8
 
 
