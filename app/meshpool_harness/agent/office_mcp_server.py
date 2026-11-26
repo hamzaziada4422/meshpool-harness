@@ -453,6 +453,59 @@ _XLSX_ALIASES = {"set_formula": "set_cell", "set_value": "set_cell", "write_cell
                  "create_sheet": "add_sheet", "write_range": "set_range", "append_row": "add_row"}
 
 
+# Sheet extensions (extLst ext uri) openpyxl drops on save, by what the user sees.
+_XLSX_EXT_NAMES = {"{78C0D931-6437-407D-A8EE-F0AAD7539E65}": "data bars or other Excel 2010 conditional formats",
+                   "{05C60535-1F16-4FD2-B633-F4F36F0B64E0}": "sparklines",
+                   "{CCE6A557-97BC-4B89-ADB6-D9C93CAAB3DF}": "Excel 2010 data validation lists",
+                   "{A8765BA9-456A-4DAB-B4F3-ACF838C121DE}": "slicers",
+                   "{3A4CF648-6AED-40F4-86FF-DC5316D8AED3}": "slicers"}
+_SHAPE = re.compile(rb"<(?:\w+:)?(?:sp|grpSp|cxnSp)[\s>/]")
+_EXT_URI = re.compile(rb"<(?:\w+:)?ext\b[^>]*?\suri=\"(\{[^\"]+\})\"")
+
+
+def _xlsx_lost_parts(p: Path) -> list[str]:
+    """What an openpyxl load and save would drop from this workbook, in words for the user; [] when nothing.
+    openpyxl keeps cells, styles, charts, images and plain comments, but not shapes and text boxes, form controls,
+    slicers, timelines, threaded comments or the Excel 2010 extensions in a sheet (data bars, sparklines)."""
+    import zipfile
+    found: list[str] = []
+
+    def add(what):
+        if what not in found:
+            found.append(what)
+    try:
+        with zipfile.ZipFile(p) as z:
+            for name in z.namelist():
+                low = name.lower()
+                if low.startswith("xl/drawings/drawing") and low.endswith(".xml"):
+                    if _SHAPE.search(z.read(name)):
+                        add("shapes or text boxes")
+                elif low.startswith("xl/ctrlprops/"):
+                    add("form controls")
+                elif low.startswith(("xl/slicers/", "xl/slicercaches/")):
+                    add("slicers")
+                elif low.startswith(("xl/timelines/", "xl/timelinecaches/")):
+                    add("timelines")
+                elif low.startswith("xl/threadedcomments/"):
+                    add("threaded comments")
+                elif low.startswith("xl/worksheets/sheet") and low.endswith(".xml"):
+                    tail = b""                       # streamed: a big sheet is never held whole
+                    with z.open(name) as f:
+                        while chunk := f.read(1 << 20):
+                            text = tail + chunk
+                            if b"extLst" in text:
+                                for uri in _EXT_URI.findall(text):
+                                    what = _XLSX_EXT_NAMES.get(uri.decode("ascii", "replace").upper())
+                                    if what:
+                                        add(what)
+                                    elif uri.upper() != b"{B025F937-C7B1-47D3-B67F-A62EFF666E3E}":
+                                        add("other Excel 2010 sheet extensions")   # that uri only links a rule to its x14 part
+                            tail = text[-400:]
+    except (OSError, zipfile.BadZipFile, KeyError):
+        return []                                    # openpyxl reports a damaged file itself
+    return found
+
+
 def edit_office_file(path: str, operations: list, output: str | None = None, in_place: bool = False):
     """Change an existing .docx, .xlsx or .pptx without rebuilding it: styles, formulas and layout stay. Works without
     LibreOffice. By default the result is a copy '<name> (edited).<ext>'; in_place=true changes the file itself."""
@@ -471,6 +524,10 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                 "delete_rows{sheet,row,count}, add_sheet{name}, delete_sheet{sheet}, freeze_panes{sheet,cell}. PowerPoint: replace_text{find,replace}, "
                 "set_notes{slide,text}."), True
     out = p if in_place else (_resolve(output) if output else _free(p.with_name(f"{p.stem} (edited){ext}")))
+    lost = _xlsx_lost_parts(p) if ext == ".xlsx" else []
+    kept_original = False
+    if lost and out.resolve() == p.resolve():          # never rewrite the user's own file without those parts
+        out, kept_original = _free(p.with_name(f"{p.stem} (edited){ext}")), True
     # Read from the source and write a part file next to `out`, moved into place only once it is whole: a failed
     # edit leaves no half-made copy behind, and a failed in-place save never truncates the user's file.
     part = out.with_name(f".{out.stem}.{os.getpid()}.{threading.get_ident()}.part{ext}")
@@ -607,7 +664,16 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
         except OSError:
             pass
         return f"Could not edit {p.name}: {e}", True
-    msg = f"{'Changed' if in_place else 'Saved a copy as'} {out}. " + "; ".join(done)
+    what = ", ".join(lost)
+    if kept_original:
+        msg = (f"Did not change {p.name} in place: the edit goes through openpyxl, which would drop its {what}. "
+               f"Saved a copy as {out} instead, and the original is unchanged. ")
+    else:
+        msg = f"{'Changed' if out == p else 'Saved a copy as'} {out}. "
+    msg += "; ".join(done)
+    if lost:
+        msg += (f"\nThe copy lacks the original's {what} (openpyxl cannot keep them). Tell the user before the copy "
+                "replaces the original.")
     return msg + (("\nNot done: " + "; ".join(errors)) if errors else ""), bool(errors) and not done
 
 
