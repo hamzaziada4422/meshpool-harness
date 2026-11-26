@@ -103,10 +103,19 @@ BOOT_PAGE = (b"<!doctype html><meta charset=utf-8><title>meshpool</title><body s
              b"printed when it started.\"; })();</script>")
 
 
-def _key_ok(key: str) -> bool:
+def _same(a, b) -> bool:
+    """Constant-time comparison that never raises: compare_digest refuses str with non-ASCII characters (a URL or a
+    header can carry them), which dropped the connection with a traceback instead of a 403."""
+    return secrets.compare_digest(str(a or "").encode("utf-8"), str(b or "").encode("utf-8"))
+
+
+def _key_ok(key: str, cookie: bool = False) -> bool:
+    """The launch key, or a one-time key. A one-time key opens the page once; within ONCE_GRACE_S a second load (a
+    webview that loads twice) is let in only together with the session cookie the first load set, so a process that
+    read the address from the process list cannot reuse it (security review, 0.0.18)."""
     if not key:
         return False
-    if secrets.compare_digest(key, LAUNCH_KEY):
+    if _same(key, LAUNCH_KEY):
         return True
     with _ONCE_LOCK:
         if key not in _ONCE:
@@ -116,7 +125,7 @@ def _key_ok(key: str) -> bool:
         if first is None:
             _ONCE[key] = now
             return True
-        return now - first < ONCE_GRACE_S
+        return cookie and now - first < ONCE_GRACE_S
 
 
 UI_VER = secrets.token_hex(4)
@@ -160,6 +169,14 @@ def assistant_view() -> dict:
 def assistant_action(b: dict) -> dict:
     from meshpool_harness import assistant as AS
     return AS.api_action(b)
+
+
+def _not_reply(host: str, said: str) -> str:
+    """A 200 that carried an error instead of a reply: the service's words, where, and what to check."""
+    if said.startswith("The address answered"):
+        return said
+    return (f"{host or 'The endpoint'} answered, but not with a model reply. The service said: {said.rstrip('.')}. "
+            "Check the model name and the key, then test again.")
 
 
 def test_connection(values: dict | None = None, fresh: bool = False) -> dict:
@@ -207,7 +224,7 @@ def test_connection(values: dict | None = None, fresh: bool = False) -> dict:
     st, data, err = PS.probe_chat(base, key, model, wire, hdr, sch, ver, kind)
     secs = round(time.time() - t0, 1)
     if err or st not in (200, 429) or (st == 200 and not PS._is_reply(wire, data)):
-        why = (PS._net_error(err, base) if err else PS._not_reply_msg(data) if st == 200
+        why = (PS._net_error(err, base) if err else _not_reply(PV.host(base), PS._not_reply_msg(data)) if st == 200
                else PS.explain(st, data, base=base, model=model, version=ver))
         return {"ok": False, "detail": why[:400], "model": model, "seconds": secs, "endpoint": base,
                 "status": 0 if err else st}
@@ -397,7 +414,7 @@ class Handler(BaseHTTPRequestHandler):
         """The app's own window: it carries the session cookie its launch key set."""
         for part in (self.headers.get("Cookie") or "").split(";"):
             k, _, v = part.strip().partition("=")
-            if k == "mp_s" and v and secrets.compare_digest(v, SESSION):
+            if k == "mp_s" and v and _same(v, SESSION):
                 return True
         return False
 
@@ -458,7 +475,7 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             return None
         except Exception as e:  # noqa: BLE001 - keep the app alive, show the cause
-            return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+            return self._send(500, {"error": _unexpected(e)})
 
     def _company(self, u):
         from meshpool_harness.ui import company_api as CO
@@ -467,7 +484,7 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, KeyError, TypeError, AttributeError, zipfile.BadZipFile) as e:
             return self._send(400, {"error": _client_error(e)})
         except Exception as e:  # noqa: BLE001 - keep the app alive, show the cause
-            return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+            return self._send(500, {"error": _unexpected(e)})
 
     def _event_stream(self, sid: str, since: int):
         """Server-Sent Events for one chat: a JSON view of whatever is new, about 30 times a second at most, until the
@@ -550,7 +567,7 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
             key = parse_qs(u.query).get("k", [""])[0]
-            keyed = _key_ok(key)
+            keyed = _key_ok(key, self._session_ok())
             if not keyed and os.environ.get("MH_UI_OPEN_PAGE") != "1" and self._session_ok():
                 return self._send(200, BOOT_PAGE, "text/html; charset=utf-8",
                                   {"Content-Security-Policy": "frame-ancestors 'none'"})
@@ -649,7 +666,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
             except Exception as e:  # noqa: BLE001 - e.g. the chat's folder is gone: the page polls instead
-                return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+                return self._send(500, {"error": _unexpected(e)})
         if u.path == "/api/preview":                  # a file's preview: JSON, or one page as PNG (an <img> cannot send the header)
             q = parse_qs(u.query)
             if q.get("t", [""])[0] != TOKEN and self.headers.get("X-Meshpool-Token") != TOKEN:
@@ -666,7 +683,7 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 return None
             except Exception as e:  # noqa: BLE001 - a damaged file must not take the app down
-                return self._send(500, {"error": f"Could not preview this file ({type(e).__name__}: {str(e)[:200]})."})
+                return self._send(500, {"error": _preview_error(q, e)})
         if self.headers.get("X-Meshpool-Token") != TOKEN:
             return self._send(403, {"error": "forbidden"})
         if u.path.startswith("/api/company"):        # Settings > Company, the company look for decks
@@ -851,7 +868,7 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             return None                    # the page went away mid-answer; nothing left to tell it
         except Exception as e:  # keep the app alive, show the cause
-            return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+            return self._send(500, {"error": _unexpected(e)})
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):
@@ -1402,7 +1419,7 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             return None                    # the page went away mid-answer; nothing left to tell it
         except Exception as e:  # keep the app alive, show the cause
-            return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+            return self._send(500, {"error": _unexpected(e)})
         return self._send(404, {"error": "not found"})
 
 
@@ -1431,6 +1448,13 @@ def _open_web(url: str) -> bool:
 
 
 from meshpool_harness.errors import plain as _client_error  # noqa: E402  (the terminal says the same)
+from meshpool_harness.errors import unexpected as _unexpected  # noqa: E402  (a 500: plain words, never a bare class name)
+
+
+def _preview_error(q: dict, e: BaseException) -> str:
+    """A preview that failed in a way the preview code did not expect, in the same words as its other failures."""
+    from meshpool_harness.ui import previews as PVW
+    return PVW.friendly_error(Path(q.get("path", [""])[0] or "file"), e)
 
 
 class _Server(ThreadingHTTPServer):
@@ -1583,13 +1607,15 @@ class OfficeHandler(Handler):
         if not rule.fullmatch(path):
             self._send(404, {"error": "not found"})
             return False
-        if not OP.session_ok(self.headers.get("X-Meshpool-Token")):     # a panel the user allowed in the app
+        self._op = OP.session_of(self.headers.get("X-Meshpool-Token"))
+        if not self._op:                                                # a panel the user allowed in the app
             self._send(401, {"error": "This panel is not connected to meshpool."})   # 401: the panel pairs again
             return False
         m = re.fullmatch(r"/api/agent/([\w-]+)(/.*)?", path)
         if m and m.group(1) in A.DELETED:             # a deleted chat: forgotten here too
             OFFICE_CHATS.discard(m.group(1))
-        if m and m.group(1) not in OFFICE_CHATS:      # a chat of the app's own: never through the panel's token
+        # a chat of the app's own, or one another paired panel started: never through this panel's token
+        if m and (m.group(1) not in OFFICE_CHATS or not OP.owns(self._op, m.group(1))):
             self._send(403, {"error": "forbidden"})
             return False
         self.headers.replace_header("X-Meshpool-Token", TOKEN)     # the app's own checks, unchanged, from here on
@@ -1611,6 +1637,7 @@ class OfficeHandler(Handler):
         if self.command == "POST" and code == 200 and isinstance(body, dict) and body.get("id") and \
                 urlparse(self.path).path == "/api/agent":
             OFFICE_CHATS.add(str(body["id"]))         # a chat this panel started: its later calls may reach it
+            OP.add_chat(getattr(self, "_op", ""), str(body["id"]))     # this panel's, not every paired panel's
         return super()._send(code, body, ctype, extra)
 
     def do_GET(self):

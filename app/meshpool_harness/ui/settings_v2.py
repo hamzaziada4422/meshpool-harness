@@ -245,17 +245,23 @@ def usage_by_day(days: int = 30) -> list[dict]:
 
 # ---------- data ----------------------------------------------------------------------------------------------------------
 def data_info() -> dict:
+    """The data folder, its history size, and the counts the sidebar shows: "chats" are the Chats list and "code" the
+    Code sessions (an imported Claude Code session is one), so Settings never says "2 chats" next to a list of one.
+    "total" is everything "Delete all chats" removes."""
     from meshpool_harness.agent.core import SESSIONS
-    n = size = 0
+    from meshpool_harness.ui import agent_api as A
+    from meshpool_harness.ui.hub import is_code_session
+    size = 0
     for p in SESSIONS.glob("*/session.json") if SESSIONS.exists() else []:
         if p.parent.name.startswith("sub-"):
             continue
-        n += 1
         try:
             size += p.stat().st_size
         except OSError:
             pass
-    return {"folder": str(C.home()), "chats": n, "bytes": size}
+    rows = A.listing()
+    code = sum(1 for r in rows if is_code_session(r))
+    return {"folder": str(C.home()), "chats": len(rows) - code, "code": code, "total": len(rows), "bytes": size}
 
 
 def export_zip() -> bytes:

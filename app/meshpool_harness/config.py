@@ -34,8 +34,11 @@ FIELDS = [
     ("MH_OTEL_CONTENT", "OpenTelemetry: include text", "0", "1 adds prompt, reply and tool-argument text (cut to 2 KB) "
      "to the exported spans. Off by default."),
     ("MH_AGENT_PERMISSIONS", "What agents may do without asking", "ask",
-     "Ask asks before every change and command. Accept edits changes files without asking but asks before "
-     "commands. Full access never asks."),
+     "Ask works in the chat's folder without asking (commands run sandboxed where the computer can, without the "
+     "internet; on Windows one yes covers the chat) and asks before deleting, using the internet, installing or "
+     "going outside the folder. Accept edits is the same. Full access never asks."),
+    ("MH_SANDBOX_AUTO", "Ordinary work in the folder runs without asking", "1",
+     "0 asks before every command and file change, as before 0.0.18."),
     ("MH_COMMIT_TRAILER", "Line at the end of the agent's commits", "", "For example Co-Authored-By: meshpool "
      "<noreply@example.com>. The agent ends its own commit messages and pull request descriptions with it. Empty: "
      "nothing is added."),

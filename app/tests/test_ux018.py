@@ -701,7 +701,7 @@ def test_onboarding_counts_its_steps_and_keeps_the_logo_still(page):
     """UX-30: with the key already set, onboarding opened on "Step 2 of 3", and the logo moved about 10 px from one step
     to the next because each card was centred on its own height. It now reads "Step 1 of 2" and every step starts at
     the same top, so the logo does not move."""
-    got = page.evaluate("""() => { S.onbKeyShown = false; const o = document.createElement('div'); o.className = 'onb'; o.id = 'onbT'; document.body.appendChild(o);
+    got = page.evaluate("""() => { try { localStorage.removeItem('mp_onbFull'); } catch (e) {} const o = document.createElement('div'); o.className = 'onb'; o.id = 'onbT'; document.body.appendChild(o);
         const card = h => { o.innerHTML = `<div class="onb-card"><img class="logo mlogo" src="${logoSrc()}" alt="" width="164" height="40">${onbSteps(2)}<div style="height:${h}px"></div></div>`;
             return [Math.round(o.querySelector('.logo').getBoundingClientRect().top), o.querySelector('.onb-steps small').textContent]; };
         const a = card(200), b = card(520); o.remove(); return {a, b}; }""")

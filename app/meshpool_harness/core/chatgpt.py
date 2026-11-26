@@ -417,11 +417,12 @@ def to_request(body: dict, model: str) -> dict:
 def read_stream(lines, on_text=None, data_idle=None, check=None) -> dict:
     """SSE events -> the final Responses object (from response.completed, or rebuilt from the output items).
     on_text gets each piece of reply text as it arrives."""
-    done, items, text, err = None, [], [], None
+    done, items, text, err, ended = None, [], [], None, False
     from meshpool_harness.core.stream import iter_sse
     for _name, data in iter_sse(lines, data_idle=data_idle, check=check):
         data = data.strip()
         if data == "[DONE]":
+            ended = True
             break
         try:
             ev = json.loads(data)
@@ -449,6 +450,9 @@ def read_stream(lines, on_text=None, data_idle=None, check=None) -> dict:
         elif any(w in low for w in ("context_length", "invalid_request", "invalid_prompt", "string_above_max")):
             code = 400
         raise RuntimeError(f"chatgpt HTTP {code}: {body}")
+    if done is None and not ended:                   # closed mid-reply: never pass a cut-off reply on as whole
+        from meshpool_harness.core.stream import StreamCut
+        raise StreamCut("ChatGPT sent no response.completed")
     done = done or {}
     if not done.get("output"):
         done["output"] = items or ([{"type": "message", "content": [{"type": "output_text", "text": "".join(text)}]}]

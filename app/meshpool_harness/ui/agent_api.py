@@ -142,8 +142,9 @@ def _messages_from_events(events: list) -> list:
 
 
 def _redact(text: str) -> str:
+    from meshpool_harness.errors import tool_card    # a reopened chat's cards read like the live ones
     from meshpool_harness.redact import redact
-    return redact(text)
+    return redact(tool_card(text))
 
 
 def events_from_messages(messages: list) -> list:
@@ -268,15 +269,50 @@ _FILLER = re.compile(r"^(?:please|pls|can you|could you|would you|i want you to|
                      re.I)
 
 
+_GREETING = re.compile(r"^(?:hi|hello|hey|hiya|howdy|hallo|hej|hola|greetings|good\s+(?:morning|afternoon|evening|day))"
+                       r"(?:\s+(?:there|all|team|everyone|again)|\s+(?-i:[A-Z])[\w-]*(?=\s*[,!.]))?\s*[,.!?:;-]*\s*", re.I)
+_FILEISH = re.compile(r"\.[A-Za-z0-9]{1,5}$")
+
+
+def _path_name(tok: str) -> str:
+    """The file (or last folder) name of a path token, for a title: "/home/dan/Reports/q3.pdf" -> "q3.pdf"."""
+    parts = [x for x in re.split(r"[/\\]+", tok) if x and not re.fullmatch(r"[A-Za-z]:|~|\.{1,2}", x)]
+    return parts[-1] if parts else tok
+
+
+def _paths_to_names(t: str) -> str:
+    """Paths in t replaced by their file names, whole: quoted ones (which may hold spaces) and bare tokens that start
+    at a root (/, ~/, ./, C:\\) with two or more parts, or that end in a file name. A single "/word" stays: it is a
+    command, removed later."""
+    t = re.sub(r"[\"'`]([^\"'`]*[/\\][^\"'`]*)[\"'`]", lambda m: _path_name(m.group(1)), t)
+
+    def one(m):
+        tok, tail = re.match(r"(.*?)([.,;:!?)\]]*)$", m.group(0)).groups()
+        rooted = re.match(r"(?:~|\.{1,2}|[A-Za-z]:)?[/\\]", tok)
+        several = len([x for x in re.split(r"[/\\]+", tok) if x]) >= 2
+        if _FILEISH.search(tok) or (rooted and (several or tok[:1] not in "/\\")):
+            return _path_name(tok) + tail
+        return m.group(0)
+    return re.sub(r"(?<!\S)[^\s]*[/\\][^\s]*", one, t)
+
+
 def nice_title(text: str) -> str:
     """A short thread title from the first message: the first sentence, without greetings, skill names, links,
-    or the hidden notes Meshpool adds, capitalised and cut at a word under 48 characters."""
+    or the hidden notes Meshpool adds, capitalised and cut at a word under 48 characters. A path is never cut: it
+    becomes its file name."""
     t = str(text or "").split("\n\n\u200b")[0].replace("\u200b", "").strip()   # notes start with this separator
     if not t or t in ("New thread", "New chat", "Session"):
         return "New chat" if t in ("", "New thread") else t
-    t = t.splitlines()[0]
+    lines = [x.strip() for x in t.splitlines() if x.strip()]
+    t = lines[0]
+    g = _GREETING.match(t)
+    if g and g.end() == len(t) and len(lines) > 1:        # "Hi!" on a line of its own, the request below it
+        t = lines[1]
+    elif g and len(t[g.end():].split()) >= 2:              # "Hi! The file ..." -> "The file ..."
+        t = t[g.end():]
     t = re.sub(r"https?://\S+", "", t)
-    t = re.sub(r"(?<!\w)[$/][\w-]+", "", t)
+    t = _paths_to_names(t)
+    t = re.sub(r"(?<!\S)[$/][\w-]+(?![\w/\\.-])", "", t)
     t = re.split(r"(?<=[.!?])\s", t)[0].strip(" .!?:;,-")
     full = t
     for _ in range(3):
@@ -287,8 +323,16 @@ def nice_title(text: str) -> str:
     if not t:
         return "New chat"
     if len(t) > 48:
-        cut = t[:48].rsplit(" ", 1)[0]
-        t = (cut if len(cut) > 20 else t[:48]).rstrip(" ,;:") + "…"
+        words, cut = t.split(" "), ""
+        for w in words:
+            if len(cut) + len(w) + bool(cut) > 48:
+                break
+            cut += " " * bool(cut) + w
+        if len(cut) <= 20:                             # one long word after a short start
+            w = words[len(cut.split(" ")) if cut else 0]
+            cut = (cut + " " + w).strip() if _FILEISH.search(w.rstrip(".,;:!?")) and len(cut) + len(w) < 72 \
+                else t[:48]                            # a file name is kept whole
+        t = cut.rstrip(" ,;:") + ("…" if cut != t else "")
     return t[0].upper() + t[1:]
 
 
@@ -1824,7 +1868,7 @@ class Session:
         write_meta(self.id, route=r.spec, route_label=r.label, route_profile=r.profile or None)
         self.emit({"type": "status", "route": r.to_dict(), "text": f"Harness: {r.label} (picked by you)."})
 
-    def set_model(self, model: str):
+    def set_model(self, model: str, check: bool = False):
         model = (model or "").strip()
         from meshpool_harness import providers as PV
         sup = self.harness.get("providers") or []
@@ -1837,10 +1881,14 @@ class Session:
                 and prov != self.harness["provider"] and self.agent.acp_session):
             raise ValueError(f"This chat runs {self.harness['name']} on {self.harness.get('runs_on')}. To use "
                              f"{PV.name(prov)}, start a new chat.")
-        # An agent on the picker's models: a name the known list lacks is refused (the chat's own model stays allowed).
-        if prov and self.harness.get("models") == "meshpool" and model != getattr(self.agent, "model", None):
+        # A pick in the model menu (check=True, the "model" action only) on an agent that uses the picker's models: a
+        # name the endpoint's list lacks is refused. Never when a chat is created or reopened: a chat saved on a model
+        # that is gone must still open (review, 0.0.18: get(sid) raised and the chat's history could not be shown).
+        # A variant suffix (OpenRouter's ":nitro", ":online") counts as its base model, which is what the list has.
+        if check and prov and self.harness.get("models") == "meshpool" and model != getattr(self.agent, "model", None):
             known = _known_models(prov)
-            if known is not None and PV.split(model)[1] not in known:
+            bare = PV.split(model)[1]
+            if known is not None and bare not in known and bare.split(":", 1)[0] not in known:
                 raise ValueError(f"The endpoint does not offer a model named {model}. Pick one from the model list.")
         if hasattr(self.agent, "set_model"):
             self.agent.set_model(model)
@@ -2408,9 +2456,8 @@ def _known_models(prov: str) -> set | None:
     """Model ids (without the provider prefix) a provider is known to serve, from the lists already read; None when
     no list is known, so a model picker that is offline never blocks a name. Never a network call."""
     try:
-        if prov == "chatgpt":
-            from meshpool_harness.core import chatgpt as CG
-            return set(CG._known()) or None
+        if prov == "chatgpt":                  # its list leaves out hidden models that still work: no check
+            return None
         from meshpool_harness.ui import workbench as W
         return W.known_models()
     except Exception:  # noqa: BLE001 - a check that cannot run allows the name
@@ -2598,7 +2645,7 @@ def session_action(sid: str, act: str, b: dict) -> dict:
     elif act == "mode":
         s.set_mode(b.get("mode", "ask"))
     elif act == "model":
-        s.set_model(b.get("model", ""))
+        s.set_model(b.get("model", ""), check=True)
     elif act == "harness":
         s.switch_harness(b.get("harness", ""))
     elif act == "route":
@@ -2970,8 +3017,11 @@ _RAW_CAP = 48 * 1024 * 1024          # characters x 2 copies; beyond it a file i
 
 
 def search(q: str) -> list:
+    """Chats that hold every word of q, in any order and anywhere in the chat ("dropped rows" finds "rows were
+    dropped"), newest first, with a snippet around the first place a word appears."""
     q = q.strip().lower()
-    if not q:
+    words = q.split()
+    if not words:
         return []
     hits = []
     quick = all(32 <= ord(c) < 127 for c in q) and not any(c in q for c in '"\\')     # plain ASCII text is never escaped in the saved JSON
@@ -2987,8 +3037,9 @@ def search(q: str) -> list:
                 if quick and not (p.parent / "session.journal").exists():
                     # P-07: a chat that cannot contain the words is skipped from its raw text (no parse, no re-dump)
                     try:
-                        if q not in p.read_text(encoding="utf-8", errors="replace").lower() \
-                                and q not in str(read_meta(p.parent.name).get("title") or "").lower():
+                        low0 = p.read_text(encoding="utf-8", errors="replace").lower() + "\n" + \
+                            str(read_meta(p.parent.name).get("title") or "").lower()
+                        if not all(w in low0 for w in words):
                             continue
                     except OSError:
                         continue
@@ -3003,8 +3054,8 @@ def search(q: str) -> list:
                     _RAW[str(p)] = (key, raw, low)
         except OSError:
             continue
-        i = low.find(q)
-        if i < 0 and q not in str(read_meta(p.parent.name).get("title") or "").lower():
+        named = str(read_meta(p.parent.name).get("title") or "").lower()
+        if not all(w in low or w in named for w in words):
             continue                                     # the name the person gave the chat counts too (F-07)
         try:
             d = json.loads(raw)
@@ -3026,10 +3077,13 @@ def search(q: str) -> list:
         for e in d.get("events") or []:
             if isinstance(e, dict) and e.get("type") in ("user", "assistant") and isinstance(e.get("text"), str):
                 texts.append(e["text"])
-        hit = next((s for s in texts if q in s.lower()), None)
-        if hit is None:
+        shown = "\n".join(texts).lower()
+        if not all(w in shown for w in words):
             continue
-        j = hit.lower().find(q)
+        hit = next((s for s in texts if q in s.lower()), None) or \
+            max(texts, key=lambda s: sum(w in s.lower() for w in words))
+        lo = hit.lower()
+        j = lo.find(q) if q in lo else min((lo.find(w) for w in words if w in lo), default=0)
         snippet = " ".join(hit[max(0, j - 60): j + 100].split())
         snippet = ("…" if j > 60 else "") + snippet + ("…" if j + 100 < len(hit) else "")
         hits.append({"id": d["id"], "title": title, "workdir": d.get("workdir"), "updated": d.get("updated", 0),

@@ -651,3 +651,21 @@ def test_a_dev_server_in_the_same_browser_cannot_take_the_token(httpd, monkeypat
     finally:
         dev.shutdown()
         dev.server_close()
+
+
+def test_a_one_time_key_reused_within_the_grace_needs_the_windows_cookie(httpd, monkeypatch):
+    """Review, 0.0.18: within ONCE_GRACE_S anyone could load the one-time address again without the cookie, so a
+    process that read it from the process list got the page with the token. A second load now needs the cookie the
+    first load set (a webview that loads twice has it)."""
+    monkeypatch.delenv("MH_UI_OPEN_PAGE", raising=False)
+    path = S.open_url(httpd).split(f":{httpd}", 1)[1]
+    st, body, r = _get(httpd, path)
+    assert st == 200 and S.TOKEN.encode() in body
+    cookie = r.getheader("Set-Cookie").split(";")[0]
+    st, body, _ = _get(httpd, path)                          # at once, no cookie: another process
+    assert st == 403 and S.TOKEN.encode() not in body
+    st, body, _ = _get(httpd, path, {"Cookie": cookie})      # the window's own second load
+    assert st == 200 and S.TOKEN.encode() in body
+    from urllib.parse import quote
+    st, body, _ = _get(httpd, "/?k=" + quote("é" * 20))       # a non-ASCII key: refused, not a dropped connection
+    assert st == 403

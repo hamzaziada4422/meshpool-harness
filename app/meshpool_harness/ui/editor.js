@@ -9,7 +9,9 @@ const EDX = {f: null, base: "", dirty: false, mode: "src", wrap: false, find: nu
 const edQ = (root, path) => `root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`;
 const edRevealLabel = () => /Mac/i.test(navigator.platform || "") ? "Show in Finder" : /Win/i.test(navigator.platform || "") ? "Show in File Explorer" : "Show in file manager";
 async function edFetch(method, url, body) {         // like api(), but keeps the status so a save conflict can be told apart
-  const r = await fetch(url, {method, headers: {"X-Meshpool-Token": MP.token, ...(body ? {"Content-Type": "application/json"} : {})}, body: body ? JSON.stringify(body) : undefined});
+  let r;
+  try { r = await fetch(url, {method, headers: {"X-Meshpool-Token": MP.token, ...(body ? {"Content-Type": "application/json"} : {})}, body: body ? JSON.stringify(body) : undefined}); }
+  catch (e) { throw new Error("meshpool isn't responding, so nothing was saved. Your text is still here: try again, and if it keeps happening, quit and reopen meshpool."); }
   let j = {}; try { j = await r.json(); } catch (e) { /* not JSON */ }
   return {ok: r.ok, status: r.status, json: j};
 }
@@ -345,7 +347,7 @@ async function edSave(force) {
   try {
     const r = await edFetch("POST", "/api/fs/save", {root: f.root, path: f.path, text, base_sha: f.sha, overwrite: !!force});
     if (r.status === 409 && r.json.conflict) { EDX.saving = false; edStatus(); edConflict(r.json.error); return; }
-    if (!r.ok) throw new Error(r.json.error || "Could not save this file.");
+    if (!r.ok) throw new Error(r.json.error || `Could not save this file: meshpool gave no reason (status ${r.status}). Your text is still here; try again.`);
     f.sha = r.json.sha; f.mtime_ns = r.json.mtime_ns; EDX.base = text; EDX.dirty = ta.value !== text; EDX.savedAt = Date.now();
     edWarn(""); toast("File saved", 1800);
   } catch (e) { toast(e.message, 6000); }

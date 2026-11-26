@@ -199,38 +199,48 @@ class Session:
     # ---------------------------------------------------------------- work
     def convert(self, src: str, out: str, ext: str, filt: str = "", options: str = "", infilter: str = "",
                 recalc: bool = False, timeout: float = 240) -> None:
-        with self.lock:
-            if time.time() < self.broken_until:
-                raise ConvertError("the LibreOffice session failed recently")
-            if not self.alive():
-                self._stop()
-                try:
-                    self._start()
-                except Exception:
-                    self.broken_until = time.time() + LO_RETRY_S
-                    raise
-            self.next_id += 1
-            req = {"id": self.next_id, "src": src, "out": out, "ext": ext, "filter": filt, "options": options,
-                   "infilter": infilter, "recalc": recalc}
+        # a long job (a 240 s deck render) must not make a preview or a recalculation wait its whole length first:
+        # busy, the caller runs its own one-off conversion as before the kept session (review, 0.0.18)
+        if not self.lock.acquire(timeout=max(1.0, min(float(timeout), BUSY_WAIT_S))):
+            raise ConvertError("the LibreOffice session is busy")
+        try:
+            self._convert(src, out, ext, filt, options, infilter, recalc, timeout)
+        finally:
+            self.lock.release()
+
+    def _convert(self, src, out, ext, filt, options, infilter, recalc, timeout) -> None:
+        if time.time() < self.broken_until:
+            raise ConvertError("the LibreOffice session failed recently")
+        if not self.alive():
+            self._stop()
             try:
-                self.worker.stdin.write(json.dumps(req) + "\n")
-                self.worker.stdin.flush()
-            except OSError as e:
-                self._stop()
-                raise ConvertError(f"the LibreOffice session stopped: {e}") from e
-            rep = self._read(timeout)
-            self.last = time.time()
-            if rep is None or rep.get("id") != req["id"]:
-                self._stop()                                 # stuck on a file, or gone: the next call starts afresh
-                raise ConvertError("the LibreOffice session stopped answering")
-            self._arm_idle()
-            if not rep.get("ok"):
-                raise ConvertError(str(rep.get("error") or "conversion failed"))
-            self.jobs += 1
+                self._start()
+            except Exception:
+                self.broken_until = time.time() + LO_RETRY_S
+                raise
+        self.next_id += 1
+        req = {"id": self.next_id, "src": src, "out": out, "ext": ext, "filter": filt, "options": options,
+               "infilter": infilter, "recalc": recalc}
+        try:
+            self.worker.stdin.write(json.dumps(req) + "\n")
+            self.worker.stdin.flush()
+        except OSError as e:
+            self._stop()
+            raise ConvertError(f"the LibreOffice session stopped: {e}") from e
+        rep = self._read(timeout)
+        self.last = time.time()
+        if rep is None or rep.get("id") != req["id"]:
+            self._stop()                                 # stuck on a file, or gone: the next call starts afresh
+            raise ConvertError("the LibreOffice session stopped answering")
+        self._arm_idle()
+        if not rep.get("ok"):
+            raise ConvertError(str(rep.get("error") or "conversion failed"))
+        self.jobs += 1
 
 
 _SESSIONS: dict = {}
 _LOCK = threading.Lock()
+BUSY_WAIT_S = 30.0
 
 
 def session(exe: str) -> Session | None:
@@ -284,7 +294,8 @@ def close_all() -> None:
 
 
 def kill_all() -> None:
-    """Stop every kept LibreOffice now, without waiting for a conversion in progress (the app is closing)."""
+    """Stop every kept LibreOffice now, without waiting for a conversion in progress (the app is closing). A
+    conversion that starts one after this is not orphaned: its worker ends LibreOffice once the app's pipe closes."""
     for s in list(_SESSIONS.values()):
         try:
             s._stop()

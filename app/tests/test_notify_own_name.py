@@ -135,3 +135,9 @@ def test_installer_registers_and_removes_the_same_id():
     key = D.WIN_AUMID_KEY
     assert f'WriteRegStr HKCU "{key}" "DisplayName" "Meshpool"' in nsi
     assert f'DeleteRegKey HKCU "{key}"' in nsi
+
+
+def test_the_signed_uninstaller_removes_the_id_too():
+    # release builds with signing ship the uninstaller built from uninstaller.nsi, not installer.nsi's section
+    nsi = (Path(__file__).resolve().parents[2] / "packaging" / "nsis" / "uninstaller.nsi").read_text()
+    assert f'DeleteRegKey HKCU "{D.WIN_AUMID_KEY}"' in nsi

@@ -194,3 +194,34 @@ def test_closing_the_app_stops_the_kept_libreoffice_without_waiting(lo, tmp_path
         assert time.time() - t0 < 15 and s.office is None
     time.sleep(1)
     assert not [p for p in _soffice_children() if p.is_running() and p.status() != "zombie"]
+
+
+def test_libreoffice_ends_when_the_app_goes_away_without_closing_it(lo, tmp_path):
+    """Review, 0.0.18: soffice runs in a process group of its own, so a crash or kill of the app left it running with
+    --accept. The worker now ends LibreOffice once its stdin (the app's pipe) closes, as it does when the app dies."""
+    assert LS.convert(lo, str(_docx(tmp_path / "a.docx", "a")), "pdf", str(tmp_path / "o")) is not None
+    s = LS._SESSIONS[lo]
+    office, worker = s.office, s.worker
+    s.office = s.worker = s.profile = None             # the app is gone: nothing will call _stop
+    worker.stdin.close()
+    end = time.time() + 30
+    while office.poll() is None and time.time() < end:
+        time.sleep(0.2)
+    assert office.poll() is not None                   # LibreOffice exited on its own
+    worker.wait(timeout=10)
+
+
+def test_a_busy_session_hands_the_job_back_instead_of_waiting(lo, tmp_path, monkeypatch):
+    """Review, 0.0.18: a preview waited for a 240 s deck render to finish before its own timeout started. Busy past
+    BUSY_WAIT_S, the session says so and convert() returns None, so the caller runs its own one-off conversion."""
+    assert LS.convert(lo, str(_docx(tmp_path / "a.docx", "a")), "pdf", str(tmp_path / "o")) is not None
+    s = LS._SESSIONS[lo]
+    monkeypatch.setattr(LS, "BUSY_WAIT_S", 1.0)
+    s.lock.acquire()                                     # a long job holds the session
+    try:
+        t0 = time.time()
+        assert LS.convert(lo, str(_docx(tmp_path / "b.docx", "b")), "pdf", str(tmp_path / "o")) is None
+        assert time.time() - t0 < 5
+    finally:
+        s.lock.release()
+    assert LS.convert(lo, str(_docx(tmp_path / "c.docx", "c")), "pdf", str(tmp_path / "o")) is not None

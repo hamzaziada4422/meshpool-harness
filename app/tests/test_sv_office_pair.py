@@ -226,3 +226,35 @@ def test_disconnecting_panels_ends_their_sessions(office, httpd):
     st, out = _app(httpd, "POST", "/api/office/pairs", {"action": "forget"})
     assert st == 200 and out["sessions"] == 0
     assert _panel(port, ctx, "/api/settings", token=tok)[0] == 401
+
+
+# ---------------------------------------------------------------------------------------------------- review, 0.0.18
+def _paired(port, ctx, httpd, host="Excel"):
+    _, r = _panel(port, ctx, "/office/pair", {"host": host})
+    _app(httpd, "POST", "/api/office/pairs", {"action": "allow", "code": r["code"]})
+    return _panel(port, ctx, "/office/pair/check", {"pair": r["pair"]})[1]["token"]
+
+
+def test_a_panel_reaches_only_the_chats_it_started_not_another_panels(office, httpd):
+    """OFFICE_CHATS was one set for every paired panel, so a second session the user allowed by mistake (a local
+    process asking with a code of its own) could read the real panel's chats and answer their approvals. Each panel's
+    session now owns the chats it started; Disconnect drops them with the session."""
+    port, ctx = office
+    tok_a, tok_b = _paired(port, ctx, httpd), _paired(port, ctx, httpd, "Word")
+    S.OFFICE_CHATS.add("chat-a")
+    OP.add_chat(OP.session_of(tok_a), "chat-a")              # what _send does when panel A starts a chat
+    assert _panel(port, ctx, "/api/agent/chat-a", token=tok_b)[0] == 403
+    assert _panel(port, ctx, "/api/agent/chat-a/answer", {"id": 1, "decision": "yes"}, token=tok_b)[0] == 403
+    assert _panel(port, ctx, "/api/agent/chat-a", token=tok_a)[0] != 403    # past the gate (no such chat here)
+    _app(httpd, "POST", "/api/office/pairs", {"action": "forget"})
+    tok_c = _paired(port, ctx, httpd)
+    assert _panel(port, ctx, "/api/agent/chat-a", token=tok_c)[0] == 403    # a new session owns none of the old ones
+
+
+def test_non_ascii_pairing_ids_and_tokens_are_refused_not_crashed(office, httpd):
+    """compare_digest raises on str with non-ASCII characters: the connection dropped with a traceback."""
+    port, ctx = office
+    _panel(port, ctx, "/office/pair", {"host": "Excel"})
+    st, out = _panel(port, ctx, "/office/pair/check", {"pair": "é" * 32})
+    assert st == 200 and out == {"state": "expired"}
+    assert not OP.session_ok("é" * 40) and OP.session_of("ü") == ""

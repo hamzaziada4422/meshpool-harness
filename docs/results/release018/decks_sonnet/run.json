@@ -1,0 +1,38 @@
+{
+ "date": "2026-11-26T10:16:19+00:00",
+ "model": "claude-sonnet",
+ "prices": {
+  "gpt-6-luna": {
+   "in": 0.1,
+   "cached": 0.01,
+   "out": 0.5
+  },
+  "deepseek-v4.1-flash": {
+   "in": 0.33,
+   "cached": 0.0066,
+   "out": 1.32
+  }
+ },
+ "price_used": null,
+ "upstream": "http://127.0.0.1:8921/v1",
+ "budget_usd": 0.01,
+ "reps": 1,
+ "tasks": [
+  "deck_read",
+  "deck_edit",
+  "deck_add",
+  "deck_reorder",
+  "deck_chart"
+ ],
+ "arms": [
+  "mp-work"
+ ],
+ "versions": {
+  "codex": "codex-cli 0.171.0",
+  "pi": "0.73.1",
+  "meshpool_src": "/home/user/rc018c/app",
+  "meshpool_git": "3eff2941540f4020ff2a89ec9f6693e844414926",
+  "python": "/usr/local/bin/python"
+ },
+ "meter": "testkit/loop/small_meter.py (no reasoning-token field; reasoning is reported as null)"
+}

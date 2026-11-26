@@ -27,6 +27,13 @@ _EXEC_VERBS = {"uv": {"run"}, "poetry": {"run"}, "pipenv": {"run"}, "pdm": {"run
                "yarn": {"exec", "dlx", "node"}, "bun": {"x"}, "pipx": {"run"}, "dotnet": {"exec"}}
 _EXEC_PROGS = frozenset({"npx", "bunx", "uvx", "pnpx"})
 _NO_GRANT_VERBS = {"docker": {"run", "exec"}, "kubectl": {"run", "exec", "debug"}}
+# Two-word commands whose second word is the real verb: a grant names all three words ("docker compose ps"), else
+# "Allow docker compose" covered `docker compose exec web sh -c ...` (security review, 0.0.18). "exec" verbs run the
+# program that follows (`uv tool run` is uvx); "no" verbs run a command in a container: never granted.
+_NESTED = {("uv", "tool"): {"exec": {"run"}, "no": set()},
+           ("docker", "compose"): {"exec": set(), "no": {"run", "exec"}},
+           ("docker", "container"): {"exec": set(), "no": {"run", "exec", "start", "attach"}},
+           ("docker", "image"): {"exec": set(), "no": set()}}
 _OKREDIR = re.compile(r"\d?>\s*/dev/null|\d?>&\d|&>\s*/dev/null")
 
 
@@ -232,6 +239,18 @@ def grant_patterns(cmd: str) -> list[str]:
     if prog in _NO_GRANT:
         return []
     pos = [a for a in rest if not a.startswith("-")]
+    if pos and (prog, pos[0]) in _NESTED:
+        rule = _NESTED[(prog, pos[0])]
+        if len(pos) < 2 or rest[:2] != pos[:2]:
+            return []                     # no verb, or an option before it (docker compose -f x run ...): not judged
+        verb, inner = pos[1], rest[2:]
+        if verb in rule["no"]:
+            return []
+        if verb in rule["exec"]:
+            if not inner or inner[0].startswith("-"):
+                return []
+            return [f"{prog} {pos[0]} {verb} " + p for p in grant_patterns(shlex.join(inner))]
+        return [f"{prog} {pos[0]} {verb}"]
     if prog in _EXEC_PROGS or (pos and pos[0] in _EXEC_VERBS.get(prog, ())):
         head = [prog] if prog in _EXEC_PROGS else [prog, pos[0]]
         inner = rest if prog in _EXEC_PROGS else rest[1:]
@@ -323,6 +342,60 @@ def safe_read(cmd: str, root, cwd=None) -> bool:
     if prog in ("xxd", "less") and (prog == "less" or "-r" in rest or len(pos) > 1):
         return False
     return all(_inside(v, root, cwd) for a in rest for v in _arg_paths(a))
+
+
+# Commands that reach the network or install software: they still ask, and run with the network when allowed.
+NETWORK = re.compile(
+    r"(?:^|[\s;&|(`])(?:curl|wget|ssh|scp|sftp|rsync|nc|ncat|netcat|telnet|ftp|http|https|aria2c|gh|brew|apt|apt-get|"
+    r"dnf|yum|snap|winget|choco|npx|bunx|pnpx|uvx|ollama)(?=$|[\s;&|)])"
+    r"|\b(?:pip3?|python3?\s+-m\s+pip|uv\s+pip|conda|mamba|gem|cargo|go|composer|poetry|pipx)\s+(?:install|download|add|get|update|upgrade|publish)\b"
+    r"|\b(?:npm|pnpm|yarn|bun)\s+(?:i|install|ci|add|update|upgrade|publish|login|dlx|create|x|exec)\b"
+    r"|\buv\s+(?:add|sync|lock|tool\s+install|run\s+--with)\b"
+    r"|\bgit\s+(?:clone|fetch|pull|push|submodule|ls-remote|remote\s+update)\b"
+    r"|\bdocker\s+(?:pull|push|login|build|run)\b|https?://", re.I)
+
+
+_PATHLIKE = re.compile(r"(?<![\w.:/-])(~[\w.~/-]*|/[\w.~/-]*|\.\./[\w.~/-]*)")
+
+
+def _home() -> Path | None:
+    try:
+        return Path(os.path.realpath(os.path.expanduser("~")))
+    except (OSError, ValueError):
+        return None
+
+
+def sandbox_auto_ok(cmd: str, root, cwd=None) -> bool:
+    """A command that may run without a question inside the OS sandbox (writes only in the project and temp folders,
+    network cut): it does not reach the network or install software, and every path it names is in the project, a
+    temp folder, or outside the user's home folder (programs, system files). A path elsewhere in the home folder
+    (~/.ssh, ~/Documents outside the project) still asks. Compound commands are fine: the sandbox confines them all."""
+    if not cmd or not cmd.strip() or NETWORK.search(cmd):
+        return False
+    if cwd is not None and not _inside(str(cwd), root):
+        return False
+    # paths from the words of the command (when it parses) and from anywhere in its text, heredoc bodies and
+    # `python -c` code included: '/home/u/.ssh/id_rsa' inside a script is a path like any other
+    toks = _tokens(cmd.replace("&&", " ").replace("||", " ").replace("|", " ").replace(";", " ")) or []
+    # a lone "/" found in the text is division in code (a / b), not the root folder; as a word (find /) it counts
+    cands = [v for a in toks for v in _arg_paths(a)] + [v for v in _PATHLIKE.findall(cmd) if v != "/"]
+    home, temps = _home(), _temp_roots()
+    for v in cands:
+        v = v.strip("'\"")
+        if not (v.startswith(("/", "~", "..", "./")) or "/" in v or "\\" in v):
+            continue                                  # a word, not a path
+        if _inside(v, root, cwd):
+            continue
+        try:
+            rp = Path(os.path.realpath(os.path.expanduser(v) if os.path.isabs(os.path.expanduser(v))
+                                       else os.path.join(str(cwd or root), v)))
+        except (OSError, ValueError):
+            return False
+        # the user's own files outside the project, or a folder above them (find /, ls /home). Checked before the
+        # temp folders: a home folder can sit under one.
+        if home is not None and (rp == home or home in rp.parents or rp in home.parents):
+            return False
+    return True
 
 
 def approve_with_scope(approve, kind, title, detail, scope: str):

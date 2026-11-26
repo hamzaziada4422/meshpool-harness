@@ -151,14 +151,15 @@ def _under(p: str, base: str) -> bool:
     return p == base or p.startswith(base.rstrip(os.sep) + os.sep)
 
 
-def wrap(argv: list[str], root, platform: str | None = None, which=shutil.which, cwd=None, mode: str | None = None) -> list[str]:
+def wrap(argv: list[str], root, platform: str | None = None, which=shutil.which, cwd=None, mode: str | None = None,
+         offline: bool = False) -> list[str]:
     """argv, wrapped so it can only write where it should. Unchanged when the sandbox is off or unavailable (with a
-    notice, once, when it was wanted)."""
+    notice, once, when it was wanted). offline: no network for this command (one that ran without a question)."""
     if not requested(mode):
         return argv
     plat = platform or sys.platform
     root = Path(root).resolve()
-    net = network_allowed()
+    net = network_allowed() and not offline
     if plat.startswith("linux") and which("bwrap"):
         out = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--die-with-parent", "--unshare-pid"]
         if not net:
