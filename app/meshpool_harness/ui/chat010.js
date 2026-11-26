@@ -116,7 +116,12 @@ function ev010(ev) {
   if (ev.type === "checks_line") {
     under010(`<details class="chkline"><summary>${ICON.check2}<span>${esc(ev.text)}</span></summary><ul>${(ev.items || []).map(i => `<li>${esc(i.text || i.label || i)}</li>`).join("")}</ul></details>`, "chkwrap"); return;
   }
-  if (ev.type === "task_receipt") { under010(`<span title="${esc(ev.reason || "")}">${esc(ev.text || "")}</span>`, "rcpt010"); return; }
+  if (ev.type === "task_receipt") {
+    // "cost not known (unpriced model)" on every reply said nothing new: it moves to the line's tooltip.
+    const bits = String(ev.text || "").split(" · "), unk = bits.some(b => /^cost not known/.test(b));
+    const tip = [unk ? "The cost is not known: this model has no price list." : "", ev.reason || ""].filter(Boolean).join(" ");
+    under010(`<span title="${esc(tip)}">${esc(bits.filter(b => !/^cost not known/.test(b)).join(" · "))}</span>`, "rcpt010"); return;
+  }
   if (ev.type === "insight" && ev.card) {
     insightUnder010(ev.card);
     const ns = Object.assign({suggest: false}, store("notify") || {});
@@ -152,7 +157,7 @@ function nextNudge010() {
   const c = nudgeQ010.shift();
   const el = document.createElement("div"); el.className = "nudge010"; el.dataset.id = c.id; el.setAttribute("role", "status");
   el.innerHTML = `<span class="n-t" title="${esc(c.body || "")}"><b>${esc(c.title)}</b> <span class="n-b">${esc(c.body || "")}</span></span><button class="btn primary sm" data-ic="accepted">${esc(c.action?.label || "Do it")}</button><button class="iconbtn" data-ic="more" aria-label="More" aria-haspopup="menu">${ICON.more}</button><button class="iconbtn" data-ic="dismissed" aria-label="Dismiss">${ICON.x}</button>`;
-  wrap.appendChild(el);
+  wrap.insertBefore(el, $("#sugg", wrap) || $("#composer", wrap));   // in the flow above the box: it never covers the chat
   post("/api/insights/act", {id: c.id, event: "shown"}).catch(() => {});
   const done = () => { el.remove(); setTimeout(nextNudge010, 400); };
   el.addEventListener("click", async e => {
@@ -197,7 +202,7 @@ window.runInsightAction = async function (a, ctx) {
     return;
   }
   if (kind === "connect") return openSettings("connectors");
-  if (kind === "remember") return toast("Added to \"Meshpool thinks\" on the memory page. Nothing is remembered until you say yes.", 9000, {label: "Review", fn: () => goPage("memory")});
+  if (kind === "remember") return toast("Added to \"meshpool thinks\" on the memory page. Nothing is remembered until you say yes.", 9000, {label: "Review", fn: () => goPage("memory")});
   if (kind === "rerun") { newThread(); $("#input").value = p.prompt || ""; $("#input").focus(); if ((p.files || []).length) toast("Attach the new file with +."); return; }
   if (kind === "send") { $("#input").value = p.text || ""; return sendNow(false); }
   if (kind === "route") return openSettings("models");
@@ -297,7 +302,10 @@ function feedback010(outcome, n) { if (S.cur) post("/api/receipt/feedback", {cha
 function acts010(n, text, ei) {
   const f = foot010(); if (!f || f.dataset.acts010) return; f.dataset.acts010 = "1";
   const w = document.createElement("span"); w.className = "racts010";
-  w.innerHTML = `<button class="iconbtn" data-ra="copy" data-tip="Copy reply" data-tip-pos="above" aria-label="Copy reply">${ICON.copy}</button><button class="iconbtn" data-ra="check" data-tip="Check this" data-tip-pos="above" aria-label="Check this: have an independent reviewer check the result">${ICON.check2}</button><button class="iconbtn" data-ra="retry" data-tip="Try again" data-tip-pos="above" aria-label="Try again">${ICON.refresh}</button><button class="iconbtn" data-ra="up" data-tip="Good reply" data-tip-pos="above" aria-label="Good reply" aria-pressed="false">${UP}</button><button class="iconbtn" data-ra="down" data-tip="Not good" data-tip-pos="above" aria-label="Not good" aria-pressed="false">${DOWN}</button>`;
+  // A turn that ended in an error, with no reply: Try again is the one useful action (nothing to copy, check or rate).
+  let bad = false; for (let x = f.previousElementSibling; x && !x.classList.contains("msg-user"); x = x.previousElementSibling) if (x.matches(".note.bad")) bad = true;
+  if (bad && !text) w.innerHTML = `<button class="iconbtn" data-ra="retry" data-tip="Try again" data-tip-pos="above" aria-label="Try again">${ICON.refresh}</button>`;
+  else w.innerHTML = `<button class="iconbtn" data-ra="copy" data-tip="Copy reply" data-tip-pos="above" aria-label="Copy reply">${ICON.copy}</button><button class="iconbtn" data-ra="check" data-tip="Check this" data-tip-pos="above" aria-label="Check this: have an independent reviewer check the result">${ICON.check2}</button><button class="iconbtn" data-ra="retry" data-tip="Try again" data-tip-pos="above" aria-label="Try again">${ICON.refresh}</button><button class="iconbtn" data-ra="up" data-tip="Good reply" data-tip-pos="above" aria-label="Good reply" aria-pressed="false">${UP}</button><button class="iconbtn" data-ra="down" data-tip="Not good" data-tip-pos="above" aria-label="Not good" aria-pressed="false">${DOWN}</button>`;
   f.appendChild(w);
   const older = (S.cur?.view?.versions || {})[String(n)] || [];
   const body = S.cur?.lastAi;

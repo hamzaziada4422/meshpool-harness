@@ -191,6 +191,7 @@ function navHTML() {
   }).join("")}</div>`;
 }
 const secHead = (k, label, extra = "") => `<div class="sec"><button class="sechd" data-sec="${k}" aria-expanded="${!S.collapsed.has(k)}"><span>${label}</span><span class="chev">${ICON.chev}</span></button><span class="sp"></span>${extra}</div>`;
+// A project lists all its chats, Chat or Code: one started on the project's page and routed to Code is still its chat.
 function pjRowHTML(p, threads) {
   const open = S.pjOpen.has(p.id), mine = threads.filter(t => t.project_id === p.id);
   const unread = mine.some(t => stateOf(t) === "done");
@@ -248,7 +249,7 @@ function renderSide() {
     const pjs = pinnedPj(), pinnedChats = mine.filter(t => t.pinned), rest = mine.filter(t => !t.pinned);
     if (pjs.length || pinnedChats.length) {
       html += secHead("pinned", "Pinned");
-      if (open("pinned")) html += `<ul class="threads prj">${pjs.map(p => pjRowHTML(p, all.filter(t => !isCodeThread(t)))).join("")}${pinnedChats.map(t => thHTML(t, {})).join("")}</ul>`;
+      if (open("pinned")) html += `<ul class="threads prj">${pjs.map(p => pjRowHTML(p, all)).join("")}${pinnedChats.map(t => thHTML(t, {})).join("")}</ul>`;
     }
     html += secHead("recents", "Recents");
     if (open("recents")) html += rest.length ? `<ul class="threads">${(S.allRecents ? rest : rest.slice(0, 40)).map(t => thHTML(t, {})).join("")}</ul>${rest.length > 40 ? `<button class="linkbtn moreproj" id="moreRecents">${S.allRecents ? "Show fewer" : `Show all ${rest.length}`}</button>` : ""}` : `<div class="empty-side">Your chats show up here. Start one with New.</div>`;

@@ -133,7 +133,14 @@ def plain_reason(reason: str) -> str:
     t = (reason or "").strip().rstrip(".")
     if not t:
         return ""
-    m = re.match(r"(?i)^(\w+) words?(?: \(\d+\))?(?:, .*)?$", t)
+    m = re.match(r"(?i)^(\w+) words?(?: \(\d+\))?(?: in a \w+ chat)?(?:, .*)?$", t)
+    if m:
+        return "chosen for " + _KINDS.get(m.group(1).lower(), m.group(1).lower())
+    # The router's own notes are not for people: "no strong signal" says nothing, and "Best benchmark quality for a
+    # data task (csv)" reads as "chosen for data". Prose written for people is kept as it is.
+    if re.match(r"(?i)^(no strong signal|general)$", t):
+        return ""
+    m = re.match(r"(?i)^best benchmark quality for (?:a |an )?(\w+)(?: task)?(?: \(.*\))?$", t)
     if m:
         return "chosen for " + _KINDS.get(m.group(1).lower(), m.group(1).lower())
     return t[:1].lower() + t[1:]

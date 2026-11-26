@@ -551,6 +551,15 @@ function setupComposer() {
   c.addEventListener("dragover", e => { e.preventDefault(); c.classList.add("drag"); });
   c.addEventListener("dragleave", () => c.classList.remove("drag"));
   c.addEventListener("drop", e => { e.preventDefault(); c.classList.remove("drag"); addAttachments([...e.dataTransfer.files]); });
+  // The whole chat pane takes a dropped file the way the box does (same highlight, same chip). Elsewhere a dropped file
+  // is ignored: the browser used to open it in place of the app. A project page has its own drop (projects.js).
+  const pane = $("#conv"), hasFiles = e => [...(e.dataTransfer?.types || [])].includes("Files");
+  const paneOn = on => { c.classList.toggle("drag", on); $("#col")?.classList.toggle("drag", on); };
+  pane.addEventListener("dragover", e => { if (!hasFiles(e) || S.view !== "chat") return; e.preventDefault(); paneOn(true); });
+  pane.addEventListener("dragleave", e => { if (!pane.contains(e.relatedTarget)) paneOn(false); });
+  pane.addEventListener("drop", e => { if (!hasFiles(e) || S.view !== "chat") return; e.preventDefault(); paneOn(false); addAttachments([...e.dataTransfer.files]); });
+  document.addEventListener("dragover", e => { if (hasFiles(e)) e.preventDefault(); });
+  document.addEventListener("drop", e => { if (hasFiles(e)) e.preventDefault(); });
   $("#fileIn").onchange = () => { addAttachments([...$("#fileIn").files]); $("#fileIn").value = ""; };
   renderBar();
 }
@@ -703,7 +712,7 @@ const SLASH = [
   ["/skills", "Manage skills", () => openSettings("skills")],
   ["/connectors", "Connect GitHub, Jira, Notion, Apollo and more", () => openSettings("connectors")],
   ["/schedule", "Scheduled tasks", () => goPage("scheduled")],
-  ["/memory", "What Meshpool knows: every memory, where it came from and where it was used", () => goPage("memory")],
+  ["/memory", "What meshpool knows: every memory, where it came from and where it was used", () => goPage("memory")],
   ["/instructions", "Instructions for every chat", () => openSettings("personal")],
   ["/steps", "Show or fold every step", () => toggleSteps()],
   ["/settings", "Open settings", () => openSettings()],
@@ -1309,13 +1318,16 @@ function scrollConv(force) { const c = $("#conv"); if (!c) return; if (force) S.
 function setupScroll() {
   const conv = $("#conv"), col = $("#col");
   const jd = Object.assign(document.createElement("button"), {className: "jumpdown", hidden: true, textContent: "Jump to latest", type: "button"});
-  conv.parentElement.appendChild(jd);
+  // Just above the composer (its wrapper is the anchor), so it never sits on the model name or the composer's buttons.
+  ($(".composer-wrap") || conv.parentElement).appendChild(jd);
   jd.onclick = () => { S.pinned = true; conv.scrollTop = conv.scrollHeight; jd.hidden = true; $("#input")?.focus({preventScroll: true}); };
   conv.addEventListener("scroll", () => {
     const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight;
     if (S.settling && S.pinned) { if (gap > 1) conv.scrollTop = conv.scrollHeight; return; }   // a chat being drawn, not the reader
     S.pinned = gap < 80; jd.hidden = gap < 160 || S.view !== "chat" || !S.cur; }, {passive: true});
-  if (window.ResizeObserver) new ResizeObserver(() => { if (S.view !== "chat" || !S.cur) { jd.hidden = true; return; } if (S.pinned) conv.scrollTop = conv.scrollHeight; else { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; jd.hidden = gap < 160; } }).observe(col);
+  // The column growing, and the pane shrinking (a card or chips taking room above the composer), both keep a pinned
+  // reader at the end.
+  if (window.ResizeObserver) { const ro = new ResizeObserver(() => { if (S.view !== "chat" || !S.cur) { jd.hidden = true; return; } if (S.pinned) conv.scrollTop = conv.scrollHeight; else { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; jd.hidden = gap < 160; } }); ro.observe(col); ro.observe(conv); }
   wakeFrame();
 }
 
@@ -1369,9 +1381,29 @@ function mdRender(node, text) {
   return node;
 }
 function inline(s) {
-  return s.replace(/`([^`\n]+)`/g, "<code>$1</code>").replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+  return linkBare(s.replace(/`([^`\n]+)`/g, (m, c) => `<code${c.length <= 32 && !/\s/.test(c) ? ' class="nw"' : ""}>${c}</code>`).replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>")
-    .replace(/\[([^\]]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    .replace(/!\[([^\]]*)\]\(([^()\s]+)\)/g, (m, alt, src) => mdImg(alt, src) || m)
+    .replace(/\[([^\]]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>'));
+}
+// A Markdown image of a file in the chat's folder (a chart the agent saved) shows as the image, through the same
+// token-checked /raw route as the file cards under a reply. Remote images and paths outside the folder stay as text.
+function mdImg(alt, src) {
+  const root = typeof curRoot === "function" ? curRoot() : "";
+  let p = String(src).replace(/&amp;/g, "&").replace(/\\/g, "/").replace(/^\.\//, "");
+  if (!root || !/\.(png|jpe?g|gif|webp)$/i.test(p)) return "";
+  const r = root.replace(/\\/g, "/").replace(/\/$/, "");
+  if (p.startsWith(r + "/")) p = p.slice(r.length + 1);
+  if (/^[a-z][\w+.-]*:/i.test(p) || p.startsWith("/") || p.split("/").some(x => x === ".." || x.startsWith("."))) return "";
+  return `<img class="mdimg" alt="${alt}" loading="lazy" src="/raw?t=${encodeURIComponent(MP.token)}&root=${encodeURIComponent(root)}&path=${encodeURIComponent(p)}">`;
+}
+// Plain http(s) addresses in a reply become links (only those two schemes), outside code and existing links.
+function linkBare(html) {
+  return html.split(/(<a\b[^>]*>[\s\S]*?<\/a>|<code\b[^>]*>[\s\S]*?<\/code>|<[^>]+>)/).map((part, i) => i % 2 ? part : part.replace(/\bhttps?:\/\/[^\s<]+/g, u => {
+    const m = /^(.*?)((?:[.,;:!?)\]]|&gt;|&quot;|&#39;)*)$/.exec(u), url = m[1];
+    if (url.length < 11) return u;
+    return `<a href="${url}" target="_blank" rel="noopener">${url}</a>${m[2]}`;
+  })).join("");
 }
 // Base64 of a string's UTF-8 bytes (decoded by unb64 in chat010.js). A lone surrogate (half of an emoji cut by the model,
 // or typed in maths) is not valid UTF-16: encodeURIComponent threw URIError on it and the live reply stopped drawing.
@@ -1509,7 +1541,8 @@ function applyEvRaw(ev) {
       if (String(ev.text).trim() === GOAL_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Continuing toward the goal</span>`, "goalturn"); break; }
       if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span> <button class="linkbtn" data-takeback title="Take it back before the agent reads it">Take back</button><br><span class="stx">${esc(ev.text)}</span></div>`, "msg-user steer"); $("#queuedChip")?.remove(); break; }
       closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; cur.tpaths = []; cur.lastAi = null; cur.lastText = "";
-      { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button><button class="iconbtn" data-ma="rewind" data-tip="Rewind to here" data-tip-pos="below" aria-label="Rewind to here">${ICON.undo}</button><button class="iconbtn" data-ma="fork" data-tip="Fork from here" data-tip-pos="below" aria-label="Fork from here">${ICON.branch}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.ei = ev.i; mu._text = String(ev.text ?? ""); cur.turnEi = ev.i; cur.lastFoot = null; }
+      const ut = splitAttached(ev.text);
+      { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button><button class="iconbtn" data-ma="rewind" data-tip="Rewind to here" data-tip-pos="below" aria-label="Rewind to here">${ICON.undo}</button><button class="iconbtn" data-ma="fork" data-tip="Fork from here" data-tip-pos="below" aria-label="Fork from here">${ICON.branch}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ut.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}${ut.files.length ? `<span class="attfiles">${ut.files.map(f => `<span class="att-chip">${ICON.file}<span>${esc(f)}</span></span>`).join("")}</span>` : ""}</div>`, "msg-user"); mu.dataset.ei = ev.i; mu._text = ut.text; cur.turnEi = ev.i; cur.lastFoot = null; }
       break; }
     case "text_delta":
       if (!cur.live) { closeGroup(); cur.live = add("", "msg-ai"); cur.liveText = ""; mdRoot(cur.live); if (!cur.stage) easeStart(cur.live); }
@@ -1612,8 +1645,10 @@ function applyEvRaw(ev) {
       add(`<details><summary>${ICON.check2}<span>${esc(clip(first.replace(/:$/, ""), 80))}</span></summary><div class="rcbody">${md(t)}</div></details>`, "note receipt"); sessionSoon(); break; }   // details: here when opened, and in the Session panel
     case "status": {
       if (ev.using) { cur.using = ev.text; if (ev.auto) cur.auto = ev.auto;
-        const why = ev.auto && ev.auto.reason ? ` <small class="why">${esc(ev.auto.reason)}</small>` : "";
-        const un = add(`<span>${esc(ev.text)}</span>${why}` + (ev.back ? ` <button class="linkbtn" data-back="1">Use ${esc(ev.back.name)} instead</button>` : ""), "note using");
+        // Auto's reason is the router's own note ("Best benchmark quality for a data task (csv)"): it stays out of the
+        // transcript, on the line's tooltip and in the Session panel's Agent section.
+        const why = ev.auto && ev.auto.reason ? String(ev.auto.reason) : "";
+        const un = add(`<span${why ? ` title="${esc(why)}"` : ""}>${esc(ev.text)}</span>` + (ev.back ? ` <button class="linkbtn" data-back="1">Use ${esc(ev.back.name)} instead</button>` : ""), "note using");
         $("[data-back]", un)?.addEventListener("click", async () => {   // one click back to the mode's own agent, history kept
           try { const v = await post(`/api/agent/${cur.id}/harness`, {harness: ev.back.harness, since: 1e9}); cur.view.harness = v.harness || harness(ev.back.harness); $("[data-back]", un)?.remove(); renderBar(); }
           catch (e) { toast(e.message); } });
@@ -1748,10 +1783,9 @@ function questionDone(ev) {
   const how = src === "stopped" ? "Stopped" : src === "timeout" ? "No answer in time, went with" : src === "user" || src === "replay" ? "" : "Went with";
   const line = (q, val) => `<div class="qa">${QCHECK}<span class="qtext">${esc(q)}</span><b>${esc(val || "No answer")}</b></div>`;
   const rows = typed ? line("You replied", String(ev.text).replace(/^You replied:?\s*/, "")) : ans.length ? qs.map((q, i) => { const a = ans[i] || {}; const v = [...(a.selected || []), ...(a.other ? [`“${a.other}”`] : [])].join(", "); return line(q, (how ? how + " " : "") + v); }).join("") : line(qs[0] || "Question", (how || "") + (ev.text ? " " + ev.text : ""));
-  const h0 = d.offsetHeight; d.style.height = h0 + "px"; d.style.overflow = "hidden";
+  // The card takes its answered size at once and its answer fades in (.qin in app.css). Easing its height laid out the
+  // chat below it on every frame for 180 ms, a run of layout shifts (UX audit 0.0.18).
   d.classList.add("done"); d.innerHTML = `<div class="qin">${rows}</div>`;
-  const h1 = $(".qin", d).offsetHeight + parseFloat(getComputedStyle(d).paddingTop) + parseFloat(getComputedStyle(d).paddingBottom);
-  requestAnimationFrame(() => { d.style.height = h1 + "px"; setTimeout(() => { d.style.height = ""; d.style.overflow = ""; }, 220); });
 }
 // A step whose end never arrived (stopped, or a harness that does not report it) must not say "running" forever.
 function settleSteps(label) {
@@ -1783,6 +1817,14 @@ async function drawRules(box, r) {
 // message goes after it, unless the draft already is that message.
 // The text of one of your messages as you sent it. The bubble's text also holds the "Plan mode" tag and the names of
 // the pictures sent with it, so Copy and Edit put "describe this photo.png" in place of "describe this".
+// The server adds "Attached files (in this chat's folder): a.csv, b.pdf" to a message for the agent. In the bubble the
+// names show as file chips, and Copy and Edit use the words the user typed.
+function splitAttached(t) {
+  const m = /\n\nAttached files \(in [^)]*\): ([^\n]+)$/.exec(String(t ?? ""));
+  return m ? {text: String(t).slice(0, m.index), files: m[1].split(", ").filter(Boolean)} : {text: String(t ?? ""), files: []};
+}
+// The folder by a name a person knows: a chat's own folder is named by an id, so it reads "This chat's folder".
+function folderLabel() { return S.cur?.view?.scratch ? "This chat\u2019s folder" : projName(curRoot()); }
 function userText(mu) {
   if (!mu) return "";
   if (typeof mu._text === "string") return mu._text.trim();
@@ -1946,7 +1988,7 @@ function panelProgress(body) {
     <section><h4>Progress <span id="pgState"></span></h4><div id="pgSteps"></div></section>
     <section><h4>Files made</h4><div id="pgFiles"></div></section>
     <section><h4>Context</h4><ul class="ctxl">
-      <li>${ICON.dir}<span><b>${esc(projName(curRoot()))}</b><small title="${esc(curRoot())}">${esc(shortPath(curRoot()))}</small></span><button class="linkbtn" id="cwOpen" aria-label="Browse the project's files">Browse files</button></li>
+      <li>${ICON.dir}<span><b>${esc(folderLabel())}</b><small title="${esc(curRoot())}">${esc(S.cur?.view?.scratch ? "Files you add and files it makes are kept here" : shortPath(curRoot()))}</small></span><button class="linkbtn" id="cwOpen" aria-label="Browse the project's files">Browse files</button></li>
       <li>${ICON.cpu}<span><b id="pgHarness"></b><small id="pgModel"></small></span></li>
       <li>${ICON.plug}<span><b>Connectors</b><small id="cwConn">Loading...</small></span><button class="linkbtn" id="cwConnMgr">Manage</button></li>
       ${skills.length ? `<li>${ICON.skill}<span><b>Skills</b><small>${esc(skills.join(", "))}</small></span></li>` : ""}
@@ -1960,7 +2002,7 @@ function panelProgress(body) {
 }
 function panelOutputs(body) {
   const outs = S.cur ? outputFiles() : [];
-  body.innerHTML = `<div class="pbar"><span class="chip">${ICON.dir}${esc(projName(curRoot()))}</span><span style="flex:1"></span><button class="btn" id="oOpen" aria-label="Show every file in the folder">Browse files</button></div>
+  body.innerHTML = `<div class="pbar"><span class="chip">${ICON.dir}${esc(folderLabel())}</span><span style="flex:1"></span><button class="btn" id="oOpen" aria-label="Show every file in the folder">Browse files</button></div>
     ${outs.length ? `<ul class="outs" style="padding:10px">${outs.map(o => `<li><button data-open="${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button></li>`).join("")}</ul>` : `<div class="pnote">Files this chat makes or changes show here. Click one to preview it.</div>`}
     <div style="border-top:1px solid var(--line-2);flex:1;min-height:160px;display:flex;flex-direction:column"><div class="pnote" style="padding:8px 12px 0">All files in the folder</div><div style="flex:1;overflow:auto" id="tree"></div></div></div>`;
   $("#oOpen").onclick = () => $("#tree")?.scrollIntoView({block: "start", behavior: lessMotion() ? "auto" : "smooth"});
@@ -2380,7 +2422,7 @@ async function renderSection(sec) {
     b.innerHTML = `${close}<h3>Instructions and memory</h3><p class="lead">Every agent reads these at the start of each new chat, so you do not repeat yourself.</p>
       <label class="field" style="max-width:none"><span>Instructions for every chat</span><textarea id="paIns" rows="6" placeholder="For example: Be direct and concise. No em dashes. I work in strategy and finance in the GCC.">${esc(a.instructions)}</textarea><small>How you want answers: tone, format, what to avoid, context about your work.</small></label>
       <label class="switchrow"><input type="checkbox" id="paInsOn" ${a.settings.instructions_on ? "checked" : ""}> Use these instructions</label>
-      <div class="field" style="max-width:none;margin-top:14px"><span>Memory</span><p class="lead" style="margin:4px 0 8px">${a.memory.split("\n").filter(x => x.trim()).length} things remembered.</p><button class="btn" id="paMemPage">Open What Meshpool knows</button></div>
+      <div class="field" style="max-width:none;margin-top:14px"><span>Memory</span><p class="lead" style="margin:4px 0 8px">${a.memory.split("\n").filter(x => x.trim()).length} things remembered.</p><button class="btn" id="paMemPage">Open What meshpool knows</button></div>
       <label class="switchrow"><input type="checkbox" id="paMemOn" ${a.settings.memory_on ? "checked" : ""}> Let agents use and add to memory</label>
       <label class="switchrow"><input type="checkbox" id="paEdits" ${a.settings.learn_from_edits ? "checked" : ""}> Learn from my edits to files Meshpool makes</label>
       <div style="display:flex;gap:8px;margin-top:12px"><button class="btn primary" id="paSave">Save</button></div><div class="res" id="paRes"></div>
@@ -2651,7 +2693,7 @@ async function renderSection(sec) {
         <h3 style="font-size:16px;margin:18px 0 8px">Rules</h3>
         <p class="lead">Rules decide without asking. Deny wins over allow. A rule is a tool name or <code>bash:</code> and a command pattern. Examples: <code>bash:npm test*</code>, <code>bash:git status*</code>, <code>edit</code>, <code>mcp__github__*</code>. An allow rule covers a command only when every part of it matches.</p>
         <div id="rulesBox"></div>
-        <div class="row" style="margin-top:8px;gap:6px"><input id="ruleIn" placeholder="bash:npm test*" aria-label="New rule" style="flex:1"><button class="btn" id="ruleAllow">Allow</button><button class="btn danger" id="ruleDeny">Deny</button></div>
+        <div class="row rulerow" style="margin-top:8px"><input id="ruleIn" placeholder="bash:npm test*" aria-label="New rule"><button class="btn" id="ruleAllow">Allow</button><button class="btn danger" id="ruleDeny">Deny</button></div>
         <div class="res" id="ruleRes"></div>`;
       const drawRules = r => {
         const li = (k, x) => `<li><span class="tg"><b>${esc(x)}</b><small>${k}</small></span><button class="iconbtn" data-rk="${k}" data-rr="${esc(x)}" aria-label="Remove rule">${ICON.x}</button></li>`;
@@ -2665,7 +2707,6 @@ async function renderSection(sec) {
       $$("[data-perm]", b).forEach(x => x.onclick = () => draw({id: x.dataset.perm}));
       $("#permAll")?.addEventListener("click", () => draw({id: "all"}));
       $$("[data-rmp]", b).forEach(x => x.onclick = async () => { await post("/api/projects", {action: "remove", path: x.dataset.rmp}); await loadProjects(); renderSide(); draw(); });
-      const rb = document.createElement("div"); rb.id = "rulesBox"; b.appendChild(rb); drawRules(rb);
       $("#addP").onclick = async () => { await pickProject(); await loadProjects(); draw(); };
     };
     await draw(); return;
@@ -2728,7 +2769,9 @@ async function renderSection(sec) {
 }
 
 /* ================================== first run ================================== */
-const onbSteps = n => `<div class="onb-steps" aria-label="Step ${n} of 3">${[1, 2, 3].map(i => `<span class="${i <= n ? "on" : ""}"></span>`).join("")}<small>Step ${n} of 3</small></div>`;
+// When the key is already set, onboarding opens on the folders step: that is step 1 of 2, not "Step 2 of 3".
+const onbSteps = n => { const skip = S.onbKeyShown ? 0 : 1, all = 3 - skip, k = Math.max(1, n - skip);
+  return `<div class="onb-steps" aria-label="Step ${k} of ${all}">${Array.from({length: all}, (_, i) => `<span class="${i < k ? "on" : ""}"></span>`).join("")}<small>Step ${k} of ${all}</small></div>`; };
 // Providers: what the models run on. Agents (harnesses) are picked separately.
 const PROVIDERS = [["meshpool", "Meshpool API key", "Recommended. Every model on one key, 20% cheaper."],
   ["custom", "Another API key", "OpenAI, OpenRouter or any OpenAI-compatible provider."],
@@ -2736,6 +2779,7 @@ const PROVIDERS = [["meshpool", "Meshpool API key", "Recommended. Every model on
 const SIGNIN = {chatgpt: {name: "ChatGPT", harness: "codex"}};
 function showOnboarding() {
   if ($("#onb")) return;
+  S.onbKeyShown = true;
   const o = document.createElement("div"); o.className = "onb"; o.id = "onb";
   o.innerHTML = `<div class="onb-card" id="onbKey">
     <img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
@@ -3042,7 +3086,7 @@ function setupStep(o, prev) {
     store("onbDone", 1); post("/api/settings", {values: {MH_ONBOARDED: "1"}}).catch(() => {});        // ticked items are imported on the way out; no extra click
     const box = $("#oImport", card);
     const srcs = Object.entries(found).filter(([, v]) => v.default).map(([k]) => k);
-    if (srcs.length && $("#oLocal", card)?.checked && !$("#oLocalRow", card).hidden) { try { const r = await post("/api/import-chats", {sources: srcs}); if (r.imported) toast(`${r.imported.toLocaleString()} chats imported.`, 9000, {label: "Open", fn: () => openThread(r.ids[0])}); await loadThreads(); } catch (e) { /* the page can import later */ } }
+    if (srcs.length && $("#oLocal", card)?.checked && !$("#oLocalRow", card).hidden) { try { const r = await post("/api/import-chats", {sources: srcs}); if (r.imported) toast(`${r.imported.toLocaleString()} chat${r.imported === 1 ? "" : "s"} imported.`, 9000, {label: "Open", fn: () => openThread(r.ids[0])}); await loadThreads(); } catch (e) { /* the page can import later */ } }
     if (box?._import && !box.dataset.done && $$("[data-key]", box).some(x => x.checked)) { $("#oFinish", card).disabled = true; $("#oFinish", card).textContent = "Importing…"; await box._import(); }
     o.remove(); renderBar(); renderHero();
   };

@@ -430,3 +430,385 @@ def test_one_off_motion_lasts_200ms_or_less(page):
     assert over == {}, json.dumps(got)
     assert got["slow"] <= 200, got
     assert page.errors == [], page.errors
+
+
+# ================================================== findings from the persona runs (data analyst, consultant): UX-12 on
+def _fake_project(page, kind="code"):
+    """A pinned project with one chat in it (a Code chat by default), only in the page."""
+    page.evaluate("""kind => { S.pj = (S.pj || []).filter(p => p.id !== 'pj-ux'); S.pj.push({id: 'pj-ux', name: 'Sales analysis', pinned: true, updated: 1});
+        S.threads = S.threads.filter(t => t.id !== 't-pj-ux').concat([{id: 't-pj-ux', title: 'Monthly revenue chart', kind, workdir: '/tmp/proj018',
+          project_id: 'pj-ux', state: 'idle', updated: Date.now() / 1000}]);
+        S.pjOpen = new Set(['pj-ux']); renderSide(); }""", kind)
+
+
+# ---------------------------------------------------------------------------------------------------- UX-12
+def test_the_open_chat_has_an_accent_edge_and_a_running_dot_stays_visible(page):
+    """UX-12 (owner): the open row also needs a steady mark of its own, and hovering or opening a running chat hid its
+    running dot (the options button took its place). The open row now carries an accent edge, and a running or waiting
+    dot stays visible beside the options button."""
+    page.evaluate("""() => { S.threads = S.threads.filter(t => t.id !== 't-run').concat([{id: 't-run', title: 'Busy chat', kind: 'chat', state: 'working', updated: Date.now() / 1000}]);
+        S.view = 'chat'; S.cur = {id: 't-run'}; renderSide(); }""")
+    row = '.th[data-id="t-run"]'
+    page.hover(row)
+    page.wait_for_timeout(200)
+    got = page.evaluate("""s => { const r = document.querySelector(s), d = r.querySelector('.dot.run'), m = r.querySelector('.more');
+        const dr = d.getBoundingClientRect(), mr = m.getBoundingClientRect();
+        return {shadow: getComputedStyle(r).boxShadow, vis: getComputedStyle(d).visibility, overlap: dr.right > mr.left && dr.left < mr.right}; }""", row)
+    page.evaluate("() => { S.cur = null; S.view = 'chat'; }")
+    assert "inset" in got["shadow"], got
+    assert got["vis"] == "visible" and not got["overlap"], got
+
+
+# ---------------------------------------------------------------------------------------------------- UX-13
+def test_the_progress_button_looks_pressed_only_while_its_panel_is_open(page):
+    """UX-13: the Progress button always had the hover fill, so it looked pressed with its panel closed. It has no fill
+    when closed and the selected fill when open."""
+    _fake_chat(page)
+    page.evaluate("() => { if (S.panel) togglePanel(S.panel); renderTop(); }")
+    page.mouse.move(5, 700)
+    page.wait_for_timeout(200)
+    closed = page.evaluate("() => getComputedStyle(document.querySelector('#panelBtn')).backgroundColor")
+    page.click("#panelBtn")
+    page.mouse.move(5, 700)
+    page.wait_for_timeout(300)
+    opened = page.evaluate("() => getComputedStyle(document.querySelector('#panelBtn')).backgroundColor")
+    assert closed in ("rgba(0, 0, 0, 0)", "transparent"), closed
+    assert opened not in ("rgba(0, 0, 0, 0)", "transparent"), opened
+    assert page.errors == [], page.errors
+
+
+# ---------------------------------------------------------------------------------------------------- UX-14
+def test_the_side_panel_slides_in_and_the_model_button_keeps_auto(page):
+    """UX-14: the side panel appeared at once, and with it open (a 580 px column at 1280 px) the "Auto" label beside
+    the model went away and the name was cut to 96 px. The panel now slides in with transform, and the model button
+    keeps its full name and "Auto"."""
+    _fake_chat(page)
+    page.evaluate("() => { if (S.panel) togglePanel(S.panel); renderBar(); }")
+    page.click("#panelBtn")
+    anim = page.evaluate("() => document.querySelector('#panel').getAnimations().map(a => a.animationName || '')")
+    page.wait_for_timeout(400)
+    got = page.evaluate("""() => { const em = document.querySelector('#mPill em'), l = document.querySelector('#mPill .lbl'); l.textContent = 'DeepSeek V4.1 Flash';
+        return {main: Math.round(document.querySelector('#main').getBoundingClientRect().width), em: em && getComputedStyle(em).display, sw: l.scrollWidth, cw: l.clientWidth}; }""")
+    assert "mp-panel-in" in anim, anim
+    assert got["main"] < 640 and got["em"] != "none" and got["sw"] <= got["cw"], got
+    assert page.errors == [], page.errors
+
+
+# ---------------------------------------------------------------------------------------------------- UX-15
+def test_answering_a_question_card_shifts_nothing_below_it(page):
+    """UX-15: an answered question card eased its height down over 180 ms, so everything under it moved on every frame
+    (a run of layout shifts, CLS about 0.01 in the consultant's run). It now takes its answered size at once and fades
+    its answer in: at most one layout shift, and no height left on the card."""
+    _fake_chat(page)
+    page.evaluate("""() => { applyEv({type: 'user', text: 'Ask me', i: 0});
+        applyEv({type: 'question', id: 'q1', questions: [{question: 'Which quarter?', options: [{label: 'Q1'}, {label: 'Q2'}, {label: 'Q3'}]}], i: 1});
+        applyEv({type: 'text_delta', text: 'Text under the card. '.repeat(20)}); flushLive(S.cur); }""")
+    page.wait_for_timeout(400)
+    page.evaluate("""() => { window.__sh = []; new PerformanceObserver(l => { for (const e of l.getEntries()) __sh.push(e.value); }).observe({type: 'layout-shift'});
+        applyEv({type: 'question_done', id: 'q1', source: 'user', answers: [{selected: ['Q2']}], i: 2}); }""")
+    page.wait_for_timeout(500)
+    got = page.evaluate("() => ({shifts: __sh.length, cls: __sh.reduce((a, b) => a + b, 0), h: (document.querySelector('.qcard.done') || {style: {}}).style.height})")
+    assert got["shifts"] <= 1 and not got["h"], got
+    assert page.errors == [], page.errors
+
+
+# ---------------------------------------------------------------------------------------------------- UX-16, UX-17
+def test_an_empty_memory_page_shows_one_empty_state_and_one_add_button(page):
+    """UX-16: with no memory the page showed two empty states ("Nothing here yet" and "No memories yet") under filters
+    over nothing, and more than one way to add. It now shows one empty state and the one Add memory button in the bar.
+    UX-17: the page title said "What Meshpool knows"; the product name is always lowercase in prose."""
+    page.evaluate("() => goPage('memory')")
+    page.wait_for_selector(".mem-empty")
+    page.wait_for_timeout(300)
+    got = page.evaluate("""() => ({empties: document.querySelectorAll('.mem-empty').length, filters: document.querySelectorAll('.mem-filters').length,
+        adds: [...document.querySelectorAll('button')].filter(b => b.offsetParent && /^\\s*Add( a)? memory\\s*$/i.test(b.textContent)).length,
+        title: document.querySelector('.gh h1').textContent})""")
+    assert got["empties"] == 1 and got["filters"] == 0 and got["adds"] == 1, got
+    assert got["title"] == "What meshpool knows", got
+    assert page.errors == [], page.errors
+
+
+# ---------------------------------------------------------------------------------------------------- UX-18, UX-25
+def test_bare_links_are_clickable_and_short_code_does_not_break(page):
+    """UX-18: a plain https address in a reply was text (0 links for https://www.revenue.ie/...). http and https
+    addresses now become links that open outside the app; javascript: and other schemes never do, and code spans and
+    existing links are left alone. UX-25: a short inline code token such as `2025-12` broke at its hyphen at the end of
+    a line; short tokens now never break."""
+    _fake_chat(page)
+    got = page.evaluate("""() => { applyEv({type: 'user', text: 'go', i: 0});
+        applyEv({type: 'assistant', text: 'See https://www.revenue.ie/en/tax-rates/index.aspx?x=1&y=2. Not javascript:alert(1) or `https://in.code/x` or [a link](https://ok.example/a). Months run to `2025-12` and `units x unit_price`.', i: 1});
+        const n = S.cur.lastAi; return {hrefs: [...n.querySelectorAll('a')].map(a => [a.getAttribute('href'), a.target]),
+            codes: [...n.querySelectorAll('code')].map(c => [c.textContent, getComputedStyle(c).whiteSpace])}; }""")
+    hrefs = dict(got["hrefs"])
+    assert "https://www.revenue.ie/en/tax-rates/index.aspx?x=1&y=2" in hrefs, got
+    assert all(h.startswith("https://") for h in hrefs) and len(hrefs) == 2, got
+    assert all(t == "_blank" for t in hrefs.values()), got
+    ws = dict(got["codes"])
+    assert ws["2025-12"] == "nowrap" and ws["https://in.code/x"] == "nowrap", got
+    assert page.errors == [], page.errors
+
+
+# ---------------------------------------------------------------------------------------------------- UX-19
+def test_a_turn_that_failed_offers_try_again_but_no_thumbs(page):
+    """UX-19: a turn that ended in an error still showed copy, check and thumbs under it. Only Try again is left."""
+    _fake_chat(page)
+    got = page.evaluate("""() => { applyEv({type: 'user', text: 'go', i: 0}); applyEv({type: 'error', text: 'The model did not answer.', i: 1}); applyEv({type: 'turn_end', i: 2});
+        applyEv({type: 'user', text: 'again', i: 3}); applyEv({type: 'assistant', text: 'Here it is.', i: 4}); applyEv({type: 'turn_end', i: 5});
+        return [...document.querySelectorAll('#col .racts010')].map(w => [...w.querySelectorAll('[data-ra]')].map(b => b.dataset.ra)); }""")
+    assert got[0] == ["retry"], got
+    assert "up" in got[1] and "copy" in got[1], got
+    assert page.errors == [], page.errors
+
+
+# ---------------------------------------------------------------------------------------------------- UX-20
+def test_attached_files_show_as_chips_and_the_chats_folder_by_name(page):
+    """UX-20: the note the server adds for the agent, "Attached files (in this chat's folder): a.csv", showed inside the
+    user's own bubble, and a chat's private folder showed by its id (b3c8e781c617) in the Progress panel. The names
+    are file chips now, Copy and Edit give back what the user typed, and the folder reads "This chat's folder"."""
+    _fake_chat(page)
+    got = page.evaluate("""() => { S.cur.view.scratch = true; S.cur.view.workdir = '/tmp/x/chats/b3c8e781c617';
+        applyEv({type: 'user', text: "Chart this\\n\\nAttached files (in this chat's folder): sales.csv, notes.pdf", i: 0});
+        const mu = document.querySelector('#col .msg-user');
+        return {bubble: mu.querySelector('.b').textContent, chips: [...mu.querySelectorAll('.att-chip')].map(c => c.textContent), copy: userText(mu), folder: folderLabel()}; }""")
+    assert "Attached files" not in got["bubble"], got
+    assert got["chips"] == ["sales.csv", "notes.pdf"] and got["copy"] == "Chart this", got
+    assert "b3c8" not in got["folder"] and "folder" in got["folder"], got
+    assert page.errors == [], page.errors
+
+
+# ---------------------------------------------------------------------------------------------------- UX-21
+@pytest.mark.parametrize("width", [1280, 1024])
+def test_a_toast_never_covers_the_message_box(app, width):
+    """UX-21: toasts sat 96 px above the bottom right, on top of Send ("1 chats imported" covered it on first open), and
+    one import said "1 chats". Toasts now show under the header, clear of the message box, and the count reads right."""
+    with sync_api.sync_playwright() as pw:
+        page = _open(app, pw, width=width, height=760)
+        try:
+            page.evaluate("() => { newThread(); toast('1 chat imported.', 9000, {label: 'Open', fn: () => {}}); }")
+            page.wait_for_timeout(300)
+            got = page.evaluate("""() => { const a = document.querySelector('.toast').getBoundingClientRect(), b = document.querySelector('#composer').getBoundingClientRect();
+                return {hit: a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top, top: Math.round(a.top)}; }""")
+            assert not got["hit"], got
+        finally:
+            page.browser_.close()
+    src = (REPO / "app" / "meshpool_harness" / "ui" / "app.js").read_text(encoding="utf-8")
+    assert "toLocaleString()} chats imported" not in src
+
+
+# ---------------------------------------------------------------------------------------------------- UX-22, UX-23
+def test_a_project_page_has_no_empty_card_and_the_breadcrumb_keeps_the_project(app):
+    """UX-22: the project brief's card was drawn empty before (or without) its text, an empty pill above
+    Instructions. UX-23: at 1024 px the header dropped the project name from the breadcrumb of a chat in a project."""
+    with sync_api.sync_playwright() as pw:
+        page = _open(app, pw, width=1024, height=760)
+        try:
+            pid = page.evaluate("""async () => { const r = await post('/api/pj', {action: 'create', name: 'Sales analysis'}); await loadPj();
+                return r.id || (r.project && r.project.id); }""")
+            page.evaluate("pid => { window.MeshBrief = null; openProject(pid); }", pid)
+            page.wait_for_selector(".pjside")
+            empty = page.evaluate("() => { const b = document.querySelector('#pjBrief'); return b ? b.getBoundingClientRect().height : 0; }")
+            assert empty == 0, empty
+            _fake_chat(page)
+            page.evaluate("pid => { S.cur.view.project_id = pid; S.cur.view.title = 'Revenue by region'; renderTop(); }", pid)
+            got = page.evaluate("() => { const c = document.querySelector('#pjChip'); return {w: c ? c.getBoundingClientRect().width : 0, main: Math.round(document.querySelector('#main').getBoundingClientRect().width)}; }")
+            assert got["main"] < 860 and got["w"] > 40, got
+            assert page.errors == [], page.errors
+        finally:
+            page.browser_.close()
+
+
+# ---------------------------------------------------------------------------------------------------- UX-24
+def test_nothing_shows_under_the_onboarding_start_button(page):
+    """UX-24: on onboarding's last step the sticky Start button left a 24 px band under it where the next card scrolled
+    into view (the button looked to sit on the card). The band is gone: the bottom row of the screen is the button's."""
+    got = page.evaluate("""() => { const o = document.createElement('div'); o.className = 'onb'; o.id = 'onbTest';
+        o.innerHTML = `<div class="onb-card"><div style="height:1500px">top</div><div class="onb-go"><button class="bigbtn">Start</button></div><section class="card" style="height:600px;border:1px solid red">next card</section></div>`;
+        document.body.appendChild(o); o.scrollTop = 300;
+        const el = document.elementFromPoint(innerWidth / 2, innerHeight - 3); const r = !!(el && el.closest('.onb-go')); o.remove(); return r; }""")
+    assert got, "the bottom of the screen shows the content under the Start button"
+
+
+# ---------------------------------------------------------------------------------------------------- UX-26
+def test_a_chart_in_the_chats_folder_shows_as_an_image(app, page):
+    """UX-26: a reply that pointed at the chart it saved, ![Monthly revenue](monthly_revenue.png), showed the Markdown as
+    text. An image in the chat's folder now shows inline through the token-checked /raw route; a remote image, a path
+    outside the folder or a parent path stays as text."""
+    import base64
+    png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP8z8DAwMDAxMDAwMDAAAANHQEDK+mmyAAAAABJRU5ErkJggg==")
+    _chats(app, page, 1)                                           # the folder is one a chat works in
+    (Path(app["work"]) / "monthly_revenue.png").write_bytes(png)
+    _fake_chat(page)
+    got = page.evaluate("""async w => { S.cur.view.workdir = w; applyEv({type: 'user', text: 'chart', i: 0});
+        applyEv({type: 'assistant', text: 'Here:\\n\\n![Monthly revenue](monthly_revenue.png)\\n\\n![x](../secret.png) ![y](https://example.com/a.png) ![z](/etc/a.png)', i: 1});
+        const imgs = [...S.cur.lastAi.querySelectorAll('img.mdimg')]; await new Promise(r => setTimeout(r, 800));
+        return {n: imgs.length, ok: imgs.map(i => i.naturalWidth), alt: imgs.map(i => i.alt), text: S.cur.lastAi.textContent}; }""", app["work"])
+    assert got["n"] == 1 and got["ok"] == [2] and got["alt"] == ["Monthly revenue"], got
+    assert "../secret.png" in got["text"] and "/etc/a.png" in got["text"], got
+    assert page.errors == [], page.errors
+
+
+# ---------------------------------------------------------------------------------------------------- UX-27
+def test_a_pinned_project_lists_its_code_chats_too(page):
+    """UX-27: a chat started from a project's page and routed to Code was missing under the project in the sidebar,
+    which said "No chats yet": the project row only listed chats of the sidebar's mode. It lists all its chats now."""
+    _fake_project(page, "code")
+    got = page.evaluate("() => [...document.querySelectorAll('#sideList .threads.sub .th')].map(t => t.dataset.id)")
+    assert "t-pj-ux" in got, got
+    assert page.errors == [], page.errors
+
+
+# ---------------------------------------------------------------------------------------------------- UX-28
+def test_the_router_note_is_kept_out_of_the_chat_in_plain_words(page):
+    """UX-28: router notes reached the chat as written for engineers: "no strong signal" and "Best benchmark quality for
+    a data task (csv)" at the end of the turn's line, and "data words in a Code chat". The receipt says "chosen for
+    data" or nothing, and the "Using" line keeps the reason on its tooltip, not in the text."""
+    sys.path.insert(0, str(REPO / "app"))
+    from meshpool_harness import receipts as RC
+    assert RC.plain_reason("no strong signal") == ""
+    assert RC.plain_reason("Best benchmark quality for a data task (csv)") == "chosen for data"
+    assert RC.plain_reason("data words in a Code chat") == "chosen for data"
+    assert RC.plain_reason("docs words (1)") == "chosen for documents"
+    _fake_chat(page)
+    got = page.evaluate("""() => { applyEv({type: 'status', using: true, text: 'Using Meshpool Work', auto: {reason: 'Best benchmark quality for a data task (csv)'}, i: 0});
+        const n = document.querySelector('#col .note.using'); return [n.textContent, (n.querySelector('[title]') || {}).title || '']; }""")
+    assert "benchmark" not in got[0] and "benchmark" in got[1], got
+    assert page.errors == [], page.errors
+
+
+# ---------------------------------------------------------------------------------------------------- UX-29
+def test_a_file_dropped_on_the_conversation_is_attached(page):
+    """UX-29: a file dropped on the conversation, not on the small message box, was not taken: dragover was not
+    prevented, so the browser opened the file in place of the app. The whole chat pane takes it now, with the box's
+    highlight and the same attachment chip; a file dropped anywhere else is ignored, never opened."""
+    _fake_chat(page)
+    got = page.evaluate("""async () => { S.attachments = []; renderAttach();
+        const dt = new DataTransfer(); dt.items.add(new File(['region,sales\\n'], 'sales.csv', {type: 'text/csv'}));
+        const conv = document.querySelector('#conv'), ev = t => new DragEvent(t, {dataTransfer: dt, bubbles: true, cancelable: true});
+        const over = ev('dragover'); conv.dispatchEvent(over);
+        const lit = document.querySelector('#composer').classList.contains('drag');
+        const drop = ev('drop'); conv.dispatchEvent(drop); await new Promise(r => setTimeout(r, 200));
+        const elsewhere = ev('dragover'); document.querySelector('#topbar').dispatchEvent(elsewhere);
+        return {over: over.defaultPrevented, lit, drop: drop.defaultPrevented, chips: [...document.querySelectorAll('#attachRow .att-chip')].map(c => c.textContent.trim()),
+                after: document.querySelector('#composer').classList.contains('drag'), elsewhere: elsewhere.defaultPrevented}; }""")
+    assert got["over"] and got["lit"] and got["drop"] and not got["after"], got
+    assert any("sales.csv" in c for c in got["chips"]), got
+    assert got["elsewhere"], got
+    assert page.errors == [], page.errors
+
+
+# ---------------------------------------------------------------------------------------------------- UX-30
+def test_onboarding_counts_its_steps_and_keeps_the_logo_still(page):
+    """UX-30: with the key already set, onboarding opened on "Step 2 of 3", and the logo moved about 10 px from one step
+    to the next because each card was centred on its own height. It now reads "Step 1 of 2" and every step starts at
+    the same top, so the logo does not move."""
+    got = page.evaluate("""() => { S.onbKeyShown = false; const o = document.createElement('div'); o.className = 'onb'; o.id = 'onbT'; document.body.appendChild(o);
+        const card = h => { o.innerHTML = `<div class="onb-card"><img class="logo mlogo" src="${logoSrc()}" alt="" width="164" height="40">${onbSteps(2)}<div style="height:${h}px"></div></div>`;
+            return [Math.round(o.querySelector('.logo').getBoundingClientRect().top), o.querySelector('.onb-steps small').textContent]; };
+        const a = card(200), b = card(520); o.remove(); return {a, b}; }""")
+    assert got["a"][1] == "Step 1 of 2", got
+    assert got["a"][0] == got["b"][0], got
+    assert page.errors == [], page.errors
+
+
+# ---------------------------------------------------------------------------------------------------- UX-31
+def test_an_unknown_cost_is_not_written_under_every_reply(page):
+    """UX-31: every reply on a model without a price list ended "cost not known (unpriced model)". The line leaves it
+    out and says it once in its tooltip."""
+    _fake_chat(page)
+    got = page.evaluate("""() => { applyEv({type: 'user', text: 'go', i: 0}); applyEv({type: 'assistant', text: 'Done.', i: 1}); applyEv({type: 'turn_end', i: 2});
+        applyEv({type: 'task_receipt', text: '12 s · cost not known (unpriced model) · Meshpool Work on claude-sonnet', reason: ''});
+        const r = document.querySelector('#col .rcpt010 span'); return r ? [r.textContent, r.title] : null; }""")
+    assert got and "cost not known" not in got[0] and "12 s" in got[0] and "Meshpool Work" in got[0], got
+    assert "not known" in got[1], got
+    assert page.errors == [], page.errors
+
+
+# ---------------------------------------------------------------------------------------------------- UX-32
+def test_the_rule_field_lines_up_with_its_buttons(page):
+    """UX-32: in Settings > Permissions the new-rule field was an unstyled box shorter than its Allow and Deny buttons
+    and only as wide as its placeholder. It is as tall as the buttons now and fills the row."""
+    page.evaluate("() => openSettings('privacy')")
+    page.wait_for_timeout(600)
+    page.evaluate("() => { const t = [...document.querySelectorAll('button, [role=tab]')].find(b => b.textContent.trim() === 'Permissions'); t && t.click(); }")
+    page.wait_for_selector("#ruleIn", timeout=10000)
+    got = page.evaluate("""() => { const r = e => document.querySelector(e).getBoundingClientRect(); const i = r('#ruleIn'), a = r('#ruleAllow'), row = document.querySelector('#ruleIn').parentElement.getBoundingClientRect();
+        return {ih: Math.round(i.height), ah: Math.round(a.height), dt: Math.abs(Math.round(i.top - a.top)), share: i.width / row.width}; }""")
+    assert abs(got["ih"] - got["ah"]) <= 1 and got["dt"] <= 1, got
+    assert got["share"] > 0.5, got
+    assert page.errors == [], page.errors
+
+
+# ---------------------------------------------------------------------------------------------------- UX-33
+def test_the_permissions_tab_draws_without_an_error_and_add_a_folder_works(page):
+    """UX-33: drawing Settings > Permissions ended in a TypeError (a stray second drawRules call was given an element,
+    not the rules), so the code after it never ran: "Add a folder" had no click handler and a second, empty rules box
+    was added. It draws cleanly now, with one rules box and a working button."""
+    page.evaluate("() => openSettings('privacy')")
+    page.wait_for_timeout(600)
+    page.evaluate("() => { const t = [...document.querySelectorAll('button, [role=tab]')].find(b => b.textContent.trim() === 'Permissions'); t && t.click(); }")
+    page.wait_for_selector("#ruleIn", timeout=10000)
+    page.wait_for_timeout(400)
+    got = page.evaluate("() => ({boxes: document.querySelectorAll('#rulesBox').length, add: typeof (document.querySelector('#addP') || {}).onclick})")
+    assert got == {"boxes": 1, "add": "function"}, got
+    assert page.errors == [], page.errors
+
+
+# ================================================== persona: finance manager (UX-34 to UX-36)
+LONG_CHAT = """() => { const para = 'The totals were checked against the workbook, row by row, and the deck now matches it. ';
+    applyEv({type: 'user', text: 'go', i: 0}); applyEv({type: 'assistant', text: para.repeat(60), i: 1}); applyEv({type: 'turn_end', i: 2}); S.cur.view.state = 'idle'; }"""
+
+
+# ---------------------------------------------------------------------------------------------------- UX-34
+def test_a_suggestion_takes_its_own_room_above_the_composer(page):
+    """UX-34: a suggestion ("Save this routine as a skill?") floated over the end of the chat, on top of the last lines
+    of the reply. It now sits in the flow above the message box: the chat pane ends where it starts, and a reader at
+    the end stays at the end."""
+    _fake_chat(page)
+    page.evaluate(LONG_CHAT)
+    page.wait_for_timeout(300)
+    page.evaluate("() => insightCard010({id: 'n-ux', title: 'Save this routine as a skill?', body: 'You did this three times.', action: {label: 'Save'}})")
+    page.wait_for_selector(".nudge010")
+    page.wait_for_timeout(300)
+    got = page.evaluate("""() => { const n = document.querySelector('.nudge010').getBoundingClientRect(), c = document.querySelector('#conv'), r = c.getBoundingClientRect();
+        return {overlap: n.top < r.bottom - 1, gap: Math.round(c.scrollHeight - c.scrollTop - c.clientHeight)}; }""")
+    page.evaluate("() => document.querySelector('.nudge010')?.remove()")
+    assert not got["overlap"] and got["gap"] <= 2, got
+    assert page.errors == [], page.errors
+
+
+# ---------------------------------------------------------------------------------------------------- UX-35
+@pytest.mark.parametrize("width", [1024, 1280, 1366])
+def test_jump_to_latest_sits_above_the_composer(app, width):
+    """UX-35: "Jump to latest" was placed 12 px from the bottom of the window, on top of the model name under the box.
+    It now sits just above the composer, clear of the box, its buttons and the model name, at 1024, 1280 and 1366 px."""
+    with sync_api.sync_playwright() as pw:
+        page = _open(app, pw, width=width, height=768)
+        try:
+            _fake_chat(page)
+            page.evaluate(LONG_CHAT)
+            page.wait_for_timeout(300)
+            page.mouse.move(width // 2, 300)
+            page.mouse.wheel(0, -1500)
+            page.wait_for_selector(".jumpdown:not([hidden])")
+            got = page.evaluate("""() => { const r = s => document.querySelector(s).getBoundingClientRect(), j = r('.jumpdown');
+                const hit = b => j.left < b.right && j.right > b.left && j.top < b.bottom && j.bottom > b.top;
+                return {composer: hit(r('#composer')), model: hit(r('#mPill')), row: hit(r('#selrow')), inPane: j.bottom <= r('#conv').bottom + 1}; }""")
+            assert got == {"composer": False, "model": False, "row": False, "inPane": True}, got
+        finally:
+            page.browser_.close()
+
+
+# ---------------------------------------------------------------------------------------------------- UX-36
+def test_the_context_window_line_in_settings_reads_plainly():
+    """UX-36: Settings' check list said "context 1,000k (from provider); older steps are summarized above 120k
+    tokens". It reads "Up to 1,000k tokens per chat (...). Past 120k, older steps are summed up to make room." The
+    number and its source stay; the wording is for people."""
+    sys.path.insert(0, str(REPO / "app"))
+    from meshpool_harness import config as C
+    os.environ["MESHPOOL_CONTEXT_WINDOW"] = "1000000"
+    try:
+        row = [r for r in C.system_check() if r["name"] == "Context window"][0]
+    finally:
+        os.environ.pop("MESHPOOL_CONTEXT_WINDOW", None)
+    assert row["detail"].startswith("Up to 1,000k tokens per chat (your setting)"), row
+    assert "summarized above" not in row["detail"], row

@@ -162,6 +162,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .msg-user{display:flex;justify-content:flex-end;margin:24px 0 12px}
 .msg-user .b{background:var(--fill);border-radius:var(--r-l);padding:8px 14px;max-width:85%;white-space:pre-wrap;word-break:break-word}
 .msg-user .att{display:block;font-size:var(--fs-xs);color:var(--ink-3);margin-top:4px}
+.msg-user .attfiles{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .msg-user .tag{display:inline-block;font-size:var(--fs-xs);font-weight:500;color:var(--pool-text);margin-bottom:4px}
 .msg-ai{margin:8px 0 12px;line-height:1.65;word-break:break-word}
 .msg-ai p{margin:0 0 12px}
@@ -169,6 +170,8 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .msg-ai ul,.msg-ai ol{margin:0 0 12px;padding-left:24px}
 .msg-ai li{margin:2px 0}
 .msg-ai code{font-size:.9em;background:var(--fill);padding:1px 5px;border-radius:4px}
+.msg-ai code.nw{white-space:nowrap}   /* a short token (2025-12, a file name) never breaks in the middle */
+.msg-ai img.mdimg{display:block;max-width:100%;height:auto;margin:8px 0 12px;border:1px solid var(--line);border-radius:var(--r-m);background:#fff}
 .msg-ai pre{background:var(--fill);border-radius:var(--r-m);padding:12px 14px;overflow:auto;font:var(--fs-s)/1.55 var(--mono);margin:12px 0 8px}
 .msg-ai pre:last-child{margin-bottom:0}
 .msg-ai pre code{display:block;background:none;padding:0;font-size:inherit}
@@ -238,7 +241,8 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .jumpdown{position:absolute;right:24px;bottom:12px;z-index:5;border:1px solid var(--line);background:var(--raise);color:var(--ink-2);border-radius:999px;padding:4px 12px;font-size:var(--fs-s);box-shadow:var(--shadow);cursor:pointer}
 .jumpdown[hidden]{display:none}
 
-.qcard{border:1px solid var(--line);background:var(--surface);border-radius:var(--r-l);padding:16px 16px 12px;margin:14px 0;box-shadow:var(--shadow-s,0 1px 2px rgba(0,0,0,.04));transition:height .18s ease-out}
+.qcard{border:1px solid var(--line);background:var(--surface);border-radius:var(--r-l);padding:16px 16px 12px;margin:14px 0;box-shadow:var(--shadow-s,0 1px 2px rgba(0,0,0,.04))}
+.qcard.done .qin{animation:mp-fade var(--t-med) ease-out both}
 .qcard .qq{border:0;margin:0 0 14px;padding:0;min-width:0}
 .qcard legend{padding:0;margin:0 0 10px;display:flex;flex-direction:column;gap:3px;float:none;width:100%}
 .qcard .qchip{font-size:var(--fs-xs);font-weight:500;letter-spacing:.02em;color:var(--ink-3);text-transform:none}
@@ -553,8 +557,8 @@ table.t td.n,table.t th:not(:first-child){text-align:right}
 .fbsel{margin-right:auto;font-size:var(--fs-xs);color:var(--ink-3);align-self:center}
 
 /* ---------- first run ---------- */
-.onb{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:24px;background:var(--bg);overflow-y:auto}
-.onb>.onb-card{margin:auto 0}
+.onb{position:fixed;inset:0;z-index:60;display:grid;place-items:start center;padding:24px 24px 0;background:var(--bg);overflow-y:auto}   /* no bottom padding: the sticky Start button sits on the edge, with nothing showing under it */
+.onb>.onb-card{margin:min(12vh,112px) 0 0}   /* the same top on every step: the logo and the step line stay still */
 .onb-card{width:min(440px,100%);padding:8px 0 90px}
 .onb-card img.logo{display:block;height:32px;width:auto;margin:0 0 32px}
 .onb-card h1{font:700 var(--fs-2xl)/1.15 var(--display);letter-spacing:-.015em;margin:0 0 8px}
@@ -565,7 +569,7 @@ table.t td.n,table.t th:not(:first-child){text-align:right}
 .onb-steps span{width:20px;height:3px;border-radius:3px;background:var(--line);transition:background-color .2s ease}
 .onb-steps span.on{background:var(--pool)}
 .onb-steps small{margin-left:6px;color:var(--ink-3);font-size:var(--fs-xs)}
-.onb-go{display:flex;align-items:center;gap:16px;position:sticky;bottom:0;background:var(--bg);padding:12px 0 4px;margin-top:8px;box-shadow:0 -12px 12px -4px var(--bg);z-index:2}
+.onb-go{display:flex;align-items:center;gap:16px;position:sticky;bottom:0;background:var(--bg);padding:12px 0 24px;margin-top:8px;box-shadow:0 -12px 12px -4px var(--bg);z-index:2}
 .onb-go .sp{flex:1}
 .onb .res:empty{display:none}
 .onb #oRes{margin:8px 0 4px}.onb details summary.linkbtn{margin-left:0}
@@ -594,7 +598,9 @@ table.t td.n,table.t th:not(:first-child){text-align:right}
 /* narrow main column (panel open, small window): icons only where space runs out */
 @container main (max-width:999px){.topbar .tbtn span{display:none}.topbar .tbtn{padding:6px}}
 @container main (max-width:1180px){.topbar .chip.use{display:none}}
-@container main (max-width:860px){.topbar .title{max-width:none}.topbar #projChip,.topbar #pjChip,.topbar .crumb{display:none}.topbar.newt #projChip{display:inline-flex}}
+@container main (max-width:860px){.topbar .title{max-width:none}.topbar #projChip{display:none}.topbar.newt #projChip{display:inline-flex}.topbar #pjChip .cl{max-width:140px}}
+/* the project name in the breadcrumb stays down to a 600 px column (1024 px with the sidebar), shortened if need be */
+@container main (max-width:600px){.topbar #pjChip,.topbar .crumb{display:none}}
 /* the model name keeps its 200 px (shell.css) down to a 640 px column: the row beside it gives way first, so "DeepSeek
    V4.1 Flash" is no longer cut at 1024 px with the sidebar or the panel open (UX audit 0.0.18) */
 @container main (max-width:720px){.topbar #branchChip{display:none}}
@@ -628,7 +634,10 @@ table.t td.n,table.t th:not(:first-child){text-align:right}
 .toast{animation:mp-toast var(--t-slow) var(--ease) both}
 .toast.out{animation:mp-out var(--t-fast) var(--ease-in) forwards}
 .panel:not([hidden])>*{animation:mp-fade .16s ease-out both}
-.onb-card{animation:mp-in .22s var(--ease) both}
+/* the side panel slides in from the right edge (transform only) instead of appearing at once */
+.panel:not([hidden]){animation:mp-panel-in var(--t-side) var(--ease) both}
+@keyframes mp-panel-in{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}
+.onb-card{animation:mp-in var(--t-med) var(--ease) both}
 .appr:not(.done){animation:mp-stage .9s var(--ease) both}
 .th,.tbtn,.pill,.btn,.bigbtn,.iconbtn,.send,.side-foot button,.newbtn,.scopeopt,.updbar,.chip,.search,.starters button,.opt,.qopt,.ptabs button,.mnav button{transition:background-color var(--t-fast) ease,color var(--t-fast) ease,border-color var(--t-fast) ease,box-shadow var(--t-med) var(--ease),transform var(--t-med) var(--spring),filter var(--t-fast) ease}
 .btn:active,.bigbtn:active,.pill:active,.newbtn:active,.iconbtn:active,.opt:active,.qopt:active,.starters button:active,.chip:active{transform:scale(.96);transition-duration:var(--t-press)}
@@ -838,7 +847,8 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .hintline .working{margin:0;font-size:var(--fs-xs);gap:6px}
 .hintline .working .wt{max-width:none;flex:0 1 auto;min-width:0}
 .hintline .working .el{flex:none}
-.jumpdown{left:50%;right:auto;transform:translateX(-50%);bottom:12px}
+.composer-wrap{position:relative}
+.jumpdown{left:50%;right:auto;transform:translateX(-50%);bottom:calc(100% + 8px)}
 #pgSteps{min-height:136px}#pgFiles{min-height:52px}
 
 /* the plan, and quiet transcript notes */
@@ -1076,6 +1086,7 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 /* older items in blocks of about 100 (foldHistory in app.js): skipped as one while off screen. A block ends before a
    message of the user, whose top margin is the larger one, so the last item's bottom margin is dropped. */
 .hist { content-visibility: auto; contain-intrinsic-size: auto 2000px; }
+#pjBrief:empty { display: none; }   /* the brief card before (or without) its text: no empty pill above Instructions */
 /* A chat that just opened: its newest items are laid out at their real size before the first paint (commitStage). */
 #col.settle > :nth-last-child(-n+12) { content-visibility: visible; }
 .hist > :last-child { margin-bottom: 0; }
@@ -1140,3 +1151,8 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 pre.live{max-height:180px;overflow:auto;opacity:.85}
 .dlgck{display:flex;align-items:center;gap:8px;margin:0 0 16px;font-size:var(--fs-s);color:var(--ink-2)}
 .dlg .dlgck input{width:auto;margin:0}
+
+/* Settings > Permissions: the new-rule field is as tall as its Allow and Deny buttons and fills the row */
+.rulerow{display:flex;align-items:stretch;gap:6px}
+#ruleIn{flex:1;min-width:0;border:1px solid var(--line-3);border-radius:var(--r-m);padding:0 10px;background:var(--surface);color:var(--ink);font:inherit;font-family:var(--mono);font-size:var(--fs-s)}
+#ruleIn:focus{outline:none;border-color:var(--focus);box-shadow:0 0 0 3px var(--pool-soft)}

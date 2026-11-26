@@ -2,7 +2,7 @@
    optional banner, then a grid of cards. Loaded before app.js; each page draws into #col when it is opened. */
 "use strict";
 
-const PAGE_TITLE = {projects: "Projects", artifacts: "Artifacts", scheduled: "Scheduled tasks", plugins: "Plugins", memory: "What Meshpool knows", work: "Your work"};
+const PAGE_TITLE = {projects: "Projects", artifacts: "Artifacts", scheduled: "Scheduled tasks", plugins: "Plugins", memory: "What meshpool knows", work: "Your work"};
 function relDate(t) {
   t = Number(t) > 1e12 ? Number(t) / 1000 : Number(t); if (!t) return "";
   const d = Math.floor((Date.now() / 1000 - t) / 86400);
