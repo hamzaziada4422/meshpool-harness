@@ -1928,6 +1928,13 @@ function applyEvRaw(ev) {
       if (t && cur.lastFoot && nf && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; safe(() => pvTurnCards(cur, cur.lastFoot, t.n)); cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${nf} file${nf === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }
       if (t && t.changed && typeof pvRefresh === "function") safe(() => pvRefresh(curRoot(), t.changed.map(c => c.path)));   // an open preview of a changed file
       break; }
+    case "steps_retried": {                              // the server found failed steps that a later step redid: not problems
+      for (const id of ev.ids || []) {
+        const d = cur.tools?.[id] || document.getElementById("tool-" + id); if (!d) continue;
+        const st = $(".st.bad", d); if (st) { st.className = "st"; st.textContent = "retried"; d.classList.add("retried"); }
+      }
+      $$(".work", col).forEach(g => bumpGroup(g));
+      break; }
     case "turn_end": {
       endLook(cur, "");
       cur.gateEl?.remove(); cur.gateEl = null; cur.jobStage = ""; cur.down = false; cur.downEl = null;
@@ -2323,6 +2330,7 @@ function progressSteps() {
     if (e.type === "tool_end" && tools[e.id] && tools[e.id].pl) tools[e.id].text = e.ok ? tools[e.id].pl.done : tools[e.id].pl.base;
     else if (e.type === "tool_end" && tools[e.id] && e.ok) tools[e.id].text = `${TOOL_DONE[tools[e.id].name] || TOOL_LABEL[tools[e.id].name] || plainTool(tools[e.id].name, tools[e.id].mcp, "done")}${tools[e.id].sm ? " " + tools[e.id].sm : ""}`;
     if (e.type === "tool_end" && tools[e.id]) tools[e.id].status = tools[e.id].status === "stopped" ? "stopped" : e.ok ? "completed" : /^Not finished: the turn ended/.test(String(e.output || "")) ? "stopped" : "failed";
+    if (e.type === "steps_retried") for (const id of e.ids || []) if (tools[id] && tools[id].status === "failed") tools[id].status = "completed";
     if (e.type === "user" && !e.steer) turnIds = [];
     if (e.type === "tool_start") turnIds.push(e.id);
     if (e.type === "interrupted") for (const id of turnIds) { const t = tools[id]; if (t && (t.status === "in_progress" || t.status === "failed")) { t.status = "stopped"; t.text = t.pl ? `${t.pl.base} (stopped)` : `${TOOL_LABEL[t.name] || t.name}${t.sm ? " " + t.sm : ""} (stopped)`; } }

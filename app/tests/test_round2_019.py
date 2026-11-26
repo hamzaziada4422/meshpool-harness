@@ -564,3 +564,24 @@ def test_a_reviewer_without_pictures_makes_no_visual_claims_unless_measured():
     kept = LR.scope_filter(v, REQ, True, ["Sheet1!E2: shows ### (column too narrow for the value)"])
     assert "the Q4 column shows ###" in [p["what"] for p in kept["problems"]], kept
     assert "never problems" in LR.SYSTEM and "cannot see pictures" in LR.SYSTEM
+
+
+def test_steps_the_server_marks_retried_are_not_counted_as_problems(app, page):
+    """The server sends {"type": "steps_retried", "ids": [...]} just before turn_end for failed steps that a later step
+    redid. Their rows read "retried" and the group does not count them."""
+    _chat(page, app["work"], None, "retried")
+    _fake_chat(page, page.evaluate("() => S.cur.id"))
+    got = page.evaluate("""() => { $('#col').replaceChildren(); S.cur.tools = {}; S.cur.group = null; S.cur.view.code_mode = false; S.cur.log = [];
+        const ev = e => { S.cur.log.push(e); applyEv(e); };
+        ev({type: 'user', text: 'make the sheet', i: 0});
+        ev({type: 'tool_start', id: 'a', name: 'exec_command', summary: 'ls', mcp: false}); ev({type: 'tool_end', id: 'a', name: 'exec_command', ok: true, output: 'x'});
+        ev({type: 'tool_start', id: 'b', name: 'exec_command', summary: 'python make.py', mcp: false}); ev({type: 'tool_end', id: 'b', name: 'exec_command', ok: false, output: 'ERROR missing file'});
+        const before = document.querySelector('#col .work .wl').textContent;
+        ev({type: 'steps_retried', ids: ['b']});
+        ev({type: 'assistant', text: 'Made it.', streamed: false}); ev({type: 'turn_end'});
+        return {before, after: document.querySelector('#col .work .wl').textContent, st: document.querySelector('#tool-b .st').textContent,
+                bad: document.querySelectorAll('#col .st.bad').length, prog: progressSteps().items.map(i => i.status)}; }""")
+    assert got["before"] == "2 steps, 1 had a problem", got
+    assert got["after"] == "2 steps" and got["st"] == "retried" and got["bad"] == 0, got
+    assert got["prog"] == ["completed", "completed"], got
+    assert page.errors == [], page.errors
