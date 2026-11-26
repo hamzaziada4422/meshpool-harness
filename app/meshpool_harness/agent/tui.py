@@ -1920,7 +1920,11 @@ def _resume_target(wd: str, session: str | None) -> str | None:
     if session:
         return session
     root = str(Path(wd).expanduser().resolve())
-    return next((r["id"] for r in chats.listing() if r.get("workdir") == root), None)
+    here = [r["id"] for r in chats.listing() if r.get("workdir") == root]
+    # A session opened and left without a word is saved too. -c must not land in that empty chat and leave the last
+    # real conversation behind it: the newest chat with a message wins, an empty one only when there is nothing else.
+    from meshpool_harness.ui import agent_api as A
+    return next((sid for sid in here if A._has_user_message(sid)), here[0] if here else None)
 
 
 _KINDS = {"code": "code", "work": "cowork", "cowork": "cowork", "auto": None}

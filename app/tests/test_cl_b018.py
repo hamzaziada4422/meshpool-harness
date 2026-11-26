@@ -201,6 +201,29 @@ def test_tui_box_does_not_read_the_key_and_sign_in_on_every_key(monkeypatch):
     assert len(calls) == 4                                         # looked at again a few seconds later
 
 
+# ---- CL-09: -c resumed an empty chat left by a session opened and closed without a word ---------------------------
+def test_continue_skips_an_empty_chat_for_the_last_real_conversation(tmp_path, monkeypatch):
+    from meshpool_harness.agent import tui as TUI
+    from meshpool_harness.ui import agent_api as A
+    monkeypatch.setattr(A, "SESSIONS", tmp_path / "sessions")
+    for name in ("LIVE", "_METAS", "_ROWS"):
+        monkeypatch.setattr(A, name, {})
+    monkeypatch.setattr(A, "DELETED", set())
+    wd = tmp_path / "proj"
+    wd.mkdir()
+    for sid, updated, msgs in (("real1", 100, [{"role": "system", "content": "s"}, {"role": "user", "content": "fix it"},
+                                                {"role": "assistant", "content": "done"}]),
+                               ("empty2", 200, [{"role": "system", "content": "s"}])):
+        d = A.SESSIONS / sid
+        d.mkdir(parents=True)
+        (d / "session.json").write_text(json.dumps({"id": sid, "title": "t", "workdir": str(wd.resolve()),
+                                                    "updated": updated, "messages": msgs}))
+    A.list_dirty()
+    assert [r["id"] for r in A.listing()][:2] == ["empty2", "real1"]
+    assert TUI._resume_target(str(wd), None) == "real1"
+    assert TUI._resume_target(str(wd), "empty2") == "empty2"          # an id given is used as given
+
+
 def test_chatgpt_relay_answers_a_json_list_with_400(tmp_path, monkeypatch):
     import http.client
     from meshpool_harness.core import chatgpt_relay as CR
