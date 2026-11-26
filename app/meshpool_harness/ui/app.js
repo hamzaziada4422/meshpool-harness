@@ -2307,8 +2307,9 @@ async function renderSection(sec) {
       $("#sml").innerHTML = M.models.filter(m => !q || m.id.toLowerCase().includes(q)).map(m => `<li><span class="tg"><b title="${esc(m.id)}">${esc(modelLabel(m.id, M.models))}</b><small>${esc(m.provider)}${m.context ? ` · ${fmt(m.context)} context` : ""}${(m.caps || []).length ? " · " + m.caps.join(", ") : ""}</small></span>
         ${m.id === M.default ? `<span class="badge modified">Default</span>` : `<button class="btn" data-def="${esc(m.id)}">Make default</button>`}
         <button class="iconbtn" data-fav="${esc(m.id)}" title="Favorite" style="color:${M.favorites.includes(m.id) ? "var(--warn)" : "var(--ink-3)"}">${ICON.star}</button></li>`).join("") || `<li class="pnote">No models.</li>`;
-      $$("[data-def]", b).forEach(x => x.onclick = async () => { S.models = await post("/api/models/default", {id: x.dataset.def}); Object.assign(M, S.models); draw(); renderBar(); });
-      $$("[data-fav]", b).forEach(x => x.onclick = async () => { S.models = await post("/api/models/favorite", {id: x.dataset.fav, on: !M.favorites.includes(x.dataset.fav)}); Object.assign(M, S.models); draw(); });
+      // A refused change says why; it used to end in an unhandled promise rejection and nothing on screen.
+      $$("[data-def]", b).forEach(x => x.onclick = async () => { try { S.models = await post("/api/models/default", {id: x.dataset.def}); } catch (e) { return toast(e.message, 6000); } Object.assign(M, S.models); draw(); renderBar(); });
+      $$("[data-fav]", b).forEach(x => x.onclick = async () => { try { S.models = await post("/api/models/favorite", {id: x.dataset.fav, on: !M.favorites.includes(x.dataset.fav)}); } catch (e) { return toast(e.message, 6000); } Object.assign(M, S.models); draw(); });
     };
     $("#smq").oninput = draw; $("#smr").onclick = async () => { await loadModels(true); Object.assign(M, S.models); renderSection("models"); }; draw();
   } else if (sec === "personal") {
