@@ -29,6 +29,7 @@ def test_a_file_listed_twice_and_its_job_copy_count_once(tmp_path):
     (tmp_path / "Meshpool outputs" / "j1").mkdir(parents=True)
     (tmp_path / "Meshpool outputs" / "j1" / "Board_Update_Q3.pdf").write_bytes(b"old")
     (tmp_path / "Board_Update_Q3.pdf").write_bytes(b"new")
+    (tmp_path / "Board_Update_Q3.pptx").write_bytes(b"deck")     # a card is only for a file that exists
     turns = [{"n": 1, "changed": [{"path": "Board_Update_Q3.pdf", "status": "added"},
                                   {"path": "Meshpool outputs/j1/Board_Update_Q3.pdf", "status": "added"},
                                   {"path": "Board_Update_Q3.pdf", "status": "added"},

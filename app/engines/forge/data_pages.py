@@ -480,7 +480,7 @@ def _charts(prs):
     def walk(shapes, n):
         for sh in shapes:
             try:
-                if sh.shape_type == 6:                          # a group
+                if sh._element.tag.endswith("}grpSp"):          # a group (shape_type raises for some shapes)
                     walk(sh.shapes, n)
                     continue
                 if not getattr(sh, "has_chart", False) or not sh.has_chart:

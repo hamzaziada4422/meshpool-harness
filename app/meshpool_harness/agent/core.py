@@ -1224,6 +1224,37 @@ def _stopped_early(final: str) -> bool:
     return bool(_PROMISE.search(last_sentence))
 
 
+_ACT_VERB = (r"(?:check|read|run|re-?run|open|look|inspect|verify|confirm|review|test|fix|update|change|edit|move|"
+             r"replace|copy|rename|delete|remove|add|build|re-?build|make|create|write|save|convert|render|search|find|"
+             r"list|install|fetch|download|compare|apply|generate|draft|export|scan|load|try|retry|set|clean|tighten|"
+             r"use|go|do|put|insert|append|merge|split|resize|format|style|draw|count|measure|compute|calculate|"
+             r"re-?check|recheck|finish|start|begin|continue|swap|restore|upload|send)")
+_ACT_PROMISE = re.compile(r"\b(?:I'll|I will|I'm going to|I am going to|let me|next,? I(?:'ll| will)|now I(?:'ll| will))"
+                          r"\s+(?:(?:now|first|then|quickly|also|just|next|go ahead and|go and|start by)\s+){0,2}"
+                          + _ACT_VERB + r"\b", re.I)
+_ACT_OFFER = re.compile(r"\b(?:if you|would you|do you want|want me to|let me know|shall I|should I|once you|when you|"
+                        r"if that|if needed|if it helps|happy to)\b", re.I)
+
+
+def _announces_action(final: str) -> bool:
+    """True when the reply that ended the turn says what the agent will do next with a tool ("I'll check the folder
+    and read the deck...") instead of doing it. An offer to the user ("If you want, I'll add a chart") is not one.
+    Daniel, 0.0.18: two turns ended on "I'll check..." after a malformed tool call, and nothing ran."""
+    paras = [p for p in re.split(r"\n\s*\n", str(final or "").strip()) if p.strip()]
+    if not paras:
+        return False
+    last = " ".join(re.sub(r"[*_`#>]", "", paras[-1]).split())[-500:]
+    sentences = [x for x in re.split(r"(?<=[.!?\u2026])\s+", last) if x.strip()][-2:]
+    for sent in sentences:
+        if sent.rstrip().endswith("?") or _ACT_OFFER.search(sent):
+            continue
+        if _ACT_PROMISE.search(sent):
+            return True
+    return False
+
+
+ACT_NUDGE = "[Meshpool] You said you would do that. Do it now with the tools, or say why you can't."
+
 _DESTRUCTIVE = PR.DESTRUCTIVE                   # shared with re-check on edit (core/tools.py _recheckable)
 
 
@@ -3595,8 +3626,13 @@ class Agent:
                 and _requirements(text) >= 2:
             body += REQ_NOTE                         # eval: short wrong answers checked the agent's reading of the task,
                                                      # not each stated rule (line-diff: the tie-break rule went untested)
-        if images:
-            parts = [{"type": "text", "text": body}] + [_image_part(im) for im in images[:6]]
+        fig_note, fig_pages = self._figure_pages(asked)   # a question about "the barriers chart": the pages with
+        if fig_note:                                       # figures go with it (Daniel, 0.0.18)
+            body += "\n\n" + fig_note
+        if images or fig_pages:
+            parts = [{"type": "text", "text": body}] + [_image_part(im) for im in (images or [])[:6]]
+            for im in fig_pages:
+                parts += [{"type": "text", "text": im["label"]}, _image_part(im)]
             self.messages.append({"role": "user", "content": parts})
         else:
             self.messages.append({"role": "user", "content": body})
@@ -4054,15 +4090,41 @@ class Agent:
                         continue
                     if self.has_steers():           # added while the checks above ran
                         continue
-                    if (E2E and not self.plan and not cx and g.get("promise_n", 0) < 2
+                    pushed = g.get("act_nudged") or g.get("push_at")
+                    if pushed and self._tool_msgs_since(pushed) == 0 and g.get("made") \
+                            and (_announces_action(final) or not final.strip()):
+                        # the push produced no action either: end on what the job made, from its own result
+                        # (Daniel, 0.0.18: the deck turn ended on "The build finished, so I'll check which files...")
+                        done = _made_summary(g["made"])
+                        if done:
+                            self.messages.append({"role": "assistant", "content": done})
+                            self.emit({"type": "assistant", "text": done, "streamed": False, "has_tools": False})
+                            final = done
+                            break
+                    if (E2E and not self.plan and not cx and g.get("promise_n", 0) < 2 and not g.get("act_nudged")
                             and _stopped_early(final) and self._tool_msgs_since(g["msg0"])):
                         g["promise_n"] = g.get("promise_n", 0) + 1   # E2E-AUTONOMY: a promise or a permission question
+                        g["push_at"] = len(self.messages)
                         self.messages.append({"role": "user", "content": (     # mid-task is not a finished turn
                             "[Meshpool] Your reply ends with what you will do next, or asks whether to go on, but "
                             "no tool call came with it, so the turn ended. Do the next step now with a tool call; do "
                             "not ask permission for work you were given. If you are truly finished or truly blocked, "
                             "say so plainly, without promising more.")})
                         continue
+                    if (not self.plan and not tools_off and not self._pace_wrapped and not pushed
+                            and _announces_action(final) and self._tools_offered()):
+                        # the same in every wire style (Codex too) and before any tool ran: "I'll check the folder
+                        # and read the current deck..." after a malformed call ended the turn (Daniel, 0.0.18)
+                        g["act_nudged"] = len(self.messages)   # once per turn
+                        self.messages.append({"role": "user", "content": ACT_NUDGE})
+                        continue
+                    if (tools_off or self._pace_wrapped or self.plan) and g.get("made") and _announces_action(final):
+                        done = _made_summary(g["made"])    # no push is possible now: say what was made
+                        if done:
+                            self.messages.append({"role": "assistant", "content": done})
+                            self.emit({"type": "assistant", "text": done, "streamed": False, "has_tools": False})
+                            final = done
+                            break
                     if not self._pace_wrapped:
                         from meshpool_harness.agent import look as _LOOK   # look at a page or file it made (0.0.18)
                         again, final = _LOOK.gate(self, g, final, turn=turn)
@@ -4113,8 +4175,12 @@ class Agent:
                     if self.mcp is not None and getattr(self.mcp, "last_images", None):
                         shots += [(batch[-1].get("function", {}).get("name", ""), im) for im in self.mcp.last_images]
                         self.mcp.last_images = []
+                    for c, out in zip(batch, outs):     # a document with charts as pictures: its pages, to see them
+                        if str((c.get("function") or {}).get("name") or "").endswith("read_document"):
+                            shots += self._doc_figure_shots(c, out)
                 if shots:
-                    self._attach_images(shots)
+                    pages = sum(1 for _, im in shots if im.get("label"))
+                    self._attach_images(shots, lim=max(2, min(pages, int(os.environ.get("MH_MAX_IMAGES", "4") or 4))))
                 self._track_progress(calls, step_out, g)
                 step_note = self._step_budget(g)        # counts every step, so it runs even when another guard speaks
                 note = self._refusal_escalation(g) or self._budget_escalation(g, turn) or step_note
@@ -4292,6 +4358,13 @@ class Agent:
 
     def _tool_msgs_since(self, start: int) -> int:
         return sum(1 for m in self.messages[start:] if m.get("role") == "tool")
+
+    def _tools_offered(self) -> bool:
+        """True when this request offers the model any tool."""
+        try:
+            return bool(self.tool_schemas())
+        except Exception:  # noqa: BLE001
+            return False
 
     def _grade_info(self, g: dict, final: str) -> dict:
         from meshpool_harness.agent import grader as GR
@@ -5084,9 +5157,10 @@ class Agent:
         return " ".join(notes)
 
     # ---------- images (computer use, browser screenshots) -----------------------------------------------------
-    def _attach_images(self, shots: list):
+    def _attach_images(self, shots: list, lim: int = 2):
         """Tool results cannot carry images on the chat API, so screenshots follow as a user message. Only the latest
-        two images stay in the conversation; older ones become a short note to keep requests small."""
+        `lim` images (two, or a document's pages with figures) stay in the conversation; older ones become a short
+        note to keep requests small. An image with a "label" gets that text before it."""
         if os.environ.get("MH_VISION", "1") == "0" or self._model_is_blind():
             return
         # A screenshot bigger than the endpoint takes (a full-size Retina or 4K PNG) would fail every request and
@@ -5102,11 +5176,56 @@ class Agent:
                                   "without it."})
         if not shots:
             return
-        _drop_images(self.messages, keep=max(0, 2 - len(shots)))
+        _drop_images(self.messages, keep=max(0, lim - len(shots)))
         parts = [{"type": "text", "text": "Image returned by " + ", ".join(sorted({n for n, _ in shots})) + ":"}]
-        for _, im in shots[-2:]:
+        for _, im in shots[-lim:]:
+            if im.get("label"):
+                parts.append({"type": "text", "text": str(im["label"])})
             parts.append(_image_part(im))
         self.messages.append({"role": "user", "content": parts})
+
+    def _sees_images(self) -> bool:
+        """True when this chat's model takes images, as the chat knows it (MH_VISION, a model that refused them)."""
+        return os.environ.get("MH_VISION", "1") != "0" and not self._model_is_blind()
+
+    def _figure_pages(self, asked: str) -> tuple[str, list]:
+        """For a message that names a chart, figure, graph, diagram or image: a note on where the figures are in the
+        chat's PDF, Word and PowerPoint files, and their pages as pictures when the model takes images. The model
+        answered "The report has no barriers chart" from the text alone, without calling a tool (Daniel, 0.0.18)."""
+        self._fig_sent = set()                       # pages sent with this message: read_document does not resend them
+        if os.environ.get("MH_DOC_FIGURES", "1") == "0":
+            return "", []
+        try:
+            from meshpool_harness import docfigures as DF
+            if not DF.asks_about_figures(asked):
+                return "", []
+            see = self._sees_images()
+            note, pages = DF.for_question(self.root, self.messages, asked, see)
+            if pages:
+                self._fig_sent = {(str(Path(im["label"].rsplit(",", 1)[0])), im["page"]) for im in pages}
+            return note, pages
+        except Exception:  # noqa: BLE001 - never in the way of the message
+            return "", []
+
+    def _doc_figure_shots(self, call: dict, out) -> list:
+        """The pages with figures of a file read_document just read, as (tool name, image) shots for the model, when
+        it takes images and the reader's note says the file has figures."""
+        if "[Figures]" not in str(out) or not self._sees_images() or os.environ.get("MH_DOC_FIGURES", "1") == "0":
+            return []
+        try:
+            from meshpool_harness import docfigures as DF
+            args = json.loads((call.get("function") or {}).get("arguments") or "{}") or {}
+            p = Path(str(args.get("path") or ""))
+            p = p if p.is_absolute() else Path(self.root) / p
+            figs = DF.in_pages(DF.figures(p), args.get("pages") if p.suffix.lower() != ".docx" else None)
+            sent = getattr(self, "_fig_sent", set())
+            figs = [f for f in figs if (p.name, f.get("page")) not in sent]
+            name = (call.get("function") or {}).get("name", "read_document")
+            got = DF.page_images(p, figs)
+            self._fig_sent = sent | {(p.name, im["page"]) for im in got}
+            return [(name, im) for im in got]
+        except Exception:  # noqa: BLE001
+            return []
 
     def _model_is_blind(self) -> bool:
         """True when this chat's current model refused images earlier (a bare model id in _no_vision_models)."""
@@ -5310,6 +5429,10 @@ class Agent:
         if os.environ.get("MH_ELIDE_OLD_CALLS", "0") == "1":      # measured: it cost solves, so off unless asked
             msgs = _elide_old_calls(msgs)
         keep = int(os.environ.get("MH_MAX_IMAGES", "4"))
+        last_user = next((m for m in reversed(msgs) if m.get("role") == "user"), None)
+        if last_user is not None and isinstance(last_user.get("content"), list):    # a question's pages with figures
+            keep = max(keep, min(6, sum(1 for p in last_user["content"]                # (up to 6) all go with it
+                                        if isinstance(p, dict) and p.get("type") == "image_url")))
         if sum(1 for m in msgs if isinstance(m.get("content"), list)
                for p in m["content"] if isinstance(p, dict) and p.get("type") == "image_url") > keep:
             # Only the latest images go with a request; the chat keeps all of them. A month-old chat full of

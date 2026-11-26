@@ -1897,6 +1897,8 @@ function applyEvRaw(ev) {
       break; }
     case "checkpoint": {
       const t = (ev.turns || [])[0];
+      // files the turn saved and then deleted (a preview PDF): no card, no entry in the outputs list (Daniel, 0.0.18)
+      if (ev.gone && ev.gone.length) { const g = new Set(ev.gone); ev.gone.forEach(p => (cur.gone ||= new Set()).add(p)); cur.tpaths = (cur.tpaths || []).filter(p => !g.has(p)); if (cur.lastFoot) safe(() => pvTurnCards(cur, cur.lastFoot, t ? t.n : 0)); }
       // the count is of the user's files: an engine's build and check files (qa.json, slides.json...) are not counted
       const nf = t && t.changed ? (t.changed.filter(c => !pvBuildFile(c.path)).length || t.changed.length) : 0;
       if (t && cur.lastFoot && nf && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; safe(() => pvTurnCards(cur, cur.lastFoot, t.n)); cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${nf} file${nf === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }
@@ -2304,7 +2306,7 @@ function outputFiles() {
   const seen = new Map(), rel = relPath;
   for (const t of S.cur?.view?.turns || []) for (const c of t.changed || []) if (c.status !== "deleted") seen.set(c.path, {path: c.path, turn: t.n});
   for (const e of threadLog()) if (e.type === "tool_end" && e.output) for (const m of String(e.output).matchAll(OUT_RX)) { const r = rel(m[1]); if (!r.startsWith("/") && !/^[A-Za-z]:/.test(r)) seen.set(r, {path: r}); }
-  return [...seen.values()].filter(o => !pvBuildFile(o.path));      // the user's files, not an engine's build files
+  return [...seen.values()].filter(o => !pvBuildFile(o.path) && !S.cur?.gone?.has(o.path));   // the user's files, not an engine's build files or one since deleted
 }
 function fileIcon(p) { return ICON.files; }
 // The chat's folder as people know it: a chat with its own folder is named after the chat, not its id ("dab817694f87").

@@ -37,7 +37,7 @@ _CACHE_MAX = 300                         # files kept in the cache folder
 _NOT_CACHED = ("Could not read", "Meshpool cannot read", "[Meshpool] ")
 # Bumped whenever a reader changes what it returns: the cache outlives upgrades, and a file read by an older reader
 # kept its old text until the file itself changed (review, 0.0.18: tracked changes, footnotes, RTF, CSV encodings).
-READER_VERSION = 18
+READER_VERSION = 19
 
 
 def _cache_dir() -> Path:
@@ -182,10 +182,32 @@ def _extract(p: Path, max_chars: int, sheet, pages, lang: str, ocr: str) -> str:
     except ImportError as e:
         return f"Meshpool cannot read {ext} files in this install ({e})."
     except Exception as e:  # noqa: BLE001  damaged or unusual files
+        if ext in OOXML and _opens(p):             # the reader's limit, not a broken file (Daniel, 0.0.18: "could not
+            return (f"meshpool's reader could not read part of {p.name} ({type(e).__name__}: {e}). The file itself "  # parse it")
+                    "opens: this is a limit of the reader, not a damaged file. Do not tell the user the file is "
+                    "broken; read it another way (python-pptx, python-docx or openpyxl in a command).")
         return f"Could not read {p.name}: {type(e).__name__}: {e}"
     if len(out) > max_chars:
         out = out[:max_chars] + f"\n\n[... cut at {max_chars} characters of {len(out)}. Ask for specific pages or sheets.]"
+    if ext in (".pdf", ".docx", ".pptx"):
+        try:                                       # charts drawn as pictures have no text: say where they are (Daniel,
+            from meshpool_harness import docfigures as DF    # 0.0.18: "The report has no barriers chart")
+            fig = DF.note(p, DF.in_pages(DF.figures(p), pages if ext != ".docx" else None))
+            if fig:
+                out += "\n\n" + fig
+        except Exception:  # noqa: BLE001 - the note is extra; the text stands without it
+            pass
     return out
+
+
+def _opens(p: Path) -> bool:
+    """True when an Office file is a whole zip package with its main part: it opens, whatever a reader made of it."""
+    try:
+        with zipfile.ZipFile(p) as z:
+            names = set(z.namelist())
+            return z.testzip() is None and bool(names & {"word/document.xml", "ppt/presentation.xml", "xl/workbook.xml"})
+    except (OSError, zipfile.BadZipFile, RuntimeError, ValueError):
+        return False
 
 
 # ---------- PDF ---------------------------------------------------------------------------------------------------
@@ -459,7 +481,13 @@ def _pptx(p: Path, ocr_mode: str = "auto") -> str:
     blobs = []
     for i, s in enumerate(prs.slides, 1):
         lines = []
-        title = s.shapes.title.text.strip() if s.shapes.title is not None and s.shapes.title.has_text_frame else ""
+        try:
+            title = s.shapes.title.text.strip() if s.shapes.title is not None and s.shapes.title.has_text_frame else ""
+        except Exception:  # noqa: BLE001
+            title = ""
+        if not title:                              # a title drawn as a plain shape named "Title 1" (no placeholder)
+            title = next((sh.text_frame.text.strip() for sh in s.shapes if str(sh.name).lower().startswith("title")
+                          and getattr(sh, "has_text_frame", False) and sh.text_frame.text.strip()), "")
         for sh in s.shapes:
             lines += _shape_text(sh, title)
         notes = ""
@@ -469,7 +497,7 @@ def _pptx(p: Path, ocr_mode: str = "auto") -> str:
         out.append(f"\n## Slide {i}: {title or '(no title)'}{hidden}\n" + "\n".join(lines)
                    + (f"\n[notes] {notes}" if notes else ""))
         for sh in s.shapes:
-            if getattr(sh, "shape_type", None) == 13:
+            if _stype(sh) == 13:
                 try:
                     blobs.append((f"on slide {i}", sh.image.blob))
                 except Exception:  # noqa: BLE001
@@ -478,9 +506,26 @@ def _pptx(p: Path, ocr_mode: str = "auto") -> str:
     return "\n".join(out)
 
 
+def _stype(sh):
+    """A shape's type, or None for one python-pptx cannot classify (a shape with no geometry, ink, an OLE object):
+    shape_type raises NotImplementedError for those, and one such shape made the whole deck unreadable (Daniel,
+    0.0.18: "unrecognized shape type", 2 of 7 slides seen)."""
+    try:
+        return sh.shape_type
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _shape_text(sh, title: str) -> list[str]:
+    try:
+        return _shape_text1(sh, title)
+    except Exception:  # noqa: BLE001 - an odd shape is skipped, never the slide
+        return []
+
+
+def _shape_text1(sh, title: str) -> list[str]:
     out = []
-    if getattr(sh, "shape_type", None) == 6 and hasattr(sh, "shapes"):          # group
+    if (_stype(sh) == 6 or sh._element.tag.endswith("}grpSp")) and hasattr(sh, "shapes"):          # group
         for x in sh.shapes:
             out += _shape_text(x, title)
         return out
@@ -501,7 +546,7 @@ def _shape_text(sh, title: str) -> list[str]:
             out.append("[chart]\n" + _md_table(rows))
         except Exception:  # noqa: BLE001
             out.append("[chart]")
-    if getattr(sh, "shape_type", None) == 13:
+    if _stype(sh) == 13:
         out.append(f"[picture: {sh.name}]")
     return out
 

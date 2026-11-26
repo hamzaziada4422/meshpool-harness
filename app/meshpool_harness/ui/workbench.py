@@ -1586,7 +1586,7 @@ def _rel(root: Path, p: str) -> str:
 
 
 _OUT_RX = re.compile(r"(?:Saved(?: the [\w ]+)?|[Ww]rote|[Cc]reated)[: ]+((?:[A-Za-z]:)?[^\n\"'`<>():]+?\."
-                     r"(?:docx|xlsx|pptx|pdf|csv|md|png|jpg|html|txt|json))(?![\w.])")
+                     r"(?:docx|xlsx|pptx|pdf|csv|md|png|jpg|html|txt|json))(?![\w]|\.\w)")
 
 
 def _found_in_events(evs, root: Path, found: dict) -> None:
@@ -1656,6 +1656,8 @@ def own_changes(turns: list, root) -> list:
         for c in ch:
             rel = str(c.get("path") or "")
             parts = rel.replace("\\", "/").split("/")
+            if root is not None and c.get("status") != "deleted" and rel and not _exists(root, rel):
+                continue      # made, then deleted (memo_check.pdf, Daniel 0.0.18): a card that leads nowhere
             if root is not None and c.get("status") == "added" and "Meshpool outputs" in parts[:-1]:
                 try:
                     st = (root / rel).stat()
@@ -1679,6 +1681,23 @@ def own_changes(turns: list, root) -> list:
         keep = _one_card_each(keep)
         out.append(dict(t, changed=keep) if len(keep) != len(ch) else t)
     return out
+
+
+def _exists(root: Path, rel: str) -> bool:
+    try:
+        return (root / rel).exists()
+    except (OSError, ValueError):
+        return True                                   # cannot tell: keep the card
+
+
+def gone_files(evs: list, root) -> list[str]:
+    """Files this turn's tools said they saved or wrote that no longer exist at its end (a preview PDF the agent made
+    and deleted): the page drops their cards and leaves them out of the outputs list."""
+    if not root:
+        return []
+    found: dict = {}
+    _found_in_events(evs, Path(root), found)
+    return sorted(rel for rel in found if not _exists(Path(root), rel))[:50]
 
 
 def _one_card_each(changed: list) -> list:

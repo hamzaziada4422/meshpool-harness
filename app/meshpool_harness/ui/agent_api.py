@@ -370,6 +370,43 @@ def deliverable_title(path: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[_\-]+", " ", stem)).strip()[:80]
 
 
+_KIND = {".pptx": "deck", ".docx": "document", ".xlsx": "workbook", ".pdf": "PDF", ".html": "page", ".csv": "data",
+         ".md": "notes"}
+
+
+def work_title(paths: list) -> str:
+    """A chat title from the deliverables it made, oldest first. One file: its name ("Ridgeway PdM Client Deck").
+    Several that share their first words: those words and what each one is ("Ridgeway PdM: deck and memo"). Several
+    that share nothing: the newest one's name."""
+    names: list[tuple[str, str]] = []
+    for p in paths:
+        t = re.sub(r"\s*\((?:updated|edited|copy|\d+)\)$", "", deliverable_title(p), flags=re.I)
+        if t and t.lower() not in [n.lower() for n, _ in names]:
+            names.append((t, Path(str(p)).suffix.lower()))
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0][0]
+    words = [n.split() for n, _ in names]
+    common = []
+    for ws in zip(*words):
+        if len({w.lower() for w in ws}) != 1:
+            break
+        common.append(ws[0])
+    if not common or len(" ".join(common)) < 3:
+        return names[-1][0]
+    kinds = []
+    for ws, (_, ext) in zip(words, names):
+        rest = ws[len(common):]
+        k = rest[-1] if rest else _KIND.get(ext, "file")
+        k = k if k.isupper() and len(k) > 1 else k.lower()
+        if k not in kinds:
+            kinds.append(k)
+    kinds = kinds[:3]
+    tail = kinds[0] if len(kinds) == 1 else ", ".join(kinds[:-1]) + " and " + kinds[-1]
+    return (" ".join(common) + ": " + tail)[:80]
+
+
 def retitle_from_work(sid: str, root: Path, made: list) -> str:
     """Title a chat after the work: once a turn makes a file, the chat is named for the newest deliverable, not for the
     first sentence the user typed. Never over a name the user gave (rename), never from a message ("go ahead", a retry):
@@ -378,17 +415,16 @@ def retitle_from_work(sid: str, root: Path, made: list) -> str:
         meta = read_meta(sid)
         if meta.get("renamed") or (meta.get("title") and not meta.get("auto_title")):
             return ""
-        best, mt = "", -1.0
+        files = []
         for o in made or []:
             p = str(o.get("path") or "")
             if p.lower().endswith(_DELIVERABLE):
                 try:
-                    t = (root / p).stat().st_mtime
+                    files.append(((root / p).stat().st_mtime, p))
                 except OSError:
                     continue
-                if t >= mt:
-                    best, mt = p, t
-        title = deliverable_title(best) if best else ""
+        files.sort()
+        title = work_title([p for _, p in files])
         if title and title != meta.get("title"):
             write_meta(sid, title=title, auto_title=True)
             return title
@@ -1562,8 +1598,11 @@ class Session:
                 made = W.outputs_from(evs, [], root)
                 for o in made:
                     if o["path"].lower().endswith((".pptx", ".xlsx", ".docx")):
-                        AR.register(str(root / o["path"]), self.id, incognito=self.incognito)
-                retitle_from_work(self.id, root, made)
+                        try:
+                            AR.register(str(root / o["path"]), self.id, incognito=self.incognito)
+                        except Exception:  # noqa: BLE001 - one file the registry refuses never skips the title
+                            pass
+                self._retitle(None, evs)
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -1937,9 +1976,46 @@ class Session:
             self.cp.end_turn()
             write_meta(self.id, turn_seq=self.cp.seq)
             from meshpool_harness.ui import workbench as W
-            self.emit({"type": "checkpoint", "turns": W.own_changes(self.cp.turns()[-1:], self.cp.root)})
+            turns = self.cp.turns()
+            ev = {"type": "checkpoint", "turns": W.own_changes(turns[-1:], self.cp.root)}
+            try:                                   # files the turn said it saved and then deleted: no card for them
+                with self.lock:
+                    evs = list(self.events[int((turns[-1] if turns else {}).get("event_index") or 0):])
+                gone = W.gone_files(evs, self.cp.root)
+                if gone:
+                    ev["gone"] = gone
+            except Exception:  # noqa: BLE001
+                pass
+            self.emit(ev)
+            self._retitle(turns)
         except Exception:  # noqa: BLE001
             pass
+
+    def _retitle(self, turns: list | None = None, evs: list | None = None) -> str:
+        """Name the chat after what it made, from every turn's checkpoint (the files really added) and this turn's
+        events. Daniel, 0.0.18: the chat kept "This is the Northfield bench...": the event scan missed "Saved as: X"
+        and "Files: - X", so retitle_from_work saw no deliverable."""
+        if self.incognito:
+            return ""
+        try:
+            from meshpool_harness.ui import workbench as W
+            root = Path(self.cp.root if self.cp else self.workdir).resolve()
+            made: dict = {}
+            if turns is None and self.cp:
+                turns = self.cp.turns()
+            for t in W.own_changes(turns or [], root):
+                for c in t.get("changed") or []:
+                    if c.get("status") == "added":
+                        made.setdefault(str(c["path"]), {"path": str(c["path"])})
+            for o in W.outputs_from(evs or [], [], root):
+                made.setdefault(o["path"], o)
+            with self.lock:                        # a file the user attached is theirs, not something this chat made
+                said = [str(e.get("text") or "") for e in self.events if e.get("type") == "user"]
+            attached = {x.strip() for t in said for line in re.findall(r"Attached files \(in [^)]*\): ([^\n]+)", t)
+                        for x in line.split(", ")}
+            return retitle_from_work(self.id, root, [o for k, o in made.items() if k not in attached])
+        except Exception:  # noqa: BLE001
+            return ""
 
     def _resume_steers(self):
         """Answer what the user added just as the turn ended, as a turn of its own: its file changes get their own

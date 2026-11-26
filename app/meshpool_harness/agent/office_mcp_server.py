@@ -990,7 +990,7 @@ def _pptx_paragraphs(shapes) -> list:
     """The text paragraphs of a slide's shapes: text boxes, the shapes inside groups and the cells of tables."""
     out = []
     for sh in shapes:
-        if getattr(sh, "shape_type", None) == 6 and hasattr(sh, "shapes"):      # group
+        if sh._element.tag.endswith("}grpSp") and hasattr(sh, "shapes"):    # group (shape_type raises for some shapes)
             out += _pptx_paragraphs(sh.shapes)
         elif getattr(sh, "has_text_frame", False):
             out += list(sh.text_frame.paragraphs)
