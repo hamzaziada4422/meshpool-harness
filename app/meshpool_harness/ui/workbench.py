@@ -1676,7 +1676,37 @@ def own_changes(turns: list, root) -> list:
                 if twin:
                     continue
             keep.append(c)
+        keep = _one_card_each(keep)
         out.append(dict(t, changed=keep) if len(keep) != len(ch) else t)
+    return out
+
+
+def _one_card_each(changed: list) -> list:
+    """One deliverable, one entry: the cards and the "files changed" count are of distinct files. Lina saw "3 files
+    changed" and three identical region_summary.xlsx cards: three job folders of an older chat each held a copy. The
+    same path listed twice counts once; copies of one file name in "Meshpool outputs" job folders count once (the
+    latest), and not at all when the turn also has that file in the user's own folder."""
+    def parts(c):
+        return str(c.get("path") or "").replace("\\", "/").split("/")
+
+    def in_job(c):
+        return "Meshpool outputs" in parts(c)[:-1]
+    own = {parts(c)[-1].lower() for c in changed if c.get("status") != "deleted" and not in_job(c)}
+    last_job = {}
+    for i, c in enumerate(changed):
+        if in_job(c) and c.get("status") != "deleted":
+            last_job[parts(c)[-1].lower()] = i
+    out, seen = [], set()
+    for i, c in enumerate(changed):
+        key = (str(c.get("path") or ""), c.get("status") == "deleted")
+        if key in seen:
+            continue
+        if in_job(c) and c.get("status") != "deleted":
+            name = parts(c)[-1].lower()
+            if name in own or last_job.get(name) != i:
+                continue
+        seen.add(key)
+        out.append(c)
     return out
 
 

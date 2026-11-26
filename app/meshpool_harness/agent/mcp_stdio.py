@@ -51,6 +51,13 @@ def cancel_check():
     return (lambda: bool(ev and ev.is_set()))
 
 
+def stop_check():
+    """Like cancel_check, but true only for a Stop: a client that cancels because it waited too long ("no reply
+    within N s") has not asked for the work to end, so a background job it started keeps building."""
+    ev = getattr(_CALL, "cancel", None)
+    return (lambda: bool(ev and ev.is_set() and not str(getattr(ev, "reason", "")).startswith("no reply within")))
+
+
 def serve(name: str, tools: dict[str, Tool], serial: bool = False, instructions: str = "") -> None:
     """Read requests from stdin until it closes. serial=True runs tool calls one at a time, in arrival order
     (needed when the tools drive one shared browser or one mouse)."""
@@ -68,6 +75,7 @@ def serve(name: str, tools: dict[str, Tool], serial: bool = False, instructions:
             if m == "notifications/cancelled":           # the client gave up on a call (Stop): tell the tool
                 ev = running.get((msg.get("params") or {}).get("requestId"))
                 if ev:
+                    ev.reason = str((msg.get("params") or {}).get("reason") or "")
                     ev.set()
             return
         try:

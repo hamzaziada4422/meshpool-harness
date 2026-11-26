@@ -442,7 +442,7 @@ then call it again with the answers as fields. If you already asked them, pass b
 
 Rules
 - Copy values the request gives (dates, amounts, labels, names) exactly as written, unless it asks you to reformat them: do not rewrite an ISO date, add a note such as "(excl. VAT)" or round a figure the user gave.
-- Save a result at the exact path and file name the request names (for example ./deck.pptx); use the Meshpool outputs folder only when it names none.
+- Save a result at the exact path and file name the request names (for example ./deck.pptx); when it names none, give it a plain name in the working folder. Never make a folder of your own for results.
 - To fill in or change a workbook, document or deck the user already has, use edit_office_file with direct edits (cell references such as Assumptions!B2 on the named sheets); build with an engine only for a new file.
 - Use facts from the user's files and fetched sources. Never invent numbers, quotes or sources; say what is missing.
 - You can only write inside the working folder. Ask before deleting or overwriting the user's files.
@@ -7101,7 +7101,8 @@ class Agent:
         child = usage.start_task(chat=self.id, parent=task, label="office:" + engine)
         jid, reused = OJ.start(engine, args["request"], paths, self.root, scope=self.id,
                                model=self.model or None,   # the user's pick; else the engine resolves MH_MODEL / settings
-                               env_extra=usage.child_env(child, "engine:" + engine))   # one request, one engine run
+                               env_extra=usage.child_env(child, "engine:" + engine),   # one request, one engine run
+                               work=Path(self.dir) / "office-jobs")   # the job's files stay in meshpool's own data
         if reused == "refused":
             return OJ.refusal_text(jid, rel_to=self.root), True
         if reused != "done":

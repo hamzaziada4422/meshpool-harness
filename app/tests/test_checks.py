@@ -32,7 +32,7 @@ def test_the_line_lists_what_passed_with_counts(home):
     K.passed("office_schema", "Office schema", None, "a.pptx")
     K.passed("sources", "sources", 14)
     s = K.summary("c1")
-    assert s["line"] == ("Checked the deck: all 20 checks passed. Checked the file follows Office's own format rules. "
+    assert s["line"] == ("Checked the slide layout and text, and that the file opens cleanly. "
                          "Checked 14 sources.") and s["failed"] == 0
     assert K.final_line("c1") == s["line"]
     ev = K.events_for("c1")
@@ -47,7 +47,8 @@ def test_a_rule_that_did_not_run_is_never_listed(home):
     K.rules_ran("deck_rules", "design rules", {"P0": "pass", "P1": "pass", "P2": "not_run", "P3": "not_run",
                                                "P4": "warn", "P5": "fail"}, "d.pptx")
     s = K.summary("c2")
-    assert s["line"] == "Checked the deck: 3 of 4 checks passed."        # P0, P1, P4 ran and passed; P5 failed
+    assert s["line"] == "Checked the slide layout and text."         # P0, P1, P4 ran and passed; P5 failed
+    assert s["failed"] == 1 and "3 of 4" not in s["line"]             # the count stays in the details fold
     K.begin("c3")
     K.rules_ran("deck_rules", "design rules", {"P0": "not_run"})
     assert K.summary("c3")["line"] == ""                                     # nothing ran: no line at all
@@ -66,7 +67,8 @@ def test_the_same_deck_checked_again_counts_once(home):
     import time
     time.sleep(1.2)
     K.passed("deck_rules", "design rules", 18, "a.pptx")
-    assert K.summary("c5")["line"] == "Checked the deck: all 18 checks passed."
+    assert K.summary("c5")["line"] == "Checked the slide layout and text."
+    assert [i["label"] for i in K.summary("c5")["items"]] == ["18 checks on the deck passed"]
 
 
 def test_a_child_process_finds_the_run_through_the_pointer_file(home, monkeypatch):
@@ -92,7 +94,7 @@ def test_workbook_rules_are_recorded_and_the_result_is_unchanged(home):
     items = K.summary("w1")["items"]
     assert any(i["kind"] == "workbook_rules" for i in items if i["ok"]) == (ok > 0)
     if ok:
-        assert f"{ok} of " in K.summary("w1")["line"] or f"all {ok} checks" in K.summary("w1")["line"]
+        assert K.summary("w1")["line"].startswith("Checked the totals and formulas")
 
 
 def test_a_deck_build_records_its_rules(home):
@@ -109,7 +111,7 @@ def test_a_deck_build_records_its_rules(home):
     ok = sum(1 for s in ran if s in ("pass", "warn"))
     bad = sum(1 for s in ran if s == "fail")
     sm = K.summary("d1")
-    assert ok > 0 and (f"{ok} of " in sm["line"] or f"all {ok} checks" in sm["line"])
+    assert ok > 0 and sm["line"].startswith("Checked the slide layout and text")
     assert sm["failed"] == bad
     assert "P0" not in sm["line"] and not any(r == "not_run" for r in [])      # not_run rules are never counted
     nr = sum(1 for s in res["rules"].values() if s == "not_run")

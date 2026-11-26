@@ -91,6 +91,66 @@ def new_workbook(sheets=("Inputs", "Calc", "Outputs")) -> Workbook:
     return wb
 
 
+def table_workbook(sheet: str = "Data") -> Workbook:
+    """A workbook for a list, a table or a simple summary: one sheet, which is the one the file opens on."""
+    wb = new_workbook((check_sheet_title(sheet),))
+    wb.active = 0
+    return wb
+
+
+_TOTALS = {"sum": "SUM", "count": "COUNTA", "average": "AVERAGE", "mean": "AVERAGE", "min": "MIN", "max": "MAX"}
+
+
+def table(ws, rows, columns=None, formats=None, total=None, row: int = 1, total_label: str = "Total") -> dict:
+    """Write a whole table in one step: the header in `row`, then every data row. `rows` is a pandas DataFrame (read
+    the input once with pandas) or a list of row lists with `columns`. It writes rows with ws.append, never cell by
+    cell, so 50,000 rows take seconds. formats: {column label: fmt}. total: {column label: "sum" | "count" |
+    "average" | "min" | "max"} adds one total row of live formulas under the data. The header is frozen and
+    filtered. Returns {"first": first data row, "last": last data row, "cols": {label: letter}, "total_row": n}."""
+    if hasattr(rows, "columns") and hasattr(rows, "itertuples"):          # a pandas DataFrame
+        columns = [str(c) for c in rows.columns] if columns is None else list(columns)
+        df = rows.astype(object).where(rows.notna(), None)
+        data = df.values.tolist()
+    else:
+        data = [list(r) for r in rows or []]
+    columns = list(columns or [])
+    if not columns:
+        raise ValueError("table() needs the column labels (columns=[...]) or a DataFrame")
+    header(ws, row, columns)
+    ws._current_row = row                                                 # append writes from the next row
+    for r in data:
+        ws.append([v.item() if hasattr(v, "item") and not isinstance(v, (str, bytes)) else v for v in r])
+    first, last = row + 1, row + len(data)
+    cols = {lab: get_column_letter(i) for i, lab in enumerate(columns, 1)}
+    for lab, fmt in (formats or {}).items():
+        if lab not in cols:
+            raise ValueError(f"formats: no column {lab!r} (columns are {columns})")
+        code, k = fmt_code(fmt), columns.index(lab) + 1
+        for (c,) in ws.iter_rows(min_row=first, max_row=max(first, last), min_col=k, max_col=k):
+            c.number_format = code
+    total_row = None
+    if total:
+        total_row = last + 1
+        ws.cell(total_row, 1, total_label).font = Font(name=FONT, bold=True)
+        for lab, how in total.items():
+            if lab not in cols:
+                raise ValueError(f"total: no column {lab!r} (columns are {columns})")
+            fn = _TOTALS.get(str(how).lower())
+            if not fn:
+                raise ValueError(f"total: {how!r} is not one of {', '.join(_TOTALS)}")
+            L = cols[lab]
+            fmt = (formats or {}).get(lab) if fn != "COUNTA" else "int"
+            formula(ws, f"{L}{total_row}", f"={fn}({L}{first}:{L}{max(first, last)})", fmt, total=True)
+        ws.cell(total_row, 1).border = TOTAL_BORDER
+    freeze(ws, f"A{row + 1}")
+    ws.auto_filter.ref = f"A{row}:{get_column_letter(len(columns))}{max(row + 1, last)}"
+    for i, lab in enumerate(columns, 1):                                  # widths from the header and a sample
+        sample = [len(str(r[i - 1])) for r in data[:200] if i - 1 < len(r) and r[i - 1] is not None]
+        ws.column_dimensions[get_column_letter(i)].width = min(60, max(10, len(str(lab)) + 4, *(s + 2 for s in sample)))
+    ws.sheet_view.showGridLines = True
+    return {"first": first, "last": last, "cols": cols, "total_row": total_row}
+
+
 def title(ws, text, row=1):
     ws.cell(row=row, column=1, value=text).font = TITLE_FONT
 

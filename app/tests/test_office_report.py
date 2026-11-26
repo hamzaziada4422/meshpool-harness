@@ -106,7 +106,8 @@ def test_office_task_uses_the_shared_report(tmp_path, monkeypatch):
     try:
         text, ok = a._office({"engine": "sheets", "request": "a model"})
         assert ok and "flagged" in text and "checks passed" not in text
-        assert "- Meshpool outputs/" in text and "rules failing: X3." in text
+        assert "- model.xlsx" in text and "rules failing: X3." in text      # delivered to the folder itself
+        assert not (tmp_path / "Meshpool outputs").exists()
         for i in range(OJ.REBUILD_LIMIT - 1):             # distinct requests: the same one is returned, not rebuilt
             text, _ = a._office({"engine": "sheets", "request": f"a model of topic {i}"})
         assert "stop here" in text

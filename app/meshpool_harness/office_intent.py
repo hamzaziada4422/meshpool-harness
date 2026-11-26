@@ -122,12 +122,45 @@ def derive_job(request: str, files=(), workdir=None) -> bool:
         bool(_named_sources(request, files, workdir))
 
 
+_NAMED_SHEET = re.compile(r"\b(?:sheet|tab|worksheet)s?\s+(?:called\s+|named\s+|titled\s+)?[\"'`‘“][^\"'`’”\n]{1,31}"
+                          r"[\"'`’”]|[\"'`‘“][^\"'`’”\n]{1,31}[\"'`’”]\s+(?:sheet|tab|worksheet)\b|"
+                          r"\b(?:sheet|tab|worksheet)\s+(?:called|named|titled)\s+\w", re.I)
+
+# A list, a table or a simple summary: one sheet with the data first. A forecast, a budget with assumptions or
+# scenarios is a model and keeps the model structure (Cover, Inputs, Calc, Outputs, Checks). Maya's Flowers: a price
+# list for 12 bouquets came back with those five tabs, a formula legend and range columns, opening on the Cover.
+_MODEL_ASK = re.compile(r"\b(?:models?|forecasts?|projections?|budgets?|scenarios?|sensitivit(?:y|ies)|assumptions?|"
+                        r"what[- ]if|dcf|lbo|valuations?|comps|precedents?|three[- ]statements?|3[- ]statements?|"
+                        r"p&l|profit and loss|income statements?|balance sheets?|cash ?flows?|npv|irr|break[- ]?even|"
+                        r"amorti[sz]ation|loan|mortgage|pricing model|unit economics|cap table|waterfall|"
+                        r"financials?)\b", re.I)
+_TABLE_ASK = re.compile(r"\b(?:lists?|listing|tables?|price ?lists?|menus?|catalogu?es?|inventor(?:y|ies)|rosters?|"
+                        r"directory|directories|registers?|logs?|trackers?|checklists?|contacts?|schedules?|rotas?|"
+                        r"timetables?|summar(?:y|ies)|totals?|one row (?:per|for each)|each row|columns?)\b", re.I)
+
+
+def table_job(request: str) -> bool:
+    """The request asks for a list, a table or a simple summary, not a model: the sheets engine builds one sheet with
+    the data first and at most a totals row.
+
+    table_job("make a price list for 12 bouquets with name, size and price")   -> True
+    table_job("a staff contact list with name, phone and email")                -> True
+    table_job("Build a 12-month budget for a coffee shop with assumptions")     -> False (a model)
+    table_job("a 3-year revenue forecast with scenarios")                       -> False
+    """
+    t = str(request or "").split(SEP)[0]
+    return bool(_TABLE_ASK.search(t)) and not _MODEL_ASK.search(t)
+
+
 def asks_for(request: str) -> set[str]:
     """What an edit request asks for outright that an edit otherwise never does: a "cover" or "checks" tab, a "title"
     row above the header, or to "rename" sheets."""
     t = str(request or "").lower()
     out = set()
-    if re.search(r"\brenam", t):
+    # A sheet the request names ("one sheet 'Summary'", "a tab called Totals") is a rename it asks for. priya018:
+    # "a summary workbook ... One sheet 'Summary'" was checked as an edit of rooms.xlsx, the checker refused the new
+    # name, and the sheet stayed "Rooms".
+    if re.search(r"\brenam", t) or _NAMED_SHEET.search(str(request or "")):
         out.add("rename")
     if re.search(r"\bcover\s*(?:sheet|tab|page)\b", t):
         out.add("cover")
