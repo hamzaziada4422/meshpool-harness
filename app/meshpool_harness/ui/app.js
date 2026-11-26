@@ -1795,13 +1795,18 @@ function userText(mu) {
   const c = b.cloneNode(true); c.querySelectorAll(".att, .tag").forEach(x => x.remove());
   return (c.textContent || "").trim();
 }
-function fillInput(text) {
+// opts.back: Undo or Rewind put the message back. It is a draft: the box is not focused (one Enter must not send the
+// undone request again), and a note says so.
+function fillInput(text, opts = {}) {
   const inp = $("#input"); if (!inp || !text) return;
   const draft = inp.value;
   if (!draft.trim()) inp.value = text;
   else if (draft.trim() !== String(text).trim()) inp.value = draft.replace(/\s+$/, "") + "\n\n" + text;
   S.suggSkip = inp.value.trim();        // put back by Undo or Rewind, not typed: no "Use $skill" chips for it
-  inp.dispatchEvent(new Event("input")); inp.focus();
+  inp.dispatchEvent(new Event("input"));
+  if (!opts.back) { inp.focus(); return; }
+  if (document.activeElement === inp) inp.blur();
+  toast("Your message is back in the box as a draft. Edit it, then send it again if you want to.", 6000);
 }
 async function undoTurn(n) {
   if (!await ask({title: "Undo this reply?", text: "Files Meshpool changed go back to how they were before it, and the conversation goes back to that point. Replies after it are undone too.", ok: "Undo changes", danger: true})) return;
@@ -1809,7 +1814,7 @@ async function undoTurn(n) {
   const ue = threadLog().find(e => e.type === "user" && (t.message_index != null && e.mi === t.message_index)) ||
     threadLog().find(e => e.type === "user" && t.event_index != null && e.i === t.event_index);
   const asked = ue?.text || "";
-  try { const root = curRoot(); const r = await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); if (asked) fillInput(asked); renderBranch(true); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel(); afterUndo(root, r.undone); }
+  try { const root = curRoot(); const r = await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); if (asked) fillInput(asked, {back: true}); renderBranch(true); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel(); afterUndo(root, r.undone); }
   catch (e) { toast(e.message); }
 }
 // After Undo or Rewind: a preview of a file Undo removed closes, one of a file it put back shows the restored version.
@@ -1834,7 +1839,7 @@ async function rewindFork(kind, el) {
     if (!a) return;
     const r = await post(`/api/agent/${cur.id}/rewind`, {event_index: ei, files: a.checked, since: 1e9});
     if (r.forked) { await loadThreads(); openThread(r.forked); toast("This agent cannot go back in place, so the conversation up to there is a new chat.", 5000); return; }
-    if (r.text) fillInput(r.text);
+    if (r.text) fillInput(r.text, {back: true});
     renderBranch(true); clearTimeout(cur.pollT); resetChat(cur); poll(); if (S.panel === "diff") renderPanel();
     afterUndo(cur.view?.workdir || curRoot(), r.undo);
   } catch (e) { toast(e.message); }
