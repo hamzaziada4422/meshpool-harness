@@ -344,6 +344,55 @@ def safe_read(cmd: str, root, cwd=None) -> bool:
     return all(_inside(v, root, cwd) for a in rest for v in _arg_paths(a))
 
 
+# Commands that reach the network or install software: they still ask, and run with the network when allowed.
+NETWORK = re.compile(
+    r"(?:^|[\s;&|(`])(?:curl|wget|ssh|scp|sftp|rsync|nc|ncat|netcat|telnet|ftp|http|https|aria2c|gh|brew|apt|apt-get|"
+    r"dnf|yum|snap|winget|choco|npx|bunx|pnpx|uvx|ollama)(?=$|[\s;&|)])"
+    r"|\b(?:pip3?|python3?\s+-m\s+pip|uv\s+pip|conda|mamba|gem|cargo|go|composer|poetry|pipx)\s+(?:install|download|add|get|update|upgrade|publish)\b"
+    r"|\b(?:npm|pnpm|yarn|bun)\s+(?:i|install|ci|add|update|upgrade|publish|login|dlx|create|x|exec)\b"
+    r"|\buv\s+(?:add|sync|lock|tool\s+install|run\s+--with)\b"
+    r"|\bgit\s+(?:clone|fetch|pull|push|submodule|ls-remote|remote\s+update)\b"
+    r"|\bdocker\s+(?:pull|push|login|build|run)\b|https?://", re.I)
+
+
+def _home() -> Path | None:
+    try:
+        return Path(os.path.realpath(os.path.expanduser("~")))
+    except (OSError, ValueError):
+        return None
+
+
+def sandbox_auto_ok(cmd: str, root, cwd=None) -> bool:
+    """A command that may run without a question inside the OS sandbox (writes only in the project and temp folders,
+    network cut): it does not reach the network or install software, and every path it names is in the project, a
+    temp folder, or outside the user's home folder (programs, system files). A path elsewhere in the home folder
+    (~/.ssh, ~/Documents outside the project) still asks. Compound commands are fine: the sandbox confines them all."""
+    if not cmd or not cmd.strip() or NETWORK.search(cmd):
+        return False
+    if cwd is not None and not _inside(str(cwd), root):
+        return False
+    toks = _tokens(cmd.replace("&&", " ").replace("||", " ").replace("|", " ").replace(";", " "))
+    if toks is None:
+        return False
+    home, temps = _home(), _temp_roots()
+    for a in toks:
+        for v in _arg_paths(a):
+            if not (v.startswith(("/", "~", "..", "./")) or "/" in v or "\\" in v):
+                continue                              # a word, not a path
+            if _inside(v, root, cwd):
+                continue
+            try:
+                rp = Path(os.path.realpath(os.path.expanduser(v) if os.path.isabs(os.path.expanduser(v))
+                                           else os.path.join(str(cwd or root), v)))
+            except (OSError, ValueError):
+                return False
+            if home is not None and (rp == home or home in rp.parents):
+                return False                          # the user's own files outside the project (checked first: a
+            if any(t == rp or t in rp.parents for t in temps):      # home folder can sit under a temp folder)
+                continue
+    return True
+
+
 def approve_with_scope(approve, kind, title, detail, scope: str):
     """Call an approver, passing `scope` only when its signature accepts it."""
     try:

@@ -5557,6 +5557,33 @@ class Agent:
             self._partial_text = text
 
     # ---------- tools ------------------------------------------------------------------------------------------
+    def _sandboxed(self) -> bool:
+        """This chat's commands run in the OS sandbox (bubblewrap, sandbox-exec): writes only in the project and temp."""
+        try:
+            from meshpool_harness.core import sandbox as SBX
+            return not getattr(self.ws, "container", None) and SBX.requested(self.mode) and SBX.available()
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _work_without_asking(self) -> bool:
+        """Ordinary work in the folder runs without a question: in the sandbox, or after the user's one yes for the
+        chat where there is none. MH_SANDBOX_AUTO=0 asks as before 0.0.18."""
+        if os.environ.get("MH_SANDBOX_AUTO", "1") == "0":
+            return False
+        return self._sandboxed() or bool(getattr(self, "_folder_ok", False))
+
+    def _edit_inside(self, name: str, args: dict) -> bool:
+        """Every file this edit touches is inside the chat's folder (or one the user added)."""
+        if name in ("edit", "write_file", "notebook_edit"):
+            paths = [str(args.get("path") or args.get("notebook_path") or "")]
+        elif name == "apply_patch":
+            paths = [str(x) for x in _patch_files(args.get("input"))]
+        else:
+            return False
+        if not paths or any(not p.strip() for p in paths):
+            return False
+        return all(not self._outside_path(os.path.expanduser(p)) for p in paths)
+
     def _outside(self, name: str, args: dict) -> str:
         """Why a read-only call still needs a yes in Ask and Accept edits: it reads outside the project
         (an SSH key, another app's secrets), or a web fetch carries a lot of data out in its address. "" if fine."""
@@ -5781,6 +5808,22 @@ class Agent:
                 wd = self.ws._path(str(args["workdir"]))
             except Exception:  # noqa: BLE001
                 wd_ok = False                      # unresolvable: never the shortcut
+        if not risky and self.mode in ("ask", "edits") and not destr and self._work_without_asking():
+            # 0.0.18 (owner: "way too many approvals for normal users"): ordinary work in the chat's folder runs
+            # without a question, as in Codex's default (workspace-write sandbox) and Claude's: inside the OS sandbox
+            # (writes only in the folder and temp, network cut for these commands) or after the user's one "Allow
+            # ordinary work in this folder for this chat" where there is no sandbox. Undo covers the changes.
+            # Still asked: destructive commands, the network and installs, paths elsewhere in the user's home,
+            # meshpool's own rule files (the guard above), and anything outside the folder.
+            if name in ("bash", "shell", "exec_command") and cmds and wd_ok and not _destructive(args, self.root) \
+                    and all(PR.sandbox_auto_ok(c, self.root, wd) for c in cmds):
+                if self._sandboxed():
+                    script = (T.shell_script(args.get("command")) if name == "shell"
+                              else str(args.get("cmd") if name == "exec_command" else args.get("command") or ""))
+                    self.ws.__dict__.setdefault("sbx_offline", set()).add(script.strip())
+                return True, ""
+            if group == "edit" and self._edit_inside(name, args):
+                return True, ""
         if cmds and wd_ok and self.mode in ("ask", "edits") and not _destructive(args, self.root) and \
                 all(PR.safe_read(c, self.root, wd) for c in cmds):
             return True, ""                    # H-15: a plain read-only command inside the project needs no question
@@ -5837,7 +5880,12 @@ class Agent:
             pass
         pats = [p for c in cmds for p in PR.grant_patterns(c)] if group == "bash" and not _destructive(args, self.root) else []
         pats = list(dict.fromkeys(pats))
+        folder = (group in ("bash", "edit") and not risky and not _destructive(args, self.root) and not destr
+                  and self.mode in ("ask", "edits") and os.environ.get("MH_SANDBOX_AUTO", "1") != "0"
+                  and not self._sandboxed() and (group == "edit" or
+                                                 (cmds and all(PR.sandbox_auto_ok(c, self.root, wd) for c in cmds))))
         scope = ("once" if risky == "destructive" or _destructive(args, self.root) else   # a destructive command: this once only
+                 "ordinary commands and edits in this folder" if folder else   # no sandbox: one yes for the chat
                  "all file edits" if group == "edit" else "this tool" if group != "bash" else
                  " and ".join(f"`{p}`" for p in pats[:3]) + " commands" if pats else "once")   # once: no chat grant
         decision, note = PR.approve_with_scope(self.approve, kind, title, detail, scope)
@@ -5855,6 +5903,8 @@ class Agent:
         if decision in ("yes", "always"):      # re-check on edit never runs a command again that needed this yes
             self.ws.__dict__.setdefault("asked_cmds", set()).update(
                 c.strip() for c in PR.commands_of(name, args) if c.strip())
+        if decision == "always" and folder:
+            self._folder_ok = True                 # what _work_without_asking reads for the rest of this chat
         if decision == "always" and scope != "once":
             if group == "bash":
                 self.always.update("bash:" + p for p in pats)   # no pattern (a chain, a redirect): this once only

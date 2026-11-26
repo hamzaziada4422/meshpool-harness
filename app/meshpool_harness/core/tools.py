@@ -1996,8 +1996,9 @@ class Workspace:
                     r = self._proc([bash, "-lc" if login else "-c", fix_nul_redirect(command)], env, timeout_s,
                                    encoding="utf-8", cwd=cwd)
                 elif bash:
-                    r = self._proc(_SB.wrap([bash, "-lc" if login else "-c", command], self.root, cwd=cwd, mode=mode),
-                                   env, timeout_s, cwd=cwd)
+                    offline = command.strip() in self.__dict__.get("sbx_offline", ())   # ran without a question
+                    r = self._proc(_SB.wrap([bash, "-lc" if login else "-c", command], self.root, cwd=cwd, mode=mode,
+                                            offline=offline), env, timeout_s, cwd=cwd)
                 elif os.name == "nt":                            # no Git Bash: PowerShell, not cmd.exe
                     r = self._proc(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                                     "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command],
