@@ -90,3 +90,18 @@ def test_a_turn_that_wrote_a_workbook_leaves_cached_values_in_it(home, om_proj, 
     d = openpyxl.load_workbook(om_proj / "area.xlsx", data_only=True)["Area"]
     assert [d[f"D{i}"].value for i in range(2, 6)] == [6, 20, 42, 68]
     assert openpyxl.load_workbook(om_proj / "area.xlsx")["Area"]["D2"].value == "=B2*C2"
+
+
+def test_fill_leaves_a_workbook_that_is_open_in_excel_or_libreoffice_alone(tmp_path):
+    """A workbook with a lock file next to it is open in Excel or LibreOffice: its values are not written in under it."""
+    import openpyxl
+    from meshpool_harness import xl_values
+    for lock in ("~$book.xlsx", ".~lock.book.xlsx#"):
+        d = tmp_path / lock.replace("#", "").replace("$", "")
+        d.mkdir()
+        f = d / "book.xlsx"
+        wb = openpyxl.Workbook(); ws = wb.active; ws["A1"] = 2; ws["A2"] = "=A1*3"; wb.save(f)
+        (d / lock).write_text("x")
+        before = f.read_bytes()
+        assert xl_values.fill(f) == 0
+        assert f.read_bytes() == before

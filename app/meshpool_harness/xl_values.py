@@ -167,6 +167,10 @@ def fill(path, timeout: float = 25) -> int:
     """Write the computed results into the formula cells of path that have none. Returns how many cells were filled;
     0 when nothing needed it or it could not be done (the file is then left as it was)."""
     path = Path(path)
+    # a workbook open in Excel or LibreOffice is never rewritten under it (its lock file sits next to it)
+    if (path.with_name("~$" + path.name).exists() or path.with_name("~$" + path.name[2:]).exists()
+            or path.with_name(f".~lock.{path.name}#").exists()):
+        return 0
     vals = _compute(path, timeout)
     if not vals:
         return 0
