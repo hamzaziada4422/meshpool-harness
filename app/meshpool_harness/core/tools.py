@@ -1161,6 +1161,27 @@ class Workspace:
         e = min(len(lines), end or len(lines))
         if s > len(lines) and lines:
             return f"{path}: file has {len(lines)} lines (start={s} is past the end)"
+        cap = self.max_tool_chars
+        if sum(len(x) + 8 for x in lines[s - 1:e]) > 20 * cap:
+            # a big file (a log, a data dump): only the head and the tail are shown, so only those are numbered, and no
+            # numbered copy of the whole file goes to the run folder (135 MB read whole: 3.8 s and a 152 MB copy)
+            keep = HEAD if cap >= MAX_TOOL_CHARS else max(250, int(cap * 0.375))
+
+            def rows(idx):
+                out, n = [], 0
+                for i in idx:
+                    row = f"{i:>5}  {lines[i - 1]}"[:keep]
+                    n += len(row) + 1
+                    if n > keep and out:
+                        break
+                    out.append(row)
+                return out
+            hl = rows(range(s, e + 1))
+            tl = rows(range(e, s + len(hl) - 1, -1))[::-1]
+            gap = e - s + 1 - len(hl) - len(tl)
+            return clean(f"{path} lines {s}-{e} of {len(lines)}\n" + "\n".join(hl)
+                         + f"\n... [{gap} lines not shown. Read them with read_file start/end, or search with grep] ...\n"
+                         + "\n".join(tl))
         body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(s, e + 1))
         return self._cap(f"{path} lines {s}-{e} of {len(lines)}\n{body}", "read")
 

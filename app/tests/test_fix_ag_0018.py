@@ -325,3 +325,21 @@ def test_glob_never_enters_skipped_folders_and_finds_the_same_files(tmp_path, mo
     ws.should_stop = lambda: next(stops, True)
     with pytest.raises(T.ToolError):                 # Stop is seen while it walks, not only between results
         ws.glob("**/*.zzz")
+
+
+# AG-14: read_file on a big file numbered every line and saved a numbered copy of the whole file in the run folder,
+# although only about 6,000 characters are shown (a 135 MB log: 3.8 s and a 152 MB copy per read).
+def test_read_file_of_a_big_file_numbers_only_what_it_shows(tmp_path):
+    with open(tmp_path / "app.log", "w", encoding="utf-8") as f:
+        for i in range(1, 40001):
+            f.write(f"line {i} request handled status=200\n")
+    ws = _ws(tmp_path)
+    out = ws.read_file("app.log")
+    assert out.startswith("app.log lines 1-40000 of 40000\n    1  line 1 ")
+    assert out.rstrip().endswith("40000  line 40000 request handled status=200")
+    assert "lines not shown" in out and len(out) < 8000
+    assert not list((tmp_path / ".run").glob("out_*")), "no numbered copy of the whole file is saved"
+    mid = ws.read_file("app.log", start=20000, end=20002)
+    assert mid.split("\n")[1:] == [f"{i:>5}  line {i} request handled status=200" for i in (20000, 20001, 20002)]
+    small = ws.read_file("app.log", start=1, end=100)           # a range that fits is shown whole, as before
+    assert "not shown" not in small and small.count("\n") == 100
