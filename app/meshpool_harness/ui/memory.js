@@ -1,10 +1,10 @@
-/* The memory page, "What Meshpool knows": portrait, the "Meshpool thinks" tray, facts filed by category with their
+/* The memory page, "What meshpool knows": portrait, the "meshpool thinks" tray, facts filed by category with their
    scope, source and use, search and filters, projects, history, a review queue, conflicts and health. Loaded after
    app.js; draws into #col through drawPage("memory"). All data comes from /api/memory (memory_api.py). Rows are
    virtualised past 150 so 1,000 facts stay smooth; every change has an Undo toast. */
 "use strict";
 
-PAGE_TITLE.memory = "What Meshpool knows";
+PAGE_TITLE.memory = "What meshpool knows";
 ICON.memory = ICON.brain;
 const MEM = {tab: "memory", q: "", cat: "", scope: "", kind: "", unused: false, d: null, hl: new Set(), editing: "", sel: "", drag: ""};
 const MEM_KIND = {stated: "You said it", learned: "Learned", noticed: "Noticed"};
@@ -28,15 +28,15 @@ async function memAct(body, undo) {
 const memDate = t => t ? new Date(t * 1000).toLocaleDateString("en", {month: "short", day: "numeric"}) : "";
 
 function memPortraitHTML(d) {
-  if (!d.counts.active) return `<div class="mem-empty"><b>Nothing here yet.</b><span>Facts about you show up here as you work.</span><button class="btn primary" id="memAddEmpty">Add a memory</button></div>`;
+  if (!d.counts.active) return `<div class="mem-empty"><b>Nothing here yet.</b><span>Facts about you show up here as you work, or add one with Add memory above.</span></div>`;
   const p = MEM.portrait;
   if (!p) return `<div class="mem-portrait sk"><span></span><span></span><span></span></div>`;
   if (!p.sentences.length) return "";
-  return `<div class="mem-portrait" aria-label="What Meshpool has understood about you"><h2>The short version</h2><p>${p.sentences.map((s, i) => `<button class="mem-sent" data-sent="${i}">${esc(s.text)}</button>`).join(" ")}</p><small>Click a sentence to see why.</small></div>`;
+  return `<div class="mem-portrait" aria-label="What meshpool has understood about you"><h2>The short version</h2><p>${p.sentences.map((s, i) => `<button class="mem-sent" data-sent="${i}">${esc(s.text)}</button>`).join(" ")}</p><small>Click a sentence to see why.</small></div>`;
 }
 function memTrayHTML(d) {
   if (!d.pending.length) return "";
-  return `<section class="mem-tray" aria-label="Meshpool thinks"><h2>Meshpool thinks <span class="cnt">${d.pending.length}</span></h2><p class="mem-sub">Not used until you say yes.</p>${d.pending.map(f => `<div class="mem-card" data-id="${esc(f.id)}"><div class="mem-ct"><b class="mem-text">${esc(f.text)}</b><span class="mem-src">${esc(f.source.text)}${f.source.chat_id ? ` <button class="linkbtn" data-chat="${esc(f.source.chat_id)}">Open</button>` : ""}</span></div><div class="mem-btns"><button class="btn primary" data-confirm="${esc(f.id)}">Yes</button><button class="btn" data-editpend="${esc(f.id)}">Edit</button><button class="btn" data-reject="${esc(f.id)}">No</button></div></div>`).join("")}</section>`;
+  return `<section class="mem-tray" aria-label="meshpool thinks"><h2>meshpool thinks <span class="cnt">${d.pending.length}</span></h2><p class="mem-sub">Not used until you say yes.</p>${d.pending.map(f => `<div class="mem-card" data-id="${esc(f.id)}"><div class="mem-ct"><b class="mem-text">${esc(f.text)}</b><span class="mem-src">${esc(f.source.text)}${f.source.chat_id ? ` <button class="linkbtn" data-chat="${esc(f.source.chat_id)}">Open</button>` : ""}</span></div><div class="mem-btns"><button class="btn primary" data-confirm="${esc(f.id)}">Yes</button><button class="btn" data-editpend="${esc(f.id)}">Edit</button><button class="btn" data-reject="${esc(f.id)}">No</button></div></div>`).join("")}</section>`;
 }
 function memConflictsHTML(d) {
   if (!d.conflicts.length) return "";
@@ -104,7 +104,7 @@ async function memHistoryHTML() {
   const h = (await api("/api/memory/history")).history;
   if (!h.length) return `<div class="mem-empty"><b>No changes yet.</b><span>Edits show up here.</span></div>`;
   const verb = {added: "Added", edited: "Edited", archived: "Archived", deleted: "Deleted", restored: "Restored", migrated: "Moved from earlier memory", changed: "Changed", reviewed: "Confirmed"};
-  return `<ol class="mem-hist">${h.map(r => `<li><span class="when">${esc(memDate(r.ts))}</span><span class="what"><b>${verb[r.action] || r.action}</b> ${esc(r.text || "")}<small>${r.by === "you" ? "You" : "Meshpool"}: ${esc(r.reason || "")}${r.before_text && r.action === "edited" ? ` · was “${esc(r.before_text)}”` : ""}</small></span>${["archived", "deleted", "edited"].includes(r.action) ? `<button class="btn" data-restore="${r.action}|${esc(r.id)}" data-before="${esc(r.before_text || "")}">Restore</button>` : ""}</li>`).join("")}</ol>`;
+  return `<ol class="mem-hist">${h.map(r => `<li><span class="when">${esc(memDate(r.ts))}</span><span class="what"><b>${verb[r.action] || r.action}</b> ${esc(r.text || "")}<small>${r.by === "you" ? "You" : "meshpool"}: ${esc(r.reason || "")}${r.before_text && r.action === "edited" ? ` · was “${esc(r.before_text)}”` : ""}</small></span>${["archived", "deleted", "edited"].includes(r.action) ? `<button class="btn" data-restore="${r.action}|${esc(r.id)}" data-before="${esc(r.before_text || "")}">Restore</button>` : ""}</li>`).join("")}</ol>`;
 }
 function memReviewHTML(d) {
   if (!d.review.length) return `<div class="mem-empty"><b>Nothing to review.</b><span>Facts no chat has used for 60 days, and facts that expired, wait here for a yes or no.</span></div>`;
@@ -118,7 +118,11 @@ async function pageMemory(redraw) {
   const scrollY = $("#conv")?.scrollTop || 0;
   const tabs = [["memory", "Memory"], ["projects", "Projects"], ["history", "History"], ["review", `Review${d.review.length ? " (" + d.review.length + ")" : ""}`]];
   let body = "";
-  if (tab === "memory") body = memPortraitHTML(d) + memConflictsHTML(d) + memTrayHTML(d) + memFiltersHTML(d) + memListHTML(d) + memHealthHTML(d);
+  // No memory yet and no filter: one empty state and the one Add button in the bar, not a second empty list, filters
+  // over nothing and a health line about nothing.
+  const bare = !d.counts.active && !MEM.q && !MEM.cat && !MEM.scope && !MEM.kind && !MEM.unused;
+  const tidy = !!(d.health?.proposal && (d.health.proposal.merges?.length || d.health.proposal.archive?.length));
+  if (tab === "memory") body = bare ? memPortraitHTML(d) + memTrayHTML(d) + (tidy ? memHealthHTML(d) : "") :memPortraitHTML(d) + memConflictsHTML(d) + memTrayHTML(d) + memFiltersHTML(d) + memListHTML(d) + memHealthHTML(d);
   else if (tab === "projects") body = memProjectsHTML(d);
   else if (tab === "history") body = await memHistoryHTML();
   else body = memReviewHTML(d);
@@ -141,7 +145,7 @@ function bindPortrait() {
     const ids = (MEM.portrait.sentences[+b.dataset.sent] || {}).ids || [];
     MEM.hl = new Set(ids); $$("[data-sent]").forEach(x => x.classList.toggle("on", x === b && ids.length));
     $$(".mem-row").forEach(r => r.classList.toggle("hl", MEM.hl.has(r.dataset.id)));
-    const first = $(".mem-row.hl"); if (first) first.scrollIntoView({block: "center", behavior: "smooth"});
+    const first = $(".mem-row.hl"); if (first) first.scrollIntoView({block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"});
     else if (ids.length) memScrollTo(ids[0]);
   });
 }

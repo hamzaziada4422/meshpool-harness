@@ -729,7 +729,10 @@ def system_check() -> list[dict]:
                  "fix": "Not needed: icons ship pre-rendered with Meshpool."})
     try:                                    # the model's context window and where that number came from
         from meshpool_harness.core import context as _ctx
-        rows.append({"name": "Context window", "optional": True, "ok": True, "detail": _ctx.describe(),
+        # Shown in Settings: plain words, not "context 1,000k (from provider); older steps are summarized above 120k".
+        plain = re.sub(r"^context (\S+) \(([^)]+)\); older steps are summarized above (\S+) tokens$",
+                       r"Up to \1 tokens per chat (\2). Past \3, older steps are summed up to make room.", _ctx.describe())
+        rows.append({"name": "Context window", "optional": True, "ok": True, "detail": plain,
                      "fix": "Set MESHPOOL_CONTEXT_WINDOW (tokens) if this is wrong for your model."})
     except Exception:  # noqa: BLE001 - a check must report, not crash
         pass

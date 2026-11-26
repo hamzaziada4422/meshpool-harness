@@ -20,6 +20,18 @@ const SET_NAMES = {profile: "Profile", appearance: "Appearance", notify: "Notifi
   about: "About and updates", scheduled: "Scheduled tasks", terminal: "Terminal command", advanced: "More options", office: "Office apps"};
 // company.js adds "Company and brand" to this list, as it did before.
 const SECTIONS = Object.entries(SET_NAMES);
+// What each page holds, in the words people search with: Search matched page names only, so "folder", "approval" or
+// "ask before" found nothing and "ask" found Scheduled tasks (UX audit 0.0.18). A query matches when each of its words
+// starts a word of a page's name or keywords.
+const SET_WORDS = {permissions: "permission permissions folder folders allow ask before approval approvals approve rules deny access sandbox",
+  data: "data export delete history privacy retention", general: "api key keys connection endpoint base url provider", models: "model models favorite default",
+  harnesses: "agent agents codex claude pi hermes sign in login", notify: "notification notifications sound alert", appearance: "theme dark light font text size density language",
+  caps: "feature features capability memory plan first", personal: "instructions memory about me", styles: "style styles writing tone", import: "import chatgpt claude export zip",
+  connectors: "connector connectors github gmail drive", skills: "skill skills", plugins: "plugin plugins marketplace", mcp: "mcp tools server servers", office: "office word excel powerpoint add-in",
+  terminal: "terminal shell command", advanced: "advanced options", scheduled: "schedule scheduled task tasks routine", about: "about update updates version",
+  usage: "usage cost spend tokens", billing: "billing plan budget", web: "web search browse internet", suggest: "suggestion suggestions next steps", profile: "profile name account"};
+const setWords = k => (setName(k) + " " + (SET_WORDS[k] || "")).toLowerCase();
+const setMatch = (hay, q) => q.split(/\s+/).filter(Boolean).every(w => (" " + hay).includes(" " + w));
 const setName = k => SET_NAMES[k] || (SECTIONS.find(x => x[0] === k) || [])[1] || k;
 
 function groupOfSection(sec) { return SET_GROUPS.find(g => g[2].includes(sec)) || SET_GROUPS.find(g => g[0] === sec) || SET_GROUPS[0]; }
@@ -50,9 +62,16 @@ function openSettings(sec = "profile") {
   document.body.appendChild(sc);
   sc.addEventListener("mousedown", e => { if (e.target === sc) closeSettings(); });
   $(".mx", sc).onclick = closeSettings;
-  $$(".mnav [data-g]", sc).forEach(b => b.onclick = () => renderSection(b.dataset.first));
+  $$(".mnav [data-g]", sc).forEach(b => b.onclick = () => renderSection(b.dataset.hit || b.dataset.first));
   $("#apiKeys", sc).onclick = () => openExternal(S.acct?.keys_url || "https://meshpool.ai");
-  $("#mnavq", sc).oninput = e => { const q = e.target.value.trim().toLowerCase(); $$(".mnav [data-g]", sc).forEach(b => b.hidden = !!q && !b.dataset.l.includes(q)); $$(".mgrp", sc).forEach(g => g.hidden = !$("[data-g]:not([hidden])", g)); };
+  $("#mnavq", sc).oninput = e => {
+    const q = e.target.value.trim().toLowerCase();
+    $$(".mnav [data-g]", sc).forEach(b => {
+      const subs = (SET_GROUPS.find(g => g[0] === b.dataset.g) || [, , []])[2];
+      const hit = q ? (setMatch(b.textContent.toLowerCase(), q) ? subs[0] : subs.find(k => setMatch(setWords(k), q))) : "";
+      b.hidden = !!q && !hit; b.dataset.hit = hit || "";               // a click opens the matching page (Privacy > Permissions)
+    });
+    $$(".mgrp", sc).forEach(g => g.hidden = !$("[data-g]:not([hidden])", g)); };
   $("#mnavq", sc).addEventListener("input", e => { const nav = $(".mnav", sc); let n = $("#mnavNone", nav); const none = !!e.target.value.trim() && !$(".mnav [data-g]:not([hidden])", sc); if (none && !n) { n = document.createElement("p"); n.id = "mnavNone"; n.className = "muted"; n.style.padding = "8px 12px"; n.textContent = "No settings match."; $(".mgrp", nav).before(n); } else if (!none) n?.remove(); });
   $("#mnavq", sc).onkeydown = e => { if (e.key === "Enter") { const first = $(".mnav [data-g]:not([hidden])", sc); if (first) first.click(); } };
   $("#quitApp")?.addEventListener("click", () => post("/api/quit").then(() => document.body.innerHTML = `<div class="onb"><div class="onb-card"><h1>Meshpool has stopped</h1><p>You can close this window.</p></div></div>`));

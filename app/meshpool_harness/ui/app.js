@@ -561,6 +561,15 @@ function setupComposer() {
   c.addEventListener("dragover", e => { e.preventDefault(); c.classList.add("drag"); });
   c.addEventListener("dragleave", () => c.classList.remove("drag"));
   c.addEventListener("drop", e => { e.preventDefault(); c.classList.remove("drag"); addAttachments([...e.dataTransfer.files]); });
+  // The whole chat pane takes a dropped file the way the box does (same highlight, same chip). Elsewhere a dropped file
+  // is ignored: the browser used to open it in place of the app. A project page has its own drop (projects.js).
+  const pane = $("#conv"), hasFiles = e => [...(e.dataTransfer?.types || [])].includes("Files");
+  const paneOn = on => { c.classList.toggle("drag", on); $("#col")?.classList.toggle("drag", on); };
+  pane.addEventListener("dragover", e => { if (!hasFiles(e) || S.view !== "chat") return; e.preventDefault(); paneOn(true); });
+  pane.addEventListener("dragleave", e => { if (!pane.contains(e.relatedTarget)) paneOn(false); });
+  pane.addEventListener("drop", e => { if (!hasFiles(e) || S.view !== "chat") return; e.preventDefault(); paneOn(false); addAttachments([...e.dataTransfer.files]); });
+  document.addEventListener("dragover", e => { if (hasFiles(e)) e.preventDefault(); });
+  document.addEventListener("drop", e => { if (hasFiles(e)) e.preventDefault(); });
   $("#fileIn").onchange = () => { addAttachments([...$("#fileIn").files]); $("#fileIn").value = ""; };
   renderBar();
 }
@@ -726,7 +735,7 @@ const SLASH = [
   ["/skills", "Manage skills", () => openSettings("skills")],
   ["/connectors", "Connect GitHub, Jira, Notion, Apollo and more", () => openSettings("connectors")],
   ["/schedule", "Scheduled tasks", () => goPage("scheduled")],
-  ["/memory", "What Meshpool knows: every memory, where it came from and where it was used", () => goPage("memory")],
+  ["/memory", "What meshpool knows: every memory, where it came from and where it was used", () => goPage("memory")],
   ["/instructions", "Instructions for every chat", () => openSettings("personal")],
   ["/steps", "Show or fold every step", () => toggleSteps()],
   ["/settings", "Open settings", () => openSettings()],
@@ -1046,9 +1055,16 @@ function commitStage(cur) {
   cur.stage = null; EASE.clear();
   const col = $("#col"); col.replaceChildren(...st.childNodes); col.classList.remove("loading");
   for (const n of col.children) n.classList.remove("enter");
+  foldHistory(col);
+  // Items are drawn only near the screen (content-visibility), and until then count as 96 px guesses: the column was
+  // scrolled to the end of the guesses, painted its top or middle for a frame, then jumped down. The scroll event of
+  // that jump arrived after the real heights, read as the reader scrolling up and unpinned the chat, so about one open
+  // in six stayed at the top (UX audit 0.0.18). The newest items get their real size before the first paint (.settle
+  // in app.css), and scroll events until the second frame never unpin.
+  col.classList.add("settle"); S.settling = true;
   S.pinned = true; scrollConv(true);
   if (cur.live) easeStart(cur.live);
-  foldHistory(col);
+  requestAnimationFrame(() => requestAnimationFrame(() => { col.classList.remove("settle"); S.settling = false; if (S.pinned) scrollConv(); }));
 }
 /* Long chats: with thousands of items directly in #col, every frame of a streaming reply laid out, hit-tested and
    paint-walked all of them, even though each skips its own content (content-visibility): a 3000-event chat used a
@@ -1157,7 +1173,7 @@ function ingest(cur, v) {
     if (ev.type === "tool_start") { const raw = ev.name || ""; const nm = ev.mcp ? raw.split("__").slice(2).join("__") : raw; ev.label = TOOL_LABEL[nm] || nm.replace(/_/g, " "); }
     cur.q.push(ev); got++;
   }
-  if (got) wakeFrame();
+  if (got) { wakeFrame(); cur.lastEvAt = Date.now(); $("#waitNote")?.remove(); }
   if (cur.stage || document.hidden) { flushQ(cur); }          // history, or a hidden tab (no animation frames): apply at once
   if (cur.stage) commitStage(cur);
   else if (got) foldHistory($("#col"));                       // a long run keeps its column short too (cheap until FOLD_AT)
@@ -1291,7 +1307,9 @@ function frame() {
 // The reply grows by easing its box open to the height of its text (a line is revealed in a few frames), so the page
 // scrolls with it smoothly instead of stepping a whole line at a time.
 const EASE = new Set();
-function easeStart(node) { wakeFrame(); if (!node || EASE.has(node)) return; node.classList.add("rv"); if (!node.style.height) node.style.height = Math.round(node.firstElementChild?.offsetHeight || 0) + "px"; EASE.add(node); }
+// With reduced motion asked for, the reply simply grows: no eased height, and no frames spent easing it (UX audit 0.0.18).
+const lessMotion = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+function easeStart(node) { wakeFrame(); if (!node || EASE.has(node) || lessMotion()) return; node.classList.add("rv"); if (!node.style.height) node.style.height = Math.round(node.firstElementChild?.offsetHeight || 0) + "px"; EASE.add(node); }
 function easeEnd(node) { if (node) node.dataset.done = "1"; }
 function easeAll() {
   for (const n of EASE) {
@@ -1318,16 +1336,40 @@ function workTick(cur) {
   const pd = cur.working ? planData() : null;
   if (cur.working && !waiting) setWorking(cur.down ? "Waiting for the model service" : cur.jobStage && !cur.live ? cur.jobStage : pd ? planLine(pd) : cur.live ? "Writing" : String(cur.activity || "Working").split(" ").slice(0, 3).join(" ").replace(/[:,]$/, ""), Math.round((Date.now() - (cur.since || Date.now())) / 1000));
   else if (cur.view?.state !== "starting" && Date.now() > (S.sendHold || 0)) setWorking(null);
+  // A long wait on the model (no reply text, no step running) gets a line in the chat after 20 s, with Stop. It is
+  // drawn by this same tick, so it costs no timer of its own.
+  const steps = Object.values(cur.tools || {}).some(d => !d.dataset.done);
+  const quiet = cur.working && !waiting && !cur.live && !cur.stage && !steps ? Math.round((Date.now() - Math.max(cur.since || 0, cur.lastEvAt || 0)) / 1000) : 0;
+  waitNote(quiet >= 20 ? quiet : 0);
+}
+function waitNote(secs) {
+  let n = $("#waitNote");
+  if (!secs) { n?.remove(); return; }
+  const t = secs < 60 ? `${secs} s` : `${Math.floor(secs / 60)} min`;
+  if (!n) {
+    const col = $("#col"); if (!col) return;
+    n = document.createElement("div"); n.id = "waitNote"; n.className = "note waitnote"; n.setAttribute("role", "status");
+    n.innerHTML = `<span class="dot run"></span><span class="wn"></span><button class="linkbtn" type="button">Stop</button>`;
+    $("button", n).onclick = () => stopNow();
+    col.appendChild(n); scrollConv();
+  }
+  setTxt($(".wn", n), `Still waiting for the model (${t}). Some answers take a while; you can stop it any time.`);
 }
 // ---- scrolling: follow the end while the reader is at the end; never pull them back once they scroll up
 function scrollConv(force) { const c = $("#conv"); if (!c) return; if (force) S.pinned = true; if (S.pinned) { c.scrollTop = c.scrollHeight; $(".jumpdown")?.setAttribute("hidden", ""); } }
 function setupScroll() {
   const conv = $("#conv"), col = $("#col");
   const jd = Object.assign(document.createElement("button"), {className: "jumpdown", hidden: true, textContent: "Jump to latest", type: "button"});
-  conv.parentElement.appendChild(jd);
+  // Just above the composer (its wrapper is the anchor), so it never sits on the model name or the composer's buttons.
+  ($(".composer-wrap") || conv.parentElement).appendChild(jd);
   jd.onclick = () => { S.pinned = true; conv.scrollTop = conv.scrollHeight; jd.hidden = true; $("#input")?.focus({preventScroll: true}); };
-  conv.addEventListener("scroll", () => { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; S.pinned = gap < 80; jd.hidden = gap < 160 || S.view !== "chat" || !S.cur; }, {passive: true});
-  if (window.ResizeObserver) new ResizeObserver(() => { if (S.view !== "chat" || !S.cur) { jd.hidden = true; return; } if (S.pinned) conv.scrollTop = conv.scrollHeight; else { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; jd.hidden = gap < 160; } }).observe(col);
+  conv.addEventListener("scroll", () => {
+    const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight;
+    if (S.settling && S.pinned) { if (gap > 1) conv.scrollTop = conv.scrollHeight; return; }   // a chat being drawn, not the reader
+    S.pinned = gap < 80; jd.hidden = gap < 160 || S.view !== "chat" || !S.cur; }, {passive: true});
+  // The column growing, and the pane shrinking (a card or chips taking room above the composer), both keep a pinned
+  // reader at the end.
+  if (window.ResizeObserver) { const ro = new ResizeObserver(() => { if (S.view !== "chat" || !S.cur) { jd.hidden = true; return; } if (S.pinned) conv.scrollTop = conv.scrollHeight; else { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; jd.hidden = gap < 160; } }); ro.observe(col); ro.observe(conv); }
   wakeFrame();
 }
 
@@ -1362,19 +1404,48 @@ function mdRender(node, text) {
       if (code) { code.appendChild(document.createTextNode(add)); pv.src = srcs[i]; continue; }
     }
     const t = document.createElement("template"); t.innerHTML = linkFiles(md(srcs[i]));
-    const nodes = [...t.content.childNodes], old = prev[i]?.nodes || [];
-    const ref = old.length ? old[0] : (prev[i + 1]?.nodes[0] || null);
-    for (const n of nodes) root.insertBefore(n, ref && ref.parentNode === root ? ref : null);
-    for (const n of old) n.remove();
+    // The block keeps its elements while it grows: a paragraph, list or table already on screen is patched where it
+    // differs (shell.js morphNode), not thrown away and drawn again each frame, so a selection in it survives and the
+    // line being written does not flash (UX audit 0.0.18: 840 elements replaced while one long reply streamed).
+    const fresh = [...t.content.childNodes], old = prev[i]?.nodes || [], nodes = [];
+    let first = old.length ? old[0] : (prev[i + 1]?.nodes[0] || null); if (first && first.parentNode !== root) first = null;
+    let k = 0;
+    for (; k < fresh.length; k++) {
+      const o = old[k], n = fresh[k], live = o && o.parentNode === root;
+      if (live && o.nodeName === n.nodeName && (o.nodeType !== 1 || o.className === n.className)) { morphNode(o, n); nodes.push(o); continue; }
+      const at = nodes.length ? nodes[nodes.length - 1].nextSibling : (live ? o : first);
+      root.insertBefore(n, at); nodes.push(n); if (live) o.remove();
+    }
+    for (; k < old.length; k++) old[k].remove();
     prev[i] = {src: srcs[i], nodes, hl: Date.now()};
   }
   while (prev.length > srcs.length) { for (const n of prev.pop().nodes) n.remove(); }
   return node;
 }
 function inline(s) {
-  return s.replace(/`([^`\n]+)`/g, "<code>$1</code>").replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+  return linkBare(s.replace(/`([^`\n]+)`/g, (m, c) => `<code${c.length <= 32 && !/\s/.test(c) ? ' class="nw"' : ""}>${c}</code>`).replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>")
-    .replace(/\[([^\]]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    .replace(/!\[([^\]]*)\]\(([^()\s]+)\)/g, (m, alt, src) => mdImg(alt, src) || m)
+    .replace(/\[([^\]]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>'));
+}
+// A Markdown image of a file in the chat's folder (a chart the agent saved) shows as the image, through the same
+// token-checked /raw route as the file cards under a reply. Remote images and paths outside the folder stay as text.
+function mdImg(alt, src) {
+  const root = typeof curRoot === "function" ? curRoot() : "";
+  let p = String(src).replace(/&amp;/g, "&").replace(/\\/g, "/").replace(/^\.\//, "");
+  if (!root || !/\.(png|jpe?g|gif|webp)$/i.test(p)) return "";
+  const r = root.replace(/\\/g, "/").replace(/\/$/, "");
+  if (p.startsWith(r + "/")) p = p.slice(r.length + 1);
+  if (/^[a-z][\w+.-]*:/i.test(p) || p.startsWith("/") || p.split("/").some(x => x === ".." || x.startsWith("."))) return "";
+  return `<img class="mdimg" alt="${alt}" loading="lazy" src="/raw?t=${encodeURIComponent(MP.token)}&root=${encodeURIComponent(root)}&path=${encodeURIComponent(p)}">`;
+}
+// Plain http(s) addresses in a reply become links (only those two schemes), outside code and existing links.
+function linkBare(html) {
+  return html.split(/(<a\b[^>]*>[\s\S]*?<\/a>|<code\b[^>]*>[\s\S]*?<\/code>|<[^>]+>)/).map((part, i) => i % 2 ? part : part.replace(/\bhttps?:\/\/[^\s<]+/g, u => {
+    const m = /^(.*?)((?:[.,;:!?)\]]|&gt;|&quot;|&#39;)*)$/.exec(u), url = m[1];
+    if (url.length < 11) return u;
+    return `<a href="${url}" target="_blank" rel="noopener">${url}</a>${m[2]}`;
+  })).join("");
 }
 // Base64 of a string's UTF-8 bytes (decoded by unb64 in chat010.js). A lone surrogate (half of an emoji cut by the model,
 // or typed in maths) is not valid UTF-16: encodeURIComponent threw URIError on it and the live reply stopped drawing.
@@ -1462,6 +1533,10 @@ function stepSummary(name, ev) {
   catch (e) { return ""; }
 }
 const TOOL_LABEL = {bash: "Ran", read_file: "Read", write_file: "Wrote", edit: "Edited", grep: "Searched", glob: "Listed", fetch_url: "Fetched", web_search: "Searched the web", web_research: "Researched", mcp__meshpool_web__web_search: "Searched the web", mcp__meshpool_web__web_fetch: "Read", mcp__meshpool_web__web_research: "Researched", mcp__meshpool_assistant__memory_save: "Saved to memory", mcp__meshpool_assistant__run_subtasks: "Ran sub-agents", run_subtasks: "Ran sub-agents", delegate_task: "Handed off to sub-agents", mcp__meshpool_assistant__schedule_task: "Scheduled", todo_write: "Updated the plan", use_skill: "Loaded skill", office_task: "Office"};
+// The command tools of Code chats (Codex-style) by what they do, not by their names ("exec_command", "apply_patch").
+Object.assign(TOOL_RUN, {exec_command: "Running a command", shell: "Running a command", terminal: "Running a command", apply_patch: "Editing files", write: "Writing", read: "Reading", write_stdin: "Answering a command", view_image: "Looking at an image"});
+Object.assign(TOOL_LABEL, {exec_command: "Ran a command", shell: "Ran a command", terminal: "Ran a command", apply_patch: "Edited files", write: "Wrote", read: "Read", write_stdin: "Answered a command", view_image: "Looked at an image"});
+Object.assign(TOOL_BASE, {exec_command: "Run a command", shell: "Run a command", terminal: "Run a command", apply_patch: "Edit files"});
 // A reopened chat is built in a detached column (cur.stage), where isConnected is false for every node: a check on it
 // started a new "1 step" group for each step and left each group spinning. inCol asks the column being built instead.
 const inCol = n => !!n && (n.isConnected || !!S.cur?.stage?.contains(n));
@@ -1475,7 +1550,7 @@ function workGroup() {
 }
 function bumpGroup(g, done) {
   const n = $$(".tool", g).length; const fails = $$(".tool .st.bad", g).length;
-  $(".wl", g).textContent = `${n} step${n === 1 ? "" : "s"}${fails ? `, ${fails} failed` : ""}`;
+  $(".wl", g).textContent = `${n} step${n === 1 ? "" : "s"}${fails ? `, ${fails} did not work` : ""}`;
   if (done) { g.dataset.done = "1"; g.open = !!S.steps || !!$(".appr:not(.done)", g); const el = $(".gel", g); if (el) el.textContent = ""; $(".gdots", g)?.remove(); }
 }
 function closeGroup() { const g = S.cur.group; if (inCol(g)) bumpGroup(g, true); S.cur.group = null; }
@@ -1617,8 +1692,10 @@ function applyEvRaw(ev) {
       add(`<details><summary>${ICON.check2}<span>${esc(clip(first.replace(/:$/, ""), 80))}</span></summary><div class="rcbody">${md(t)}</div></details>`, "note receipt"); sessionSoon(); break; }   // details: here when opened, and in the Session panel
     case "status": {
       if (ev.using) { cur.using = ev.text; if (ev.auto) cur.auto = ev.auto;
-        const why = ev.auto && ev.auto.reason ? ` <small class="why">${esc(ev.auto.reason)}</small>` : "";
-        const un = add(`<span>${esc(ev.text)}</span>${why}` + (ev.back ? ` <button class="linkbtn" data-back="1">Use ${esc(ev.back.name)} instead</button>` : ""), "note using");
+        // Auto's reason is the router's own note ("Best benchmark quality for a data task (csv)"): it stays out of the
+        // transcript, on the line's tooltip and in the Session panel's Agent section.
+        const why = ev.auto && ev.auto.reason ? String(ev.auto.reason) : "";
+        const un = add(`<span${why ? ` title="${esc(why)}"` : ""}>${esc(ev.text)}</span>` + (ev.back ? ` <button class="linkbtn" data-back="1">Use ${esc(ev.back.name)} instead</button>` : ""), "note using");
         $("[data-back]", un)?.addEventListener("click", async () => {   // one click back to the mode's own agent, history kept
           try { const v = await post(`/api/agent/${cur.id}/harness`, {harness: ev.back.harness, since: 1e9}); cur.view.harness = v.harness || harness(ev.back.harness); $("[data-back]", un)?.remove(); renderBar(); }
           catch (e) { toast(e.message); } });
@@ -1760,10 +1837,9 @@ function questionDone(ev) {
   const how = src === "stopped" ? "Stopped" : src === "timeout" ? "No answer in time, went with" : src === "user" || src === "replay" ? "" : "Went with";
   const line = (q, val) => `<div class="qa">${QCHECK}<span class="qtext">${esc(q)}</span><b>${esc(val || "No answer")}</b></div>`;
   const rows = typed ? line("You replied", String(ev.text).replace(/^You replied:?\s*/, "")) : ans.length ? qs.map((q, i) => { const a = ans[i] || {}; const v = [...(a.selected || []), ...(a.other ? [`“${a.other}”`] : [])].join(", "); return line(q, (how ? how + " " : "") + v); }).join("") : line(qs[0] || "Question", (how || "") + (ev.text ? " " + ev.text : ""));
-  const h0 = d.offsetHeight; d.style.height = h0 + "px"; d.style.overflow = "hidden";
+  // The card takes its answered size at once and its answer fades in (.qin in app.css). Easing its height laid out the
+  // chat below it on every frame for 180 ms, a run of layout shifts (UX audit 0.0.18).
   d.classList.add("done"); d.innerHTML = `<div class="qin">${rows}</div>`;
-  const h1 = $(".qin", d).offsetHeight + parseFloat(getComputedStyle(d).paddingTop) + parseFloat(getComputedStyle(d).paddingBottom);
-  requestAnimationFrame(() => { d.style.height = h1 + "px"; setTimeout(() => { d.style.height = ""; d.style.overflow = ""; }, 220); });
 }
 // A step whose end never arrived (stopped, or a harness that does not report it) must not say "running" forever.
 function settleSteps(label) {
@@ -2433,7 +2509,7 @@ async function renderSection(sec) {
     b.innerHTML = `${close}<h3>Instructions and memory</h3><p class="lead">Every agent reads these at the start of each new chat, so you do not repeat yourself.</p>
       <label class="field" style="max-width:none"><span>Instructions for every chat</span><textarea id="paIns" rows="6" placeholder="For example: Be direct and concise. No em dashes. I work in strategy and finance in the GCC.">${esc(a.instructions)}</textarea><small>How you want answers: tone, format, what to avoid, context about your work.</small></label>
       <label class="switchrow"><input type="checkbox" id="paInsOn" ${a.settings.instructions_on ? "checked" : ""}> Use these instructions</label>
-      <div class="field" style="max-width:none;margin-top:14px"><span>Memory</span><p class="lead" style="margin:4px 0 8px">${a.memory.split("\n").filter(x => x.trim()).length} things remembered.</p><button class="btn" id="paMemPage">Open What Meshpool knows</button></div>
+      <div class="field" style="max-width:none;margin-top:14px"><span>Memory</span><p class="lead" style="margin:4px 0 8px">${a.memory.split("\n").filter(x => x.trim()).length} things remembered.</p><button class="btn" id="paMemPage">Open What meshpool knows</button></div>
       <label class="switchrow"><input type="checkbox" id="paMemOn" ${a.settings.memory_on ? "checked" : ""}> Let agents use and add to memory</label>
       <label class="switchrow"><input type="checkbox" id="paEdits" ${a.settings.learn_from_edits ? "checked" : ""}> Learn from my edits to files Meshpool makes</label>
       <div style="display:flex;gap:8px;margin-top:12px"><button class="btn primary" id="paSave">Save</button></div><div class="res" id="paRes"></div>
@@ -2704,7 +2780,7 @@ async function renderSection(sec) {
         <h3 style="font-size:16px;margin:18px 0 8px">Rules</h3>
         <p class="lead">Rules decide without asking. Deny wins over allow. A rule is a tool name or <code>bash:</code> and a command pattern. Examples: <code>bash:npm test*</code>, <code>bash:git status*</code>, <code>edit</code>, <code>mcp__github__*</code>. An allow rule covers a command only when every part of it matches.</p>
         <div id="rulesBox"></div>
-        <div class="row" style="margin-top:8px;gap:6px"><input id="ruleIn" placeholder="bash:npm test*" aria-label="New rule" style="flex:1"><button class="btn" id="ruleAllow">Allow</button><button class="btn danger" id="ruleDeny">Deny</button></div>
+        <div class="row rulerow" style="margin-top:8px"><input id="ruleIn" placeholder="bash:npm test*" aria-label="New rule"><button class="btn" id="ruleAllow">Allow</button><button class="btn danger" id="ruleDeny">Deny</button></div>
         <div class="res" id="ruleRes"></div>`;
       const drawRules = r => {
         const li = (k, x) => `<li><span class="tg"><b>${esc(x)}</b><small>${k}</small></span><button class="iconbtn" data-rk="${k}" data-rr="${esc(x)}" aria-label="Remove rule">${ICON.x}</button></li>`;
@@ -2718,7 +2794,6 @@ async function renderSection(sec) {
       $$("[data-perm]", b).forEach(x => x.onclick = () => draw({id: x.dataset.perm}));
       $("#permAll")?.addEventListener("click", () => draw({id: "all"}));
       $$("[data-rmp]", b).forEach(x => x.onclick = async () => { await post("/api/projects", {action: "remove", path: x.dataset.rmp}); await loadProjects(); renderSide(); draw(); });
-      const rb = document.createElement("div"); rb.id = "rulesBox"; b.appendChild(rb); drawRules(rb);
       $("#addP").onclick = async () => { await pickProject(); await loadProjects(); draw(); };
     };
     await draw(); return;

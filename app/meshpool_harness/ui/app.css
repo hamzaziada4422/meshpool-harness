@@ -8,7 +8,8 @@
 
 /* ---------- tokens ----------
    Neutral surfaces, one accent. Dark is the reference theme (app #191919, sidebar and dialogs #1F1F1F, raised surfaces
-   #303030, hover #404040, selected #3B3B3B); light is derived from it with the same roles.
+   #303030, hover #404040, selected #4D4D4D); light is derived from it with the same roles. Selected is a step
+   stronger than hover, so the open chat stays marked while the pointer rests on another row.
    Surfaces: --side (sidebar, settings nav, dialogs), --bg (the page), --surface (composer, cards, menus),
    --raise (menus and popovers). Fills: --hover, --sel (selected rows and tabs), --fill (code and quiet wells).
    Text: --ink, --ink-2 (secondary), --ink-3 (muted; AA on every surface). Lines: --line (dividers),
@@ -18,7 +19,7 @@
    Type: 12 / 13 / 14 / 16 / 20 / 28. Space: 4 / 8 / 12 / 16 / 24. Radii: 6 / 8 / 12 / 16. */
 :root{
   --bg:#FBFBFB; --side:#F3F3F3; --surface:#FFFFFF; --raise:#FFFFFF;
-  --hover:#E8E8E8; --sel:#E2E2E2; --fill:#F0F0F0;
+  --hover:#E8E8E8; --sel:#DCDCDC; --fill:#F0F0F0;
   --ink:#171717; --ink-2:#454545; --ink-3:#686868;
   --line:#E0E0E0; --line-2:#EAEAEA; --line-3:#CBCBCB;
   --pool:#1F6FD0; --pool-btn:#1F6FD0; --pool-ink:#FFFFFF; --pool-text:#1559B0; --pool-soft:#E9F1FC; --focus:#1F6FD0;
@@ -35,12 +36,12 @@
   --ease:cubic-bezier(.16,1,.3,1);       /* slow out: quick start, gentle landing (things arriving) */
   --ease-in:cubic-bezier(.5,0,.75,0);    /* slow in: things leaving accelerate away */
   --spring:cubic-bezier(.34,1.56,.64,1); /* follow-through: a small overshoot that settles */
-  --t-press:70ms; --t-hover:100ms; --t-fast:120ms; --t-menu:150ms; --t-side:200ms; --t-med:180ms; --t-slow:260ms;   /* all under the 400 ms Doherty threshold */
+  --t-press:70ms; --t-hover:100ms; --t-fast:120ms; --t-menu:150ms; --t-side:200ms; --t-med:180ms; --t-slow:200ms;   /* one-off motion stays between 120 and 200 ms */
   color-scheme:light;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
   --bg:#191919; --side:#1F1F1F; --surface:#303030; --raise:#303030;
-  --hover:#404040; --sel:#3B3B3B; --fill:#262626;
+  --hover:#404040; --sel:#4D4D4D; --fill:#262626;
   --ink:#FFFFFF; --ink-2:#D9D9D9; --ink-3:#B7B7B7;
   --line:#353535; --line-2:#2B2B2B; --line-3:#4A4A4A;
   --pool:#237DE0; --pool-btn:#237DE0; --pool-ink:#FFFFFF; --pool-text:#6BAAF0; --pool-soft:#1B2E45; --focus:#5AA2EE;
@@ -53,7 +54,7 @@
 }}
 :root[data-theme="dark"]{
   --bg:#191919; --side:#1F1F1F; --surface:#303030; --raise:#303030;
-  --hover:#404040; --sel:#3B3B3B; --fill:#262626;
+  --hover:#404040; --sel:#4D4D4D; --fill:#262626;
   --ink:#FFFFFF; --ink-2:#D9D9D9; --ink-3:#B7B7B7;
   --line:#353535; --line-2:#2B2B2B; --line-3:#4A4A4A;
   --pool:#237DE0; --pool-btn:#237DE0; --pool-ink:#FFFFFF; --pool-text:#6BAAF0; --pool-soft:#1B2E45; --focus:#5AA2EE;
@@ -81,7 +82,7 @@ code,pre,kbd{font-family:var(--mono)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 
 /* ---------- shell ---------- */
-.app{display:grid;grid-template-columns:var(--sw,264px) minmax(0,1fr) auto;grid-template-rows:100vh;height:100vh;overflow:hidden;transition:grid-template-columns var(--t-med) var(--ease)}
+.app{display:grid;grid-template-columns:var(--sw,264px) minmax(0,1fr) auto;grid-template-rows:100vh;height:100vh;overflow:hidden;position:relative}
 .app>.side{grid-column:1}.app>.main{grid-column:2}.app>.panel{grid-column:3}
 .app.noside,.app.autoside{--sw:0px}
 .app.noside .side,.app.autoside .side{visibility:hidden;border-right-color:transparent;transition:visibility 0s var(--t-med),border-color var(--t-med)}
@@ -122,7 +123,7 @@ code,pre,kbd{font-family:var(--mono)}
 .th .tt small.tf{display:block;font-size:var(--fs-xs);color:var(--ink-3);line-height:1.2}
 .dot{width:6px;height:6px;border-radius:50%;flex:none;background:transparent}
 .dot.run{background:var(--ink-3);animation:mp-breathe 1.6s ease-in-out infinite}
-.dot.done{background:var(--pool);animation:mp-lightup .5s ease-out both}
+.dot.done{background:var(--pool);animation:mp-lightup var(--t-med) ease-out both}
 .dot.wait{background:var(--warn)}
 .empty-side{color:var(--ink-3);font-size:var(--fs-s);padding:8px}
 .updbar{display:flex;align-items:center;gap:8px;margin:8px 8px 0;padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-m);background:var(--surface);color:var(--ink);font-weight:500;font-size:var(--fs-s);text-align:left;cursor:pointer}
@@ -161,6 +162,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .msg-user{display:flex;justify-content:flex-end;margin:24px 0 12px}
 .msg-user .b{background:var(--fill);border-radius:var(--r-l);padding:8px 14px;max-width:85%;white-space:pre-wrap;word-break:break-word}
 .msg-user .att{display:block;font-size:var(--fs-xs);color:var(--ink-3);margin-top:4px}
+.msg-user .attfiles{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .msg-user .tag{display:inline-block;font-size:var(--fs-xs);font-weight:500;color:var(--pool-text);margin-bottom:4px}
 .msg-ai{margin:8px 0 12px;line-height:1.65;word-break:break-word}
 .msg-ai p{margin:0 0 12px}
@@ -168,6 +170,8 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .msg-ai ul,.msg-ai ol{margin:0 0 12px;padding-left:24px}
 .msg-ai li{margin:2px 0}
 .msg-ai code{font-size:.9em;background:var(--fill);padding:1px 5px;border-radius:4px}
+.msg-ai code.nw{white-space:nowrap}   /* a short token (2025-12, a file name) never breaks in the middle */
+.msg-ai img.mdimg{display:block;max-width:100%;height:auto;margin:8px 0 12px;border:1px solid var(--line);border-radius:var(--r-m);background:#fff}
 .msg-ai pre{background:var(--fill);border-radius:var(--r-m);padding:12px 14px;overflow:auto;font:var(--fs-s)/1.55 var(--mono);margin:12px 0 8px}
 .msg-ai pre:last-child{margin-bottom:0}
 .msg-ai pre code{display:block;background:none;padding:0;font-size:inherit}
@@ -238,7 +242,8 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .jumpdown{position:absolute;right:24px;bottom:12px;z-index:5;border:1px solid var(--line);background:var(--raise);color:var(--ink-2);border-radius:999px;padding:4px 12px;font-size:var(--fs-s);box-shadow:var(--shadow);cursor:pointer}
 .jumpdown[hidden]{display:none}
 
-.qcard{border:1px solid var(--line);background:var(--surface);border-radius:var(--r-l);padding:16px 16px 12px;margin:14px 0;box-shadow:var(--shadow-s,0 1px 2px rgba(0,0,0,.04));transition:height .18s ease-out}
+.qcard{border:1px solid var(--line);background:var(--surface);border-radius:var(--r-l);padding:16px 16px 12px;margin:14px 0;box-shadow:var(--shadow-s,0 1px 2px rgba(0,0,0,.04))}
+.qcard.done .qin{animation:mp-fade var(--t-med) ease-out both}
 .qcard .qq{border:0;margin:0 0 14px;padding:0;min-width:0}
 .qcard legend{padding:0;margin:0 0 10px;display:flex;flex-direction:column;gap:3px;float:none;width:100%}
 .qcard .qchip{font-size:var(--fs-xs);font-weight:500;letter-spacing:.02em;color:var(--ink-3);text-transform:none}
@@ -553,8 +558,8 @@ table.t td.n,table.t th:not(:first-child){text-align:right}
 .fbsel{margin-right:auto;font-size:var(--fs-xs);color:var(--ink-3);align-self:center}
 
 /* ---------- first run ---------- */
-.onb{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:24px;background:var(--bg);overflow-y:auto}
-.onb>.onb-card{margin:auto 0}
+.onb{position:fixed;inset:0;z-index:60;display:grid;place-items:start center;padding:24px;background:var(--bg);overflow-y:auto}
+.onb>.onb-card{margin:min(12vh,112px) 0 0}   /* the same top on every step: the logo and the step line stay still */
 .onb-card{width:min(440px,100%);padding:8px 0 90px}
 .onb-card img.logo{display:block;height:32px;width:auto;margin:0 0 32px}
 .onb-card h1{font:700 var(--fs-2xl)/1.15 var(--display);letter-spacing:-.015em;margin:0 0 8px}
@@ -565,7 +570,9 @@ table.t td.n,table.t th:not(:first-child){text-align:right}
 .onb-steps span{width:20px;height:3px;border-radius:3px;background:var(--line);transition:background-color .2s ease}
 .onb-steps span.on{background:var(--pool)}
 .onb-steps small{margin-left:6px;color:var(--ink-3);font-size:var(--fs-xs)}
-.onb-go{display:flex;align-items:center;gap:16px;position:sticky;bottom:0;background:var(--bg);padding:12px 0 4px;margin-top:8px;box-shadow:0 -12px 12px -4px var(--bg);z-index:2}
+/* The step's button closes the card, in the flow: kept sticky, it covered the key field at 1024x700 and the last
+   controls of step 3 ("3. Add to memory") at 1366 and 1024 (UX audit 0.0.18). */
+.onb-go{display:flex;align-items:center;gap:16px;padding:12px 0 4px;margin-top:8px}
 .onb-go .sp{flex:1}
 .onb .res:empty{display:none}
 .onb #oRes{margin:8px 0 4px}.onb details summary.linkbtn{margin-left:0}
@@ -594,8 +601,11 @@ table.t td.n,table.t th:not(:first-child){text-align:right}
 /* narrow main column (panel open, small window): icons only where space runs out */
 @container main (max-width:999px){.topbar .tbtn span{display:none}.topbar .tbtn{padding:6px}}
 @container main (max-width:1180px){.topbar .chip.use{display:none}}
-@container main (max-width:860px){.topbar .title{max-width:none}.topbar #projChip,.topbar #pjChip,.topbar .crumb{display:none}.topbar.newt #projChip{display:inline-flex}}
-@container main (max-width:760px){#mPill .lbl{max-width:120px}}
+@container main (max-width:860px){.topbar .title{max-width:none}.topbar #projChip{display:none}.topbar.newt #projChip{display:inline-flex}.topbar #pjChip .cl{max-width:140px}}
+/* the project name in the breadcrumb stays down to a 600 px column (1024 px with the sidebar), shortened if need be */
+@container main (max-width:600px){.topbar #pjChip,.topbar .crumb{display:none}}
+/* the model name keeps its 200 px (shell.css) down to a 640 px column: the row beside it gives way first, so "DeepSeek
+   V4.1 Flash" is no longer cut at 1024 px with the sidebar or the panel open (UX audit 0.0.18) */
 @container main (max-width:720px){.topbar #branchChip{display:none}}
 @container main (max-width:700px){#mPill .lbl{display:none}}
 @container main (max-width:640px){#topbar .chip:not(#projChip):not(#brChip){display:none}}
@@ -627,7 +637,10 @@ table.t td.n,table.t th:not(:first-child){text-align:right}
 .toast{animation:mp-toast var(--t-slow) var(--ease) both}
 .toast.out{animation:mp-out var(--t-fast) var(--ease-in) forwards}
 .panel:not([hidden])>*{animation:mp-fade .16s ease-out both}
-.onb-card{animation:mp-in .22s var(--ease) both}
+/* the side panel slides in from the right edge (transform only) instead of appearing at once */
+.panel:not([hidden]){animation:mp-panel-in var(--t-side) var(--ease) both}
+@keyframes mp-panel-in{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}
+.onb-card{animation:mp-in var(--t-med) var(--ease) both}
 .appr:not(.done){animation:mp-stage .9s var(--ease) both}
 .th,.tbtn,.pill,.btn,.bigbtn,.iconbtn,.send,.side-foot button,.newbtn,.scopeopt,.updbar,.chip,.search,.starters button,.opt,.qopt,.ptabs button,.mnav button{transition:background-color var(--t-fast) ease,color var(--t-fast) ease,border-color var(--t-fast) ease,box-shadow var(--t-med) var(--ease),transform var(--t-med) var(--spring),filter var(--t-fast) ease}
 .btn:active,.bigbtn:active,.pill:active,.newbtn:active,.iconbtn:active,.opt:active,.qopt:active,.starters button:active,.chip:active{transform:scale(.96);transition-duration:var(--t-press)}
@@ -837,7 +850,8 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .hintline .working{margin:0;font-size:var(--fs-xs);gap:6px}
 .hintline .working .wt{max-width:none;flex:0 1 auto;min-width:0}
 .hintline .working .el{flex:none}
-.jumpdown{left:50%;right:auto;transform:translateX(-50%);bottom:12px}
+.composer-wrap{position:relative}
+.jumpdown{left:50%;right:auto;transform:translateX(-50%);bottom:calc(100% + 8px)}
 #pgSteps{min-height:136px}#pgFiles{min-height:52px}
 
 /* the plan, and quiet transcript notes */
@@ -1074,6 +1088,7 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .pvbtn{border:1px solid var(--line-3);background:var(--surface);color:var(--ink-2);border-radius:var(--r-s);padding:2px 9px;font-size:var(--fs-xs);opacity:.85}
 .pvbtn:hover,.pvbtn:focus-visible{opacity:1;background:var(--hover);color:var(--ink)}
 .pvcard{justify-content:flex-start;text-align:left}.pvcm{flex:1;align-items:flex-start}
+.pvcm b,.pvcm small{max-width:100%}   /* left-aligned in the card, a long name still ends in an ellipsis, not a cut */
 .pvth{width:96px}
 
 
@@ -1082,6 +1097,9 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 /* older items in blocks of about 100 (foldHistory in app.js): skipped as one while off screen. A block ends before a
    message of the user, whose top margin is the larger one, so the last item's bottom margin is dropped. */
 .hist { content-visibility: auto; contain-intrinsic-size: auto 2000px; }
+#pjBrief:empty { display: none; }   /* the brief card before (or without) its text: no empty pill above Instructions */
+/* A chat that just opened: its newest items are laid out at their real size before the first paint (commitStage). */
+#col.settle > :nth-last-child(-n+12) { content-visibility: visible; }
 .hist > :last-child { margin-bottom: 0; }
 .msg-ai p, .msg-ai li, .msg-ai h3, .msg-ai blockquote, .msg-user .b, .sidelist .tt, .tt { unicode-bidi: plaintext; text-align: start; }
 /* In-app files: the folder tree and the editor (editor.js). Colours come from the theme tokens, so both themes work. */
@@ -1144,3 +1162,12 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 pre.live{max-height:180px;overflow:auto;opacity:.85}
 .dlgck{display:flex;align-items:center;gap:8px;margin:0 0 16px;font-size:var(--fs-s);color:var(--ink-2)}
 .dlg .dlgck input{width:auto;margin:0}
+
+/* Settings > Permissions: the new-rule field is as tall as its Allow and Deny buttons and fills the row */
+.rulerow{display:flex;align-items:stretch;gap:6px}
+#ruleIn{flex:1;min-width:0;border:1px solid var(--line-3);border-radius:var(--r-m);padding:0 10px;background:var(--surface);color:var(--ink);font:inherit;font-family:var(--mono);font-size:var(--fs-s)}
+#ruleIn:focus{outline:none;border-color:var(--focus);box-shadow:0 0 0 3px var(--pool-soft)}
+
+/* a long wait on the model: one quiet line at the end of the chat, with Stop (workTick in app.js) */
+.note.waitnote{display:flex;align-items:center;gap:8px;color:var(--ink-2)}
+.note.waitnote .linkbtn{margin-left:4px}

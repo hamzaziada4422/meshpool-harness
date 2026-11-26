@@ -72,6 +72,9 @@ function shell() {
   setupComposer();
   setupPanelResize();
   document.addEventListener("keydown", globalKeys);
+  // Keyboard or pointer: a field reached with Tab shows a focus ring that a click into it does not (.kbd in shell.css).
+  document.addEventListener("keydown", e => { if (e.key === "Tab") document.documentElement.classList.add("kbd"); }, true);
+  document.addEventListener("pointerdown", () => document.documentElement.classList.remove("kbd"), true);
   if (store("sidehidden")) $("#app").classList.add("noside");
   $("#app").classList.toggle("steps", !!S.steps);
   syncMode();
@@ -213,6 +216,7 @@ function navHTML() {
   }).join("")}</div>`;
 }
 const secHead = (k, label, extra = "") => `<div class="sec"><button class="sechd" data-sec="${k}" aria-expanded="${!S.collapsed.has(k)}"><span>${label}</span><span class="chev">${ICON.chev}</span></button><span class="sp"></span>${extra}</div>`;
+// A project lists all its chats, Chat or Code: one started on the project's page and routed to Code is still its chat.
 function pjRowHTML(p, threads) {
   const open = S.pjOpen.has(p.id), mine = threads.filter(t => t.project_id === p.id);
   const unread = mine.some(t => stateOf(t) === "done");
@@ -300,7 +304,7 @@ function renderSide() {
   }
   const had = document.activeElement?.closest?.("#sideList") ? (document.activeElement.dataset.id || document.activeElement.dataset.pid) : "";
   const st = el.scrollTop;
-  el._html = html; el._shape = shape; el.innerHTML = html; el.scrollTop = st;
+  el._html = html; el._shape = shape; morph(el, html); if (el.scrollTop !== st) el.scrollTop = st;   // rows that stay keep hover, focus and their dot
   if (had) { const back = $(`[data-id="${CSS.escape(had)}"], [data-pid="${CSS.escape(had)}"]`, el); back?.focus({preventScroll: true}); }
   paintAccount();
 }
@@ -496,7 +500,40 @@ function appsMenu(e) {
 /* ================================== top bar ================================== */
 // Set an element's HTML only when it differs from what is there: a header or bar that did not change is not rebuilt,
 // so nothing flashes, loses hover or focus, or does layout work during a run.
-function setHTML(el, html, tight) { if (tight) html = html.replace(/>\s+</g, "><").trim(); if (!el || el._h === html) return false; el._h = html; el.innerHTML = html; return true; }
+/* Patch a part of the page to new HTML, keeping every element that is still there. Rewriting innerHTML replaced every
+   button and row each time one word changed: hover and focus dropped, running dots restarted their animation, and the
+   header, the composer bar and the sidebar flashed while a reply streamed (UX audit 0.0.18). Elements match by id,
+   data-id, data-pid or data-nv when they have one, else by tag in order; only what differs is written. Handlers set
+   with onclick on a kept element stay, so callers bind with onclick, never addEventListener, after a patch. */
+const morphKey = n => n.nodeType === 1 ? (n.id || n.getAttribute("data-id") || n.getAttribute("data-pid") || n.getAttribute("data-nv") || "") : "";
+function morphNode(a, b) {
+  if (a.nodeType !== 1) {                          // text that only grew is appended: a selection in it stays put
+    const x = a.nodeValue, y = b.nodeValue;
+    if (x !== y) { if (a.nodeType === 3 && y.startsWith(x)) a.appendData(y.slice(x.length)); else a.nodeValue = y; }
+    return;
+  }
+  if (a.isEqualNode(b)) return;                    // native and quick: most kept elements did not change at all
+  const aa = a.attributes, ba = b.attributes;
+  for (let i = aa.length - 1; i >= 0; i--) if (!b.hasAttribute(aa[i].name)) a.removeAttribute(aa[i].name);
+  for (let i = 0; i < ba.length; i++) { const at = ba[i]; if (a.getAttribute(at.name) !== at.value) a.setAttribute(at.name, at.value); }
+  if (a.nodeName === "TEXTAREA" || a.isContentEditable) return;        // what the user is typing is theirs
+  morphKids(a, b);
+}
+function morphKids(to, from) {
+  let cur = to.firstChild;
+  for (let nw = from.firstChild; nw;) {
+    const next = nw.nextSibling, k = morphKey(nw);
+    let match = null;
+    if (k) { for (let c = cur; c; c = c.nextSibling) if (c.nodeName === nw.nodeName && morphKey(c) === k) { match = c; break; } }
+    else if (cur && cur.nodeName === nw.nodeName && !morphKey(cur)) match = cur;
+    if (match) { if (match !== cur) to.insertBefore(match, cur); morphNode(match, nw); cur = match.nextSibling; }
+    else to.insertBefore(nw, cur);
+    nw = next;
+  }
+  while (cur) { const n = cur.nextSibling; to.removeChild(cur); cur = n; }
+}
+function morph(el, html) { const t = document.createElement("template"); t.innerHTML = html; morphKids(el, t.content); }
+function setHTML(el, html, tight) { if (tight) html = html.replace(/>\s+</g, "><").trim(); if (!el || el._h === html) return false; el._h = html; morph(el, html); return true; }
 function stepLabel() { const pd = planData(); return pd ? `Step ${Math.min(pd.current + 1, pd.total)} of ${pd.total}` : "Progress"; }
 function updateStep() { const el = $("#stepLbl"); if (el) setTxt(el, stepLabel()); }
 function renderTop() {
@@ -522,13 +559,14 @@ function renderTop() {
     ${v ? `<button class="tbtn stepbtn" id="panelBtn" aria-label="${open ? "Hide" : "Show"} progress" aria-pressed="${open}" data-tip="${open ? "Hide" : "Show"} progress" data-kbd="${MOD}." data-tip-pos="below">${ICON.list}<span id="stepLbl">${esc(stepLabel())}</span></button><button class="tbtn" id="shareBtn" aria-label="Export chat" data-tip="Copy or save this chat" data-tip-pos="below" aria-haspopup="menu">${ICON.share}<span>Export</span></button>` : ""}
     ${!v && !onPage && !onProject ? `<button class="tbtn" id="flagBtn" data-tip="Report a problem" data-tip-pos="below" aria-label="Report a problem">${ICON.flag}</button>` : ""}`;
   if (!setHTML($("#topbar"), topHTML, true)) { renderBranch(); return; }      // nothing changed: leave the header alone
-  $("#showSide")?.addEventListener("click", toggleSide);
-  $("#panelBtn")?.addEventListener("click", () => togglePanel(S.panel || (panelSet().includes("progress") ? "progress" : panelSet()[0]), !S.panel));
-  $("#shareBtn")?.addEventListener("click", e => exportMenu(e));
-  $("#devBtn")?.addEventListener("click", e => devPop(e));
-  $("#flagBtn")?.addEventListener("click", () => reportProblem());
-  $("#pjChip")?.addEventListener("click", () => openProject(pid));
-  $("#projChip")?.addEventListener("click", () => { if (!v) chooseDraftFolder(); else if (isMgd(root)) togglePanel("session", true); else openFolderInApp(root, ""); });
+  const on = (id, fn) => { const b = $("#" + id); if (b) b.onclick = fn; };      // onclick: a kept button is bound once
+  on("showSide", toggleSide);
+  on("panelBtn", () => togglePanel(S.panel || (panelSet().includes("progress") ? "progress" : panelSet()[0]), !S.panel));
+  on("shareBtn", e => exportMenu(e));
+  on("devBtn", e => devPop(e));
+  on("flagBtn", () => reportProblem());
+  on("pjChip", () => openProject(pid));
+  on("projChip", () => { if (!v) chooseDraftFolder(); else if (isMgd(root)) togglePanel("session", true); else openFolderInApp(root, ""); });
   const ttl = $("#ttl");
   if (v) {
     ttl.ondblclick = renameTop; ttl.onclick = e => { if (ttl.contentEditable !== "true") chatMenu({type: "click", currentTarget: ttl}); };
