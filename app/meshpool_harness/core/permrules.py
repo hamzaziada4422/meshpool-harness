@@ -352,7 +352,19 @@ NETWORK = re.compile(
     r"|\b(?:npm|pnpm|yarn|bun)\s+(?:i|install|ci|add|update|upgrade|publish|login|dlx|create|x|exec)\b"
     r"|\buv\s+(?:add|sync|lock|tool\s+install|run\s+--with)\b"
     r"|\bgit\s+(?:clone|fetch|pull|push|submodule|ls-remote|remote\s+update)\b"
-    r"|\bdocker\s+(?:pull|push|login|build|run)\b|https?://"
+    r"|\bdocker\s+(?:pull|push|login|build|run)\b"
+    # calls in a script that reach the network (0.0.19: any "https://" in the text asked, so an XML namespace string
+    # in a Python script read "Use the internet (schemas.openxmlformats.org)?" and a commit message with a link asked
+    # too). A URL that is only text (a namespace, a message, a comment) is not network use; these calls are.
+    r"|\brequests\s*\.\s*(?:get|post|put|patch|delete|head|options|request|Session)\b|\burlopen\s*\("
+    r"|\burllib\.request\b|\burllib[23]\b|\burlretrieve\s*\(|\bhttp\.client\.HTTPS?Connection\b|\bhttplib2\.Http\b"
+    r"|\bhttpx\s*\.\s*(?:get|post|put|patch|delete|head|request|stream|Client|AsyncClient)\b|\baiohttp\.ClientSession\b"
+    r"|\bpycurl\.Curl\b|\bwebsockets\.connect\b|\bsocket\s*\.\s*(?:create_connection|socket)\b"
+    r"|\b(?:ftplib\.FTP|smtplib\.SMTP|poplib\.POP3|imaplib\.IMAP4|telnetlib\.Telnet|paramiko\.SSHClient)"
+    r"|\bfetch\s*\(\s*['\"`]?(?:https?:|//)|\baxios\b|\bXMLHttpRequest\b|\bnew\s+WebSocket\b|\bhttps?\.(?:get|request)\s*\("
+    r"|\bread_(?:csv|excel|json|html|table|parquet|xml)\s*\(\s*['\"]https?://|\bload_dataset\s*\("
+    r"|\b(?:Invoke-WebRequest|Invoke-RestMethod|Start-BitsTransfer)\b|\b(?:iwr|irm)\s+['\"]?https?://"
+    r"|(?:^|[\s;&|(])(?:xdg-open|open|start)\s+['\"]?https?://"
     # builds that fetch their dependencies (review, 0.0.18): run offline they fail, and nobody is asked
     r"|\bcargo\s+(?:build|run|test|check|fetch|update|install|doc|bench|add|vendor|publish)\b"
     r"|\bgo\s+(?:build|test|run|mod|generate|work|vet)\b|\bgit\s+lfs\b"
@@ -378,15 +390,54 @@ DELETES = re.compile(
     r"|\bfs\.(?:rm|unlink|rmdir)\b|\.(?:rmSync|unlinkSync|rmdirSync)\s*\(|\bunlink\s*\(", re.I)
 
 
-def _deletes_unasked_ok(cmd: str, root, cwd=None) -> bool:
-    """Every delete in cmd is a plain rm that scratch_rm clears (named files in the project or temp, caches)."""
+def _deletes_unasked_ok(cmd: str, root, cwd=None, made=None) -> bool:
+    """Every delete in cmd is a plain rm that scratch_rm clears (named files in the project or temp, caches), and no
+    named file in the project that it deletes is one the user already had: only files this chat made (`made`, full
+    paths) or that are not there. Omar, 0.0.19: `rm sample.csv` ran without a question while Settings said "asks
+    before deleting"."""
     hits = [m.group(0).strip(" ;&|(`\n").lower() for m in DELETES.finditer(cmd)]
     if not hits:
         return True
     if any(h != "rm" for h in hits) or re.search(r"(?<![\w-])rm\s+[^;&|\n]*[*?\[]", cmd):
         return False                          # rmdir, find -delete, a script's rmtree, a wildcard: ask
-    return scratch_rm(re.sub(r"(?<![\w-])rm\s+(?!-)", "rm -f ", cmd), root,
-                      None if cwd is None else os.path.relpath(str(cwd), str(root)))
+    if not scratch_rm(re.sub(r"(?<![\w-])rm\s+(?!-)", "rm -f ", cmd), root,
+                      None if cwd is None else os.path.relpath(str(cwd), str(root))):
+        return False
+    r = Path(os.path.realpath(str(root)))
+    mine = {os.path.realpath(str(m)) for m in (made or ())}
+    for t in _rm_targets(cmd, r, cwd):
+        if t.name in _CACHE_DIRS or not _within(t, r, strict=True):
+            continue                          # a cache folder, or a temp file (scratch_rm checked where it is)
+        if (t.exists() or t.is_symlink()) and str(t) not in mine:
+            return False                      # the user's own file: deleting it asks
+    return True
+
+
+def _rm_targets(cmd: str, root: Path, cwd=None) -> list:
+    """The paths the rm commands in cmd name, resolved from where each one runs (a `cd` before it counts)."""
+    try:
+        lex = shlex.shlex(cmd, posix=True, punctuation_chars=";&|<>()\n")
+        lex.whitespace = " \t\r"
+        toks = list(lex)
+    except ValueError:
+        return []
+    here = Path(os.path.realpath(str(cwd))) if cwd is not None else root
+    out, seg = [], []
+    for t in toks + [";"]:
+        if t and set(t) <= set(";&|<>()\n"):
+            if seg and seg[0] == "cd" and len(seg) == 2:
+                here = Path(os.path.realpath(os.path.join(str(here), seg[1])))
+            elif seg and os.path.basename(seg[0]) == "rm":
+                opts = True
+                for a in seg[1:]:
+                    if opts and a == "--":
+                        opts = False
+                    elif not (opts and a.startswith("-") and a != "-"):
+                        out.append(Path(os.path.realpath(os.path.join(str(here), a))))
+            seg = []
+        else:
+            seg.append(t)
+    return out
 
 
 _PATHLIKE = re.compile(r"(?<![\w.:/-])(~[\w.~/-]*|/[\w.~/-]*|\.\./[\w.~/-]*)")
@@ -399,16 +450,20 @@ def _home() -> Path | None:
         return None
 
 
-def sandbox_auto_ok(cmd: str, root, cwd=None) -> bool:
+def sandbox_auto_ok(cmd: str, root, cwd=None, made=None) -> bool:
     """A command that may run without a question inside the OS sandbox (writes only in the project and temp folders,
     network cut): it does not reach the network or install software, and every path it names is in the project, a
     temp folder, or outside the user's home folder (programs, system files). A path elsewhere in the home folder
-    (~/.ssh, ~/Documents outside the project) still asks. Compound commands are fine: the sandbox confines them all."""
-    if not cmd or not cmd.strip() or NETWORK.search(cmd) or _HOME_REF.search(cmd):
+    (~/.ssh, ~/Documents outside the project) still asks, as do deletes of the user's files (`made`: the files this
+    chat made, which it may delete) and git's risky verbs (GIT_ASK). Compound commands are fine: the sandbox confines
+    them all."""
+    if not cmd or not cmd.strip() or NETWORK.search(cmd) or _HOME_REF.search(cmd) or GIT_ASK.search(cmd):
         return False
     if cwd is not None and not _inside(str(cwd), root):
         return False
-    if not _deletes_unasked_ok(cmd, root, cwd):
+    if re.search(_GIT + r"commit\b[^;&|\n]*--amend\b", cmd) and amend_pushed(root):
+        return False
+    if not _deletes_unasked_ok(cmd, root, cwd, made):
         return False
     # paths from the words of the command (when it parses) and from anywhere in its text, heredoc bodies and
     # `python -c` code included: '/home/u/.ssh/id_rsa' inside a script is a path like any other
@@ -433,6 +488,144 @@ def sandbox_auto_ok(cmd: str, root, cwd=None) -> bool:
         if home is not None and (rp == home or home in rp.parents or rp in home.parents):
             return False
     return True
+
+
+# git verbs that always ask: the network, history rewrites, clean, and git's own config and hooks (a hook or a config
+# value runs programs later, outside any sandbox).
+GIT_ASK = re.compile(
+    _GIT + r"(?:push|pull|fetch|clone|clean|rebase|filter-branch|filter-repo|submodule|update-ref|replace|prune|gc"
+    r"|reflog\s+(?:expire|delete)|remote\s+(?:add|set-url|remove|rm|rename|prune|update|set-head|set-branches)"
+    r"|reset\s+(?:[^;&|\n]*\s)?--(?:hard|merge|keep)|config(?!\s+(?:--get\S*|--list|-l)\b))\b"
+    r"|\.git[\\/]+(?:hooks|config)\b|\bcore\.hooksPath\b", re.I)
+
+
+def amend_pushed(root) -> bool:
+    """HEAD is already on a remote branch, so amending it rewrites history others may have (or git cannot tell)."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", str(root), "branch", "-r", "--contains", "HEAD"], capture_output=True,
+                           text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return r.returncode != 0 or bool(r.stdout.strip())
+
+
+def _segments(cmd: str) -> list[str]:
+    """The commands of a chain (&& || ; | and newlines), split where the shell splits, never inside quotes."""
+    masked, out, at = _scan(cmd)[0], [], 0
+    for m in re.finditer(r"&&|\|\||[;|\n]", masked):
+        out.append(cmd[at:m.start()])
+        at = m.end()
+    out.append(cmd[at:])
+    return [s.strip() for s in out if s.strip()]
+
+
+_COMMIT_VALUE = {"-m", "--message", "-F", "--file", "-C", "-c", "--reuse-message", "--reedit-message", "--author",
+                 "--date", "--fixup", "--squash", "-t", "--template", "--cleanup", "--trailer"}
+_COMMIT_BAD = {"-p", "--patch", "--interactive", "-i", "--include", "-o", "--only", "-e", "--edit", "--pathspec-from-file"}
+
+
+def _git_local_seg(w: list, root, cwd) -> bool:
+    """One `git <verb> ...` (already split into words) that only writes the local repository."""
+    if len(w) < 2 or w[0] != "git":
+        return False
+    verb, rest = w[1], w[2:]
+    inside = lambda a: _inside(a, root, cwd)                     # noqa: E731
+    exists = lambda a: os.path.lexists(os.path.join(str(cwd or root), os.path.expanduser(a)))   # noqa: E731
+    if verb == "add":
+        if any(a in ("-p", "--patch", "-i", "--interactive", "-e", "--edit") or a.startswith("--pathspec-from")
+               for a in rest):
+            return False
+        return all(inside(a) for a in rest if not a.startswith("-"))
+    if verb == "commit":
+        skip = False
+        for a in rest:
+            if skip:
+                skip = False
+                continue
+            if a in _COMMIT_BAD or a.split("=")[0] in _COMMIT_BAD:
+                return False
+            if a in _COMMIT_VALUE or (re.match(r"^-[a-zA-Z]*[mFCct]$", a) and not a.startswith("--")):
+                skip = True                                     # its value follows (-m msg, -am msg, -F file)
+                if a.endswith(("F", "t")) or a in ("--file", "--template"):
+                    skip = False                                # a file: the next word is checked as a path
+                continue
+            if a.startswith("--amend") and amend_pushed(root):
+                return False                                    # rewrites a commit that is already pushed
+            if not a.startswith("-") and not inside(a):
+                return False
+        return True
+    if verb == "stash":
+        sub = rest[0] if rest and not rest[0].startswith("-") else "push"
+        if sub not in ("push", "save", "list", "show", "apply", "pop", "create", "store"):
+            return False                                        # drop, clear, branch: ask
+        return all(inside(a) for a in rest[1:] if not a.startswith("-") and sub == "push" and "--" in rest)
+    if verb == "reset":
+        return "--soft" in rest and not any(a in ("--hard", "--merge", "--keep", "--mixed") for a in rest)
+    if verb == "restore":
+        paths = [a for a in rest if not a.startswith("-")]
+        return bool(paths) and all(a not in (".", ":/", "*") and inside(a) for a in paths) and \
+            not any(a.startswith(("--pathspec-from", "-p", "--patch")) for a in rest)
+    if verb in ("checkout", "switch"):
+        if any(a in ("-B", "-C", "--force", "-f", "--orphan", "-p", "--patch", "--force-create") for a in rest):
+            return False
+        if any(a in ("-b", "-c", "--create") for a in rest):    # a new branch (from here or a start point)
+            return True
+        if verb == "switch":
+            return False                                        # switching branches: ask
+        files = rest[rest.index("--") + 1:] if "--" in rest else [a for a in rest if not a.startswith("-")]
+        return bool(files) and all(a not in (".", ":/", "*") and inside(a) and exists(a) for a in files)
+    if verb == "branch":
+        pos = [a for a in rest if not a.startswith("-")]
+        return 1 <= len(pos) <= 2 and all(a in ("--track", "--no-track", "-q", "--quiet") for a in rest
+                                          if a.startswith("-"))
+    return False
+
+
+def git_local_ok(cmd: str, root, cwd=None) -> bool:
+    """A command made only of local git writes in the project's repository and plain reads: add, commit (--amend only
+    while the commit is not pushed), stash, reset --soft, restore, checkout of a file, and a new branch (git branch x,
+    checkout -b, switch -c). The repository's config and hooks must not run programs (tools.git_config_safe), no
+    path leaves the project, and nothing expands ($, backticks) or redirects. Push, pull, fetch, clone, reset --hard,
+    clean, rebase, filter-branch and git config still ask."""
+    from meshpool_harness.core import tools as T
+    if not cmd or not cmd.strip() or re.search(r"[$`\r\x00-\x08\x0b-\x1f]", cmd) or writes(cmd) or \
+            GIT_ASK.search(cmd) or NETWORK.search(cmd) or DESTRUCTIVE.search(cmd):
+        return False
+    if cwd is not None and not _inside(str(cwd), root):
+        return False
+    wrote = False
+    for seg in _segments(cmd):
+        if T.git_read_only(seg) or safe_read(seg, root, cwd):
+            continue
+        w = _tokens(seg)
+        if not w or not _git_local_seg(w, root, cwd):
+            return False
+        wrote = True
+    return wrote and T.git_config_safe(root)
+
+
+def undo_covers(path, root) -> str:
+    """"" when Undo (checkpoints.py) keeps the file's contents and can put it back after a change; else why not."""
+    from meshpool_harness import checkpoints as CK
+    try:
+        r = Path(os.path.realpath(str(root)))
+        p = Path(os.path.realpath(str(path)))
+        rel = p.relative_to(r)
+    except (OSError, ValueError):
+        return "it is outside the folder"
+    if any(x in CK.SKIP_DIRS for x in rel.parts[:-1]):
+        return "Undo does not keep files in that folder"
+    try:
+        if p.exists() and p.stat().st_size > CK.MAX_FILE:
+            return f"Undo does not keep files over {CK.MAX_FILE // 1_000_000} MB"
+    except OSError:
+        return "it cannot be read"
+    rules = CK._ignore_rules(r)
+    parts = rel.as_posix().split("/")
+    if any(CK._ignored("/".join(parts[:i]), i < len(parts), rules) for i in range(1, len(parts) + 1)):
+        return "the folder's .gitignore lists it, so Undo does not keep it"
+    return ""
 
 
 _OFFICE_FILE = re.compile(r"[^\s'\"<>|;&()]+\.(?:pptx?|pptm|docx?|docm|xlsx?|xlsm|xlsb|odp|odt|ods|rtf)\b", re.I)

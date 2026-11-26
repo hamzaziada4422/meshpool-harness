@@ -698,13 +698,16 @@ def _plain_command_title(script: str) -> str:
         return "Send your commits to the remote repository?"
     if re.search(r"\bgit\s+(?:clone|fetch|pull)\b", s):
         return "Download from a git repository?"
-    if re.search(r"\b(?:curl|wget)\b|https?://", s):
-        host = re.search(r"https?://([^/\s'\"]+)", s)
+    if re.search(r"(?:^|[\s;&|(])(?:curl|wget)(?=\s|$)", s):   # a URL that is only text (an XML namespace in a
+        host = re.search(r"https?://([^/\s'\"]+)", s)         # script, a link in a commit message) is not the network
         return "Use the internet" + (f" ({host.group(1)})" if host else "") + "?"
     if PR.NETWORK.search(s):
         return "Use the internet? (" + s.strip().splitlines()[0][:80] + ")"
     if PR.DELETES.search(s):
-        return ("Delete " + ", ".join(files) + "?") if files else f"Delete files?{more}"
+        # name only what the deleting steps remove: "sed -i … report.py && rm sample.csv" deletes sample.csv, not both
+        dsegs = [x for x in steps if PR.DELETES.search(x)] or [s]
+        gone = list(dict.fromkeys(m.group(0).rsplit("/", 1)[-1] for x in dsegs for m in _FILE_WORD.finditer(x)))[:3]
+        return ("Delete " + ", ".join(gone) + "?") if gone else f"Delete files?{more}"
     lang = next((_PROGRAMS[p] for p in progs if p in _PROGRAMS), "")
     if lang:
         return f"Run a {lang} step{on}?" if not more else f"Run a {lang} step{on}{more}?"
@@ -768,12 +771,32 @@ def _unknown_model_text(bare: str, prov: str = "key", msg: str = "", key: str = 
     return text + " Pick one with --model, or run `meshpool models` to see them all."
 
 
+def _patch_step(script) -> str:
+    """The step row of a shell script that starts with apply_patch, in plain words: "Edit a.py, b.py, then run
+    python -m pytest" (0.0.19: the row above the approval card read `apply_patch <<'EOF' *** Begin...`). "" when the
+    script is not a patch."""
+    hit = T.patch_from_shell(script)
+    sp = None if hit else T.split_patch_script(script)
+    body = hit[0] if hit else sp[0] if sp else None
+    if body is None:
+        return ""
+    files = _patch_files(body)
+    text = "Edit " + (", ".join(files[:4]) + (f" and {len(files) - 4} more" if len(files) > 4 else "") if files
+                      else "files")
+    rest = sp[2] if sp else ""
+    if rest:
+        more = _patch_step(re.sub(r"^cd\s+\S+\s*&&\s*", "", rest)) or _plain_command_title(rest).rstrip("?")
+        text += ", then " + more[:1].lower() + more[1:]
+    return text
+
+
 def _summary_of(name: str, args: dict) -> str:
-    if name == "shell":
-        cmd = T.shell_script(args.get("command"))
-        return (f"cd {args['workdir']} && " if args.get("workdir") else "") + cmd
-    if name == "exec_command":
-        return (f"cd {args['workdir']} && " if args.get("workdir") else "") + str(args.get("cmd") or "")
+    if name in ("shell", "exec_command"):
+        script = T.shell_script(args.get("command")) if name == "shell" else str(args.get("cmd") or "")
+        plain = _patch_step(script)
+        if plain:
+            return plain
+        return (f"cd {args['workdir']} && " if args.get("workdir") else "") + script
     if name == "apply_patch":
         files = _patch_files(args.get("input"))
         return ", ".join(files[:6]) + (f" (+{len(files) - 6} more)" if len(files) > 6 else "") if files else "patch"
@@ -801,8 +824,9 @@ def _summary_of(name: str, args: dict) -> str:
         return args.get("pattern", "")
     if name == "fetch_url":
         return args.get("url", "")
-    if name == "office_task":
-        return f"{args.get('engine', '')}: {str(args.get('request', ''))[:160]}"
+    if name == "office_task" or name.replace("-", "_").startswith("mcp__meshpool_office__") and \
+            name.replace("-", "_").rsplit("__", 1)[-1] not in ("read_document", "find_icon", "office_job_status"):
+        return office_card(name, args)[0]       # what it will make or change, not its JSON or the model's brief
     if name == "web_search":
         return args.get("query", "")
     if name == "web_research":
@@ -2328,6 +2352,297 @@ KEEP_NOTE = ("\n\n\u200b[Meshpool] This request says existing behaviour must sta
 # model before any approval card is drawn.
 _NEEDS_CONTENT = {"make_document", "make_pdf", "make_spreadsheet", "make_deck", "add_slides", "fill_template",
                   "merge_decks", "convert_document", "edit_office_file"}
+
+# --- office tool cards in plain words (0.0.19 persona runs: the cards showed the raw JSON of edit_office_file, with
+# "op": "set_range", "in_place": true and lists of numbers, paragraph-long "find" strings, and the model's own brief
+# for make_spreadsheet). The card says what will change; the exact call stays under "Details".
+DETAILS_MARK = "\n\nDetails:\n"
+
+
+def _q(s, n: int = 40) -> str:
+    s = " ".join(str(s if s is not None else "").split())
+    return "“" + (s if len(s) <= n else s[:n - 3].rstrip() + "...") + "”"
+
+
+def _cell_text(v, fmt: str = "") -> str:
+    if isinstance(v, bool) or v is None:
+        return "empty" if v is None else str(v)
+    if isinstance(v, (int, float)):
+        cur = next((c for c in ("$", "€", "£") if c in (fmt or "")), "")
+        if isinstance(v, float) and not v.is_integer():
+            num = f"{v:,.2f}"
+        else:
+            num = f"{int(v):,}"
+        return cur + num
+    s = str(v)
+    return s if len(s) <= 30 else s[:27] + "..."
+
+
+def _plural(n: int, word: str) -> str:
+    w = word.lower()
+    if n == 1:
+        return f"1 {w}"
+    return f"{n} {w if w.endswith('s') else w[:-1] + 'ies' if w.endswith('y') and w[-2:-1] not in 'aeiou' else w + 's'}"
+
+
+def _xlsx_changes(path, ops: list) -> tuple[list, list]:
+    """(summary parts, detail lines) for the cell edits of an edit_office_file call on a workbook: by the column's
+    header ("12 prices", "6 Total formulas"), the row's label and the value before and after."""
+    import openpyxl
+    from openpyxl.utils.cell import column_index_from_string, coordinate_from_string, get_column_letter
+    wb = None
+    try:
+        if path and Path(path).is_file() and Path(path).stat().st_size < 8_000_000:
+            wb = openpyxl.load_workbook(str(path))
+    except Exception:  # noqa: BLE001 - the card still says what is asked, without the values before
+        wb = None
+    cells, parts, lines = [], [], []
+    for o in ops:
+        op = str(o.get("op") or "")
+        op = {"set_formula": "set_cell", "set_value": "set_cell", "write_cell": "set_cell", "write_range": "set_range",
+              "delete_row": "delete_rows", "remove_rows": "delete_rows", "append_row": "add_row", "clear": "clear_cell",
+              "clear_range": "clear_cell", "create_sheet": "add_sheet", "remove_sheet": "delete_sheet"}.get(op, op)
+        sheet = o.get("sheet")
+        try:
+            if op == "set_cell":
+                v = o.get("value", o.get("formula"))
+                if isinstance(v, str) and o.get("formula") is not None and not v.startswith("="):
+                    v = "=" + v
+                cells.append((sheet, str(o.get("cell")), v))
+            elif op == "set_range":
+                col, row = coordinate_from_string(str(o.get("start") or o.get("cell") or str(o.get("range", "A1")).split(":")[0]))
+                c0 = column_index_from_string(col)
+                for i, vals in enumerate(o.get("values") or []):
+                    for j, v in enumerate(vals if isinstance(vals, list) else [vals]):
+                        cells.append((sheet, f"{get_column_letter(c0 + j)}{row + i}", v))
+            elif op == "add_row":
+                parts.append("add a row")
+            elif op == "delete_rows":
+                n, r = int(o.get("count") or o.get("amount") or 1), o.get("row") or o.get("start") or "?"
+                parts.append(f"delete row {r}" if n == 1 else f"delete rows {r} to {int(r) + n - 1}"
+                             if str(r).isdigit() else f"delete {n} rows")
+            elif op == "clear_cell":
+                refs = [r for r in (o.get("cells") or [o.get("cell") or o.get("range")]) if r]
+                parts.append("clear " + ", ".join(map(str, refs[:3])) + (" and more" if len(refs) > 3 else ""))
+            elif op == "add_sheet":
+                parts.append(f"add the sheet {_q(o.get('name') or o.get('title') or o.get('new_sheet'), 30)}")
+            elif op == "delete_sheet":
+                parts.append(f"delete the sheet {_q(sheet or 'the first one', 30)}")
+            elif op == "freeze_panes":
+                parts.append("freeze the top rows")
+            elif op == "add_comment":
+                parts.append(f"add a comment on {o.get('cell')}")
+            else:
+                parts.append(op.replace("_", " ") or "an edit")
+        except Exception:  # noqa: BLE001
+            parts.append(op.replace("_", " ") or "an edit")
+    groups: dict = {}
+    for sheet, ref, v in cells:
+        ws = None
+        try:
+            ws = (wb[sheet] if sheet else wb.active) if wb is not None else None
+        except KeyError:
+            ws = None
+        header, label, old, fmt = "", "", None, ""
+        try:
+            col, row = coordinate_from_string(ref)
+            if ws is not None:
+                c = ws[ref]
+                old, fmt = c.value, c.number_format or ""
+                for r in range(1, min(row, 6)):
+                    h = ws.cell(row=r, column=column_index_from_string(col)).value
+                    if isinstance(h, str) and h.strip():
+                        header = h.strip()
+                        break
+                for cc in range(1, min(column_index_from_string(col), 4)):
+                    lab = ws.cell(row=row, column=cc).value
+                    if isinstance(lab, str) and lab.strip():
+                        label = lab.strip()
+                        break
+        except Exception:  # noqa: BLE001
+            pass
+        formula = isinstance(v, str) and v.startswith("=")
+        groups.setdefault((header or f"column {ref.rstrip('0123456789')}", formula), []).append((ref, label, old, v, fmt))
+    for (header, formula), items in groups.items():
+        n = len(items)
+        ref, label, old, new, fmt = items[0]
+        if formula:
+            fixing = all(isinstance(it[2], str) and it[2].startswith("=") for it in items)
+            parts.append(f"{'fix' if fixing else 'set'} {n} {header} formula{'s' if n != 1 else ''}")
+        else:
+            what = _plural(n, header) if header and not header.startswith("column ") else \
+                f"{n} cell{'s' if n != 1 else ''} in {header}"
+            first = f"{label or ref} {_cell_text(old, fmt)} to {_cell_text(new, fmt)}" if old is not None else \
+                f"{label or ref} to {_cell_text(new, fmt)}"
+            parts.append(f"{what} ({first}{', and ' + str(n - 1) + ' more' if n > 1 else ''})")
+        for ref, label, old, new, fmt in items[:8]:
+            lines.append(f"{header}, {ref}{' (' + label + ')' if label else ''}: "
+                         + (f"{_cell_text(old, fmt)} to " if old is not None else "") + _cell_text(new, fmt))
+        if n > 8:
+            lines.append(f"... and {n - 8} more in {header}")
+    return parts, lines
+
+
+def _docx_sections(path, finds: list) -> list:
+    """The headings the texts in `finds` sit under, in order ("" for text before any heading)."""
+    out = []
+    try:
+        from docx import Document
+        doc = Document(str(path))
+        paras = [(p.text, (p.style.name if p.style is not None else "") or "") for p in doc.paragraphs]
+    except Exception:  # noqa: BLE001
+        return out
+    for f in finds:
+        key, head = " ".join(str(f or "").split())[:60], ""
+        for text, style in paras:
+            if style.lower().startswith(("heading", "title")) and text.strip():
+                head = text.strip()
+            if key and key in " ".join(text.split()):
+                out.append(head)
+                break
+    return out
+
+
+def _section_name(head: str) -> str:
+    m = re.match(r"^(?:section\s+)?(\d+(?:\.\d+)*)[.)]?\s+\S", head, re.I)
+    return f"section {m.group(1)}" if m else _q(head, 40)
+
+
+def office_in_place(args: dict, root=None) -> bool:
+    """edit_office_file changes the file itself: in_place=true, or (since ad27fe76) in_place left out for a file in
+    the project folder with no `output`. The same reading as office_mcp_server.edit_office_file."""
+    v = args.get("in_place")
+    if args.get("output") and v is None:
+        return False
+    if v is not None:
+        return v in (True, "true", 1, "yes")           # in_place=true wins over output there too
+    p = os.path.expanduser(str(args.get("path") or ""))
+    if root is None:
+        return not os.path.isabs(p)
+    try:
+        q = (Path(p) if os.path.isabs(p) else Path(root) / p).resolve()
+        r = Path(root).resolve()
+        return q == r or r in q.parents
+    except (OSError, ValueError):
+        return False
+
+
+def office_card(name: str, args: dict, root=None) -> tuple[str, list]:
+    """(title without the question mark, plain lines) for an office tool call, for its approval card and its step
+    row. Never raises: the arguments come from the model unchecked."""
+    try:
+        return _office_card(name, args or {}, Path(root) if root else None)
+    except Exception:  # noqa: BLE001
+        tool = name.split("__", 2)[-1].replace("_", " ")
+        return f"Use the office tool {tool}", []
+
+
+def _office_card(name: str, args: dict, root) -> tuple[str, list]:
+    tool = name.replace("-", "_").split("__", 2)[-1]
+
+    def full(p):
+        p = os.path.expanduser(str(p or ""))
+        return Path(p) if os.path.isabs(p) or root is None else root / p
+
+    def base(p):
+        return str(p or "").rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+    files = [base(f) for f in (args.get("files") if isinstance(args.get("files"), list) else [args.get("files")])
+             if isinstance(f, str) and f.strip()]
+    using = (" from " + ", ".join(files[:3]) + (" and more" if len(files) > 3 else "")) if files else ""
+    new_file = "A new file in this folder. No file you have is changed."
+    if tool == "edit_office_file":
+        p, ops = args.get("path"), [o for o in (args.get("operations") or []) if isinstance(o, dict)]
+        fname, ext = base(p), os.path.splitext(str(p or ""))[1].lower()
+        in_place = office_in_place(args, root)
+        where = ("It changes the file itself. Undo can put it back." if in_place else
+                 f"It saves the result as {base(args.get('output'))}; {fname} stays as it is."
+                 if args.get("output") else
+                 f"It saves a copy, {os.path.splitext(fname)[0]} (edited){ext}; {fname} stays as it is.")
+        if ext in (".xlsx", ".xlsm"):
+            parts, lines = _xlsx_changes(full(p), ops)
+            only_fix = len(parts) == 1 and re.match(r"^fix \d+ .* formulas?$", parts[0])
+            title = (f"Fix {parts[0][4:]} in {fname}" if only_fix else
+                     f"Change {fname}: " + "; ".join(parts[:3]) + (f"; and {len(parts) - 3} more changes"
+                                                                    if len(parts) > 3 else "")) if parts else f"Change {fname}"
+            return title, lines + [where]
+        tracked = [o for o in ops if str(o.get("op")) in ("tracked_replace", "tracked_delete", "tracked_insert_after")
+                   or (str(o.get("op")) in ("replace_text", "replace") and o.get("tracked") in (True, "true", "yes", 1))]
+        lines, parts = [], []
+        dels = sum(1 for o in tracked if o.get("op") == "tracked_delete")
+        reps = [o for o in ops if o not in tracked and str(o.get("op")) in ("replace_text", "replace", "find_replace")]
+        for o in ops:
+            op = str(o.get("op"))
+            if o in tracked:
+                if op == "tracked_delete":
+                    lines.append(f"Delete {_q(o.get('find'), 70)} (tracked)")
+                elif op == "tracked_insert_after":
+                    lines.append(f"Insert {_q(o.get('text') or o.get('replace'), 50)} after {_q(o.get('find'), 30)} (tracked)")
+                else:
+                    lines.append(f"Replace {_q(o.get('find'), 40)} with {_q(o.get('replace'), 40)} (tracked)")
+            elif o in reps:
+                lines.append(f"Replace {_q(o.get('find'), 40)} with {_q(o.get('replace'), 40)}")
+            elif op == "add_comment":
+                lines.append(f"Add a comment at {_q(o.get('find'), 30)}: {_q(o.get('text'), 50)}")
+            elif op == "append_paragraph":
+                lines.append(f"Add a paragraph at the end: {_q(o.get('text'), 60)}")
+            elif op == "set_notes":
+                lines.append(f"Set the speaker notes on slide {o.get('slide', 1)}")
+            else:
+                lines.append(op.replace("_", " "))
+        if len(lines) > 10:
+            lines = lines[:10] + [f"... and {len(lines) - 10} more"]
+        if tracked and len(tracked) == len(ops):
+            shorter = all(o.get("op") == "tracked_delete" or (o.get("op") == "tracked_replace" and len(
+                str(o.get("replace") or "")) < len(str(o.get("find") or ""))) for o in tracked)
+            secs = [s for s in dict.fromkeys(_docx_sections(full(p), [o.get("find") for o in tracked]))]
+            sec = f"{_section_name(secs[0])} of " if len(secs) == 1 and secs[0] else ""
+            count = []
+            if dels:
+                count.append(_plural(dels, "deletion"))
+            if len(tracked) - dels:
+                count.append(_plural(len(tracked) - dels, "change"))
+            title = f"{'Shorten' if shorter else 'Change'} {sec}{fname} as tracked changes ({', '.join(count)})"
+        elif reps and len(reps) == len(ops):
+            title = (f"Change {fname}: replace {_q(reps[0].get('find'), 30)} with {_q(reps[0].get('replace'), 30)}"
+                     if len(reps) == 1 else f"Change {fname}: {len(reps)} text replacements")
+        else:
+            title = f"Change {fname}: {_plural(len(ops), 'edit')}"
+        return title, lines + [where]
+    if tool == "convert_document":
+        src, to = base(args.get("path")), str(args.get("to") or "pdf").lower().lstrip(".")
+        out = base(args.get("output")) or os.path.splitext(src)[0] + "." + to
+        return (f"Make a PDF of {src}" if to == "pdf" else f"Convert {src} to {to.upper()}"), \
+            [f"A new file, {out}. {src} stays as it is."]
+    if tool == "make_spreadsheet":
+        return "Make a new spreadsheet" + (f", {base(args.get('save_as'))}" if args.get("save_as") else "") + using, [new_file]
+    if tool == "make_deck":
+        return "Make a new PowerPoint deck" + (f", {base(args.get('save_as'))}" if args.get("save_as") else "") + using, [new_file]
+    if tool == "make_document":
+        return "Make a Word document" + (f", {base(args.get('filename'))}" if args.get("filename") else ""), [new_file]
+    if tool == "make_pdf":
+        return "Make a PDF" + (f", {base(args.get('filename'))}" if args.get("filename") else ""), [new_file]
+    if tool == "add_slides":
+        deck = base(args.get("deck"))
+        return f"Add slides to {deck or 'a deck'}", [f"It saves a copy, {os.path.splitext(deck)[0]} (updated).pptx; "
+                                                    f"{deck or 'the deck'} stays as it is."]
+    if tool == "analyze_data":
+        return "Analyse " + (", ".join(files[:3]) if files else "data") + " into charts and a summary", [new_file]
+    if tool == "office_task" or name == "office_task":
+        eng = str(args.get("engine") or "").strip()
+        return ("Make a new " + {"slides": "PowerPoint deck", "sheets": "spreadsheet", "docs": "Word document",
+                                 "data": "data analysis"}.get(eng, "office file") + using), [new_file]
+    nice = {"fill_template": "Fill in", "merge_decks": "Combine decks into"}.get(tool)
+    target = base(args.get("filename") or args.get("path") or args.get("output") or "")
+    return (f"{nice} {target}".strip() if nice else f"Use the office tool {tool.replace('_', ' ')}"
+            + (f" on {target}" if target else "")), []
+
+
+def office_detail(name: str, args: dict, root=None) -> str:
+    """The approval card's text for an office tool: the plain lines, then the exact call under "Details"."""
+    title, lines = office_card(name, args, root)
+    call = json.dumps({k: v for k, v in (args or {}).items() if not str(k).startswith("_")}, indent=1,
+                      ensure_ascii=False)
+    return "\n".join(lines) + DETAILS_MARK + (call if len(call) <= 6000 else call[:6000] + "\n...")
 
 
 class Agent:
@@ -5799,7 +6114,9 @@ class Agent:
 
     def _edit_inside(self, name: str, args: dict) -> bool:
         """Every file this edit touches is inside the chat's folder (or one the user added)."""
-        if name in ("edit", "write_file", "notebook_edit"):
+        if name == "edit" and isinstance(args.get("changes"), list) and not args.get("path"):
+            paths = [str(c.get("path") or "") if isinstance(c, dict) else "" for c in args["changes"]]
+        elif name in ("edit", "write_file", "notebook_edit"):
             paths = [str(args.get("path") or args.get("notebook_path") or "")]
         elif name == "apply_patch":
             paths = [str(x) for x in _patch_files(args.get("input"))]
@@ -5807,7 +6124,100 @@ class Agent:
             return False
         if not paths or any(not p.strip() for p in paths):
             return False
-        return all(not self._outside_path(os.path.expanduser(p)) for p in paths)
+        try:                                    # ~, $HOME and $VAR as the shell reads them (Workspace._path does too)
+            paths = [T.expand_path(p) for p in paths]
+        except ToolError:
+            return False                        # a variable that is not set: never "inside"
+        return all(not self._outside_path(p) for p in paths)
+
+    def _edit_targets(self, name: str, args: dict) -> list:
+        """The files an edit writes, as full paths (~ and $VAR expanded); [] when they cannot be read."""
+        if name == "apply_patch":
+            raw = [str(x) for x in _patch_files(args.get("input"))]
+        elif name == "edit" and isinstance(args.get("changes"), list):
+            raw = [str(c.get("path") or "") for c in args["changes"] if isinstance(c, dict)] + [str(args.get("path") or "")]
+        else:
+            raw = [str(args.get("path") or args.get("notebook_path") or "")]
+        out = []
+        for p in filter(None, (x.strip() for x in raw)):
+            try:
+                p = T.expand_path(p)
+            except ToolError:
+                continue
+            out.append(p if os.path.isabs(p) else os.path.join(str(self.root), p))
+        return out
+
+    def _office_write(self, name: str) -> bool:
+        """An office tool that writes a file: office_task and every tool of the office server that is not one of the
+        read-only ones in SAFE_MCP (make_*, add_slides, analyze_data, edit_office_file, convert_document...)."""
+        n = name.replace("-", "_")
+        return n == "office_task" or (n.startswith(self._OFFICE_MCP) and n not in SAFE_MCP)
+
+    def _office_write_risk(self, name: str, args: dict) -> str:
+        """"" when an office tool's write needs no question by the rule for shell edits in the folder: a new file in
+        the folder, or a change to a file in the folder that Undo can put back. Else the card's question: a file
+        open in Office (its lock file is there), a result saved outside the folder, or a file Undo does not keep.
+        The office tools never delete a file and never use the network themselves."""
+        tool = name.replace("-", "_").rsplit("__", 1)[-1]
+        if tool != "edit_office_file":
+            return ""                          # make_*, convert, add_slides: a new file, never over an existing one
+        targets = []
+        if office_in_place(args, self.root):
+            targets.append(str(args.get("path") or ""))
+        elif args.get("output"):
+            targets.append(str(args.get("output")))
+        for t in filter(None, targets):
+            try:
+                t = T.expand_path(t)
+            except ToolError:
+                return f"Save {t[:80]}? Its path names a variable that is not set."
+            full = t if os.path.isabs(t) else os.path.join(str(self.root), t)
+            nm = os.path.basename(full.rstrip("/\\"))
+            if self._outside_path(t):
+                return f"Change {nm}, outside the project folder ({full[:100]})?"
+            if PR.office_lock(full):
+                return f"{nm} is open in Office. Change it anyway? Office may overwrite this change when it saves."
+            if os.path.exists(full):
+                why = PR.undo_covers(full, self.root)
+                if why:
+                    return f"Change {nm}? Undo cannot put it back: {why}."
+        return ""
+
+    def _chat_made(self) -> set:
+        """Full paths of the files this chat made (its edits, and what Undo booked as added in its turns): the files
+        it may delete without a question. Anything else in the folder is the user's."""
+        made = {str(x) for x in getattr(self.ws, "created", ()) or ()}
+        cp = getattr(self, "checkpoint", None)
+        try:
+            for t in (cp.turns() if cp is not None else []):
+                made.update(str(self.root / c["path"]) for c in t.get("changed") or []
+                            if c.get("status") == "added" and c.get("path"))
+        except Exception:  # noqa: BLE001 - no Undo record: only this chat's own edits count
+            pass
+        return made
+
+    def _git_local_ok(self, name: str, args: dict) -> bool:
+        """A command made only of local git writes in the project repository (add, commit, stash, reset --soft,
+        restore, checkout of a file, a new branch) and reads. Omar, 0.0.19: `git add` and `git commit` were refused in
+        Accept edits and a whole task was lost. The network (push, pull, fetch, clone), history rewrites (reset --hard,
+        rebase, filter-branch), clean, and git's config and hooks still ask."""
+        if name not in ("bash", "shell", "exec_command"):
+            return False
+        wd = None
+        if args.get("workdir"):
+            try:
+                wd = self.ws._path(str(args["workdir"]))
+            except Exception:  # noqa: BLE001
+                return False
+        cmds = PR.commands_of(name, args)
+        return bool(cmds) and not _destructive(args, self.root) and \
+            all(PR.git_local_ok(c, self.root, wd) for c in cmds)
+
+    def _edit_unasked(self, name: str, args: dict) -> bool:
+        """The rule for a file change that needs no question, for every way of making one (edit, write_file,
+        apply_patch, a patch inside a shell script): every file it writes is in the chat's folder, and none of them
+        is open in Office (Word, Excel, PowerPoint or LibreOffice would overwrite the change, or lose it)."""
+        return self._edit_inside(name, args) and not any(PR.office_lock(p) for p in self._edit_targets(name, args))
 
     def _outside(self, name: str, args: dict) -> str:
         """Why a read-only call still needs a yes in Ask and Accept edits: it reads outside the project
@@ -5939,18 +6349,31 @@ class Agent:
                 return skill
         return ""
 
-    def _permit(self, name: str, args: dict) -> tuple[bool, str]:
+    def _permit(self, name: str, args: dict, _part: bool = False) -> tuple[bool, str]:
         if name == "delegate_task":
             return True, ""                    # its sub-agents' own actions are checked against this chat's mode
         only = getattr(self, "_only_names", None)
-        if only is not None and name not in only:
+        if not _part and only is not None and name not in only:
             return False, f"{name} is not one of the tools this agent may use."
-        sk = self._skill_blocked(name)
+        sk = self._skill_blocked(name) if not _part else ""
         if sk:
             return False, f"The skill {sk} says not to use {name} while following it. Do it another way."
         own_name, own_args = name, args
         if name in ("shell", "exec_command"):
-            hit = T.patch_from_shell(args.get("command") if name == "shell" else args.get("cmd"))
+            key = "command" if name == "shell" else "cmd"
+            hit = T.patch_from_shell(args.get(key))
+            sp = None if hit else T.split_patch_script(args.get(key))
+            if sp and sp[2]:
+                # Omar, 0.0.19: `apply_patch <<'EOF' ... EOF` then `python -m pytest` was judged as one command of 50
+                # "steps" and refused in Accept edits. The patch is an edit (a diff card when it asks); the rest is
+                # its own commands under the usual rules. Workspace.shell and exec_command run them the same way.
+                wd, cd = str(args.get("workdir") or ""), sp[1] or ""
+                bases = [cd or wd, cd, wd, os.path.join(wd, cd)]
+                ok, note = self._permit("apply_patch", {"input": sp[0], "_bases": list(dict.fromkeys(bases))}, True)
+                if not ok:
+                    return False, note
+                ok2, note2 = self._permit(name, {**args, key: sp[2]}, True)
+                return ok2, " ".join(n for n in (note, note2) if n)
             if hit:                            # apply_patch through the shell is an edit like any other
                 wd, cd = str(args.get("workdir") or ""), hit[1] or ""
                 bases = [cd or wd, cd, wd, os.path.join(wd, cd)]        # what Workspace.shell uses comes first
@@ -6002,6 +6425,11 @@ class Agent:
             return True, ""
         risky = self._outside(name, args) if self.mode != "auto" else ""
         destr = self._mcp_destructive(name)       # the connector itself says this deletes or overwrites
+        # 0.0.19: an office tool that writes a file follows the rule for shell edits in the folder: a new file, or a
+        # change Undo can put back, needs no question in sandbox-auto and Accept edits; "Before every command and
+        # change" asks for all of them, office_task included; a file open in Office or a result outside asks.
+        office_w = self._office_write(name) and self.mode != "auto"
+        orisk = self._office_write_risk(name, args) if office_w and not risky else ""
         if self.mode == "auto" and _destructive(args, self.root):        # OSS-18: Full access still asks about these ...
             if _allow_hit([r for r in rules["allow"] if r.startswith("bash:")], name, args):
                 return True, ""          # ... unless the user allowlisted this command ("bash:rm -rf build*"; a bare
@@ -6010,15 +6438,21 @@ class Agent:
             from meshpool_harness import trust as TRD
             if not TRD.is_trusted(self.root):      # cargo check, dotnet build run the project's own build code
                 risky = "Run this folder's checks? Build checks run the project's own code, and the folder is not trusted."
-        if not risky and (self.mode == "auto" and not (destr and self.approve) or name in READ_ONLY
+        if not risky and (self.mode == "auto" and not (destr and self.approve) or name in READ_ONLY and not office_w
                           or name.replace("-", "_") in SAFE_MCP):
             return True, ""
         if not risky and name in ("bash", "shell") and not args.get("workdir") and \
                 T.git_read_only(T.shell_script(args.get("command")) if name == "shell" else str(args.get("command") or "")) \
                 and T.git_config_safe(self.root):
             return True, ""                    # git status, log, diff and other reads never ask
-        if self.mode == "edits" and name in ("edit", "write_file", "apply_patch", "notebook_edit"):
-            return True, ""                    # auto-accept edits: file changes go through, commands still ask
+        if self.mode == "edits" and name in ("edit", "write_file", "apply_patch", "notebook_edit") and \
+                self._edit_unasked(name, args):
+            return True, ""                    # auto-accept edits: file changes in the folder go through
+        if self.mode == "edits" and not risky and self._git_local_ok(name, args):
+            return True, ""                    # local git writes in the project repo (add, commit, stash...)
+        if office_w and not risky and not orisk and not destr and (
+                self.mode == "edits" or self.mode == "ask" and self._work_without_asking()):
+            return True, ""                    # a new office file, or an undoable change to one, in the folder
         if name in ("edit", "write_file") and self._exists(args.get("path", "")) and \
                 self._diff(name, args) == "(no change)" and self._same_bytes(name, args):
             return True, ""                    # nothing would change, byte for byte: do not ask
@@ -6041,16 +6475,14 @@ class Agent:
             # Still asked: destructive commands, the network and installs, paths elsewhere in the user's home,
             # meshpool's own rule files (the guard above), and anything outside the folder.
             if name in ("bash", "shell", "exec_command") and cmds and wd_ok and not _destructive(args, self.root) \
-                    and all(PR.sandbox_auto_ok(c, self.root, wd) and not PR.open_office_write(c, self.root, wd)
+                    and all(PR.sandbox_auto_ok(c, self.root, wd, self._chat_made()) and not PR.open_office_write(c, self.root, wd)
                             for c in cmds):
                 if self._sandboxed():
                     script = (T.shell_script(args.get("command")) if name == "shell"
                               else str(args.get("cmd") if name == "exec_command" else args.get("command") or ""))
                     self.ws.__dict__.setdefault("sbx_offline", set()).add(script.strip())
                 return True, ""
-            if group == "edit" and self._edit_inside(name, args) and \
-                    not any(PR.office_lock(os.path.join(str(self.root), os.path.expanduser(str(args.get(k))))) for k in ("path", "notebook_path")
-                            if args.get(k)):
+            if group == "edit" and self._edit_unasked(name, args):
                 return True, ""                    # a file open in Office asks before it is replaced
         if cmds and wd_ok and self.mode in ("ask", "edits") and not _destructive(args, self.root) and \
                 all(PR.safe_read(c, self.root, wd) for c in cmds):
@@ -6059,7 +6491,8 @@ class Agent:
             pats = [x[5:] for x in self.always if x.startswith("bash:")]
             if cmds and not _destructive(args, self.root) and all(PR.granted(c, pats) for c in cmds):
                 return True, ""                # the chat grant covers only the command patterns the user allowed
-        elif group in self.always and risky != "destructive" and not _destructive(args, self.root) and not destr:
+        elif group in self.always and risky != "destructive" and not _destructive(args, self.root) and not destr \
+                and not orisk:
             return True, ""                    # a chat grant never covers a destructive command (OSS-18)
         if not self.approve:
             return False, "No one is available to approve this. Run with --auto to allow changes."
@@ -6067,8 +6500,15 @@ class Agent:
             shown = PR.commands_of(name, args) or [str(args.get("command") or args.get("cmd") or "")]
             wd = f"cd {args['workdir']} && " if name in ("shell", "exec_command") and args.get("workdir") else ""
             kind, title, detail = "bash", "Run this destructive command?", wd + "\n".join(shown)
+        elif risky and office_w:
+            kind, title, detail = "mcp", risky, office_detail(name, args, self.root)
         elif risky:
             kind, title, detail = "read", risky, json.dumps(args, indent=1, ensure_ascii=False)[:3000]
+        elif office_w and not args.get("markdown"):
+            kind, title, detail = "mcp", orisk or office_card(name, args, self.root)[0] + "?", \
+                office_detail(name, args, self.root)
+            if destr:
+                title = "The app marks this as one that deletes or overwrites data. " + title
         elif name == "bash":
             kind, title, detail = "bash", _plain_command_title(args.get("command", "")), args.get("command", "")
         elif name == "bash_start":
@@ -6105,6 +6545,12 @@ class Agent:
             body = args.get("markdown") or args.get("request") or args.get("content")
             detail = (str(body)[:3000] if isinstance(body, str) and body.strip()
                       else json.dumps(args, indent=1, ensure_ascii=False)[:3000])
+        outside_edit = kind == "edit" and group == "edit" and not self._edit_inside(name, args)
+        if outside_edit:
+            where = [os.path.relpath(p, str(self.root)) if not self._outside_path(p) else p
+                     for p in self._edit_targets(name, args)]
+            title = ("Change " + (", ".join(where[:3]) + (" and more" if len(where) > 3 else "") or "files")
+                     + ", outside the project folder?")    # said plainly: the edit leaves the folder
         try:
             from meshpool_harness.agent import extras as EXN
             EXN.run_hooks(self.root, "Notification", {"message": title, "kind": kind}, timeout=10)
@@ -6112,11 +6558,13 @@ class Agent:
             pass
         pats = [p for c in cmds for p in PR.grant_patterns(c)] if group == "bash" and not _destructive(args, self.root) else []
         pats = list(dict.fromkeys(pats))
-        folder = (group in ("bash", "edit") and not risky and not _destructive(args, self.root) and not destr
+        folder = ((group in ("bash", "edit") or office_w and not orisk) and not risky
+                  and not _destructive(args, self.root) and not destr
                   and self.mode in ("ask", "edits") and _sandbox_auto_on()
-                  and not self._sandboxed() and (group == "edit" or
-                                                 (cmds and all(PR.sandbox_auto_ok(c, self.root, wd) for c in cmds))))
-        scope = ("once" if risky == "destructive" or _destructive(args, self.root) else   # a destructive command: this once only
+                  and not self._sandboxed() and (group == "edit" or office_w or
+                                                 (cmds and all(PR.sandbox_auto_ok(c, self.root, wd, self._chat_made()) for c in cmds))))
+        folder = folder and not outside_edit
+        scope = ("once" if risky == "destructive" or _destructive(args, self.root) or orisk or outside_edit else   # a destructive command: this once only
                  # no sandbox: one yes for the chat. Said plainly (review, 0.0.18): nothing isolates these commands
                  "ordinary commands and edits in this folder (not isolated: this computer has no sandbox)" if folder else
                  "all file edits" if group == "edit" else "this tool" if group != "bash" else
@@ -6178,6 +6626,10 @@ class Agent:
                      for b in (args.get("_bases") or [""])] if args.get("_bases") else bases
         tails = ("/.meshpool/hooks.json", "/.meshpool/permissions.json", "/.meshpool/mcp.json", "/.mcp.json")
         for p in filter(None, paths):
+            try:
+                p = T.expand_path(p)               # $HOME/.meshpool/... is the same file as the shell would write
+            except ToolError:
+                pass
             for base in bases:
                 try:
                     q = (base / p).resolve() if not os.path.isabs(os.path.expanduser(p)) else Path(p).expanduser().resolve()

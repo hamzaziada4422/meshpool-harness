@@ -16,8 +16,11 @@ import threading
 import time
 from types import SimpleNamespace
 
-DENIED_NOTE = ("Not allowed in -p mode: nobody can approve it. Re-run with --auto, --permission-mode edits, or "
-               "--allowed-tools.")
+# What the model is told about a refused action: only that it was refused, and why. The flags that would allow it are
+# for the user (denial_note), and depend on what was refused and the mode the run already has (0.0.19: the note told
+# the model to "re-run with --permission-mode edits" in a run that had it, and the model told the user the same).
+DENIED_NOTE = ("Not run: this needs a person's yes, and in -p mode nobody can answer. Do not try it another way; "
+               "say in your reply what was not done.")
 # Full access (--auto) still asks before a command that deletes recursively, rewrites git history or uses sudo
 # (core._destructive): "re-run with --auto" would be wrong advice for those, to the model and to the user alike.
 DESTRUCTIVE_NOTE = ("Not run: this command deletes or rewrites things (rm -r/-f, git reset --hard, sudo...), which "
@@ -292,6 +295,8 @@ class TermFrontend:
         more = [f"  (and {len(self.denied) - 8} more)"] if len(self.denied) > 8 else []
         if kinds <= {"edit"}:
             hint = "re-run with --permission-mode edits (or --auto for full access)."
+        elif kinds <= {"outside"}:
+            hint = "re-run with --dir set to a folder that holds those files: edits stay inside the project folder."
         elif kinds <= {"destructive"}:
             hint = DESTRUCTIVE_HINT
         else:
@@ -337,8 +342,16 @@ def _allow_hint(d: dict, mode: str) -> tuple[str, str, str]:
             return shown, "--allowed-tools bash (every command that does not delete things)", "command"
         return shown, "--permission-mode auto", "command"
     if d.get("kind") == "edit":
-        if title.startswith("Change "):
+        if title.startswith("Your rule"):
+            return title, "your saved ask rule covers it; change the rule in permissions.json", "rule"
+        if title.startswith("Change ") and "outside the project folder" not in title:
             return title, "it changes meshpool's own rule files; make that change yourself", "rule"
+        if "outside the project folder" in title:
+            # no mode lets an edit leave the folder (Workspace refuses it): name the run that can make it
+            return title, "--dir with a folder that holds the file (edits stay inside the project folder)", "outside"
+        if mode in ("edits", "auto"):
+            # the run already accepts edits: it was refused for another reason (a file open in Office, a saved rule)
+            return title, "close the file in Office or change your saved rule, then run again", "other"
         return title, "--permission-mode edits", "edit"
     if d.get("kind") == "read":
         return title, "--permission-mode auto (it reaches outside the folder)", "other"

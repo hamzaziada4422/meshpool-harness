@@ -142,7 +142,8 @@ def test_persona_is_derived_kept_for_round_two_and_shown_in_the_note(proj, tmp_p
     assert f"You are: {PERSONA}" in body_text(both.r_bodies[1]) and f"You are: {PERSONA}" in body_text(both.r_bodies[2])
     assert "First name the person" not in body_text(both.r_bodies[2])          # the persona string is kept, not re-derived
     assert len(both.r_bodies) == 3                                              # plan + verdict, then verdict again
-    assert final.rstrip().endswith("Checked: " + PERSONA + " tried it; fixed the page scrolls sideways.")
+    assert final.rstrip().endswith("Checked as a shopper on her phone: fixed 1 thing: the page scrolls sideways. "
+                                   "Nothing left open.")
 
 
 def test_action_requests_run_and_their_results_go_back_to_the_reviewer(proj, tmp_path, monkeypatch):
@@ -264,8 +265,9 @@ def test_a_recorded_verdict_with_a_stray_bracket_no_longer_ends_the_review(proj,
     final = a.send(ASK)
     t = text_of(reviews(a)[0])
     assert "[blocker] no confirmation is shown after the order form is sent" in t and "measured only" not in final
-    assert final.rstrip().endswith("fixed no confirmation is shown after the order form is sent, no visible keyboard "
-                                   "focus on the Pickup date field and the phone layout was not confirmed.")
+    assert final.rstrip().endswith("Checked as a customer on her phone: fixed 3 things: no confirmation is shown after "
+                                   "the order form is sent; no visible keyboard focus on the Pickup date field. "
+                                   "Nothing left open.")
 
 
 # ---------- when it stops -----------------------------------------------------------------------------------------------
@@ -277,7 +279,7 @@ def test_a_pass_ends_the_loop_with_no_second_model_loop(proj, tmp_path, monkeypa
     final = a.send(ASK)
     assert reviews(a) == [] and len(both.b_bodies) == 2 and len(render.calls) == 1
     assert len(both.r_bodies) == 2
-    assert final.rstrip().endswith("Checked: " + PERSONA + " tried it; no problems found."), final
+    assert final.rstrip().endswith("Checked as a shopper on her phone: found nothing to fix."), final
 
 
 def test_at_most_two_rounds_when_the_reviewer_never_passes(proj, tmp_path, monkeypatch):
@@ -292,7 +294,7 @@ def test_at_most_two_rounds_when_the_reviewer_never_passes(proj, tmp_path, monke
     final = a.send(ASK)
     assert len(reviews(a)) == 2 and len(both.r_bodies) == 3                    # plan, verdict, verdict: no third verdict
     assert len(render.calls) == 3
-    assert "still open: still scrolls sideways" in final and PERSONA in final, final
+    assert "Still open: still scrolls sideways" in final and "Checked as a shopper on her phone" in final, final
 
 
 def test_blockers_reach_the_builder_first_with_the_persona(proj, tmp_path, monkeypatch):
@@ -318,7 +320,7 @@ def test_explicit_user_choices_win_over_the_reviewer(proj, tmp_path, monkeypatch
                  verdict([("The 'Buy now' button does nothing when clicked", "hero", "blocker")], ok=False)])
     a, _ = agent(proj)
     final = a.send(ask)
-    assert reviews(a) == [] and "no problems found" in final                    # the placeholder is not a problem
+    assert reviews(a) == [] and "found nothing to fix" in final                # the placeholder is not a problem
 
 
 # ---------- cost: the receipt counts the extra calls --------------------------------------------------------------------
@@ -462,7 +464,7 @@ def test_a_docx_gets_a_reader_persona_and_no_action_requests(proj, tmp_path, mon
     t = text_of(reviews(a)[0])
     assert memo in t and "[major] the cache hit rate has no date" in t
     assert f"You are: {memo}" in body_text(both.r_bodies[1])
-    assert "Checked: " + memo + " looked it over; fixed the cache hit rate has no date" in final, final
+    assert "Checked as a finance director: fixed 1 thing: the cache hit rate has no date." in final, final
 
 
 def test_engine_qa_that_drew_the_pages_still_skips_the_look_and_the_reviewer(proj, monkeypatch):
@@ -582,7 +584,7 @@ def test_mock_server_full_loop_with_the_independent_reviewer(proj, mock_server):
     final = a.send("landing page demo: " + ASK)
     assert "initGallery" not in (proj / "index.html").read_text()
     assert len(reviews(a)) == 1 and PERSONA in text_of(reviews(a)[0])
-    assert "Checked: " + PERSONA + " tried it; fixed sideways scrolling on the phone" in final, final
+    assert "Checked as a shopper on her phone: fixed" in final and "sideways scrolling on the phone" in final, final
     sent = [json.loads(x) for x in log.read_text().splitlines()]
     reviewer = [r for r in sent if r["n_tools"] == 0 and r["n_msgs"] == 2]          # no tools, one system and one user message
     assert len(reviewer) == 3 and len(sent) >= 5

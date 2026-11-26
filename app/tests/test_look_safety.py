@@ -441,7 +441,7 @@ def test_the_reviewer_makes_at_most_four_calls_a_turn(proj, tmp_path, monkeypatc
     a, _ = agent(proj)
     final = a.send(ASK)
     assert len(both.r_bodies) <= LR.MAX_REVIEW_CALLS == 4, len(both.r_bodies)
-    assert "Checked:" in final
+    assert "Checked" in final
 
 
 def test_a_reviewer_call_carries_at_most_four_pictures_and_counts_them_at_full_size(proj, tmp_path, monkeypatch):
@@ -537,21 +537,19 @@ def test_the_checked_line_is_clean_with_the_recorded_phrases():
     st = {"persona": STUDIO, "rounds": 1, "changed": True,
           "evals": [{"problems": _probs(ROUND1), "pass": False}, {"problems": _probs(ROUND2), "pass": True}]}
     line = LR.summary_line("web", st)
-    assert line == ("Checked: " + STUDIO + " tried it; fixed missing open house date, time and location details, no "
-                    "location or address found for the open house, typing an invalid email shows 'Please enter your "
-                    "name.' and 1 more."), line
-    for bad in ("fixed could not find", "instead of", "still open", "minor things left", "no address or location is "
-                "mentioned", ";  ", " an and"):
+    assert line == ("Checked as a prospective visitor on her phone: fixed 4 things: missing open house date, time and "
+                    "location details; no location or address found for the open house. Nothing left open."), line
+    for bad in ("fixed could not find", "instead of", "minor things left", "no address or location is mentioned",
+                "  ", " an and", ";;"):
         assert bad not in line, bad
-    assert line.count(";") == 1
 
 
 def test_problems_with_no_later_look_read_changed_after_the_check():
     st = {"persona": STUDIO, "rounds": 1, "changed": True, "measured_only": True,
           "evals": [{"problems": _probs(ROUND1[:2]), "pass": False}]}
     line = LR.summary_line("web", st)
-    assert "changed after the check: missing open house date, time and location details and no location" in line, line
-    assert "still open" not in line
+    assert "changed 2 things after the check, not looked at again: missing open house date, time and location details" in line, line
+    assert "Still open" not in line and "Nothing left open" not in line
 
 
 def test_problem_phrases_are_clean():
