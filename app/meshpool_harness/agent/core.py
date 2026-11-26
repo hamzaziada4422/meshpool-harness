@@ -1849,8 +1849,9 @@ def _test_summary(cmd: str, tail: str) -> str:
     runner = word if word in ("pytest", "py.test", "unittest", "go test", "cargo test", "jest", "vitest", "mocha",
                               "rspec", "phpunit", "npm test", "yarn test", "pnpm test", "dotnet test") else "tests"
     low = str(tail or "")
-    nums = [f"{n} {w}" for w in ("failed", "errors", "passed", "skipped")
-            for n in re.findall(r"\b(\d+) " + w + r"\b", low)[-1:]]
+    nums = [f"{n} {w}" + ("s" if w == "error" and n != "1" else "")           # "1 error" and "2 errors" both count
+            for w in ("failed", "error", "passed", "skipped")
+            for n in re.findall(r"\b(\d+) " + w + r"s?\b", low)[-1:]]
     ok = re.search(r"(?m)^Ran (\d+) tests?\b", low)
     if not nums and ok and re.search(r"(?m)^OK\b", low):
         nums = [f"{ok.group(1)} passed"]
@@ -1871,25 +1872,51 @@ def _tests_after_own_edit(cmd) -> bool:
     return False
 
 
-def _check_line(cmd: str, shown: str, code: int, tail: str = "") -> str:
-    """The receipt's verdict on the last command after the last change: never "passed" when the exit status could
+def _fails_of(c: dict) -> list:
+    """The failed test ids a recorded command reported (parsed again from its tail for older records)."""
+    return list(c.get("fails") or T.failed_test_ids(c.get("tail", "")))
+
+
+def _is_test_cmd(cmd: str) -> bool:
+    """A real test or check run: it matches the runner words and is not a read-only command that only mentions them
+    (`cat tests/x.py`, `git diff --stat tests`)."""
+    return bool(_TEST_RUN.search(cmd or "")) and not T.read_only(cmd or "")
+
+
+def _without_failures(summ: str) -> str:
+    """"pytest, 14 passed" from "pytest, 2 failed, 14 passed"."""
+    return ", ".join(x for x in summ.split(", ") if not re.match(r"\d+ (?:failed|errors?)$", x))
+
+
+def _check_line(cmd: str, shown: str, code: int, tail: str = "", fails=None, before=None) -> str:
+    """The receipt's verdict on the check that ran after the last change: never "passed" when the exit status could
     not show a failure (a check piped into another command without pipefail), "no match" for a search that found
-    nothing, and the name of the test run when one verified the change ("Verified: pytest, 14 passed")."""
+    nothing, and the name of the test run when one verified the change ("Verified: pytest, 14 passed").
+    fails: the test ids that run reported failed; before: the ids that failed in a run before this turn's first edit
+    (None when there was no such run). Failures that were all there before are not this change's: "Verified: pytest,
+    14 passed (2 failures were there before this change)". Without the earlier ids it says the counts, not "Not
+    verified"."""
     if _no_match(cmd, code, tail):
         return f"`{shown}` found no match (exit 1 is how a search says so)"
     summ = _test_summary(cmd, tail)
     bad = bool(re.search(r"\b[1-9]\d* (?:failed|errors?)\b", summ))
+    if bad:
+        nf = sum(int(n) for n in re.findall(r"\b(\d+) (?:failed|errors?)\b", summ))
+        if before is not None and fails and set(fails) <= set(before) and len(set(fails)) >= nf:
+            were = "failures were" if nf != 1 else "failure was"
+            return f"Verified: {_without_failures(summ)} ({nf} {were} there before this change)"
+        if before is not None and fails:
+            return f"Not verified: {summ}"
+        return summ.replace(", ", ": ", 1)          # "pytest: 2 failed, 14 passed", with no earlier ids to compare
     if code != 0:
         return f"`{shown}` FAILED (exit {code})" + (f": {summ}" if summ else "")
-    if bad:
-        return f"Not verified: {summ}"
     if summ:                                    # the runner's own summary line shows it passed, pipe or not
         return f"Verified: {summ}"
     if _piped_check_hides_status(cmd):
-        return (f"`{shown}` ran (exit status is the last command's in the pipe; failures before it are not visible)"
+        return (f"Not verified: `{shown}` ran (exit status is the last command's in the pipe; failures before it are not visible)"
                 + (f": {summ}" if summ else ""))
     if _TEST_RUN.search(cmd or "") and re.search(r"\|\|\s*(?:true\b|:(?=\s|;|$)|exit\s+0\b)", cmd or ""):
-        return f"`{shown}` ran (its exit status is ignored by `|| true`, so a failure would not show)"
+        return f"Not verified: `{shown}` ran (its exit status is ignored by `|| true`, so a failure would not show)"
     return f"`{shown}` passed"
 
 
@@ -4121,6 +4148,7 @@ class Agent:
         self._todo_touched = False
         self.ws.turn_files = set()
         self.ws.turn_new = set()
+        self.ws.turn_edits0, self.ws.turn_cmd0 = self.ws.edits, len(self.ws.commands)   # the receipt's baseline test run
         g = {"hist": [], "doom_at": -10, "seen": set(), "edits": self.ws.edits, "edits0": self.ws.edits, "last": 0,
              "cmds0": len(self.ws.commands), "t0": time.time(),
              "todo_nudged": False}
@@ -5684,11 +5712,14 @@ class Agent:
         after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits and c.get("kind") != "read"]
         if after:
             real = [c for c in after if not _no_match(c["cmd"], c["code"], c.get("tail", ""))]
-            last = (real or after)[-1]          # a search that found nothing is not the check
+            tests = [c for c in real if _is_test_cmd(c["cmd"])]
+            last = (tests or real or after)[-1]  # a search that found nothing is not the check; nor is a read-only
+                                                 # command that ran after the tests (git diff --stat)
             # the command, not the `cd <long project path> &&` the model put in front of it
             cmd = re.sub(r"^\s*cd\s+(\"[^\"]*\"|'[^']*'|\S+)\s*&&\s*", "", last["cmd"]).strip() or last["cmd"]
             cmd = cmd.splitlines()[0][:80]
-            check = _check_line(last["cmd"], cmd, last["code"], last.get("tail", ""))
+            check = _check_line(last["cmd"], cmd, last["code"], last.get("tail", ""),
+                                _fails_of(last), Agent._fails_before_turn(self))
             check += f" ({len(after)} command{'s' if len(after) > 1 else ''} after the last change)"
         else:
             check = "nothing was run after the last change, so it is not verified"
@@ -5701,6 +5732,16 @@ class Agent:
             from meshpool_harness.agent import grader as GR
             check += "  \n**Independent check:** " + GR.receipt_line(rv)
         return f"**Changed:** {', '.join(parts)}{more}  \n**Checked:** {check}"
+
+    def _fails_before_turn(self):
+        """The test ids that failed in the last test run before this turn's first edit; None when none ran then."""
+        ws = self.ws
+        e0, c0 = getattr(ws, "turn_edits0", None), getattr(ws, "turn_cmd0", 0)
+        if e0 is None:
+            return None
+        before = [c for c in ws.commands[c0:] if c.get("after_edit", -1) <= e0 and _is_test_cmd(c["cmd"])
+                  and _test_summary(c["cmd"], c.get("tail", ""))]
+        return set(_fails_of(before[-1])) if before else None
 
     def _turn_line_stats(self) -> dict:
         """{path: "+a -d"} of the open turn from the chat's checkpoint: the lines this turn changed, not the user's

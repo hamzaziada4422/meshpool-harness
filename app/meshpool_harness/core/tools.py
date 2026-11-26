@@ -167,6 +167,20 @@ def glob_match(rel: str, glob: str) -> bool:
     return (not pos or any(one(p) for p in pos)) and not any(one(n) for n in neg)
 
 
+_FAIL_ID = re.compile(r"(?m)^(?:FAILED|ERROR)\s+(\S+::\S+?)(?:\s+-\s.*)?$|^(?:FAIL|ERROR): (\S+ \([\w.]+\))|^--- FAIL: (\S+)")
+
+
+def failed_test_ids(out: str) -> list:
+    """The ids of the tests a runner reported as failed ("tests/x.py::test_a", "test_a (mod.Cls.test_a)", "TestA"), in
+    the order printed and without repeats. [] when it printed none (or is no test runner)."""
+    seen: list = []
+    for m in _FAIL_ID.finditer(str(out or "")):
+        i = next(g for g in m.groups() if g)
+        if i not in seen:
+            seen.append(i)
+    return seen
+
+
 def read_only(cmd: str) -> bool:
     """Conservative check that a shell command only reads (safe to run beside others). Unknown means False."""
     import re
@@ -2128,6 +2142,7 @@ class Workspace:
         asked = self.__dict__.get("asked_cmds") or ()
         self.commands.append({"cmd": command.strip(), "code": code, "kind": kind, "after_edit": self.edits,
                               "secs": round(time.time() - t0, 1), "tail": out[-600:],
+                              "fails": failed_test_ids(out),                # the receipt compares them with the baseline
                               "cwd": str(cwd) if cwd else None,            # re-check runs it in the same folder
                               "approved_once": command.strip() in asked})  # a yes for this run is not a yes for more
         try:                                     # full outputs: evidence for number tracing; the task may have
