@@ -2364,6 +2364,22 @@ class Agent:
 
     _PANEL = "using the meshpool panel"   # office/taskpane.js buildMessage: the first message of an Office panel chat
 
+    @staticmethod
+    def _panel_title(text: str) -> str:
+        """The title of an Office panel chat: "Excel: " and the user's own words, after the panel's context block
+        ("[I am in Excel, using the meshpool panel. ...]") and the selection. The chat list showed that block
+        ("[I am in Excel, using the me..."). "" when the message is not from the panel."""
+        m = re.match(r"\s*\[I am in ([A-Za-z]+), using the meshpool panel\.[^\]]*\]\s*", str(text or ""))
+        if not m:
+            return ""
+        rest = re.sub(r"[^\n]*:\n<selection>.*?</selection>\s*", "", text[m.end():], count=1, flags=re.S)
+        paras = [x.strip() for x in re.split(r"\n\s*\n", rest) if x.strip()]
+        if len(paras) > 1 and "\n" not in paras[0] and re.match(
+                r"(?:The active cell is|Nothing is selected|Selected |Selection )", paras[0]):
+            paras = paras[1:]                               # the context line when there was no selection text
+        ask = paras[0].splitlines()[0].strip() if paras else ""
+        return f"{m.group(1)}: {ask}" if ask else m.group(1)
+
     def _office_panel_chat(self, own: str = "") -> bool:
         """A chat the Office add-in panel started (its first message says so). It answers about the selection in
         Excel, Word or PowerPoint, in the chat, and may ask the user (the panel shows ask_user questions). Codex
@@ -2932,6 +2948,7 @@ class Agent:
             hi = len(ln) > 1 and re.fullmatch(r"(?i)(?:hi|hello|hey|hiya|good (?:morning|afternoon|evening))\b"
                                               r"[\w ]{0,20}[!.,]*", ln[0])
             first = " ".join(ln[:2]) if hi else (ln[0] if ln else "")
+            first = self._panel_title(text) or first
             first = (first[:80] + re.match(r"\S*", first[80:]).group(0))[:240]
             self.title = os.environ.pop("MH_SESSION_NAME", "").strip()[:80] or first or "Session"
         body = text
