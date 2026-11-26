@@ -145,3 +145,50 @@ def test_lp03_permissions_list_shows_ask_rules(tmp_path, monkeypatch, capsys):
     assert "ask   bash:git push*" in out and "allow read_file" in out
     assert cli.main(["permissions", "remove", "bash:git push*"]) == 0
     assert core._rules(proj)["ask"] == []
+
+
+_OPENS = {"path": None, "n": 0}
+
+
+def _count_opens(event, args):
+    if event == "open" and _OPENS["path"] and args and str(args[0]) == _OPENS["path"]:
+        _OPENS["n"] += 1
+
+
+def test_lp04_providers_read_the_settings_file_once_while_unchanged(tmp_path, monkeypatch):
+    """LP-04: the base, key, kind and api-version of one model call do not each read the settings file again; a
+    change to the file is still seen."""
+    from meshpool_harness import config as C
+    from meshpool_harness import providers as PV
+    cfg = tmp_path / "meshpool.config"
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path))
+    monkeypatch.setenv("MESHPOOL_CONFIG", str(cfg))
+    for k in ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "AZURE_OPENAI_API_KEY",
+              "AZURE_OPENAI_ENDPOINT", "MH_API_KIND", "MH_API_VERSION", "MH_API_WIRE"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(C, "_INJECTED", set())
+    monkeypatch.setattr(C, "SHELL", {})
+
+    from meshpool_harness import fsio
+    monkeypatch.setattr(fsio, "RACY_S", 0.0)      # the cache's guard for a file written in the last 2 s: not here
+
+    def write(base):
+        cfg.write_text(f"MESHPOOL_API_KEY=test-key-one\nMESHPOOL_BASE_URL={base}\n")
+
+    def one_call():
+        return PV.key_base(), PV.key(), PV.key_kind(), PV.key_api_version()
+
+    write("https://one.example.test/v1")
+    sys.addaudithook(_count_opens)                # stays installed; it counts only while a path is set
+    _OPENS.update(path=str(cfg), n=0)
+    try:
+        assert one_call()[:2] == ("https://one.example.test/v1", "test-key-one")
+        first = _OPENS["n"]
+        assert first <= 1, f"one model call read the settings file {first} times"
+        _OPENS["n"] = 0
+        one_call()
+        assert _OPENS["n"] == 0, "an unchanged settings file was read again"
+        cfg.write_text("MESHPOOL_API_KEY=test-key-two\nMESHPOOL_BASE_URL=https://two.example.test/v1/extra\n")
+        assert one_call()[:2] == ("https://two.example.test/v1/extra", "test-key-two")
+    finally:
+        _OPENS["path"] = None
