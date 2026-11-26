@@ -281,6 +281,23 @@ def test_windows_paste_keeps_a_grave(monkeypatch):
     assert out == [("paste", "déjà vu\nok")]
 
 
+# ---- CL-12: --settings kept the quotes of KEY="value" and refused a file with a byte-order mark -------------------
+def test_settings_flag_reads_lines_like_the_settings_file(tmp_path):
+    from meshpool_harness import cli
+    from meshpool_harness import config as C
+    f = tmp_path / "run.env"
+    f.write_bytes(b'\xef\xbb\xbfMH_MODEL="acme/m1"\nMH_EFFORT=\'high\'\n# a note\n')
+    assert C.read(f) == {"MH_MODEL": "acme/m1", "MH_EFFORT": "high"}       # what meshpool.config would mean
+    assert cli._settings_file(f) == {"MH_MODEL": "acme/m1", "MH_EFFORT": "high"}
+
+
+def test_settings_flag_reads_json_with_a_bom(tmp_path):
+    from meshpool_harness import cli
+    f = tmp_path / "run.json"
+    f.write_bytes(b'\xef\xbb\xbf{"MH_MODEL": "acme/m1"}')
+    assert cli._settings_file(f) == {"MH_MODEL": "acme/m1"}
+
+
 def test_chatgpt_relay_answers_a_json_list_with_400(tmp_path, monkeypatch):
     import http.client
     from meshpool_harness.core import chatgpt_relay as CR
