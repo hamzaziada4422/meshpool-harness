@@ -141,7 +141,7 @@ function insightUnder010(c) {
 /* A suggestion is one quiet line above the composer: what it is, one button, a way to dismiss. One at a time. */
 const nudgeQ010 = [];
 function insightCard010(c) {
-  if (nudgeQ010.some(x => x.id === c.id) || $(`.nudge010[data-id="${c.id}"]`)) return;
+  if (nudgeQ010.some(x => x.id === c.id) || $(`.nudge010[data-id="${CSS.escape(String(c.id))}"]`)) return;
   nudgeQ010.push(c); nextNudge010();
 }
 function nextNudge010() {
