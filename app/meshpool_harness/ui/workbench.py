@@ -277,9 +277,9 @@ def list_dir(root: str, rel: str = "") -> dict:
 
 def _perm_hint(p: Path) -> str:
     if sys.platform == "darwin":
-        return (f"macOS did not let Meshpool read {p}. Allow it when macOS asks, or turn on Full Disk Access for "
-                "Meshpool in Settings, Permissions.")
-    return f"Meshpool cannot read {p}: permission denied."
+        return (f"macOS did not let meshpool read {p}. Allow it when macOS asks, or turn on Full Disk Access for "
+                "meshpool in Settings, Permissions.")
+    return f"meshpool cannot read {p}: permission denied."
 
 
 # B4: decided by name first, so an empty or odd-looking .jpg is never opened as text with a Save button.
@@ -402,7 +402,7 @@ def attach_to(r: Path, name: str, data: bytes, reuse: bool = False) -> dict:
         with open(p, "xb") as f:                 # x: never through a link or over a file made meanwhile
             f.write(data)
     except PermissionError:
-        raise ValueError(f"Meshpool can't save files in {r}: it is read-only. Choose another folder or change its permissions.")
+        raise ValueError(f"meshpool can't save files in {r}: it is read-only. Choose another folder or change its permissions.")
     except OSError as e:
         raise ValueError(f"Couldn't save {name}: {e.strerror or e}")
     try:
@@ -773,7 +773,7 @@ def _open_pr(r: Path, body: dict) -> dict:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 base = json.loads(resp.read())["default_branch"]
         except urllib.error.HTTPError as e:
-            raise ValueError(f"GitHub did not let Meshpool read {slug} (HTTP {e.code}). Check the GitHub "
+            raise ValueError(f"GitHub did not let meshpool read {slug} (HTTP {e.code}). Check the GitHub "
                              "connection in Settings.") from None
         except (urllib.error.URLError, OSError, ValueError, KeyError):
             raise ValueError("Could not reach GitHub to look up the default branch. Check your network "
@@ -797,7 +797,7 @@ def _open_pr(r: Path, body: dict) -> dict:
             raise ValueError(out.stderr.strip()[-600:])
         return st | {"pr": out.stdout.strip().splitlines()[-1]}
     return st | {"pr": f"https://github.com/{slug}/compare/{st['branch']}?expand=1",
-                 "note": "Connect GitHub (Settings, Connectors) to open pull requests from Meshpool. This link opens the form."}
+                 "note": "Connect GitHub (Settings, Connectors) to open pull requests from meshpool. This link opens the form."}
 
 
 # ======================================== terminal ================================================================
@@ -997,7 +997,7 @@ def usage(since: float = 0) -> dict:
 def open_editor(root: str) -> dict:
     """"Open in Meshpool editor": the project folder opens in the app's own file tree and editor. No other program starts."""
     r = check_root(root)
-    return {"ok": True, "open": {"root": str(r), "path": ""}, "message": "Opened in the Meshpool editor."}
+    return {"ok": True, "open": {"root": str(r), "path": ""}, "message": "Opened in the meshpool editor."}
 
 
 # ======================================== pull request, CI and deployments =======================================

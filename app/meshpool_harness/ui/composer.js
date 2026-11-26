@@ -118,13 +118,17 @@ function effortMenuItems(c) {
 function modelMenu(anchor) {
   const c = cfg(), M = S.models || {models: [], groups: []};
   const rows = modelsForMenu().map((m, i) => ({label: modelName(m.id) + (provOf(m.id) === "chatgpt" ? " · ChatGPT" : ""), desc: (m.caps || []).join(", ") || (provOf(m.id) === "chatgpt" ? "Through your ChatGPT sign-in" : m.id === M.default ? "Your default model" : "From your meshpool endpoint"), checked: m.id === c.model ? true : undefined, key: String(i + 1), fn: () => pickModel(m.id)}));
+  // Chat mode: the choice of agent is for the few who want it, under "Advanced" and called "Other agents" (no "Harness").
+  const chatUi = S.cur ? chatMode() : S.mode !== "code";
+  const agent = {label: chatUi ? "Other agents" : "Harness", note: S.cur && !S.cur.auto ? harness(c.harness).name.replace(/^meshpool .*/i, "meshpool") : harnessShort(), sub: harnessMenuItems()};
   ctxMenu({type: "click", currentTarget: anchor}, [
     {head: S.cur ? "Model · this chat" : "Model · new chats"},
     ...(rows.length ? rows : [{label: "No models yet", desc: "Add a key in Settings to see models", fn: () => openSettings("general")}]),
     {sep: true},
-    {label: "Harness", note: S.cur && !S.cur.auto ? harness(c.harness).name.replace(/^meshpool .*/i, "meshpool") : harnessShort(), sub: harnessMenuItems()},
+    ...(chatUi ? [] : [agent]),
     {label: "Effort", note: EFFORT_NAME[c.effort || ""] || "Auto", sub: effortMenuItems(c)},
     {label: "More models", more: true, fn: () => modelPop(anchor)},
+    ...(chatUi ? [{sep: true}, {head: "Advanced"}, agent] : []),
   ], {cls: "modelmenu", up: true});
 }
 

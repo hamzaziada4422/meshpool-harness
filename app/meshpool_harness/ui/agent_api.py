@@ -175,6 +175,18 @@ def _with_plain(e: dict) -> dict:
     return dict(e, plain=p) if p else e
 
 
+def _approval_view(kind, title, detail, clean=None) -> dict:
+    """The plain line and file preview of an approval card (core.approval_view), redacted like the card's detail."""
+    try:
+        from meshpool_harness.agent.core import approval_view
+        v = approval_view(kind, title, detail)
+        if clean and v.get("file"):
+            v["file"] = dict(v["file"], text=clean(v["file"]["text"]))
+        return v
+    except Exception:  # noqa: BLE001 - the plain view is a help, never a second failure
+        return {}
+
+
 def _redact(text: str) -> str:
     from meshpool_harness.errors import tool_card    # a reopened chat's cards read like the live ones
     from meshpool_harness.redact import redact
@@ -1171,7 +1183,7 @@ class Session:
             if hasattr(self, "lock") and hasattr(self, "events"):   # a live chat: the card shows it, already closed
                 aid = "ap-" + uuid.uuid4().hex[:10]
                 self.emit({"type": "approval", "id": aid, "kind": kind, "title": title, "detail": detail,
-                           "options": options, "scope": scope})
+                           "options": options, "scope": scope, **_approval_view(kind, title, detail)})
                 self.emit({"type": "approval_done", "id": aid, "decision": "no", "reason": note})
             return "no", note
         auto = self._acp_always_pick(kind, detail, options, title)
@@ -1193,7 +1205,7 @@ class Session:
         except Exception:  # noqa: BLE001
             folder = True
         self.emit({"type": "approval", "id": aid, "kind": kind, "title": title, "detail": redact(detail),
-                   "options": options, "scope": scope, "folder": folder,
+                   "options": options, "scope": scope, "folder": folder, **_approval_view(kind, title, detail, redact),
                    "folder_name": os.path.basename(str(getattr(self, "workdir", "") or "").rstrip("/\\")) if folder else ""})
         if time.time() - getattr(self, "t_turn", time.time()) > 60:
             _notify(f"{self.agent.title or 'A task'} needs your approval", title)
@@ -3590,6 +3602,36 @@ _RAW_BYTES = [0]
 _RAW_CAP = 48 * 1024 * 1024          # characters x 2 copies; beyond it a file is read each time
 
 
+_MD_LINK = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+_MD_MARKS = re.compile(r"(\*\*|__|~~|`+)")
+
+
+def plain_markdown(text: str) -> str:
+    """Markdown as plain reading text: no **, `, #, list dashes or link targets (a search snippet is not the rendered reply)."""
+    t = _MD_LINK.sub(r"\1", str(text or ""))
+    t = re.sub(r"(?m)^\s{0,3}(#{1,6}|>|[-*+]|\d+[.)])\s+", "", t)
+    t = re.sub(r"(?m)^\s*\|?[\s:|-]{3,}\|?\s*$", " ", t)
+    t = _MD_MARKS.sub("", t)
+    t = re.sub(r"(?<![\w*])\*(?=\S)([^*\n]*?)\*(?![\w*])", r"\1", t)
+    t = t.replace("|", " ")
+    return " ".join(t.split())
+
+
+def _plain_snippet(text: str, q: str, words: list) -> str:
+    """About 160 characters of plain text around the first match, starting and ending at a whole word."""
+    plain = plain_markdown(text)
+    lo = plain.lower()
+    j = lo.find(q) if q in lo else min((lo.find(w) for w in words if w in lo), default=0)
+    a, b = max(0, j - 60), min(len(plain), j + 100)
+    if a > 0 and plain[a - 1] != " ":
+        k = plain.find(" ", a)
+        a = a if k < 0 or k >= j else k + 1
+    if b < len(plain) and plain[b] != " ":
+        k = plain.rfind(" ", j, b)
+        b = k if k > j else b
+    return ("…" if a > 0 else "") + plain[a:b].strip() + ("…" if b < len(plain) else "")
+
+
 def search(q: str) -> list:
     """Chats that hold every word of q, in any order and anywhere in the chat ("dropped rows" finds "rows were
     dropped"), newest first, with a snippet around the first place a word appears."""
@@ -3657,10 +3699,7 @@ def search(q: str) -> list:
         body = texts[1:] or texts                         # the words in the messages, not just in the title, make the snippet
         hit = next((s for s in body if q in s.lower()), None) or \
             max(body, key=lambda s: sum(w in s.lower() for w in words))
-        lo = hit.lower()
-        j = lo.find(q) if q in lo else min((lo.find(w) for w in words if w in lo), default=0)
-        snippet = " ".join(hit[max(0, j - 60): j + 100].split())
-        snippet = ("…" if j > 60 else "") + snippet + ("…" if j + 100 < len(hit) else "")
+        snippet = _plain_snippet(hit, q, words)
         hits.append({"id": d["id"], "title": title, "workdir": d.get("workdir"), "updated": d.get("updated", 0),
                      "snippet": snippet})
     return sorted(hits, key=lambda r: -r["updated"])[:50]

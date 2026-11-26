@@ -32,13 +32,13 @@ def _wrap(fn):
 
 def memory_save(fact: str) -> str:
     if not A.settings()["memory_on"]:
-        raise ToolFailed("The user turned memory off in Meshpool settings.")
+        raise ToolFailed("The user turned memory off in meshpool settings.")
     return A.remember(fact)
 
 
 def project_note(note: str, folder: str = "") -> str:
     if not A.settings()["memory_on"]:
-        raise ToolFailed("The user turned memory off in Meshpool settings.")
+        raise ToolFailed("The user turned memory off in meshpool settings.")
     root = folder or _project() or os.getcwd()
     return A.remember_project(root, note)
 
@@ -64,9 +64,9 @@ def schedule_task(prompt: str, when: str, name: str = "", time: str = "09:00", d
             pass
     t = A.add_task(name, prompt, when, time, day, at, minutes, folder or _project(),
                    "", mode, only_on_change, cron=cron)
-    return (f"Scheduled \"{t['name']}\" {A.describe(t)}. It runs while Meshpool is open on this computer; the user "
-            "can change or delete it in Settings, Scheduled tasks. To also run it while Meshpool is closed, they can turn on "
-            "\"Also run tasks when Meshpool is closed\" on the Scheduled tasks page.")
+    return (f"Scheduled \"{t['name']}\" {A.describe(t)}. It runs while meshpool is open on this computer; the user "
+            "can change or delete it in Settings, Scheduled tasks. To also run it while meshpool is closed, they can turn on "
+            "\"Also run tasks when meshpool is closed\" on the Scheduled tasks page.")
 
 
 def list_scheduled_tasks() -> str:
@@ -119,7 +119,7 @@ TOOLS = {
                          "command that runs its tests or build, a convention, where something lives, a known pitfall. "
                          "One short sentence. Not tasks or progress; never secrets.",
                          {"note": {"type": "string"}, "folder": {"type": "string"}}, ["note"]),
-    "memory_view": Tool(memory_view, "Show everything in Meshpool memory."),
+    "memory_view": Tool(memory_view, "Show everything in meshpool memory."),
     "memory_forget": Tool(_wrap(memory_forget), "Remove memory lines that contain the given text. Use it when the "
                           "user asks you to forget something or a saved fact is wrong.", {"text": {"type": "string"}},
                           ["text"]),
@@ -138,7 +138,7 @@ TOOLS = {
     "list_scheduled_tasks": Tool(list_scheduled_tasks, "List the scheduled tasks."),
     "delete_scheduled_task": Tool(_wrap(delete_scheduled_task), "Delete a scheduled task by id or name.",
                                   {"id": {"type": "string"}}, ["id"]),
-    "search_chats": Tool(_wrap(search_chats), "Search the user's earlier Meshpool chats for a topic, and get matching "
+    "search_chats": Tool(_wrap(search_chats), "Search the user's earlier meshpool chats for a topic, and get matching "
                          "chats with a snippet. Use it when the user refers to something from a past chat.",
                          {"query": {"type": "string"}}, ["query"]),
     "run_subtasks": Tool(_wrap(run_subtasks), "Run independent parts of a big job in parallel with sub-agents. Each "
