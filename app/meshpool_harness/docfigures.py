@@ -299,6 +299,28 @@ def _words(text: str) -> set[str]:
     return {w[:6] for w in re.findall(r"[a-z][a-z-]{3,}", str(text or "").lower()) if w not in _STOP}
 
 
+_DOC_EXT = re.compile(r"\.(?:pdf|docx|pptx)\b", re.I)
+_NAME_CH = re.compile(r"[\w .()\-]")
+NAME_MAX = 160                  # characters before ".pdf" looked at for the name (and the words before it)
+QUESTION_MAX = 8_000            # characters of a message searched for document names
+
+
+def _named_docs(question: str) -> list[str]:
+    """The "... name.pdf" runs in a message: each extension with the name characters just before it, at most NAME_MAX.
+    Linear in the message: the old lazy pattern retried from every start and took 56 s on 80 KB."""
+    own = str(question or "").split("\n\n​")[0][:QUESTION_MAX]
+    out, prev = [], 0
+    for m in _DOC_EXT.finditer(own):
+        k = m.start()
+        stop = max(prev, k - NAME_MAX)
+        while k > stop and _NAME_CH.match(own[k - 1]):
+            k -= 1
+        if k < m.start():
+            out.append(own[k:m.end()])
+        prev = m.end()
+    return out
+
+
 def docs_in_chat(root, messages: list, question: str = "") -> list[Path]:
     """The PDF, Word and PowerPoint files this chat is about, newest first: named in the question, attached to a
     message ("Attached files (in ...): a.pdf, b.docx") or read with read_document."""
@@ -316,9 +338,8 @@ def docs_in_chat(root, messages: list, question: str = "") -> list[Path]:
                 seen.append(q)
         except OSError:
             pass
-    own = str(question or "").split("\n\n​")[0]
-    for m in re.findall(r"[\w .()\-]+?\.(?:pdf|docx|pptx)\b", own, re.I):
-        words = m.split()                     # "the chart in report.pdf": the name is the shortest tail that exists
+    for m in _named_docs(question):
+        words = m.split()                    # "the chart in report.pdf": the name is the shortest tail that exists
         for k in range(1, len(words) + 1):
             n = len(seen)
             add(" ".join(words[-k:]))

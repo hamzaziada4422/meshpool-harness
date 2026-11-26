@@ -16,7 +16,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "app"))
 
 CHART_PY = "import matplotlib\nmatplotlib.use('Agg')\nimport pandas as pd\nprint('chart saved')\n"
-SCRATCH = "/tmp/claude-0/-home-user-x/9468bdd7/scratchpad"
+SCRATCH = "/tmp/mh-scratch"
 HEREDOC = f"S={SCRATCH}; mkdir -p $S; cat > $S/chart.py <<'EOF'\n{CHART_PY}EOF\npython3 $S/chart.py"
 PYSTEP = f'cd "{SCRATCH}/maya/home/Maya\'s Flowers" && python3 -I -c "\nimport openpyxl\nwb=openpyxl.load_workbook(\'price list.xlsx\')\nprint(wb.sheetnames)\n"'
 

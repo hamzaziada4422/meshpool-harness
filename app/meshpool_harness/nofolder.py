@@ -4,8 +4,11 @@ The chat has a private folder, so the file goes there and shows in the chat's fi
 reply says so in plain words and offers "Add a folder"; it never sends the user to "a session that has a shell".
 
 note(root, asked)   the hidden note for the model, or "" when this is not that case
-plain(text)         the reply with a "run this in a session that has a shell" sentence turned into the plain offer
-wants_folder(text)  True when a reply offers a folder (the app then shows an "Add a folder" button)
+plain(text, made_file)
+                    the reply with a "run this in a session that has a shell" sentence turned into the plain offer;
+                    left alone when the turn made a file
+wants_folder(text, made_file)
+                    True when a reply offers a folder (the app then shows an "Add a folder" button)
 """
 from __future__ import annotations
 
@@ -14,11 +17,17 @@ import re
 OFFER = ("I can save this file once the chat has a folder. Choose Add a folder in the sidebar, then send the request "
          "again.")
 
-_ELSEWHERE = re.compile(
-    r"[^.\n]*\b(?:run|use|try|do|open|paste)\b[^.\n]*\b(?:session|environment|setup|machine|terminal|tool)s?\b[^.\n]*"
-    r"\b(?:shell|terminal|command line|file writing|write files|file access)\b[^.\n]*\.?"
-    r"|[^.\n]*\b(?:session|environment|setup)\b[^.\n]*\b(?:has|have|with)\s+(?:a\s+|an\s+)?(?:shell|terminal|command line|"
-    r"file writing)\b[^.\n]*\.?", re.I)
+# A deflection is one sentence that names a place to go (a session, an environment, a setup, a machine) and what that
+# place has (a shell, a terminal, file writing), and sends the user away ("another session", "a session that has",
+# "an environment with a shell"). Each is a flat keyword search run on one sentence at a time: no nested wildcards, so a long reply
+# costs linear time (B2: the old single pattern took 36 s on 2 KB). "a terminal" alone is not a place: "Run the tests
+# in a terminal with the shell command `pytest -q`" is a correct reply, not a deflection.
+_PLACE = re.compile(r"\b(?:session|environment|setup|machine|computer)s?\b", re.I)
+_HAS = re.compile(r"\b(?:shell|terminal|command line|file writing|write files|file access)\b", re.I)
+_AWAY = re.compile(r"\b(?:another|a different|a separate|elsewhere|one that|that has|which has|with (?:a |an )?"
+                   r"(?:shell|terminal|command line|file writing))\b", re.I)
+# Sentence ends: . ! ? followed by white space or the end, or a line break. "plot.py" and "v1.2" are never split.
+_SENTENCE = re.compile(r"[^\n]*?(?:[.!?](?=\s|$)|\n|$)")
 _FOLDER = re.compile(r"\badd a folder\b", re.I)
 
 
@@ -39,15 +48,44 @@ def note(root, asked: str) -> str:
             "it elsewhere, in another session, or in a place that has a shell or file writing.")
 
 
-def plain(text: str) -> str:
-    """A sentence that sends the user to "a session that has a shell" becomes the plain offer."""
+def _sentences(text: str) -> list:
+    out, pos, n = [], 0, len(text)
+    while pos < n:
+        m = _SENTENCE.match(text, pos)
+        end = m.end() if m and m.end() > pos else n
+        out.append(text[pos:end])
+        pos = end
+    return out
+
+
+def _deflects(sentence: str) -> bool:
+    s = sentence[:2000]
+    return bool(_PLACE.search(s) and _HAS.search(s) and _AWAY.search(s))
+
+
+def plain(text: str, made_file: bool = False) -> str:
+    """A sentence that sends the user to "a session that has a shell" becomes the plain offer. Only whole sentences
+    are replaced, so a word or a file name is never cut; a reply whose turn made a file is left as it is."""
     t = str(text or "")
-    if not _ELSEWHERE.search(t):
+    if made_file or not wants_folder(t):
         return t
-    out = _ELSEWHERE.sub(OFFER, t, count=1)
-    return _ELSEWHERE.sub("", out).replace("  ", " ")
+    out, offered = [], False
+    for part in _sentences(t):
+        if not _deflects(part):
+            out.append(part)
+            continue
+        lead = part[:len(part) - len(part.lstrip())]
+        tail = part[len(part.rstrip()):]
+        if not offered:
+            out.append(lead + OFFER + tail)
+            offered = True
+        elif tail and "\n" in tail:
+            out.append(tail)
+    return "".join(out)
 
 
-def wants_folder(text: str) -> bool:
+def wants_folder(text: str, made_file: bool = False) -> bool:
     t = str(text or "")
-    return bool(_FOLDER.search(t) or _ELSEWHERE.search(t))
+    if _FOLDER.search(t):
+        return True
+    return not made_file and any(_deflects(p) for p in _sentences(t))

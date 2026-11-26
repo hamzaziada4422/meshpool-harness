@@ -864,8 +864,9 @@ class ACPAgent:
         """Before an outside engine works on a message that changes an office file open in Excel, Word or PowerPoint
         (its lock file is next to it): ask first, as meshpool's own agent does. The engine writes files itself, in its
         own sandbox, so this is the one moment meshpool can stop it. Returns the hidden note for the engine ("" when
-        the user said go ahead, or nothing is open)."""
-        if self.plan or self.mode == "auto" or not self.approve:
+        the user said go ahead, or nothing is open). It asks in Full access too: a live lock file means the user has
+        the file open, and the change would be lost when Office saves (release review, 0.0.18)."""
+        if self.plan or not self.approve:
             return ""
         from meshpool_harness import office_guard as OG
         try:

@@ -47,9 +47,9 @@ SARA = ["Budget_2026.xlsx has a wrong Total SUM in the Total column (it seems to
         "Update the numbers in Board_Update_Q3.pptx from Budget_2026.xlsx and fix the typo \"teh\" on every slide.",
         "In Expense_Policy.docx, shorten section 3 by about a third. Make it as tracked changes so I can review.",
         "Make a PDF of Board_Update_Q3.pptx that I can email to the board."]
-PRIYA_RAW = ("mkdir -p /tmp/claude-0/-tmp/852bb802/scratchpad/chk && soffice --headless --convert-to csv --outdir "
-             "/tmp/claude-0/-tmp/852bb802/scratchpad/chk rooms-summary.xlsx >/dev/null 2>&1; cat\n"
-             "[rooms-summary.csv](rooms-summary.csv)\n/tmp/claude-0/home/user/fakehome/Studio\n30000")
+PRIYA_RAW = ("mkdir -p /tmp/mh-scratch/chk && soffice --headless --convert-to csv --outdir "
+             "/tmp/mh-scratch/chk rooms-summary.xlsx >/dev/null 2>&1; cat\n"
+             "[rooms-summary.csv](rooms-summary.csv)\n/tmp/mh-scratch/home/Studio\n30000")
 
 
 def _soffice() -> bool:

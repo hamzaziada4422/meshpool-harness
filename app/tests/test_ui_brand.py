@@ -1,13 +1,17 @@
 """The UI is Meshpool's own: no other company's name or brand colour in the interface files. Comments may name sources
 the code reads from, and the Models and providers page names the sign-ins it finds on the computer (a tool, an
-environment variable): those lines are the only allowed mentions."""
+environment variable), and the chat import names the services whose export files it reads: those lines are the only
+allowed mentions."""
 import re
 from pathlib import Path
 
 UI = Path(__file__).resolve().parents[1] / "meshpool_harness" / "ui"
 FILES = ["app.js", "shell.js", "composer.js", "pages.js", "settings2.js", "projects.js", "company.js", "app.css", "shell.css", "index.html"]
 NAME = re.compile(r"claude|anthropic", re.I)
-ALLOWED = re.compile(r"claude_code|kind === \"claude\"|ANTHROPIC_API_KEY|Claude Code is installed|^\s*(//|/\*|\*)")
+# "ChatGPT or Claude": the chat import names the two services whose export files it reads (Settings, Import), so the
+# user knows which file to choose; round 3 asked for the names (test_round3_020).
+ALLOWED = re.compile(r"claude_code|kind === \"claude\"|ANTHROPIC_API_KEY|Claude Code is installed|ChatGPT or Claude|"
+                     r"^\s*(//|/\*|\*)")
 
 
 def test_no_other_brand_names_in_the_ui():
