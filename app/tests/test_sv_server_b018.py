@@ -284,6 +284,52 @@ def test_account_and_search_build_the_chat_list_once(httpd, tmp_path, monkeypatc
     assert HUB.TABS                                       # the module under test, imported for the patch above
 
 
+@pytest.fixture
+def live_chat(tmp_path, monkeypatch):
+    """A real built-in chat in an isolated data folder, open in LIVE (no MCP servers, no model)."""
+    from meshpool_harness import config as C
+    sessions = tmp_path / "sessions"
+    monkeypatch.setitem(A.Agent.__init__.__globals__, "SESSIONS", sessions)
+    monkeypatch.setattr(A, "SESSIONS", sessions)
+    monkeypatch.setattr(A.Session, "_start_mcp", lambda self: self._mcp_ready.set())
+    C.write({"MESHPOOL_API_KEY": "mk-123456789"})
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    s = A.Session(workdir=str(proj), harness="meshpool-code", kind="code")
+    monkeypatch.setitem(A.LIVE, s.id, s)
+    return s, proj
+
+
+# ---------------------------------------------------------------------------------------------------- SV-09
+def test_chat_view_does_not_reread_the_trust_files_every_time(httpd, live_chat, monkeypatch):
+    """SV-09: every chat view (each poll, each event-stream frame that is not plain text, each action's answer)
+    worked out the folder's trust note twice from scratch: the trusted-folders files and up to four project files,
+    read and parsed, plus path resolves, twice per view because message() ran needs_prompt() again. The note now comes
+    from a cache that is checked against those files' stamps, so a change still shows at once."""
+    from meshpool_harness import trust as TR
+    s, proj = live_chat
+    n = {"risky": 0}
+    real = TR.risky_files
+
+    def counted(root):
+        n["risky"] += 1
+        return real(root)
+    monkeypatch.setattr(TR, "risky_files", counted)
+    hdr = {"X-Meshpool-Token": S.TOKEN}
+    for _ in range(10):
+        st, body, _ = _get(httpd, f"/api/agent/{s.id}?since=0", hdr)
+        assert st == 200 and json.loads(body)["trust"] is None
+    assert n["risky"] <= 1, n
+    (proj / ".meshpool").mkdir()                          # a hooks file appears: the next view says so
+    (proj / ".meshpool" / "hooks.json").write_text('{"PreToolUse": [{"command": "echo hi"}]}')
+    st, body, _ = _get(httpd, f"/api/agent/{s.id}?since=0", hdr)
+    assert json.loads(body)["trust"]["files"] == [".meshpool/hooks.json"]
+    st, out = _post(httpd, "/api/trust", {"root": str(proj), "action": "trust"})
+    assert st == 200
+    st, body, _ = _get(httpd, f"/api/agent/{s.id}?since=0", hdr)
+    assert json.loads(body)["trust"] is None              # trusted: the note goes at once
+
+
 def _serve_quietly(monkeypatch, tmp_path, desktop: bool):
     """Run the real serve() on a free port with its background helpers stubbed; returns (port, stop)."""
     from meshpool_harness import autoupdate as AU
