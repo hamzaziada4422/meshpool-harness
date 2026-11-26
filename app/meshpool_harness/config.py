@@ -176,6 +176,20 @@ def home() -> Path:
     return Path(h).expanduser() if h else user_home_default()
 
 
+def upload_roots(chat: str | None = None) -> list[Path]:
+    """The attached-file folders one chat may read: its own runs/_uploads/chat-<id> and the folders that belong to no
+    chat (the company profile's files). Never _uploads itself, which lists every chat, and never another chat's
+    folder (release review, 0.0.18: dropped files moved there, and any chat could read every other chat's)."""
+    try:
+        up = (runs_dir() / "_uploads").resolve()
+        out = [up / f"chat-{chat}"] if chat else []
+        if up.is_dir():
+            out += [d.resolve() for d in up.iterdir() if d.is_dir() and not d.name.startswith("chat-")]
+        return out
+    except OSError:
+        return []
+
+
 def runs_dir() -> Path:
     return Path(os.environ["MH_RUNS_DIR"]) if os.environ.get("MH_RUNS_DIR") else home() / "runs"
 

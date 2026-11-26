@@ -986,6 +986,13 @@ class Session:
                 ev = dict(ev, text=NF.plain(ev["text"]))
         if t == "assistant" and "/" in str(ev.get("text") or ""):
             ev = self._no_dead_links(ev)
+        if t == "reply_trim":                         # the answer without its trailing promise (core): not a new bubble
+            with self.lock:
+                for e in reversed(self.events):
+                    if e.get("type") == "assistant" and not e.get("has_tools"):
+                        e["text"] = str(ev.get("text") or "")
+                        break
+            return
         if t == "turn_end":
             self._mark_retried_steps()               # failed steps a later step redid: not problems in the count
         if t == "status" and _RETRY_RE.search(str(ev.get("text") or "")):

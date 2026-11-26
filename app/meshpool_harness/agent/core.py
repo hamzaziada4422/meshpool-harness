@@ -1849,8 +1849,9 @@ def _test_summary(cmd: str, tail: str) -> str:
     runner = word if word in ("pytest", "py.test", "unittest", "go test", "cargo test", "jest", "vitest", "mocha",
                               "rspec", "phpunit", "npm test", "yarn test", "pnpm test", "dotnet test") else "tests"
     low = str(tail or "")
-    nums = [f"{n} {w}" for w in ("failed", "errors", "passed", "skipped")
-            for n in re.findall(r"\b(\d+) " + w + r"\b", low)[-1:]]
+    nums = [f"{n} {w}" + ("s" if w == "error" and n != "1" else "")           # "1 error" and "2 errors" both count
+            for w in ("failed", "error", "passed", "skipped")
+            for n in re.findall(r"\b(\d+) " + w + r"s?\b", low)[-1:]]
     ok = re.search(r"(?m)^Ran (\d+) tests?\b", low)
     if not nums and ok and re.search(r"(?m)^OK\b", low):
         nums = [f"{ok.group(1)} passed"]
@@ -1871,25 +1872,62 @@ def _tests_after_own_edit(cmd) -> bool:
     return False
 
 
-def _check_line(cmd: str, shown: str, code: int, tail: str = "") -> str:
-    """The receipt's verdict on the last command after the last change: never "passed" when the exit status could
+def _fails_of(c: dict) -> list:
+    """The failed test ids a recorded command reported (parsed again from its tail for older records)."""
+    return list(c.get("fails") or T.failed_test_ids(c.get("tail", "")))
+
+
+_FILE_WRITE_CMD = re.compile(r"\bsed\s+(?:-\w+\s+)*-\w*i|\btee\b|\bdd\b[^|;]*\bof=|\binstall\s+-m|\bcp\s|\bmv\s")
+
+
+def _writes_a_file(name: str, args: dict) -> bool:
+    """A shell call whose command redirects into a file, or is tee, sed -i, cp or mv: a file change that
+    apply_patch or the edit tool can make in its place."""
+    if name not in ("bash", "shell", "exec_command", "bash_start", "bash_many", "probe", "trace"):
+        return False
+    return any(PR.writes(c) or _FILE_WRITE_CMD.search(c) for c in PR.commands_of(name, args))
+
+
+def _is_test_cmd(cmd: str) -> bool:
+    """A real test or check run: it matches the runner words and is not a read-only command that only mentions them
+    (`cat tests/x.py`, `git diff --stat tests`)."""
+    return bool(_TEST_RUN.search(cmd or "")) and not T.read_only(cmd or "")
+
+
+def _without_failures(summ: str) -> str:
+    """"pytest, 14 passed" from "pytest, 2 failed, 14 passed"."""
+    return ", ".join(x for x in summ.split(", ") if not re.match(r"\d+ (?:failed|errors?)$", x))
+
+
+def _check_line(cmd: str, shown: str, code: int, tail: str = "", fails=None, before=None) -> str:
+    """The receipt's verdict on the check that ran after the last change: never "passed" when the exit status could
     not show a failure (a check piped into another command without pipefail), "no match" for a search that found
-    nothing, and the name of the test run when one verified the change ("Verified: pytest, 14 passed")."""
+    nothing, and the name of the test run when one verified the change ("Verified: pytest, 14 passed").
+    fails: the test ids that run reported failed; before: the ids that failed in a run before this turn's first edit
+    (None when there was no such run). Failures that were all there before are not this change's: "Verified: pytest,
+    14 passed (2 failures were there before this change)". Without the earlier ids it says the counts, not "Not
+    verified"."""
     if _no_match(cmd, code, tail):
         return f"`{shown}` found no match (exit 1 is how a search says so)"
     summ = _test_summary(cmd, tail)
     bad = bool(re.search(r"\b[1-9]\d* (?:failed|errors?)\b", summ))
+    if bad:
+        nf = sum(int(n) for n in re.findall(r"\b(\d+) (?:failed|errors?)\b", summ))
+        if before is not None and fails and set(fails) <= set(before) and len(set(fails)) >= nf:
+            were = "failures were" if nf != 1 else "failure was"
+            return f"Verified: {_without_failures(summ)} ({nf} {were} there before this change)"
+        if before is not None and fails:
+            return f"Not verified: {summ}"
+        return summ.replace(", ", ": ", 1)          # "pytest: 2 failed, 14 passed", with no earlier ids to compare
     if code != 0:
         return f"`{shown}` FAILED (exit {code})" + (f": {summ}" if summ else "")
-    if bad:
-        return f"Not verified: {summ}"
     if summ:                                    # the runner's own summary line shows it passed, pipe or not
         return f"Verified: {summ}"
     if _piped_check_hides_status(cmd):
-        return (f"`{shown}` ran (exit status is the last command's in the pipe; failures before it are not visible)"
+        return (f"Not verified: `{shown}` ran (exit status is the last command's in the pipe; failures before it are not visible)"
                 + (f": {summ}" if summ else ""))
     if _TEST_RUN.search(cmd or "") and re.search(r"\|\|\s*(?:true\b|:(?=\s|;|$)|exit\s+0\b)", cmd or ""):
-        return f"`{shown}` ran (its exit status is ignored by `|| true`, so a failure would not show)"
+        return f"Not verified: `{shown}` ran (its exit status is ignored by `|| true`, so a failure would not show)"
     return f"`{shown}` passed"
 
 
@@ -3157,16 +3195,52 @@ def approval_view(kind: str, title: str, detail: str) -> dict:
     if "<<" in d:
         head, bodies = _strip_heredocs(d)
         w = re.search(r"(?:\bcat|\btee(?:\s+-a)?)\s*(?:>>?\s*)?(?P<f>[^\s<>|;&]+)\s*<<|\bcat\s*>>?\s*(?P<g>[^\s<>|;&]+)\s*<<", head)
-        name = os.path.basename((w.group("f") or w.group("g") or "").strip("'\"")) if w else ""
-        if name and bodies:
+        tgt = (w.group("f") or w.group("g") or "").strip("'\"") if w else ""
+        name = os.path.basename(tgt)
+        ran = bool(name) and bool(re.search(r"(?:python[\d.]*|node|Rscript|ruby|perl|bash|sh)\s+\S*" + re.escape(name), head))
+        # release review, 0.0.18: the plain line names the file only when writing it (and setting up for it, and
+        # running it) is ALL the command does: "Save notes.txt" over a trailing `rm -rf ~/Documents && curl ...`
+        # left the rest to the folded Details. And it says where the file goes when that is not this folder.
+        if name and bodies and _only_writes(head, name) and not re.match(r"(?:this deletes|run this destructive)",
+                                                                          line, re.I):
             text = bodies[0].rstrip()
             lines = text.split("\n")
             if len(lines) > 40 or len(text) > 3000:
                 text = "\n".join(lines[:40])[:3000].rstrip() + "\n..."
-            ran = bool(re.search(r"(?:python[\d.]*|node|Rscript|ruby|perl|bash|sh)\s+\S*" + re.escape(name), head))
-            out["file"] = {"name": name, "text": text, "run": ran}
-            out["sum"] = f"Save {name}" + (" and run it" if ran else "")
+            where, shown = _write_place(head, tgt)
+            out["file"] = {"name": name, "text": text, "run": ran, "where": where, "path": shown}
+            out["sum"] = f"Save {name}" + {"in": "", "temp": " in a temporary folder",
+                                            "outside": f" outside this folder ({shown})"}[where] + \
+                (" and run it" if ran else "")
     return out
+
+
+def _only_writes(head: str, name: str) -> bool:
+    """Every step of a heredoc script (bodies taken out) only writes `name`, sets up for it (cd, mkdir, VAR=...,
+    ls, echo) or runs it."""
+    for seg in PR._segments(head):
+        w = seg.split()
+        while w and re.match(r"^[A-Za-z_]\w*=\S*$", w[0]):
+            w = w[1:]
+        if not w or "<<" in seg or w[0] in ("cd", "mkdir", "ls", "echo", "true", "export", "set"):
+            continue
+        if re.match(r"(?:python[\d.]*|node|Rscript|ruby|perl|bash|sh)$", os.path.basename(w[0])) and \
+                any(os.path.basename(x.strip("'\"")) == name for x in w[1:]):
+            continue
+        return False
+    return True
+
+
+def _write_place(head: str, tgt: str) -> tuple:
+    """Where a heredoc writes: ("in", name) in this folder, ("temp", path) a temporary folder, ("outside", path)."""
+    vals = dict(re.findall(r"(?:^|[;&|\n]\s*|\s)([A-Za-z_]\w*)=([^\s;&|$`]+)", head))
+    t = re.sub(r"\$\{?([A-Za-z_]\w*)\}?", lambda m: vals.get(m.group(1), m.group(0)), tgt).strip("'\"")
+    if _SCRATCH_PATH.match(t) or t.startswith(("$TMPDIR", "${TMPDIR")):
+        return "temp", ""                                 # a scratch path never reaches the card
+    if t.startswith(("/", "~", "$", "\\")) or re.match(r"[A-Za-z]:[\\/]", t) or ".." in t.replace("\\", "/").split("/"):
+        home = os.path.expanduser("~")
+        return "outside", ("~" + t[len(home):] if home and t.startswith(home + os.sep) else t)
+    return "in", t
 
 
 class Agent:
@@ -4121,6 +4195,7 @@ class Agent:
         self._todo_touched = False
         self.ws.turn_files = set()
         self.ws.turn_new = set()
+        self.ws.turn_edits0, self.ws.turn_cmd0 = self.ws.edits, len(self.ws.commands)   # the receipt's baseline test run
         g = {"hist": [], "doom_at": -10, "seen": set(), "edits": self.ws.edits, "edits0": self.ws.edits, "last": 0,
              "cmds0": len(self.ws.commands), "t0": time.time(),
              "todo_nudged": False}
@@ -4491,6 +4566,7 @@ class Agent:
                     again, final = self._grade_gate(g, turn, final)   # independent check of a big task (agent/grader.py)
                     if again:
                         continue
+                    final = self._without_trailing_promise(final)
                     break
                 if tools_off and os.environ.get("MH_REPEAT_STOP", "8") != "0":
                     g["off_calls"] = g.get("off_calls", 0) + 1     # tools were off for this reply, yet it asked for some
@@ -5684,11 +5760,14 @@ class Agent:
         after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits and c.get("kind") != "read"]
         if after:
             real = [c for c in after if not _no_match(c["cmd"], c["code"], c.get("tail", ""))]
-            last = (real or after)[-1]          # a search that found nothing is not the check
+            tests = [c for c in real if _is_test_cmd(c["cmd"])]
+            last = (tests or real or after)[-1]  # a search that found nothing is not the check; nor is a read-only
+                                                 # command that ran after the tests (git diff --stat)
             # the command, not the `cd <long project path> &&` the model put in front of it
             cmd = re.sub(r"^\s*cd\s+(\"[^\"]*\"|'[^']*'|\S+)\s*&&\s*", "", last["cmd"]).strip() or last["cmd"]
             cmd = cmd.splitlines()[0][:80]
-            check = _check_line(last["cmd"], cmd, last["code"], last.get("tail", ""))
+            check = _check_line(last["cmd"], cmd, last["code"], last.get("tail", ""),
+                                _fails_of(last), Agent._fails_before_turn(self))
             check += f" ({len(after)} command{'s' if len(after) > 1 else ''} after the last change)"
         else:
             check = "nothing was run after the last change, so it is not verified"
@@ -5701,6 +5780,39 @@ class Agent:
             from meshpool_harness.agent import grader as GR
             check += "  \n**Independent check:** " + GR.receipt_line(rv)
         return f"**Changed:** {', '.join(parts)}{more}  \n**Checked:** {check}"
+
+    def _without_trailing_promise(self, final: str) -> str:
+        """The turn ended with no tool call, and its last paragraph still promises an action ("I'll retry the commit
+        as before..."), after the promise nudge fired or when it did not apply. The answer above it says what
+        happened; the promise would contradict it. Drop that paragraph from what is shown (the chat, -p, the reply
+        the run returns) and keep the full reply in the run's turn.log. A reply that is only the promise stays."""
+        paras = re.split(r"\n\s*\n", str(final or "").rstrip())
+        if len(paras) < 2 or len(paras[-1]) > 300 or not _announces_action(paras[-1]) \
+                or not "".join(paras[:-1]).strip():
+            return final
+        kept = str(final).rstrip()[:len(str(final).rstrip()) - len(paras[-1])].rstrip()
+        try:
+            with (self.ws.run_dir / "turn.log").open("a", encoding="utf-8", errors="replace") as f:
+                f.write("\n[dropped trailing promise]\n" + paras[-1] + "\n")
+        except (OSError, AttributeError):
+            pass
+        for m in reversed(self.messages):                  # the chat shows the answer without it
+            if m.get("role") == "assistant" and not m.get("tool_calls"):
+                if isinstance(m.get("content"), str) and m["content"].rstrip().endswith(paras[-1]):
+                    m["content"] = kept
+                break
+        self.emit({"type": "reply_trim", "text": kept})
+        return kept
+
+    def _fails_before_turn(self):
+        """The test ids that failed in the last test run before this turn's first edit; None when none ran then."""
+        ws = self.ws
+        e0, c0 = getattr(ws, "turn_edits0", None), getattr(ws, "turn_cmd0", 0)
+        if e0 is None:
+            return None
+        before = [c for c in ws.commands[c0:] if c.get("after_edit", -1) <= e0 and _is_test_cmd(c["cmd"])
+                  and _test_summary(c["cmd"], c.get("tail", ""))]
+        return set(_fails_of(before[-1])) if before else None
 
     def _turn_line_stats(self) -> dict:
         """{path: "+a -d"} of the open turn from the chat's checkpoint: the lines this turn changed, not the user's
@@ -7049,7 +7161,7 @@ class Agent:
             return f"Read {p[:80]} (outside the project)?"
         # the project, folders the user added (/add-dir), this chat's own tool output and the files the user
         # attached; never other chats' histories
-        ok = [self.ws.root, *getattr(self.ws, "extra_roots", []), self.dir.resolve(), (C.runs_dir() / "_uploads").resolve()]
+        ok = [self.ws.root, *getattr(self.ws, "extra_roots", []), self.dir.resolve(), *C.upload_roots(self.id)]
         return "" if any(q == r or r in q.parents for r in ok) else f"Read {str(q)[:120]} (outside the project)?"
 
     # A new deck or workbook written in code instead of through the engines (python-pptx, openpyxl, xlsxwriter,
@@ -7222,6 +7334,10 @@ class Agent:
                 self._edit_unasked(name, args):
             return True, ""                    # auto-accept edits: file changes in the folder go through
         if self.mode == "edits" and not risky and self._git_local_ok(name, args):
+            if self._sandboxed():              # release review: local git needs no network, and hides no secrets
+                script = (T.shell_script(args.get("command")) if name == "shell"
+                          else str(args.get("cmd") if name == "exec_command" else args.get("command") or ""))
+                self.ws.__dict__.setdefault("sbx_offline", set()).add(script.strip())
             return True, ""                    # local git writes in the project repo (add, commit, stash...)
         if office_w and not risky and not orisk and not destr and (
                 self.mode == "edits" or self.mode == "ask" and self._work_without_asking()):
@@ -7567,6 +7683,11 @@ class Agent:
                 denied, ok = True, False
                 out = "The user denied this action." + (f" Their note: {note}" if note else "") + \
                     " Do not retry it. Take another approach or ask the user."
+                if not self.approve and _writes_a_file(name, args):      # -p: nobody can say yes, so say what works
+                    have = [n for n in ("apply_patch", "edit") if n in self._tool_names()] or ["edit"]
+                    out += (f" This command writes a file. Make the same change with {' or '.join(have)}"
+                            f"{' (or the edit tool)' if have == ['apply_patch'] else ''}, "
+                            "which file edits in the project go through, and then run the tests.")
                 try:
                     from meshpool_harness.agent import extras as EXD
                     _, hn = EXD.run_hooks(self.root, "PermissionDenied", {"reason": str(note or "")[:2000]},

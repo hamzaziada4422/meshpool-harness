@@ -179,19 +179,26 @@ _SOFFICE = re.compile(r"(?:^|[\s;&|(/])(?:soffice|libreoffice|soffice\.bin)\b[^;
                       r"[^;&|]*?(?:^|\s)['\"]?([^\s'\";&|]+\.\w{2,5})['\"]?(?=\s*(?:$|[;&|)]|2>|>|--))", re.I)
 
 
-_HELPERS = {"cd", "mkdir", "ls", "echo", "cp", "timeout", "soffice", "libreoffice", "soffice.bin", "pdfinfo", "export",
-            "true", "env"}
+# steps that only set up a conversion. Not env or timeout: they run whatever follows them (release review, 0.0.18:
+# `env rm -rf ~/Documents; soffice --convert-to pdf a.docx` was titled "Convert a.docx to PDF")
+_HELPERS = {"cd", "mkdir", "ls", "echo", "cp", "soffice", "libreoffice", "soffice.bin", "pdfinfo", "export", "true"}
 
 
 def plain_command_title(cmd: str) -> str:
     """A command's approval card title in plain words, for the kinds people meet in office work, else "". The raw
     command goes in the card's Details fold."""
     c = str(cmd or "")
+    if re.search(r"\$\(|`|<\(|>\(", c):
+        return ""                                      # a substitution runs a command of its own: the ordinary card
     m = _SOFFICE.search(c)
     # never milder than the command: only when every other step is a harmless helper (cd, mkdir, ls, echo, a copy
     # of the input, pdfinfo); "soffice ...; rm -rf x" keeps the ordinary command card
     for step in re.split(r"&&|\|\||[;|\n]", c):
         words = [w for w in step.split() if not re.match(r"[A-Za-z_]\w*=", w)]
+        while words and words[0] in ("timeout", "env"):          # judge what the wrapper runs, not the wrapper
+            words = words[1:]
+            while words and (words[0].startswith("-") or re.match(r"^\d+[smhd]?$", words[0])):
+                words = words[1:]
         if words and os.path.basename(words[0]) not in _HELPERS and not re.match(r"\d*>|2>&1", words[0]):
             return ""
         if words and words[0] == "cp" and not words[-1].startswith(("/tmp/", "$TMPDIR", "${TMPDIR")):

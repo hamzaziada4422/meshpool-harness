@@ -153,7 +153,7 @@ def test_the_approval_view_shows_the_file_under_its_name_and_no_scratch_path():
     from meshpool_harness.agent.core import approval_view
     v = approval_view("bash", "Write chart.py and run it (a Python step)?", HEREDOC)
     assert v["file"]["name"] == "chart.py" and v["file"]["run"] and "matplotlib" in v["file"]["text"], v
-    assert v["sum"] == "Save chart.py and run it"
+    assert v["sum"] == "Save chart.py in a temporary folder and run it"     # release review: says where it goes
     blob = json.dumps(v)
     assert "/tmp/" not in blob and "mkdir" not in blob and "<<" not in blob, blob
     w = approval_view("bash", "Run a Python step on price?", PYSTEP)

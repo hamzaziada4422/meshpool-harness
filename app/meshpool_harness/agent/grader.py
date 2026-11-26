@@ -637,7 +637,7 @@ def make_agent(parent, emit, stop_check=None):
                 return False, ("the reviewer may only run commands that read, or the project's own tests "
                                "(pytest, npm test, go test, cargo test)")
             if self.mcp and _Mcp.ok(name):
-                if DL._mcp_paths_outside(parent.root, args):
+                if DL._mcp_paths_outside(parent.root, args, getattr(parent, 'id', None)):
                     return False, "the reviewer only reads inside the project"
                 return True, ""
             return False, "the reviewer cannot use this tool: it only reads and runs checks"
