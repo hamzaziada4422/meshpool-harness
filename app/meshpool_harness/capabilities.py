@@ -59,7 +59,9 @@ _WEAK_RX = {k: _rx(v) for k, v in _WEAK.items()}
 SEP = "\n\n​"                       # notes only the model sees follow this (pace.SEP)
 
 
-_FILE = re.compile(r"[\w][\w .()-]*\.(?:xlsx?|xlsm|docx?|pptx?)(?![\w])", re.I)
+# A word, then name characters, then an office extension. The match may start only where a run of name characters
+# starts, so one long run (a pasted blob) is scanned once, not once per character: linear, not quadratic.
+_FILE = re.compile(r"(?<![\w .()-])[ .()-]*\w[\w .()-]*\.(?:xlsx?|xlsm|docx?|pptx?)(?![\w])", re.I)
 _EDIT = re.compile(r"\b(add|raise|lower|change|fix|update|replace|edit|modify|rename|delete|remove|insert|set|correct|"
                    r"adjust|increase|decrease|fill|append|reformat|format|sort|filter|swap|highlight|translate|"
                    r"proofread|tidy|clean up|shorten|rewrite|tweak|bump|apply)\b", re.I)

@@ -491,6 +491,20 @@ class _EndpointDown(RuntimeError):
     """The endpoint stayed down for the whole recovery wait: report it, do not wait again."""
 
 
+class _ModelFailing(RuntimeError):
+    """The model answered every try with a server error (5xx) until the retries were used up."""
+
+
+def _clip(text: str, n: int = 120) -> str:
+    """text on one line, at most n characters, cut at a word with an ellipsis when it is longer."""
+    t = " ".join(str(text).split())
+    if len(t) <= n:
+        return t
+    cut = t[:n - 1]
+    sp = cut.rfind(" ")
+    return (cut[:sp] if sp > n // 2 else cut).rstrip(" ,;:") + "…"
+
+
 def _urlopen(req, timeout: float, sink):
     """urllib.request.urlopen with the connection handed to sink (proxies from the environment as usual)."""
     from meshpool_harness.core import endpoint as _EP
@@ -3393,6 +3407,9 @@ class Agent:
                        "the key's limit, or pick another model or key in Settings, then send \"continue\".")
             elif re.search(r"rejected the API key|stopped accepting the API key", msg):
                 msg = "The endpoint rejected the API key. Check it in Settings, then send your message again."
+            elif isinstance(e, _ModelFailing):       # every retry got a server error: waiting a moment will not help
+                msg = ("The model keeps failing: it returned a server error on every try. Everything done so far is "
+                       "kept. Switch to another model and send \"continue\", or try this one again later.")
             elif re.search(r"HTTP 0|connection problem|timed out|urlopen error", msg, re.I) and \
                     "answers small requests" not in msg and self._recover_off():
                 msg = (f"Couldn't reach the model endpoint ({self._endpoint_host()}). Check the network and the "
@@ -3412,7 +3429,7 @@ class Agent:
                 _lighten(self.messages)                # the next message starts lighter, on a fresh route
                 self.rotate_route()
             if msg != raw:
-                msg += f" ({raw[:120]})"               # the detail, for support and the command line
+                msg += f" ({_clip(raw)})"              # the detail, for support and the command line
             rid = getattr(self, "last_request_id", "")
             if rid and rid not in msg:
                 msg += f" Request id: {rid}."
@@ -4963,7 +4980,7 @@ class Agent:
                         continue
                     if attempt >= 5:                       # up, yet this conversation's requests keep failing
                         if re.search(r"HTTP 5\d\d", msg):  # the endpoint itself fails: no claim that it is fine
-                            raise RuntimeError(msg)
+                            raise _ModelFailing(msg) from e
                         raise RuntimeError(msg + " (the endpoint answers small requests, but this conversation's "
                                            "requests keep failing)")
                     if re.search(r"timed out", msg, re.I):   # up but slow to start (prefill, a queue): wait longer
@@ -4976,6 +4993,8 @@ class Agent:
                         stream = False
                         self.emit({"type": "status", "text": "Trying again without streaming."})
                 elif attempt >= 5:
+                    if re.search(r"HTTP 5\d\d", msg):      # a server error on every try: the model keeps failing
+                        raise _ModelFailing(msg) from e
                     raise
                 stalled = re.search(r"HTTP 5\d\d|timed out", msg, re.I)   # 5xx, or no byte back within the timeout
                 if stalled and attempt >= 1:               # a big request that keeps failing upstream:

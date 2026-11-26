@@ -238,6 +238,21 @@ def _restart_or_recover(UP, AU) -> None:
             pass
 
 
+class MissingField(KeyError):
+    """A request body without a field the route needs: a 400 that names it, not a 404 (a KeyError means not found)."""
+
+    def __init__(self, field):
+        super().__init__(field)
+        self.field = str(field)
+
+
+class _Body(dict):
+    """A JSON object from a request body. Reading a field it does not have raises MissingField."""
+
+    def __missing__(self, key):
+        raise MissingField(key)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "Meshpool"
 
@@ -295,7 +310,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _json(self) -> dict:
         raw = self._body()
-        d = json.loads(raw.decode("utf-8")) if raw else {}
+        d = json.loads(raw.decode("utf-8"), object_hook=_Body) if raw else _Body()
         if not isinstance(d, dict):
             raise ValueError("The request must be a JSON object.")
         return d
@@ -1212,6 +1227,8 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/agent/([\w-]+)/(send|stop|answer|mode|compact|grade|take_back)", u.path)
             if m:
                 return self._send(200, A.session_action(m.group(1), m.group(2), self._json()))
+        except MissingField as e:                 # the request lacks a field: say which, as a bad request
+            return self._send(400, {"error": f"Missing field: {e.field}."})
         except KeyError as e:
             msg = str(e).strip("'\"")
             if not msg or msg == "None":

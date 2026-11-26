@@ -218,6 +218,20 @@ def models(refresh: bool = False) -> dict:
             "error": "" if any(g["ready"] for g in groups) else err, "base_url": base}
 
 
+def known_models() -> set | None:
+    """Model ids the key endpoint serves, from the list models() last read for the endpoint set up now, plus the
+    names set up by hand (the default model, which may be one the list lacks, and favorites). None when no list is
+    known (offline, not read yet, or an endpoint without a list): then any name may be right."""
+    from meshpool_harness import providers as _PV
+    base, key, _src = _PV.endpoint_pair()
+    if _MODELS["key"] != base + "|" + key[-6:] or not _MODELS["rows"]:
+        return None
+    vals = C.read()
+    mine = [vals.get("MH_MODEL") or os.environ.get("MH_MODEL") or "",
+            *(vals.get("MH_FAVORITE_MODELS") or "").split(","), _PV.env_deployment()]
+    return {r["id"] for r in _MODELS["rows"]} | {_PV.split(m)[1] for m in mine if m}
+
+
 def set_default_model(mid: str) -> dict:
     C.write({"MH_MODEL": str(mid or "").strip()})   # may carry a provider prefix
     C.load_into_env(override=True)
@@ -412,6 +426,18 @@ def _gh_git_env(env: dict) -> dict:
     return dict(env, MESHPOOL_GH_TOKEN=tok) if tok else env
 
 
+def _git_cmd(args) -> str:
+    """The git command in args ("commit" in `-c user.name=X commit -m ...`): the first word that is neither an
+    option nor the value of a -c or -C before it."""
+    it = iter(args)
+    for a in it:
+        if a in ("-c", "-C"):
+            next(it, None)
+        elif not str(a).startswith("-"):
+            return str(a)
+    return ""
+
+
 def _git(root: Path, *args, check=True, timeout=60) -> str:
     g = git_exe()
     if not g:
@@ -427,11 +453,10 @@ def _git(root: Path, *args, check=True, timeout=60) -> str:
         r = subprocess.run([g, *safe, *extra, *args], cwd=str(root), capture_output=True, text=True, encoding="utf-8",
                            errors="replace", timeout=timeout, creationflags=NO_WINDOW, env=env)
     except subprocess.TimeoutExpired:
-        raise ValueError(f"git {args[0] if args else ''} took too long and was stopped. Check your network "
+        raise ValueError(f"git {_git_cmd(args)} took too long and was stopped. Check your network "
                          "connection and try again.") from None
     if check and r.returncode != 0:
-        raise ValueError((r.stderr or r.stdout).strip()[-800:]
-                         or f"git {next((a for a in args if not a.startswith('-')), 'command')} failed")
+        raise ValueError((r.stderr or r.stdout).strip()[-800:] or f"git {_git_cmd(args) or 'command'} failed")
     return r.stdout
 
 
