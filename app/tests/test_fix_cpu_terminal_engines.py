@@ -128,12 +128,6 @@ def test_status_line_folder_check_is_kept_until_the_git_config_changes(tmp_path,
 
 
 # ---------------------------------------------------------------- streaming a long line
-def _old_tail(partial: str, width: int) -> str:
-    tail = partial.replace("\t", "    ")
-    w = width - 4
-    return "  " + (tail if R.vlen(tail) <= w else "…" + tail[-(w - 1):])
-
-
 def test_a_long_streamed_line_is_measured_at_its_end_only(monkeypatch):
     from testkit import cli_v2_shots as S
     t, out, clk = S.make_terminal()
@@ -154,8 +148,10 @@ def test_a_long_streamed_line_is_measured_at_its_end_only(monkeypatch):
             before = counted[0]
             t.emit({"type": "text_delta", "text": word})
             per_token.append(counted[0] - before)
-            if i in (5, 50, 599):
-                assert t._turn_live()[0][0] == R.clip(_old_tail(t._partial, t.width), t.width - 1)   # same line
+            if i in (5, 50, 599):                         # OM-08: the paragraph shows word-wrapped, its end last
+                rows = t._turn_live()[0][:-1]
+                assert rows and len(rows) <= t.LIVE_ROWS and all(R.vlen(r) <= t.width - 1 for r in rows)
+                assert t._partial.replace("\t", " ").endswith(rows[-1][2:])
         assert max(per_token[-50:]) <= 2 * max(per_token[:50]) + 50  # flat, not growing with the line (was O(n))
         assert max(per_token) < 10 * t.width
     finally:

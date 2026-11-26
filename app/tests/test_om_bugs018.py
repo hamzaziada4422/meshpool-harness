@@ -371,3 +371,69 @@ def test_om06_exit_typed_while_the_agent_works_stops_the_turn_and_quits(home, pr
     saved = [SS.read(d) for d in (mh / "runs" / "sessions").iterdir()]
     msgs = [m for sd in saved for m in sd["messages"]]
     assert any(m["role"] == "assistant" and str(m["content"]).endswith(core.STOPPED_MARK) for m in msgs), msgs
+
+
+# ---------------------------------------------------------------------------------------------------- OM-08
+def test_om08_a_streaming_paragraph_shows_as_wrapped_rows_while_it_streams():
+    """OM-08: the answer being streamed showed as one clipped line ("…the app. This is a long") next to the spinner
+    and could not be read until the paragraph ended. It now shows as word-wrapped rows."""
+    from testkit import vt
+    out = io.StringIO()
+    t = T.Terminal(out=out, width=60, interactive=True, clock=lambda: 0.0)
+    t.turn_begin()
+    words = [f"word{i}" for i in range(60)]
+    for w in words:
+        t.emit({"type": "text_delta", "text": w + " "})
+    lines, _ = t._turn_live()
+    rows = [ln.strip() for ln in lines[:-1]]
+    assert len(rows) == T.Terminal.LIVE_ROWS and all(len(ln) <= 60 for ln in lines)
+    assert " ".join(rows).split() == words[-len(" ".join(rows).split()):]        # whole words, in order, no "…"
+    assert "…" not in " ".join(rows)
+    t._turn = False
+    t.emit({"type": "text_delta", "text": "\n"})
+    screen = vt.render(out.getvalue(), 60).text()
+    assert " ".join(screen.split()).count("word0 word1 word2") == 1                 # the paragraph is printed once
+
+
+def test_om08_p_prints_no_ctrl_o_hint_and_no_exec_command_header_lines():
+    """OM-08: `meshpool -p` printed "ctrl+o to expand" (no key can be pressed) and exec_command's lines meant for the
+    model (Chunk ID, Wall time, Original token count)."""
+    from meshpool_harness.core import tools as CT
+    out = io.StringIO()
+    t = T.Terminal(print_mode=True, out=out, interactive=False)
+    t.info = out
+    body = "\n".join(f"line {i}" for i in range(30))
+    t.emit({"type": "tool_start", "id": "c1", "name": "exec_command", "summary": "python3 -m pytest -q"})
+    t.emit({"type": "tool_end", "id": "c1", "name": "exec_command", "ok": True,
+            "output": CT.exec_result(body, 0, 0.42)})
+    text = out.getvalue()
+    for bad in ("ctrl+o", "Chunk ID", "Wall time", "Original token count", "Output:"):
+        assert bad not in text, bad
+    assert "line 29" in text and "earlier lines)" in text
+
+
+def test_om08_undo_picker_numbers_each_turn_once_and_says_what_was_undone(home, proj, monkeypatch, capfd):
+    """OM-08: the /undo picker read "1. 1. explain storage.py", and after Undo the terminal said only "Undone. No
+    files had changed." although the turn had left the conversation."""
+    script(monkeypatch, "it reads the csv", "it writes the csv")
+    out = io.StringIO()
+    t = T.Terminal(print_mode=False, out=out, interactive=False)
+    t.info = out
+    s = chats.get(chats.create({"workdir": str(proj), "no_mcp": True})["id"])
+    front = T.TermFrontend(s, t)
+    sess = T.Session(t, s.agent, None, None, front=front)
+    sess.send("explain storage.py")
+    sess.send("and save()")
+    shown = []
+
+    def choose(title, detail, options, **k):
+        shown.append(options)
+        return 1 if title.startswith("Undo from") else 0
+    t.choose = choose
+    sess.command("/undo")
+    assert shown[0][0].startswith("explain storage.py") and not shown[0][0].startswith("1.")
+    text = out.getvalue()
+    assert "The conversation is back to before turn 2 (and save())" in text
+    assert [m["content"] for m in s.agent.messages if m["role"] == "user"][-1].startswith("explain storage.py")
+    assert A.undo_message({"conversation": False})[0].startswith("Nothing to undo")
+    assert A.undo_message({"conversation": True})[0] == "Undone. No files in this chat's folder had changed."

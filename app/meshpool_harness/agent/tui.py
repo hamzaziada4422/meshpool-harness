@@ -291,21 +291,29 @@ class Terminal:
             self._write(self._clear_seq() + "\n".join(lines) + "\n" + self._paint_seq())
 
     # ---------- spinner ----------
+    LIVE_ROWS = 6                                  # rows of a streaming paragraph shown above the spinner
+
+    def _live_rows(self) -> list[str]:
+        """The paragraph being streamed, word-wrapped, its last LIVE_ROWS rows (OM-08: it was one clipped line that
+        could not be read while it streamed). Redrawn on every token, so only the open last row is wrapped again:
+        rows before it are final (R.word_wrap is greedy) and kept, which keeps a long paragraph O(n)."""
+        p, w = self._partial.replace("\t", " "), max(8, self.width - 4)
+        pw = self.__dict__.get("_pw")
+        if pw is None or pw["w"] != w or pw["start"] > len(p):
+            pw = self._pw = {"w": w, "start": 0, "rows": []}
+        seg = p[pw["start"]:]
+        starts = R.word_wrap(seg, w)
+        for a, b in zip(starts, starts[1:]):
+            pw["rows"].append(seg[a:b].rstrip())
+        pw["rows"] = pw["rows"][-self.LIVE_ROWS:]
+        pw["start"] += starts[-1]
+        return (pw["rows"] + [seg[starts[-1]:]])[-self.LIVE_ROWS:]
+
     def _turn_live(self):
-        lines = []
-        if self._partial:
-            # Redrawn on every streamed token: measure only the end of a long line. A model writes a paragraph as one
-            # line, and measuring all of it each token made a long paragraph cost O(n^2). The last 2w+8 characters
-            # already being wider than w means the whole line is (no character is narrower than 0 columns).
-            w = self.width - 4
-            p, k = self._partial, 2 * max(w, 1) + 8
-            tail = p[-k:].replace("\t", "    ")
-            if not (len(p) > k and R.vlen(tail) > w):
-                tail = p.replace("\t", "    ")
-            lines.append("  " + (tail if R.vlen(tail) <= w else "…" + tail[-(w - 1):]))
+        # the reply's rows already fit (word_wrap at width - 4): only the spinner line is measured on each redraw
+        lines = ["  " + r for r in self._live_rows()] if self._partial else []
         secs = int(self.clock() - self._busy_t0) if self._busy_t0 is not None else 0
-        lines.append(" " + R.spinner_line(self.st, self._frame, self._label or "Working", secs))
-        lines = [R.clip(x, self.width - 1) for x in lines]
+        lines.append(R.clip(" " + R.spinner_line(self.st, self._frame, self._label or "Working", secs), self.width - 1))
         return lines, (len(lines) - 1, 0)
 
     def turn_begin(self):
@@ -460,6 +468,7 @@ class Terminal:
         while "\n" in self._partial:
             line, self._partial = self._partial.split("\n", 1)
             done += R.markdown(line, self.width - 2, self.st, self._md)
+            self._pw = None                            # a new paragraph: its rows start again
         if done:
             self.scroll(["  " + x if x else "" for x in done])
         elif self._live_fn:
@@ -467,6 +476,7 @@ class Terminal:
 
     def _flush_text(self):
         if self.interactive:
+            self._pw = None
             if self._partial:
                 rest, self._partial = self._partial, ""
                 self.scroll(["  " + x if x else "" for x in R.markdown(rest, self.width - 2, self.st, self._md)])
@@ -629,9 +639,10 @@ class Terminal:
             return
         ok = bool(ev.get("ok"))
         if name in R.SHELL_TOOLS:
+            out = R.exec_output(out).rstrip()
             meta = f"(timeout {info['timeout']}s)" if info.get("timeout") else ""
             lines, hidden = R.guard(R.shell_block, st, info["summary"], out, took, st, self.width, meta=meta,
-                                    limit=self.output_limit, ok=ok)
+                                    limit=self.output_limit, ok=ok, expand=self.interactive)
             self.last_block = {"command": info["summary"], "output": out, "took": took, "meta": meta, "ok": ok,
                                "hidden": hidden}
             self.scroll(lines)

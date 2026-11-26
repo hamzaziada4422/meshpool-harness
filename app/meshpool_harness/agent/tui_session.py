@@ -459,8 +459,9 @@ class SharedCommands:
             return None
         if arg.isdigit():
             return int(arg)
-        i = t.choose(title, [], [f"{x['n']}. {x.get('title') or ''}" + ("  (" + str(len(x['changed'])) + " files)"
-                                                                       if x.get('changed') else "") for x in turns],
+        # the menu numbers its rows itself: a row that began with the turn's number read "1. 1. fix the test" (OM-08)
+        i = t.choose(title, [], [(x.get('title') or f"Turn {x['n']}") + ("  (" + str(len(x['changed'])) + " files)"
+                                                                         if x.get('changed') else "") for x in turns],
                      sel=len(turns) - 1)
         return None if i is None else turns[i]["n"]
 
@@ -490,13 +491,18 @@ class SharedCommands:
         n = self._turn_pick(arg, "Undo from which turn?")
         if n is None:
             return
+        turns_before = self.s.cp.turns() if self.s.cp else []
         d = self.s.cp.diff(n)
         if d.get("patch"):
             self._show_patch(d["patch"])
         i = t.choose(f"Undo turn {n} and everything after it?", [], ["Undo", "Cancel"], sel=1)
         if i == 0:
-            self.s.revert(n)
+            r = self.s.revert(n)
             self._rebind()
+            if r.get("conversation"):            # the status line names the files; say what left the conversation
+                title = next((x.get("title") for x in turns_before if x.get("n") == n), "") or ""
+                t.p(t.st.dim(f"  The conversation is back to before turn {n}" + (f" ({title})" if title else "")
+                             + "."))
 
     def cmd_grade(self, arg):
         if not self._need_shared():

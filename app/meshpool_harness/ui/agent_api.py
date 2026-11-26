@@ -161,6 +161,9 @@ def undo_message(r: dict) -> tuple[str, str]:
     restored, deleted, kept, outside = (list(r.get(k) or []) for k in ("restored", "deleted", "kept", "outside"))
     done = [s for s in (count(restored, "Restored") if restored else "",
                         count(deleted, "removed" if restored else "Removed") if deleted else "") if s]
+    if not done and r.get("conversation") is False and not kept and not outside:
+        # OM-08: nothing left the conversation and no file changed: "Undone." said something happened that did not
+        return "Nothing to undo: that turn changed no files and is no longer in the conversation.", ""
     msg = "Undone. " + (" and ".join(done) + "." if done else "No files in this chat's folder had changed.")
     if kept:
         msg += f" Not restored: {names(kept)} (changed since, or not saved before; see details)."
@@ -2108,6 +2111,8 @@ class Session:
 
     def _revert(self, turn: int) -> dict:
         cut = self._turn_cut(turn)
+        with self.lock:
+            had = (len(getattr(self.agent, "messages", None) or []), len(self.events))
         r = self.cp.revert_to_before(int(turn))
         idx = r.get("message_index")
         built_in = self.harness["type"] not in ("acp", "pi")
@@ -2136,6 +2141,8 @@ class Session:
                     self.agent.events = [{k: v for k, v in e.items() if k not in ("i", "t")} for e in self.events]
                     self.agent.save()
         self.epoch += 1
+        with self.lock:                          # whether the conversation lost anything (undo_message says so)
+            r["conversation"] = (len(getattr(self.agent, "messages", None) or []), len(self.events)) != had
         self._persist(running=False)
         try:                                     # Undo counts against every logged turn it removed; never breaks Undo
             from meshpool_harness.hrouter import outcomes as OUT
