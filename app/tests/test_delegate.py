@@ -528,11 +528,19 @@ def test_a_failed_sub_agent_says_why_and_the_turn_counts_its_tokens(monkeypatch,
 def test_ctrl_c_ends_the_turn_but_keeps_the_reports_that_finished(monkeypatch, _env):
     import os
     import signal
+    fast_done = threading.Event()
+
     def child(b):
         if "slow" in _goal(b):
-            time.sleep(0.2)
+            time.sleep(0.5)
             return _msg("", [("glob", {"pattern": "*"})])
+        fast_done.set()
         return _msg("fast report: acme sells widgets")
+
+    def ctrl_c():                                  # a real Ctrl+C once the fast child has reported, while the slow one
+        if fast_done.wait(30):                     # still works (a fixed delay raced a slow child that got faster)
+            time.sleep(1.0)
+            os.kill(os.getpid(), signal.SIGINT)
 
     def parent(b):
         if b["messages"][-1]["role"] == "tool":
@@ -544,7 +552,7 @@ def test_ctrl_c_ends_the_turn_but_keeps_the_reports_that_finished(monkeypatch, _
     old = signal.signal(signal.SIGINT, signal.default_int_handler)
     try:
         a = _agent(_env)
-        threading.Timer(3.0, lambda: os.kill(os.getpid(), signal.SIGINT)).start()   # a real Ctrl+C, after the fast child is done
+        threading.Thread(target=ctrl_c, daemon=True).start()
         t0 = time.time()
         a.send("research both")
     finally:

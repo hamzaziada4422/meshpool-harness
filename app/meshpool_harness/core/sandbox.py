@@ -70,16 +70,51 @@ def unavailable_notice(platform: str | None = None) -> str:
             "and can write anywhere you can.")
 
 
+_GIT_DIRS: dict = {}                 # root -> (what the answer depends on, the answer): one git process per folder
+
+
+def _git_dirs_key(root: Path):
+    """What _git_dirs(root) depends on: the nearest .git above root (its identity, and its time and size when it is a
+    worktree's "gitdir:" file) and the GIT_* variables that move it. Stat calls only, no process."""
+    env = tuple((k, os.environ.get(k, "")) for k in ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_CEILING_DIRECTORIES",
+                                                     "GIT_DISCOVERY_ACROSS_FILESYSTEM"))
+    for d in (root, *root.parents):
+        p = d / ".git"
+        try:
+            st = os.lstat(p)
+        except OSError:
+            continue
+        isdir = os.path.isdir(p)
+        return env, str(p), st.st_ino, st.st_mode, None if isdir else (st.st_mtime_ns, st.st_size)
+    return env, None
+
+
 def _git_dirs(root: Path) -> list[str]:
     """The repository folders git writes to for a command run in ``root``: its own git dir and the shared one. They
     lie outside ``root`` for a project in a subfolder of a repository (``<repo>/.git``) and for a worktree copy
-    (``<main>/.git`` and ``<main>/.git/worktrees/<name>``), so without them every commit, stash or add failed there."""
+    (``<main>/.git`` and ``<main>/.git/worktrees/<name>``), so without them every commit, stash or add failed there.
+    Kept per folder while its nearest .git is the same: every sandboxed command ran git rev-parse before."""
+    root = Path(root)
+    key = _git_dirs_key(root)
+    hit = _GIT_DIRS.get(str(root))
+    if hit is not None and hit[0] == key:
+        return list(hit[1])
+    out = _git_dirs_run(root)
+    if out is None:                              # git missing or too slow this time: ask again next command
+        return []
+    if len(_GIT_DIRS) > 256:
+        _GIT_DIRS.clear()
+    _GIT_DIRS[str(root)] = (key, tuple(out))
+    return out
+
+
+def _git_dirs_run(root: Path) -> list[str] | None:
     import subprocess
     try:
         r = subprocess.run(["git", "-C", str(root), "rev-parse", "--git-common-dir", "--git-dir"],
                            capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
-        return []
+        return None
     if r.returncode:
         return []                                  # not inside a repository (or no git)
     out = []
