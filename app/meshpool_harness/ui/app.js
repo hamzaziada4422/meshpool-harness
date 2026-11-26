@@ -2761,7 +2761,12 @@ function showOnboarding() {
       : (h.signed_in ? `You are signed in to ${name} on this computer. Usage comes out of your plan.` : `Sign in with your ${name} account. Usage comes out of your plan, not an API key.`) + what;
     $("#oGo").disabled = !(h && h.signed_in);
   };
+  // A ChatGPT sign-in started here stops when the user picks another option or onboarding ends: it kept running
+  // (npm exec @openai/codex login) long after the user had chosen an API key instead.
+  let signing = false;
+  const stopSign = () => { if (signing) { signing = false; post("/api/harness-login/stop", {}).catch(() => {}); } };
   const pick = id => {
+    if (!SIGNIN[id]) stopSign();
     prov = id; res.className = "res"; res.textContent = "";
     $$("[data-prov]", o).forEach(x => x.setAttribute("aria-checked", x.dataset.prov === id));
     const isSub = !!SIGNIN[id];
@@ -2777,12 +2782,12 @@ function showOnboarding() {
   $("#oKey").oninput = () => { res.textContent = ""; };
   $("#oSign").onclick = async () => {
     const id = SIGNIN[prov].harness;
-    try { const r = await post("/api/harness-login", {id}); res.className = "res " + (r.ok ? "" : "bad"); res.textContent = r.message; } catch (e) { res.className = "res bad"; res.textContent = e.message; return; }
+    try { const r = await post("/api/harness-login", {id}); signing = !!r.ok; res.className = "res " + (r.ok ? "" : "bad"); res.textContent = r.message; } catch (e) { res.className = "res bad"; res.textContent = e.message; return; }
     const t0 = Date.now();
     const tick = async () => { if (!$("#oSubBox") || SIGNIN[prov]?.harness !== id) return; await loadHarnesses(); drawSub(); if (sub()?.signed_in) { res.className = "res ok"; res.textContent = "Signed in."; return; } if (Date.now() - t0 < 600000) setTimeout(tick, 3000); };
     setTimeout(tick, 3000);
   };
-  const finish = async () => { await loadSettings(); await loadHarnesses(); await loadModels(true); renderBar(); renderHero?.(); $("#onbKey").remove(); permStep(o); };
+  const finish = async () => { stopSign(); await loadSettings(); await loadHarnesses(); await loadModels(true); renderBar(); renderHero?.(); $("#onbKey").remove(); permStep(o); };
   $("#oGo").onclick = async () => {
     if (SIGNIN[prov]) {
       if (!sub()?.signed_in) { res.className = "res bad"; res.textContent = "Sign in first."; return; }

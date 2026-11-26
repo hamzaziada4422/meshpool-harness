@@ -1052,6 +1052,9 @@ class Handler(BaseHTTPRequestHandler):
                 from meshpool_harness import harness_router as HRT
                 b = self._json()
                 return self._send(200, HRT.route(b.get("text", ""), b.get("kind", "cowork")))
+            if u.path == "/api/harness-login/stop":   # the user left the ChatGPT choice, or onboarding is done
+                HR.stop_login()
+                return self._send(200, {"ok": True})
             if u.path == "/api/harness-login":
                 from meshpool_harness import harnesses as HRS
                 b = self._json()
@@ -1547,6 +1550,10 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     threading.Thread(target=A.probe_mcp, daemon=True).start()
     office = _start_office()
     ON_QUIT.append(HR.stop_login)                   # an unfinished ChatGPT sign-in does not outlive the app
+    try:
+        HR.reap_stale_login()                       # nor one a meshpool that was killed left running
+    except Exception:  # noqa: BLE001
+        pass
     threading.Thread(target=A.recover_worktrees, daemon=True).start()   # copies a crash or a deleted chat left
     if desktop:                                     # background update checks and downloads; install on quit
         try:
