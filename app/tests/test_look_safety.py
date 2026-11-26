@@ -560,3 +560,9 @@ def test_problem_phrases_are_clean():
     assert L._join(["a", "b", "c", "d", "e"]) == "a, b, c and 2 more" and L._join(["a", "b"]) == "a and b"
     for w in ("an", "the", "of"):                                       # never ends on a small word
         assert not LR._phrase({"what": ("word " * 15) + w + " thing " * 10, "where": ""}).endswith(" " + w)
+
+
+def test_the_look_browser_makes_no_speculative_connections():
+    """Release review nit: Chromium opened one empty preconnect to another local port. Prediction and prefetch are off."""
+    from meshpool_harness.review_interact import LAUNCH_ARGS
+    assert "--disable-features=NetworkPrediction" in LAUNCH_ARGS and "--dns-prefetch-disable" in LAUNCH_ARGS
