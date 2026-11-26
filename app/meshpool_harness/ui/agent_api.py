@@ -205,7 +205,14 @@ def _meta_path(sid: str) -> Path:
 _METAS: dict = {}                   # meta.json path -> (mtime, size, meta): the sidebar lists every chat every few s
 
 
+def _plain_id(sid) -> bool:
+    """A chat id is one folder name (the routes take [\\w-]+): "", ".." or a path would reach outside the chats folder."""
+    return isinstance(sid, str) and bool(re.fullmatch(r"[\w-]+", sid))
+
+
 def read_meta(sid: str) -> dict:
+    if not _plain_id(sid):
+        return {}
     p = _meta_path(sid)
     try:
         st = p.stat()
@@ -223,6 +230,8 @@ _META_LOCK = threading.RLock()      # read-modify-write of meta.json: turn, post
 
 
 def write_meta(sid: str, **kw) -> dict:
+    if not _plain_id(sid):
+        return {}
     s = LIVE.get(sid)
     if s is None and not (SESSIONS / sid).is_dir():
         return {}                                     # deleted thread: do not recreate its folder
