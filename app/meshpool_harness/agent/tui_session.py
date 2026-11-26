@@ -52,7 +52,7 @@ def _denied(ev: dict) -> dict:
     return {"kind": "bash", "title": "Run this destructive command?", "destructive": True,
             "command": " ".join(str(cmd).split())[:300]}
 _QUIET = ("Starting MCP servers", "No MCP servers enabled")          # status lines the terminal shows its own way
-_NO_STREAM = ("text_delta", "token", "delta", "thinking")
+_NO_STREAM = ("text_delta", "token", "delta", "thinking", "model_wait")
 
 
 class TermFrontend:

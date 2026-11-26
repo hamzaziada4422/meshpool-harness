@@ -2692,6 +2692,8 @@ def office_detail(name: str, args: dict, root=None) -> str:
 
 
 class Agent:
+    _model_prog = 0.0
+    model_req_at = None    # when the model call now running began; None while no request is made or waited on
     office_on = False      # a message in this chat asked for an office file: Codex style shows the office tools too
     browser_on = False     # a message in this chat is about a web page or app UI: Codex style shows the browser tools
     office_engines = False  # MH_OFFICE_DIRECT=1: a message asked for a new deck, report or model (engine tools shown)
@@ -5062,6 +5064,7 @@ class Agent:
             sc = self._scrubber = StreamScrubber()
         t = sc.feed(t)
         if t:
+            self._model_prog = time.time()
             self.emit({"type": "text_delta", "text": t})
 
     def _check_stop(self):
@@ -5334,6 +5337,35 @@ class Agent:
         return MC.resolve(base, bare, prof)
 
     def _chat(self, turn: dict) -> tuple[dict, bool]:
+        """One model call, with its retries. model_req_at says a request is being made or waited on right now, so the
+        app can tell a real wait from a turn that is stuck with no request (ui/agent_api.py view, ui/app.js workTick)."""
+        self.model_req_at = self._model_prog = time.time()
+        done = threading.Event()
+        threading.Thread(target=self._wait_notes, args=(done,), daemon=True).start()
+        try:
+            return self._chat_call(turn)
+        finally:
+            done.set()
+            self.model_req_at = None
+
+    def _wait_notes(self, done: threading.Event):
+        """While the model says nothing (no text, no reasoning), tell the front end once a minute: a model_wait event
+        with the seconds waited. Session.emit hands it to the terminal only; it is not kept in the chat."""
+        every = max(0.2, float(os.environ.get("MH_WAIT_NOTE_S", "60") or 60))
+        told = 0
+        while not done.wait(min(1.0, every / 4)):
+            idle = time.time() - self._model_prog
+            n = int(idle // every)
+            if n < told:
+                told = 0                                   # text arrived and then stopped: count again
+            if n > told:
+                told = n
+                try:
+                    self.emit({"type": "model_wait", "secs": int(idle)})
+                except Exception:  # noqa: BLE001  a note never breaks the call
+                    pass
+
+    def _chat_call(self, turn: dict) -> tuple[dict, bool]:
         body = self._body()
         # The model's provider decides where the call goes (providers.py): the key endpoint in settings or the
         # ChatGPT sign-in.
@@ -6089,6 +6121,7 @@ class Agent:
                         self.emit({"type": "status", "text": "Thinking…"})
                     if isinstance(t, str) and t and not aux and os.environ.get("MH_SHOW_THINKING", "1") != "0":
                         thought.append(t)
+                        self._model_prog = time.time()
                         self.emit({"type": "thought", "text": t, "delta": True})   # live only
 
                 def check():
