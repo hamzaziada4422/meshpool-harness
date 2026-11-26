@@ -409,7 +409,7 @@ A review of the release candidate by area, before the persona fixes were merged.
 Tests changed with no product change: test_fix_pass2_open_server.py follows the ER detail wording, test_awake.py resets
 the holder's give-up flag that PF-05 added (4f3c9b2f), a panel test waits for the UX-14 slide to end (3b3cf16e), and the
 UX tests open the top-level Permissions page (03fad180). Later: the live-line test and the polish UI test skip the fake
-chat's "This chat is gone" note, which they counted one run in four (38551047, ca09b450). The testkit's claude_shim
+chat's "This chat is gone" note, which they counted one run in four (38551047, ca09b450). The local Claude adapter
 follows a format the instructions ask for, so the reviewer's JSON reads the same as on the real adapter (ff36e256). None
 of these is counted. The Copy toast of the same merge is MG-03.
 

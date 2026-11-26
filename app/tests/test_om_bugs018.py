@@ -152,11 +152,14 @@ def endpoint(monkeypatch):
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     served = ["mock-edit", "mock-slow"]
+    listed = served + ["mock-locked"]               # in the model list, but this key may not call it
 
     class Asked(list):
         bodies: list = []
     asked = Asked()
     asked.bodies = []
+    asked.denied_text = ("key not allowed to access model. This key can only access models=['mock-edit']. Key used: "
+                         "sk-test-key-123456. " + "Ask your admin to add it. " * 20)
 
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -171,12 +174,15 @@ def endpoint(monkeypatch):
             self.wfile.write(b)
 
         def do_GET(self):
-            self._json(200, {"data": [{"id": m, "object": "model"} for m in served]})
+            self._json(200, {"data": [{"id": m, "object": "model"} for m in listed]})
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
             asked.append(body.get("model"))
             asked.bodies.append(body)
+            if body.get("model") == "mock-locked":
+                return self._json(400, {"error": {"type": "key_model_access_denied", "code": "400",
+                                                  "message": asked.denied_text}})
             if body.get("model") not in served:
                 return self._json(404, {"error": {"message": f"The model `{body.get('model')}` does not exist",
                                                   "type": "invalid_request_error", "code": "model_not_found"}})
@@ -231,6 +237,38 @@ def test_om04_a_model_named_on_the_command_line_that_does_not_exist_stops_with_c
     assert rc == 1 and "does not serve the model nope-model" in res["error"]
 
 
+def test_om04_a_model_the_key_may_not_use_says_so_and_is_not_offered_back(home, proj, capfd, endpoint):
+    """OM-04 (review, 0.0.18): key_model_access_denied means the key is not allowed to use the model. It said "the
+    endpoint does not serve the model". It now says the key is not allowed, adds the endpoint's own words (about 200
+    characters, key masked) and never lists the requested name among the close names."""
+    rc = T.main(str(proj), no_mcp=True, prompt="hi", json_out="json", model="mock-locked")
+    res = json.loads(capfd.readouterr().out.strip().splitlines()[-1])
+    err = res["error"]
+    assert rc == 1 and not res["ok"]
+    assert err.startswith("Your key is not allowed to use the model mock-locked."), err
+    assert "does not serve" not in err
+    assert "key not allowed to access model" in err and "sk-test-key-123456" not in err
+    said = err.split("The endpoint said: ", 1)[1].split(" Close names", 1)[0].split(" Pick one", 1)[0]
+    assert 0 < len(said) <= 200, len(said)
+    assert "mock-locked" not in err.split("Close names it does serve:", 1)[-1] if "Close names" in err else True
+    assert "Close names it does serve: mock-edit" in err or "mock-slow" in err, err
+    assert set(endpoint) == {"mock-locked"}                # never carried on with another model
+
+
+def test_om04_the_requested_name_is_never_a_close_name(monkeypatch):
+    """Both errors leave the name asked for out of the "Close names it does serve" list, even when the endpoint's own
+    list holds it."""
+    from meshpool_harness.ui import workbench as W
+    monkeypatch.setattr(W, "models", lambda *a, **k: {"models": [{"id": "gpt-x"}, {"id": "gpt-xl"}, {"id": "gpt-y"}]})
+    for msg in ("", "HTTP 400: key_model_access_denied"):
+        t = core._unknown_model_text("gpt-x", "key", msg, "sk-test-key-123456")
+        close = t.split("Close names it does serve:", 1)[1].split(".", 1)[0]
+        assert "gpt-xl" in close and "gpt-x," not in close + "," and " gpt-x " not in " " + close + " ", t
+    assert core._unknown_model_text("gpt-x", "key", "").startswith("The endpoint does not serve the model gpt-x.")
+    assert core._unknown_model_text("gpt-x", "key", "HTTP 400: key_model_access_denied").startswith(
+        "Your key is not allowed to use the model gpt-x.")
+
+
 def test_om04_a_saved_model_that_disappeared_still_falls_back(home, proj, capfd, endpoint, monkeypatch):
     """The fallback stays for a chat's saved model that the endpoint dropped (no --model given)."""
     v = chats.create({"workdir": str(proj), "no_mcp": True, "model": "gone-model"})
@@ -261,11 +299,38 @@ def test_om09_a_resumed_chat_takes_the_mode_and_model_from_the_command_line(home
     cap = capfd.readouterr()
     assert rc == 0, cap.err
     meta = chats.read_meta(v["id"])
-    assert meta["mode"] == "ask" and meta["model"] == "mock-slow"
+    assert meta["mode"] == "auto" and meta["model"] == "mock-slow"      # the mode is for this run only (see below)
     assert "This chat was in full access. It resumes in ask before changes" in cap.err
     A.LIVE.clear()
     rc = T.main(str(proj), resume=True, auto=True, no_mcp=True, prompt="three", json_out="json")
     assert rc == 0 and chats.read_meta(v["id"])["mode"] == "auto"     # --auto asked for it: full access
+
+
+def test_om09_resuming_does_not_save_the_mode_it_runs_in(home, proj, capfd, monkeypatch):
+    """Review, 0.0.18: -c applied the resumed mode through set_mode, which saved it. An Accept edits chat resumed with
+    no flag was left in Ask for good. The mode now holds for this run only; the stored mode stays as it was."""
+    for stored, flag, ran in (("edits", None, "ask"), ("edits", "edits", "edits"), ("ask", "edits", "edits")):
+        v = chats.create({"workdir": str(proj), "no_mcp": True, "mode": stored, "model": "mock-edit"})
+        A.LIVE.pop(v["id"]).close()
+        seen = []
+        orig = T._resume_access
+
+        def spy(term, sess, mode, model):
+            orig(term, sess, mode, model)
+            seen.append(sess.agent.mode)                  # the mode this run works in, right after resuming
+        monkeypatch.setattr(T, "_resume_access", spy)
+        if flag:
+            monkeypatch.setenv("MH_PERMISSION_MODE", flag)
+        else:
+            monkeypatch.delenv("MH_PERMISSION_MODE", raising=False)
+        script(monkeypatch, "ok")
+        rc = T.main(str(proj), session=v["id"], no_mcp=True, prompt="hi", json_out="json")
+        capfd.readouterr()
+        monkeypatch.setattr(T, "_resume_access", orig)
+        assert rc == 0
+        assert seen == [ran], (stored, flag, seen)                                  # this run
+        assert chats.read_meta(v["id"])["mode"] == stored, (stored, flag)          # the chat's own setting
+        A.LIVE.clear()
 
 
 

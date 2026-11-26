@@ -126,10 +126,16 @@ def _git_dirs_run(root: Path) -> list[str] | None:
     return out
 
 
-def _writable(root: Path) -> list[str]:
+def _writable(root: Path, offline: bool = False) -> list[str]:
     home = Path.home()
-    cands = [str(root), "/tmp", "/var/tmp", str(home / ".cache"), str(home / ".npm"), str(home / ".cargo"),
-             str(home / ".local"), str(home / ".meshpool"), str(home / ".config" / "pip"), str(home / ".pnpm-store")]
+    if offline:
+        # a command that ran without a question (review, 0.0.18): no ~/.local/bin, ~/.cargo/env or pip config to
+        # plant code in that later runs outside the sandbox. Package folders are for installs, and those ask.
+        cands = [str(root), "/tmp", "/var/tmp", str(home / ".cache")]
+    else:
+        cands = [str(root), "/tmp", "/var/tmp", str(home / ".cache"), str(home / ".npm"), str(home / ".cargo"),
+                 str(home / ".local"), str(home / ".meshpool"), str(home / ".config" / "pip"),
+                 str(home / ".pnpm-store")]
     cands += _git_dirs(root)
     extra = os.environ.get("MH_SANDBOX_WRITE", "")
     cands += [x for x in extra.split(os.pathsep) if x]
@@ -149,6 +155,49 @@ def _data_folder() -> str | None:
 def _under(p: str, base: str) -> bool:
     """p is base or inside it."""
     return p == base or p.startswith(base.rstrip(os.sep) + os.sep)
+
+
+_SECRET_DIRS = (".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", ".password-store", ".config/gh",
+                ".config/gcloud", ".config/hub", ".config/op", ".terraform.d")
+_SECRET_FILES = (".netrc", ".git-credentials", ".npmrc", ".pypirc", ".pgpass", ".my.cnf", ".config/git/credentials")
+_DATA_SECRETS = ("meshpool.config", "mcp.json", "mcp-auth.json", "connectors.json", "harnesses")
+
+
+def _hidden(root: Path) -> tuple[list[str], list[str]]:
+    """(folders, files) a command that ran without a question may not read (review, 0.0.18): keys and tokens in the
+    home folder and meshpool's own settings (the API key), unless the chat works inside one of them."""
+    home = Path.home()
+    dirs = [home / d for d in _SECRET_DIRS]
+    files = [home / f for f in _SECRET_FILES]
+    data = _data_folder()
+    if data:
+        for n in _DATA_SECRETS:
+            (dirs if n == "harnesses" else files).append(Path(data) / n)
+    try:
+        from meshpool_harness import config as C
+        files.append(Path(C.config_path()))
+    except Exception:  # noqa: BLE001
+        pass
+    r = os.path.realpath(str(root))
+    keep = lambda p: not (_under(r, os.path.realpath(str(p))) or _under(os.path.realpath(str(p)), r))  # noqa: E731
+    d = [os.path.realpath(str(p)) for p in dirs if p.is_dir() and keep(p)]
+    f = [os.path.realpath(str(p)) for p in files if p.is_file() and keep(p)]
+    return list(dict.fromkeys(d)), list(dict.fromkeys(f))
+
+
+def _locked(root: Path) -> list[str]:
+    """Files a command that ran without a question may not change, though they sit in a writable folder: git's hooks
+    and config (they run programs at the next commit, outside the sandbox) and the project's .meshpool rules."""
+    out = []
+    for g in dict.fromkeys(_git_dirs(root) + [str(Path(root) / ".git")]):
+        for n in ("hooks", "config"):
+            p = Path(g) / n
+            if p.exists():
+                out.append(os.path.realpath(str(p)))
+    m = Path(root) / ".meshpool"
+    if m.exists():
+        out.append(os.path.realpath(str(m)))
+    return list(dict.fromkeys(out))
 
 
 def _office_profile() -> str | None:
@@ -181,9 +230,16 @@ def wrap(argv: list[str], root, platform: str | None = None, which=shutil.which,
         out = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--die-with-parent", "--unshare-pid"]
         if not net:
             out.append("--unshare-net")
-        ws = _writable(root)
+        ws = _writable(root, True) if offline else _writable(root)
         for w in ws:
             out += ["--bind", w, w]
+        if offline:
+            home = os.path.realpath(str(Path.home()))
+            if home not in ("/", "") and os.path.isdir(home):
+                out += ["--ro-bind", home, home]        # nothing in home is writable, wherever it sits (even in /tmp)
+                for w in ws:
+                    if _under(os.path.realpath(w), home):
+                        out += ["--bind", w, w]          # ...but the folder itself and ~/.cache
         data = _data_folder()
         if data and any(_under(data, os.path.realpath(w)) for w in ws):
             # meshpool's own data folder (~/.local/share/meshpool, inside the writable ~/.local) holds the settings
@@ -197,9 +253,17 @@ def wrap(argv: list[str], root, platform: str | None = None, which=shutil.which,
         prof = _office_profile()
         if prof:
             out += ["--bind", prof, prof, "--setenv", "UserInstallation", Path(prof).as_uri()]
+        if offline:                                     # last, so no bind above undoes them
+            hd, hf = _hidden(root)
+            for d in hd:
+                out += ["--tmpfs", d]
+            for f in hf:
+                out += ["--ro-bind", "/dev/null", f]
+            for p in _locked(root):
+                out += ["--ro-bind", p, p]
         return out + ["--chdir", str(Path(cwd).resolve() if cwd else root), "--"] + argv
     if plat == "darwin" and which("sandbox-exec"):
-        ws = _writable(root)
+        ws = _writable(root, True) if offline else _writable(root)
         allow = "".join(f'(subpath "{p}")' for p in ws + ["/private/tmp", "/private/var/folders"])
         profile = ('(version 1)(allow default)(deny file-write*)' + ("" if net else "(deny network*)") +
                    f'(allow file-write* {allow} (literal "/dev/null") (literal "/dev/dtracehelper") (regex #"^/dev/tty"))')
@@ -212,9 +276,25 @@ def wrap(argv: list[str], root, platform: str | None = None, which=shutil.which,
             profile += f'(deny file-write* (subpath "{data}"))'
             if back:
                 profile += "(allow file-write* " + "".join(f'(subpath "{rw}")' for rw in back) + ")"
+        if offline:
+            home = os.path.realpath(str(Path.home()))
+            back = [os.path.realpath(w) for w in ws if _under(os.path.realpath(w), home)]
+            if home not in ("/", ""):
+                profile += f'(deny file-write* (subpath "{home}"))'
+                if back:
+                    profile += "(allow file-write* " + "".join(f'(subpath "{b}")' for b in back) + ")"
         prof = _office_profile()
         if prof:
             profile += f'(allow file-write* (subpath "{os.path.realpath(prof)}"))'
+        if offline:                                     # last: the last matching rule wins
+            hd, hf = _hidden(root)
+            if hd or hf:
+                profile += "(deny file-read* " + "".join(f'(subpath "{d}")' for d in hd) + \
+                           "".join(f'(literal "{f}")' for f in hf) + ")"
+            lk = _locked(root)
+            if lk:
+                profile += "(deny file-write* " + "".join(f'(subpath "{p}")' for p in lk) + ")"
+        if prof:
             return ["sandbox-exec", "-p", profile, "/usr/bin/env", f"UserInstallation={Path(prof).as_uri()}"] + argv
         return ["sandbox-exec", "-p", profile] + argv
     _say("unavailable", unavailable_notice(plat))

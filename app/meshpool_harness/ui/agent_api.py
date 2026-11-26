@@ -1186,7 +1186,9 @@ class Session:
 
     def take_back(self) -> dict:
         """The last message sent while the agent worked, back to the user: from the queue, or from the running
-        turn when the agent has not read it yet. {"text": None} when there is nothing left to take back."""
+        turn when the agent has not read it yet. {"text": None} when there is nothing left to take back. The copies
+        made for that message belong to no turn now: a later turn's Undo must not remove them."""
+        self.__dict__.pop("_attach_made", None)
         with self.lock:
             if self.queue:
                 text, _ = self.queue.pop()
@@ -2213,9 +2215,11 @@ class Session:
         for p in pend:
             p["ev"].set()
 
-    def set_mode(self, mode: str):
+    def set_mode(self, mode: str, save: bool = True):
+        """Change the access mode. save=False is for this run only: the chat's stored mode stays as it was."""
         self.agent.mode = self.mode = C.normalize_mode(mode, "ask")
-        write_meta(self.id, mode=self.mode)          # restored on resume: an Ask chat stays Ask
+        if save:
+            write_meta(self.id, mode=self.mode)      # restored on resume: an Ask chat stays Ask
         if hasattr(self.agent, "apply_mode"):
             try:
                 self.agent.apply_mode()
@@ -2771,6 +2775,16 @@ def _listed_project(meta: dict, workdir: str, legacy: dict, kind: str | None = N
     return (legacy or {}).get(workdir) or ""          # both paths are stored resolved: no disk access per row
 
 
+def _list_project(r: dict, m: dict, legacy: dict, live_pids: set) -> None:
+    """Set a listed row's project_id (where the sidebar shows it) and project_linked: whether the chat's own project
+    is that one. A Code session listed under a project by its folder is not linked, so the menu does not tick it as
+    if it were."""
+    wd = r.get("workdir") or ""
+    pid = _listed_project(m, wd, legacy, r.get("kind"))
+    r["project_id"] = pid if pid in live_pids else ""
+    r["project_linked"] = bool(r["project_id"]) and _project_of(m, wd, legacy) == r["project_id"]
+
+
 _ROWS: dict = {}                    # session.json path -> (mtime, size, row): imported histories can be thousands
 
 
@@ -2790,9 +2804,7 @@ def _decorate(r: dict, m: dict, legacy: dict, live_pids: set) -> dict:
     r["unread"] = bool(m.get("unread")) and r.get("state") not in ("working", "waiting")
     r["scheduled"] = bool(m.get("scheduled"))
     r["pr"] = m.get("pr") or None                 # the pull request last seen for this session (the row's icon and card)
-    r["project_id"] = _listed_project(m, r.get("workdir") or "", legacy, r.get("kind"))
-    if r["project_id"] and r["project_id"] not in live_pids:
-        r["project_id"] = ""
+    _list_project(r, m, legacy, live_pids)
     r["_m"] = m                                   # kept for the cached rows: projects are re-resolved on every call
     r["scratch"] = bool(m.get("scratch"))
     r["kind"] = m.get("kind") or r.get("kind") or "code"
@@ -2859,8 +2871,7 @@ def listing() -> list:
         if sid not in DELETED:
             r = dict(r)
             m = r.pop("_m")
-            pid = _listed_project(m, r.get("workdir") or "", legacy, r.get("kind"))
-            r["project_id"] = pid if pid in live_pids else ""
+            _list_project(r, m, legacy, live_pids)
             rows[sid] = r
     with LOCK:
         live = list(LIVE.items())

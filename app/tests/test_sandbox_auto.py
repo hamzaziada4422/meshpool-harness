@@ -98,7 +98,7 @@ def test_without_a_sandbox_one_yes_covers_the_chat(tmp_path, monkeypatch):
     proj = _home_project(tmp_path, monkeypatch)
     a, asked = _agent(proj, False, monkeypatch, answer=("always", ""))
     assert a._permit("bash", {"command": "python3 analyze.py data.csv"})[0]
-    assert len(asked) == 1 and asked[0]["scope"] == "ordinary commands and edits in this folder"
+    assert len(asked) == 1 and asked[0]["scope"].startswith("ordinary commands and edits in this folder (not isolated")
     for c in ORDINARY:
         assert a._permit("bash", {"command": c})[0]
     assert a._permit("write_file", {"path": "chart.png", "content": "x"})[0]

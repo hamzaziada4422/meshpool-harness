@@ -670,13 +670,24 @@ _PROGRAMS = {"python": "Python", "python3": "Python", "node": "JavaScript", "Rsc
 
 def _plain_command_title(script: str) -> str:
     """What a command does, in words a person can judge, for the approval card (persona runs, 0.0.18: every card was
-    a raw `D=/tmp/...; python3 -I -c "..."` line nobody could judge). The command itself stays below the title."""
+    a raw `D=/tmp/...; python3 -I -c "..."` line nobody could judge). The command itself stays below the title.
+    Never milder than the command (review, 0.0.18): "Read" only when every step only reads, a write, delete or the
+    network is named as such, and a chain says how many steps it has."""
     s = str(script or "")
     files = list(dict.fromkeys(m.group(0).rsplit("/", 1)[-1] for m in _FILE_WORD.finditer(s)))[:3]
     on = (" on " + ", ".join(files)) if files else ""
     words = re.findall(r"(?:^|[;&|]\s*|\bdo\s+|\bthen\s+)([A-Za-z][\w.+-]*)", s)
     progs = [os.path.basename(w) for w in words if w not in ("cd", "export", "set", "for", "do", "done", "if", "then",
                                                               "fi", "echo", "true", "D", "mkdir")]
+    masked, cuts, at = PR._scan(s)[0], [], 0          # split where the shell would: not inside quoted code
+    for m in re.finditer(r"&&|\|\||[;|\n]", masked):
+        cuts.append(s[at:m.start()])
+        at = m.end()
+    cuts.append(s[at:])
+    steps = [x.strip() for x in cuts
+             if x.strip() and not re.match(r"(?:cd|export|set|echo|true|mkdir)\b|[A-Za-z_]\w*=\S*$", x.strip())]
+    more = f" ({len(steps)} steps: " + ", ".join(dict.fromkeys(x.split()[0] for x in steps))[:60] + ")" \
+        if len(steps) > 1 else ""
     if re.search(r"\b(?:pip3?|npm|pnpm|yarn|cargo|gem|brew|apt|apt-get|conda|uv)\s+(?:install|add|i)\b", s):
         return "Install software from the internet? (" + s.strip().splitlines()[0][:80] + ")"
     if re.search(r"\bgit\s+push\b", s):
@@ -686,18 +697,28 @@ def _plain_command_title(script: str) -> str:
     if re.search(r"\b(?:curl|wget)\b|https?://", s):
         host = re.search(r"https?://([^/\s'\"]+)", s)
         return "Use the internet" + (f" ({host.group(1)})" if host else "") + "?"
+    if PR.NETWORK.search(s):
+        return "Use the internet? (" + s.strip().splitlines()[0][:80] + ")"
+    if PR.DELETES.search(s):
+        return ("Delete " + ", ".join(files) + "?") if files else f"Delete files?{more}"
     lang = next((_PROGRAMS[p] for p in progs if p in _PROGRAMS), "")
     if lang:
-        return f"Run a {lang} step{on}?"
-    if progs and all(p in ("which", "command", "type") for p in progs):
-        return "Check which programs are installed?"
+        return f"Run a {lang} step{on}?" if not more else f"Run a {lang} step{on}{more}?"
     if "find" in progs and re.search(r"\bfind\s+(?:/|~)", s):
         return "Search your computer's files?"
-    if progs and all(p in _READERS for p in progs):
+    writes = PR.writes(s) or re.search(r"\bsed\s+(?:-\w*\s+)*-i|\b(?:tee|cp|mv|touch|chmod|chown|ln)\b", s)
+    if progs and not writes and all(p in ("which", "command", "type") for p in progs):
+        return "Check which programs are installed?"
+    if progs and not writes and all(p in _READERS for p in progs) and \
+            all(T.read_only(x) or re.match(r"pdfinfo\b|pdftotext\b.*\s-$", x) for x in steps or [s]):
         return ("Read " + ", ".join(files) + "?") if files else "Look at files in this folder?"
+    if re.search(r"\bsed\s+(?:-\w*\s+)*-i", s) and files and not more:
+        return "Change " + ", ".join(files) + "?"
+    dest = re.search(r"(?<![0-9&])>>?\s*([^\s;&|<>]+)", PR._OKREDIR.sub(" ", s))
+    if dest and not more:
+        return f"Write {os.path.basename(dest.group(1).strip(chr(39) + chr(34)))}?"
     # the first real step (not cd, export or VAR=...), up to three words before an option or a quoted argument
-    seg = next((x.strip() for x in re.split(r"&&|\|\||[;|\n]", s)
-                if x.strip() and not re.match(r"(?:cd|export|set)\b|[A-Za-z_]\w*=", x.strip())), "")
+    seg = steps[0] if steps else ""
     first = []
     for w in seg.split()[:3]:
         if w.startswith(("-", "'", '"', "$")):
@@ -706,12 +727,15 @@ def _plain_command_title(script: str) -> str:
     first = " ".join(first)
     if first and any(f in first for f in files):
         on = ""
+    if more:
+        return f"Run {len(steps)} steps: " + ", ".join(dict.fromkeys(x.split()[0] for x in steps))[:60] + "?"
     return f"Run {first}{on}?" if first else "Run this command?"
 
 
-def _unknown_model_text(bare: str, prov: str = "key") -> str:
+def _unknown_model_text(bare: str, prov: str = "key", msg: str = "", key: str = "") -> str:
     """OM-04: the error for a model named with --model that the endpoint does not serve, with the closest names it
-    does serve (one read of the endpoint's model list, made only now that the call failed)."""
+    does serve (one read of the endpoint's model list, made only now that the call failed). When the endpoint says
+    key_model_access_denied the model exists but this key may not use it: say that, with the endpoint's own words."""
     import difflib
     ids: list = []
     try:
@@ -724,10 +748,17 @@ def _unknown_model_text(bare: str, prov: str = "key") -> str:
             ids = [i.split(":", 1)[1] if i.startswith("chatgpt:") else i for i in ids]
     except Exception:  # noqa: BLE001 - the list is a help, never a second failure
         ids = []
-    ids = list(dict.fromkeys(ids))
+    ids = [i for i in dict.fromkeys(ids) if i != bare]       # the name asked for is never offered back as a close one
     close = difflib.get_close_matches(bare, ids, n=5, cutoff=0.4) or \
         [i for i in ids if bare.lower().split("-")[0] in i.lower()][:5]
-    text = f"The endpoint does not serve the model {bare}."
+    if "key_model_access_denied" in (msg or ""):
+        from meshpool_harness.core import errtext as ET
+        text = f"Your key is not allowed to use the model {bare}."
+        said = ET.said(ET.parse(msg)[1], key)[:200].strip()
+        if said:
+            text += f" The endpoint said: {said}"
+    else:
+        text = f"The endpoint does not serve the model {bare}."
     if close:
         text += " Close names it does serve: " + ", ".join(close) + "."
     return text + " Pick one with --model, or run `meshpool models` to see them all."
@@ -2098,6 +2129,22 @@ def _recalc_formulas(path, tmp: str, forms: dict | None = None, timeout: float =
         return None
 
 
+def _cache_formula_values(root, since: float) -> int:
+    """Workbooks written or changed this turn whose formulas have no stored result (openpyxl writes none) get the
+    results written in, calculated once by the kept LibreOffice: Quick Look, phones and mail show numbers, not blanks.
+    Formulas and formatting stay as they are. Never stops a turn."""
+    n = 0
+    try:
+        from meshpool_harness import xl_values
+        for f in _recent_office(root, since, ".xlsx")[:6]:
+            if f.name.startswith("~$"):
+                continue
+            n += xl_values.fill(f)
+    except Exception:  # noqa: BLE001
+        pass
+    return n
+
+
 def _formula_result_miss(asked: str, root, since: float) -> str:
     """Workbooks written this turn, recalculated through LibreOffice: a formula the turn wrote or changed that comes
     out as an Excel error, or (when the request says its formula is wrong) a changed formula whose result is the same
@@ -3399,6 +3446,8 @@ class Agent:
                         if rep:
                             self.messages.append({"role": "user", "content": "[Meshpool] " + rep})
                             continue
+                    if os.environ.get("MH_CACHE_FORMULAS", "1") != "0":     # any route that wrote a workbook; a no-op when none needs it
+                        _cache_formula_values(self.root, g.get("t0", 0))
                     if self._office_direct() and not g.get("office_check_nudged") \
                             and os.environ.get("MH_OFFICE_FINISH_CHECK", "1") != "0":
                         # SpreadsheetBench (38f57ffb), sb-374-31: the agent's own assert failed, it printed the rows
@@ -5029,7 +5078,7 @@ class Agent:
                     if getattr(self, "model_named", False):
                         # OM-04: a model the user named on the command line (--model) is not swapped for another one
                         # without a word: the run stops and says which names the endpoint does serve.
-                        raise RuntimeError(_unknown_model_text(body["model"], prov))
+                        raise RuntimeError(_unknown_model_text(body["model"], prov, msg, key))
                     # A chat from weeks ago on a model the endpoint has dropped: continue on today's default for
                     # its provider, once per call. Otherwise say so at once; retrying the same model cannot help.
                     C.load_into_env(override=True)
@@ -6055,7 +6104,8 @@ class Agent:
                   and not self._sandboxed() and (group == "edit" or
                                                  (cmds and all(PR.sandbox_auto_ok(c, self.root, wd) for c in cmds))))
         scope = ("once" if risky == "destructive" or _destructive(args, self.root) else   # a destructive command: this once only
-                 "ordinary commands and edits in this folder" if folder else   # no sandbox: one yes for the chat
+                 # no sandbox: one yes for the chat. Said plainly (review, 0.0.18): nothing isolates these commands
+                 "ordinary commands and edits in this folder (not isolated: this computer has no sandbox)" if folder else
                  "all file edits" if group == "edit" else "this tool" if group != "bash" else
                  " and ".join(f"`{p}`" for p in pats[:3]) + " commands" if pats else "once")   # once: no chat grant
         decision, note = PR.approve_with_scope(self.approve, kind, title, detail, scope)
