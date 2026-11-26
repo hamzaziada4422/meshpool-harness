@@ -94,3 +94,51 @@ def test_codex_shell_command_list_is_inspected_by_its_script(tmp_path):
     assert a._inspection("shell", json.dumps({"command": ["bash", "-lc", "od -c m.py | sed -n '1,2p'"]}))
     assert a._inspection("shell", json.dumps({"command": "cat m.py"}))
     assert not a._inspection("shell", json.dumps({"command": ["bash", "-lc", "python3 m.py"]}))
+
+
+def _killed_env(tmp_path):
+    import subprocess
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "m.py").write_text("x = 1\n")
+    return Agent(str(tmp_path), mode="auto")
+
+
+def _sh(cmd):
+    return {"id": "s", "function": {"name": "shell", "arguments": json.dumps({"command": ["bash", "-lc", cmd]})}}
+
+
+def test_three_in_a_row_counts_a_file_changed_outside_the_edit_tools(tmp_path):
+    """A command rerun after a script or the user changed a file is not a loop, even with no edit-tool call."""
+    a = _killed_env(tmp_path)
+    runs = []
+    a._run_tool = lambda c, cut=False: runs.append(1) or f"[exit 1]\nfail {len(runs)}"
+    g = {}
+    for i in range(5):
+        (tmp_path / "m.py").write_text(f"x = {i + 2}\n")
+        out = a._repeat_guard(_sh("python3 m.py"), g)
+        assert "repeating yourself" not in out
+    assert len(runs) == 5
+
+
+def test_a_pair_taking_turns_that_flips_the_tree_is_still_caught(tmp_path):
+    """git stash, git stash pop, again and again: the tree flips between two states, and the fifth turn is refused."""
+    a = _killed_env(tmp_path)
+    state = {"n": 0}
+
+    def run(c, cut=False):
+        state["n"] += 1
+        (tmp_path / "m.py").write_text("x = 1\n" if "pop" in json.dumps(c) else "x = 9\n")
+        return "[exit 0]\nok"
+    a._run_tool = run
+    g = {}
+    outs = [a._repeat_guard(_sh("git stash" if i % 2 == 0 else "git stash pop"), g) for i in range(7)]
+    assert any("repeating yourself" in o for o in outs)
+
+
+def test_a_command_rerun_with_nothing_changed_is_still_refused_the_fourth_time(tmp_path):
+    a = _killed_env(tmp_path)
+    a._run_tool = lambda c, cut=False: "[exit 1]\nsame"
+    g = {}
+    outs = [a._repeat_guard(_sh("python3 m.py --x"), g) for _ in range(4)]
+    assert not any("repeating yourself" in o for o in outs[:3])
+    assert "Not run" in outs[3]

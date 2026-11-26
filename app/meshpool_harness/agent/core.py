@@ -5008,12 +5008,21 @@ class Agent:
         if nm in ("shell", "exec_command", "bash", "bash_many") and os.environ.get("MH_REPEAT_SHELL", "1") != "0" \
                 and not self._POLL.search(str(f.get("arguments", ""))):
             # the same command three times in a row with no file changed between them, whatever it printed, or a
-            # pair of commands taking turns (git stash, git stash pop, five times: Omar's run): the fourth is refused
+            # pair of commands taking turns (git stash, git stash pop, five times: Omar's run): the fourth is refused.
+            # For other commands, "no file changed" also covers a change made outside the edit tools (a script that
+            # writes, a fixed input): the three runs must each have left the tree as it is now. A git
+            # command that moves state (stash, pop, checkout) changes the tree itself, so it counts by edits only.
+            gitcmd = bool(re.search(r"(?:^|[\s\"';&|(])git\s", str(f.get("arguments", ""))))
+            sig0 = None if gitcmd else self._tree_sig()
+            g["_sig0"] = (id(c), sig0)
             tail = [r for r in runs if r[2] == edits]
             ks = [r[0] for r in tail]
+            n3 = len(ks) >= 3 and ks[-1] == ks[-2] == ks[-3] == key
+            if n3 and sig0 is not None:
+                n3 = all(len(r) <= 5 or r[5] is None or r[5] == sig0 for r in tail[-3:])
             bg = self.ws.__dict__.get("_bg") or {}
             if not any(e["p"].poll() is None for e in list(bg.values())) and (
-                    (len(ks) >= 3 and ks[-1] == ks[-2] == ks[-3] == key) or
+                    n3 or
                     (len(ks) >= 5 and ks[-1] != key and ks[-2] == ks[-4] == key and ks[-1] == ks[-3] == ks[-5])):
                 g["refused"] = g.get("refused", 0) + 1
                 return ("[Meshpool] Not run: you are repeating yourself. This command (or this pair of commands) "
@@ -5032,7 +5041,8 @@ class Agent:
                     "blocking you.")
         sh = (nm in ("shell", "exec_command", "bash", "bash_many") and os.environ.get("MH_REPEAT_SHELL", "1") != "0"
               and not self._POLL.search(str(f.get("arguments", ""))))     # a poll of a job or service may repeat
-        sig = self._tree_sig() if sh else None
+        pre = g.pop("_sig0", None)
+        sig = (pre[1] if pre and pre[0] == id(c) else self._tree_sig()) if sh else None
         if sh and sig is not None:
             bg = self.ws.__dict__.get("_bg") or {}
             # killed with no project file changed since: a changed input or fixed code may well run now
