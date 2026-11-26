@@ -111,9 +111,9 @@ function toggleSteps() {
 }
 function toggleSide() {
   const a = $("#app");
-  if (a.classList.contains("autoside")) { S.keepSide = true; a.classList.remove("autoside"); renderTop(); return; }
+  if (a.classList.contains("autoside")) { S.keepSide = true; flipLayout(() => { a.classList.remove("autoside"); renderTop(); }); return; }
   if (narrow()) { a.classList.toggle("sideopen"); return; }
-  a.classList.toggle("noside"); store("sidehidden", a.classList.contains("noside")); renderTop();
+  flipLayout(() => { a.classList.toggle("noside"); store("sidehidden", a.classList.contains("noside")); renderTop(); });
 }
 function globalKeys(e) {
   const m = isMac ? e.metaKey : e.ctrlKey;
