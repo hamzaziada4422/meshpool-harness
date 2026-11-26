@@ -12,11 +12,11 @@ fix once to see the test fail again. Rows from the 0.0.17 ledger were not counte
 | Web UI (UI) | 13 | 13 | 1 |
 | Agent core and tools (AG) | 15 | 15 | 2 |
 | Office files and engines (OF) | 19 | 19 | 2 |
-| Server and security (SV) | 12 | 12 | 4 |
+| Server and security (SV) | 13 | 13 | 3 |
 | Command line and setup (CL) | 13 | 13 | 3 |
 | Lead (LD) | 8 | 7 | 0 |
 | Later pass (LP, LQ) | 12 | 12 | 3 |
-| all | 105 | 104 | 6 |
+| all | 106 | 105 | 5 |
 
 The one fix without a test is LD-07. The race behind it could not be made to happen reliably.
 
@@ -133,6 +133,7 @@ tests that slept a fixed time now wait for an event).
 | SV-10 | An editor save that could not write returned a 500 with a raw PermissionError. |
 | SV-11 | The browser was opened with the app's lifetime launch key on its command line. The key is now single-use. |
 | SV-12 | A blank folder path became the app's own working folder. |
+| SV-13 | The mp_s session cookie reached every other server on 127.0.0.1 the user opened in the same browser, since cookies are not scoped by port. That server could replay it to GET / and read the API token. The cookie alone now gets a page without the token. The token comes back only when the cookie arrives with a per-launch page secret that the meshpool page keeps in localStorage, which is scoped to its own origin and port. |
 
 ## Command line and setup (app/tests/test_cl_b018.py)
 
@@ -174,7 +175,6 @@ tests that slept a fixed time now wait for an event).
 Needs the owner (a design decision):
 - SV: The Office panel token is in taskpane.html, which any local process can fetch without a token. Office loads the
   page without a secret, so closing this needs a different design.
-- SV: The mp_s cookie is not tied to a port. Another server on 127.0.0.1 opened in the same browser receives it.
 - SV: The launch key printed in the terminal in browser mode still lasts for the app's life (testkit scripts reuse it).
 
 Known limits:
