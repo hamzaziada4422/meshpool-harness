@@ -678,7 +678,10 @@ def term_run(root: str, command: str, shell: str = "") -> dict:
         TERMS.pop(k, None)
     TERMS[tid] = t
     env = dict(C.user_env(), TERM="dumb", FORCE_COLOR="0", NO_COLOR="1")
-    p = subprocess.Popen(_shell_cmd(command, shell), cwd=str(r), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    argv = _shell_cmd(command, shell)
+    if argv[0] == os.environ.get("MH_BASH"):    # Git Bash on Windows (config.msys_lang)
+        C.msys_lang(env)
+    p = subprocess.Popen(argv, cwd=str(r), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                          stdin=subprocess.DEVNULL, env=env, creationflags=NO_WINDOW,
                          **({} if os.name == "nt" else {"start_new_session": True}))
     t["p"] = p

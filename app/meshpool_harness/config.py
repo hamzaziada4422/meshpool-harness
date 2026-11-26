@@ -793,6 +793,30 @@ def packaged() -> bool:
     return (APP.parent / "python").is_dir() or (APP.parent / "runtime").is_dir()
 
 
+def _windows_locale_name() -> str:
+    """The Windows user locale ("de-DE"), or "" when it cannot be read."""
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(85)
+        if ctypes.windll.kernel32.GetUserDefaultLocaleName(buf, 85):
+            return buf.value
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def msys_lang(env: dict, nt: bool | None = None, locale_name=_windows_locale_name) -> dict:
+    """Git Bash's /etc/profile.d/lang.sh runs /usr/bin/locale when LC_ALL, LC_CTYPE and LANG are all unset, as they
+    are on Windows. MinGit (the bundled Git) has no locale program, so every login shell printed "lang.sh: line 19:
+    /usr/bin/locale: No such file or directory" into the command's output. LANG is set here the way that program sets
+    it: the Windows user locale, UTF-8 ("de_DE.UTF-8"), else C.UTF-8. A locale the user set is never changed."""
+    if not (os.name == "nt" if nt is None else nt) or any(env.get(k) for k in ("LC_ALL", "LC_CTYPE", "LANG")):
+        return env
+    name = locale_name() or ""
+    env["LANG"] = name.replace("-", "_") + ".UTF-8" if re.fullmatch(r"[a-z]{2,3}-[A-Z]{2}", name) else "C.UTF-8"
+    return env
+
+
 def user_env(base: dict | None = None) -> dict:
     """Environment for the user's own commands (the agent's shell, the terminal panel). Inside the app, drop the
     variables that point Python at Meshpool's bundled runtime, so the user's python3, pip and tools behave as in

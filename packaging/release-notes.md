@@ -20,6 +20,7 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
   - The `probe` and `trace` tools ask like any command instead of failing.
   - A repository with submodules gets an isolated copy again, and meshpool's git calls in a copy never run the repository's own hooks or fsmonitor. A repository whose git settings run programs on checkout (a filter, an external diff) gets no copy.
   - Saved allow rules never cover a chained, PowerShell, non-ASCII or path-glob command, and read-only git commands in a repository whose git settings run programs ask first.
+  - On Windows, a command no longer ends with "lang.sh: line 19: /usr/bin/locale: No such file or directory". The bundled Git has no locale program, so meshpool now sets LANG for its Git Bash from your Windows language when nothing else sets it.
   - Still open: the cost and speed targets against Codex are only partly met (see the 0.0.16 table), three tests still wait a fixed time, and typing speed in very long chats is not measured.
 - **The browser follows a new tab.** When a link or a script opens a page in a new tab, the agent's browser now switches to it before it reports what it sees. Before, it still described the old tab for one step.
 - **Release builds are sturdier.** LibreOffice is downloaded from the main site when the archive site is down, still checked against its pinned checksum. The release smoke test now makes a real tool call: the v0.0.16 smoke test passed on a reply that held a tool error.
