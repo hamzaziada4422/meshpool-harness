@@ -111,7 +111,10 @@ TAIL = ("The user's explicit choices win over these checks: if the request says 
         "this check to the user under your answer, so your answer needs no account of the review, the pictures or "
         "the measurements. If you changed something, say what you changed in plain words, as part of your answer. "
         "Do not start servers or open other programs for this: meshpool looks again "
-        "after your fix. End with your answer to the user as before: what you made and where it is.")
+        "after your fix. End with your answer to the user as before, led by what you made and where it is; a "
+        "fix you could not make comes after that, in one line.")
+# Sara, round 4: the reply to a fix round led with "I couldn't fix the ### problem" though the Q4 column, the SUM,
+# the chart and the lock file were all done. The answer leads with what the turn delivered.
 SCOPE_RULE = ("Change only what the user's request asked for in this turn. Anything else you notice, in this file or in "
               "any other, you leave as it is: do not fix it, and do not create another copy of a file to change it. If you "
               "think it matters, say it in one line at the end of your answer and ask if they want it fixed.")

@@ -397,6 +397,22 @@ function pvKeepCardsFirst(col) {
     if (last && n.previousElementSibling?.classList.contains("turnfoot")) last.after(n);
   } }).observe(col, {childList: true, subtree: true});
 }
+// The same picture in two formats (Maya, round 4: "Bouquet price chart.pdf" and "Bouquet price chart.png" were two cards):
+// one card, shown by its picture, with the other format beside it. {main: path, alts: [paths]} per card, in order.
+const PV_SAME_RX = /\.(png|jpe?g|gif|webp|svg|pdf)$/i;
+function pvGroupFormats(paths) {
+  const out = [], by = new Map();
+  for (const p of paths) {
+    const m = p.match(PV_SAME_RX), k = m ? p.slice(0, -m[0].length).toLowerCase() : null;
+    const g = k !== null ? by.get(k) : null;
+    if (g) { g.all.push(p); continue; }
+    const n = {all: [p]}; out.push(n); if (k !== null) by.set(k, n);
+  }
+  return out.flatMap(g => {
+    const main = g.all.find(p => PV_IMG_RX.test(p));
+    return main ? [{main, alts: g.all.filter(p => p !== main)}] : g.all.map(p => ({main: p, alts: []}));
+  });
+}
 function pvTurnCards(cur, foot, turn) {
   if (!foot || !cur) return;
   { const col = foot.closest("#col"); if (col) pvKeepCardsFirst(col); }
@@ -408,7 +424,8 @@ function pvTurnCards(cur, foot, turn) {
   (cur.tpaths || []).forEach(add);
   const t = (cur.view?.turns || []).find(x => x.n === (turn ?? cur.turn));
   for (const c of t?.changed || []) if (c.status !== "deleted") add(c.path);
-  const paths = [...seen];
+  const groups = pvGroupFormats([...seen]), alts = new Map(groups.map(g => [g.main, g.alts]));
+  const paths = groups.map(g => g.main);
   // The turn's row, wherever it is under its footer: the receipt line and the chips (.after010) go in right after the
   // footer, so the row drawn at turn end was no longer next to it when the checkpoint came, and a second row was
   // added (Sara: the PDF card twice). One turn, one row.
@@ -426,8 +443,9 @@ function pvTurnCards(cur, foot, turn) {
   // the card says so, so "I fixed Budget.xlsx" is not read as a change to your own file. Download gets it back.
   const own = !!cur.view?.scratch, att = pvAttached(cur);
   row.innerHTML = shown.map(p => { const ty = pvType(p), thumb = PV_THUMB_RX.test(p), img = /\.(png|jpe?g|gif|webp|svg)$/i.test(p), nm = p.split("/").pop();
+    const also = alts.get(p) || [], exts = [ty.ext, ...also.map(pvExt)].filter(Boolean);
     const where = own ? (att.has(p) || att.has(nm) ? "Copy of your file, in this chat" : "In this chat") : "";
-    return `<span class="pvwrap"><button class="pvcard" data-pv="${esc(p)}" title="${esc(p)}"><span class="pvth${thumb ? " wait" : ""}">${img ? `<img alt="" loading="lazy" src="/raw?t=${encodeURIComponent(MP.token)}&${pvQuery(root, p)}">` : `<span class="pvi ${ty.ext && /^html?$/.test(ty.ext) ? "html" : ""}">${pvIcon(ty.ext)}</span>`}</span><span class="pvcm"><b title="${esc(nm)}">${esc(pvShortName(nm))}</b><small>${esc(ty.label)}${ty.ext ? " · ." + esc(ty.ext) : ""}</small>${where ? `<small class="pvwhere">${esc(where)}</small>` : ""}</span></button><button class="iconbtn pvdl" data-pvdl="${esc(p)}" aria-label="Download ${esc(nm)}" data-tip="Download" data-tip-pos="above">${ICON.dl}</button></span>`; }).join("")
+    return `<span class="pvwrap"><button class="pvcard" data-pv="${esc(p)}" title="${esc(p)}"><span class="pvth${thumb ? " wait" : ""}">${img ? `<img alt="" loading="lazy" src="/raw?t=${encodeURIComponent(MP.token)}&${pvQuery(root, p)}">` : `<span class="pvi ${ty.ext && /^html?$/.test(ty.ext) ? "html" : ""}">${pvIcon(ty.ext)}</span>`}</span><span class="pvcm"><b title="${esc(nm)}">${esc(pvShortName(nm))}</b><small>${esc(ty.label)}${exts.length ? " · " + exts.map(x => "." + esc(x)).join(" and ") : ""}</small>${where ? `<small class="pvwhere">${esc(where)}</small>` : ""}</span></button><button class="iconbtn pvdl" data-pvdl="${esc(p)}" aria-label="Download ${esc(nm)}" data-tip="Download" data-tip-pos="above">${ICON.dl}</button>${also.map(a => `<button class="pvalt" data-pvdl="${esc(a)}" aria-label="Download ${esc(a.split("/").pop())}" data-tip="Download the ${esc(pvExt(a).toUpperCase())}" data-tip-pos="above">${esc(pvExt(a).toUpperCase())}</button>`).join("")}</span>`; }).join("")
     + (paths.length - bigs.size > shown.length ? `<span class="pvmore">+${paths.length - bigs.size - shown.length} more under Artifacts</span>` : "");
   $$(".pvcard", row).forEach(b => {
     // opening is delegated (the click listener below), so a card whose handlers were lost in a rebuild still opens

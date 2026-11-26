@@ -63,9 +63,10 @@ def _harness_name(hid: str) -> str:
         return ""
     try:
         from meshpool_harness import harnesses as H
-        return H.get(hid).get("name") or hid
+        name = H.get(hid).get("name") or hid
     except Exception:  # noqa: BLE001
-        return hid
+        name = hid
+    return re.sub(r"\bMeshpool\b", "meshpool", str(name))    # the brand is lowercase wherever people read it
 
 
 def _reason_from_events(chat_id: str) -> str:

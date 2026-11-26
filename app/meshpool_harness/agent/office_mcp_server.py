@@ -595,11 +595,13 @@ def read_document(path: str, sheet: str | None = None, pages: str | None = None,
                           False), p)
 
 
-XLSX_OPS = "set_cell, add_row, add_comment, clear_cell, set_range, delete_rows, add_sheet, delete_sheet, freeze_panes"
+XLSX_OPS = ("set_cell, add_row, add_comment, clear_cell, set_range, delete_rows, add_sheet, delete_sheet, freeze_panes, "
+            "set_column_width")
 # names models reach for (seen in office1-3 transcripts: set_formula 58x, delete_rows 34x, set_value 30x, clear_cell 28x)
 _XLSX_ALIASES = {"set_formula": "set_cell", "set_value": "set_cell", "write_cell": "set_cell", "delete_row": "delete_rows",
                  "remove_rows": "delete_rows", "clear": "clear_cell", "clear_range": "clear_cell", "remove_sheet": "delete_sheet",
-                 "create_sheet": "add_sheet", "write_range": "set_range", "append_row": "add_row"}
+                 "create_sheet": "add_sheet", "write_range": "set_range", "append_row": "add_row",
+                 "column_width": "set_column_width", "set_width": "set_column_width", "widen_column": "set_column_width"}
 
 
 # Sheet extensions (extLst ext uri) openpyxl drops on save, by what the user sees.
@@ -703,7 +705,8 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                 "tracked_replace{find,replace}, tracked_delete{find}, tracked_insert_after{find,text}, "
                 "append_paragraph{text}, add_comment{find,text}. Excel: set_cell{sheet,cell,value or =formula}, "
                 "add_row{values}, add_comment{sheet,cell,text}, clear_cell{sheet,cell or range}, set_range{sheet,start,values[[...]]}, "
-                "delete_rows{sheet,row,count}, add_sheet{name}, delete_sheet{sheet}, freeze_panes{sheet,cell}. PowerPoint: replace_text{find,replace}, "
+                "delete_rows{sheet,row,count}, add_sheet{name}, delete_sheet{sheet}, freeze_panes{sheet,cell}, "
+                "set_column_width{sheet,column,width}. PowerPoint: replace_text{find,replace}, "
                 "set_notes{slide,text}."), True
     out = p if in_place else (_resolve(output) if output else _free(p.with_name(f"{p.stem} (edited){ext}")))
     lost = _xlsx_lost_parts(p) if ext == ".xlsx" else []
@@ -719,6 +722,7 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
     # edit leaves no half-made copy behind, and a failed in-place save never truncates the user's file.
     part = out.with_name(f".{out.stem}.{os.getpid()}.{threading.get_ident()}.part{ext}")
     done, errors = [], []
+    words0 = _docx_words(p) if ext == ".docx" else None
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
         if ext == ".docx":
@@ -814,6 +818,17 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                 elif op == "freeze_panes":
                     ws.freeze_panes = o.get("cell") or "A2"
                     done.append(f"froze panes at {ws.freeze_panes} on {ws.title}")
+                elif op == "set_column_width":     # Lina, round 4: "widen the date column" had no op, so a script
+                    col = str(o.get("column") or o.get("col") or "").strip().upper()     # rewrote the workbook
+                    try:
+                        width = float(o.get("width") or 0)
+                    except (TypeError, ValueError):
+                        width = 0
+                    if not re.fullmatch(r"[A-Z]{1,3}", col) or not 0 < width <= 255:
+                        errors.append("set_column_width needs column (a letter, e.g. B) and width (1 to 255)")
+                        continue
+                    ws.column_dimensions[col].width = width
+                    done.append(f"set column {col} to width {width:g} on {ws.title}")
                 elif op == "add_row":
                     ws.append(o.get("values") or [])
                     done.append(f"row added to {ws.title}")
@@ -864,10 +879,32 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
         if out == p:                                 # no backup copy in a scratch folder the user cannot see (Sara)
             msg += "Undo in meshpool takes this change back; no backup copy is needed. "
     msg += "; ".join(done)
+    words1 = _docx_words(out) if words0 is not None and done else None
+    if words1 is not None and words1 != words0:
+        # Sara, round 4: "shorten section 3 by about a third" lost half its words and the reply said a third
+        cut = words0 - words1
+        msg += (f"\nWords the reader sees: {words1:,}, {'down' if cut > 0 else 'up'} from {words0:,} "
+                f"({abs(cut):,} {'fewer' if cut > 0 else 'more'}). Compare that with the part of the document you "
+                "changed and with what the user asked for, and give the real figure in your answer.")
     if lost:
         msg += (f"\nThe copy lacks the original's {what} (openpyxl cannot keep them). Tell the user before the copy "
                 "replaces the original.")
     return msg + (("\nNot done: " + "; ".join(errors)) if errors else ""), bool(errors) and not done
+
+
+def _docx_words(path) -> int | None:
+    """The words a reader sees in a .docx body: tracked deletions (w:delText) are not counted, insertions are."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(str(path)) as z:
+            xml = z.read("word/document.xml").decode("utf-8", "replace")
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return None
+    n = 0
+    for para in re.findall(r"<w:p[ >].*?</w:p>", xml, re.S):
+        text = "".join(re.findall(r"<w:t(?:\s[^>]*)?>([^<]*)</w:t>", para))
+        n += len(text.split())
+    return n
 
 
 _REV_ID = [0]
@@ -1442,7 +1479,7 @@ TOOLS = {
                          "Word: replace_text, "
                          "tracked_replace{find,replace}, tracked_delete, tracked_insert_after, add_comment. Excel: "
                          "set_cell{sheet,cell,value; =formula}, set_range{start,values}, clear_cell, add_row, "
-                         "delete_rows{row,count}, add_sheet, delete_sheet, freeze_panes.",
+                         "delete_rows{row,count}, add_sheet, delete_sheet, freeze_panes, set_column_width{column,width}.",
                          {"path": S, "operations": {"type": "array", "items": {"type": "object"}}, "output": S,
                           "in_place": {"type": "boolean"}}, ["path", "operations"]),
     "make_pdf": (make_pdf, "Save Markdown as a PDF. Saved as `filename` in the project folder. Charts: a fenced "

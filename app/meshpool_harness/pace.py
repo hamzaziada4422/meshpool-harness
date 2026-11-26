@@ -20,7 +20,9 @@ _MAKE = re.compile(r"\b(make|create|build|write|draft|generate|produce|prepare|d
                    re.I)
 _FILES = re.compile(r"\.(docx?|xlsx?|pptx?|pdf|csv|json|py|js|ts|tsx|md|html|css|sql)\b|\b(document|report|deck|"
                     r"slides?|spreadsheet|workbook|presentation|memo|file|folder|script|code|repo|app|website|"
-                    r"function|class|bug|tests?)\b", re.I)
+                    r"function|class|bug|tests?|charts?|graphs?|plots?|diagrams?)\b", re.I)
+# Maya, round 4: "Can you make me a simple chart comparing the prices of my 12 bouquets" was a quick request, whose note
+# says not to create files, so the chart came as bars of text characters. A chart is a picture, made as a file.
 _ASK = re.compile(r"^\s*(whats|hows|whos|what|which|who|whom|whose|when|where|why|how|is|are|was|were|can|could|does|do|did|should|"
                   r"would|will|tell me|explain|compare|define|give me|list|name|suggest|recommend|find out|look up|"
                   r"search|research|quick(ly)?|briefly|any idea|i wonder)\b|\?\s*$|\b(quick|short|brief|briefly|"
