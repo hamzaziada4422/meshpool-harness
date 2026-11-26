@@ -159,8 +159,13 @@ def _extract(p: Path, max_chars: int, sheet, pages, lang: str, ocr: str) -> str:
         except Exception:  # noqa: BLE001
             pass
         return f"# {p.name}\nImage, {size}.\n\n" + ocr.describe(p, p.name, lang)
-    if not fn:
-        return p.read_text(encoding="utf-8", errors="replace")[:max_chars]
+    if not fn:                                     # plain text: only what is shown is read (a 3 GB log is not loaded)
+        with open(p, "rb") as fh:
+            raw = fh.read(max_chars * 4 + 4)
+        text, size = raw.decode("utf-8", errors="replace"), p.stat().st_size
+        if size > len(raw) or len(text) > max_chars:
+            text = text[:max_chars] + f"\n\n[... cut at {max_chars} characters of a {size:,}-byte file. Read it in parts.]"
+        return text
     try:
         kw = {}
         if fn in (_xlsx, _xls) and sheet:
@@ -852,8 +857,16 @@ def _strip_html(s: str) -> str:
     return re.sub(r"[ \t]+", " ", html.unescape(s)).strip()
 
 
+HTML_MAX = 20_000_000
+
+
 def _html(p: Path) -> str:
-    return _strip_html(p.read_text(encoding="utf-8", errors="replace"))
+    with open(p, "rb") as fh:                      # a huge saved page or log: the start is read, not all of it
+        raw = fh.read(HTML_MAX + 1)
+    text = _strip_html(raw[:HTML_MAX].decode("utf-8", errors="replace"))
+    if len(raw) > HTML_MAX:
+        text += f"\n\n[only the first {HTML_MAX // 1_000_000} MB of this page were read]"
+    return text
 
 
 def _epub(p: Path) -> str:

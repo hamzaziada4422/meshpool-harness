@@ -339,3 +339,56 @@ def test_of09_preview_of_a_password_protected_file_does_not_say_damaged(tmp_path
         with pytest.raises(ValueError) as e:
             PV.meta(str(root), name)
         assert "password-protected" in str(e.value) and "damaged" not in str(e.value)
+
+
+# ---------- OF-11: read_document loaded a whole plain-text or HTML file to show the first part of it ------------------
+
+def _count_reads(monkeypatch, target: Path) -> list:
+    import builtins
+    import io as _io
+    got = []
+    real_open = _io.open
+
+    class Spy:
+        def __init__(self, fh):
+            self.fh = fh
+
+        def __getattr__(self, k):
+            return getattr(self.fh, k)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self.fh.close()
+
+        def read(self, n=-1):
+            data = self.fh.read(n)
+            got.append(len(data))
+            return data
+
+    def spy_open(file, *a, **k):
+        fh = real_open(file, *a, **k)
+        return Spy(fh) if str(file) == str(target) else fh
+    monkeypatch.setattr(_io, "open", spy_open)
+    monkeypatch.setattr(builtins, "open", spy_open)
+    return got
+
+
+def test_of11_a_big_log_file_is_read_only_as_far_as_it_is_shown(tmp_path, monkeypatch):
+    f = tmp_path / "server.log"
+    f.write_bytes(b"line of log text\n" * 300_000)          # 5 MB
+    got = _count_reads(monkeypatch, f)
+    out = docread.extract(f, max_chars=1000)
+    assert out.startswith("line of log text") and "cut at 1000 characters" in out
+    assert got and sum(got) <= 4004
+
+
+def test_of11_a_huge_html_file_is_read_only_in_part(tmp_path, monkeypatch):
+    monkeypatch.setattr(docread, "HTML_MAX", 100_000)
+    f = tmp_path / "dump.html"
+    f.write_bytes(b"<p>row</p>\n" * 50_000)                 # 550 KB
+    got = _count_reads(monkeypatch, f)
+    out = docread.extract(f)
+    assert out.startswith("row") and "only the first" in out
+    assert got and sum(got) <= 100_001
