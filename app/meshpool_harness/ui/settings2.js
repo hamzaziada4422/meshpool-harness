@@ -16,7 +16,7 @@ const SET_NAV = [
 const SET_GROUPS = SET_NAV.flat().map(([k, lb, , subs]) => [k, lb, subs]);       // kept for company.js and old callers
 // Words people search for that are not in a page's name (persona runs, 0.0.18: "approval", "ask before" and "folder"
 // found nothing, and Permissions was a tab inside Privacy).
-const SET_WORDS = {permissions: "approvals approve approval ask asking ask before prompts questions allow deny rules folders folder access sandbox commands run without asking",
+const SET_WORDS = {permissions: "approvals approve approval ask asking ask before prompts questions allow deny rules folders folder access sandbox commands run without asking full access never ask auto approve",
   privacy: "data delete export history incognito", models: "model provider endpoint key api", notify: "alerts sounds",
   personal: "memory instructions custom style", plugins: "connectors mcp tools skills office excel word powerpoint add-in", caps: "features web search browser computer"};
 const SET_NAMES = {profile: "Profile", appearance: "Appearance", notify: "Notifications", suggest: "Suggestions", caps: "Features", personal: "Instructions and memory", styles: "Styles", web: "Web search",

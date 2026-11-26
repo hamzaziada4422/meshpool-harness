@@ -2624,38 +2624,30 @@ async function renderSection(sec) {
     const draw = async body => {
       const r = await post("/api/permissions", body || {});
       const autoOn = !["0", "off", "false", "no"].includes(String(get0("MH_SANDBOX_AUTO") ?? "1").toLowerCase());
+      const fullOn = normMode(get0("MH_AGENT_PERMISSIONS")) === "auto";   // Full access: new chats never ask
       b.innerHTML = `${close}<h3>Permissions</h3>
         <h3 style="font-size:16px;margin:4px 0 6px">When Meshpool asks you</h3>
-        <p class="lead">${autoOn ? "Meshpool reads, runs and writes files in the chat's folder on its own (Undo keeps every change). It asks before it deletes files, uses the internet, installs something, or goes outside the folder." : "Meshpool asks before every command and every file change."}</p>
-        <div class="row" style="gap:8px;margin-bottom:6px"><select class="sr-sel" id="permAuto" aria-label="When Meshpool asks you"><option value="1" ${autoOn ? "selected" : ""}>Only for risky actions (recommended)</option><option value="0" ${autoOn ? "" : "selected"}>Before every command and change</option></select><span class="res" id="permAutoRes"></span></div>
+        <p class="lead">${fullOn ? "New chats start in Full access: Meshpool edits files and runs commands without asking, including deleting, using the internet and installing. Undo keeps every file change." : autoOn ? "Meshpool reads, runs and writes files in the chat's folder on its own (Undo keeps every change). It asks before it deletes files, uses the internet, installs something, or goes outside the folder." : "Meshpool asks before every command and every file change."}</p>
+        <div class="row" style="gap:8px;margin-bottom:6px"><select class="sr-sel" id="permAuto" aria-label="When Meshpool asks you"><option value="1" ${!fullOn && autoOn ? "selected" : ""}>Only for risky actions (recommended)</option><option value="0" ${!fullOn && !autoOn ? "selected" : ""}>Before every command and change</option><option value="full" ${fullOn ? "selected" : ""}>Never (Full access)</option></select><span class="res" id="permAutoRes"></span></div>
         <p class="lead">${esc(r.note || "")} Meshpool works only in the folders you add.${r.platform === "darwin" ? " When an agent opens a protected folder such as Desktop, Documents or Downloads for the first time, your Mac asks you to allow it." : ""}</p>
         ${r.platform === "darwin" ? `<button class="btn primary" id="permAll" style="margin-bottom:10px">Allow all</button>` : ""}
         <ul class="rows2">${r.rows.map(x => `<li><span class="dot ${x.ok === true ? "" : "wait"}" style="margin-top:7px;${x.ok === true ? "background:var(--add)" : ""}"></span><span class="tg"><b>${esc(x.name)}</b><small>${x.ok === true ? "Allowed. " : x.ok === false ? "Not allowed yet. " : ""}${esc(x.why)}</small></span>${x.ok === true || r.platform !== "darwin" ? "" : `<button class="btn" data-perm="${esc(x.id)}">${x.ok === false ? "Allow" : "Open settings"}</button>`}</li>`).join("")}</ul>
         <h3 style="font-size:16px;margin:18px 0 8px">Folders Meshpool works in</h3>
         <ul class="rows2">${S.projects.map(p => `<li><span class="tg"><b>${esc(p.name)}</b><small>${esc(p.managed ? "GitHub" : p.path)}</small></span><button class="iconbtn" data-rmp="${esc(p.path)}" aria-label="Remove">${ICON.x}</button></li>`).join("") || `<li class="pnote">No folders yet.</li>`}</ul>
         <button class="btn" id="addP">${ICON.folder} Add a folder</button>
-        <h3 style="font-size:16px;margin:18px 0 8px">Rules</h3>
-        <p class="lead">Rules decide without asking. Deny wins over allow. A rule is a tool name or <code>bash:</code> and a command pattern. Examples: <code>bash:npm test*</code>, <code>bash:git status*</code>, <code>edit</code>, <code>mcp__github__*</code>. An allow rule covers a command only when every part of it matches.</p>
-        <div id="rulesBox"></div>
-        <div class="row" style="margin-top:8px;gap:6px"><input id="ruleIn" placeholder="bash:npm test*" aria-label="New rule" style="flex:1"><button class="btn" id="ruleAllow">Allow</button><button class="btn danger" id="ruleDeny">Deny</button></div>
-        <div class="res" id="ruleRes"></div>`;
-      const drawRules = r => {
-        const li = (k, x) => `<li><span class="tg"><b>${esc(x)}</b><small>${k}</small></span><button class="iconbtn" data-rk="${k}" data-rr="${esc(x)}" aria-label="Remove rule">${ICON.x}</button></li>`;
-        $("#rulesBox", b).innerHTML = `<ul class="rows2">${r.allow.map(x => li("allow", x)).join("")}${r.deny.map(x => li("deny", x)).join("")}${r.allow.length + r.deny.length ? "" : `<li class="pnote">No saved rules.</li>`}</ul>`;
-        $$("[data-rk]", b).forEach(x => x.onclick = async () => drawRules(await post("/api/rules", {action: "remove", kind: x.dataset.rk, rule: x.dataset.rr})));
-      };
-      const addRule = async kind => { try { const r = await post("/api/rules", {action: "add", kind, rule: $("#ruleIn", b).value}); $("#ruleIn", b).value = ""; $("#ruleRes", b).textContent = ""; drawRules(r); } catch (e) { $("#ruleRes", b).className = "res bad"; $("#ruleRes", b).textContent = e.message; } };
-      drawRules(await api("/api/rules"));
-      $("#ruleAllow").onclick = () => addRule("allow"); $("#ruleDeny").onclick = () => addRule("deny");
+        <div id="rulesBox"></div>`;
       done();
       $$("[data-perm]", b).forEach(x => x.onclick = () => draw({id: x.dataset.perm}));
       $("#permAuto", b).onchange = async e => {
-        try { await post("/api/settings", {values: {MH_SANDBOX_AUTO: e.target.value}}); await loadSettings(); draw(); toast("Saved. It applies to your chats from their next step."); }
+        const v = e.target.value, cur = normMode(get0("MH_AGENT_PERMISSIONS"));
+        const values = v === "full" ? {MH_AGENT_PERMISSIONS: "auto"} : {MH_SANDBOX_AUTO: v, ...(cur === "auto" ? {MH_AGENT_PERMISSIONS: "ask"} : {})};
+        try { await post("/api/settings", {values}); await loadSettings(); S.draft.mode = ""; renderBar(); draw();
+              toast(v === "full" ? "Saved. New chats start in Full access; an open chat keeps its mode (change it next to the send button)." : "Saved. It applies to your chats from their next step."); }
         catch (err) { $("#permAutoRes", b).className = "res bad"; $("#permAutoRes", b).textContent = err.message; }
       };
       $("#permAll")?.addEventListener("click", () => draw({id: "all"}));
       $$("[data-rmp]", b).forEach(x => x.onclick = async () => { await post("/api/projects", {action: "remove", path: x.dataset.rmp}); await loadProjects(); renderSide(); draw(); });
-      const rb = document.createElement("div"); rb.id = "rulesBox"; b.appendChild(rb); drawRules(rb);
+      drawRules($("#rulesBox", b));                    // the one rules panel: allow, ask, deny and per-folder rules
       $("#addP").onclick = async () => { await pickProject(); await loadProjects(); draw(); };
     };
     await draw(); return;
