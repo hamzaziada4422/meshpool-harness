@@ -373,7 +373,7 @@ def test_speaker_notes_keep_to_about_120_words(grounded_deck):
 
 
 # ---------------------------------------------------------------------------------------------------- item 4
-def _add_one(deck, tmp_path, task="Add one chart slide after slide 5 (1 slide)"):
+def _add_one(deck, tmp_path, task="Add one chart slide after slide 5 (1 slide)", root="chat"):
     from engines.forge.engine import add_to_deck
     added = {"node": "6", "archetype": "chart_takeaway", "section": "Why a pilot wins",
              "title": "A five-plant rollout turns positive in year 1 and reaches EUR 3.1m by year 3",
@@ -392,7 +392,9 @@ def _add_one(deck, tmp_path, task="Add one chart slide after slide 5 (1 slide)")
                 return {"choices": [{"message": {"content": json.dumps({"slides": [
                     {k: added[k] for k in ("node", "archetype", "title", "section")}]})}}]}
             return super().chat(model=model, messages=messages, **kw)
-    return add_to_deck(task, str(deck), workdir=str(tmp_path / "work"), task_id="add", client=One([]))
+    root = str(tmp_path) if root == "chat" else root                   # tmp_path is the chat's folder
+    return add_to_deck(task, str(deck), workdir=str(tmp_path / "work"), task_id="add", client=One([]),
+                       **({"root": root} if root else {}))
 
 
 @pytest.fixture()
@@ -444,8 +446,8 @@ def test_a_copy_only_for_a_lock_file_or_an_explicit_save_as(tmp_path, quiet_buil
     deck = tmp_path / "Board deck.pptx"
     shutil.copy(r2_deck, deck)
     (tmp_path / "work").mkdir()
-    assert deck_target(deck, "Update the same deck") == (deck, "in_place")
-    assert deck_target(deck, "Add a slide and save it as a new file")[1] == "save_as"
+    assert deck_target(deck, "Update the same deck", tmp_path) == (deck, "in_place")
+    assert deck_target(deck, "Add a slide and save it as a new file", tmp_path)[1] == "save_as"
     lock = tmp_path / "~$Board deck.pptx"
     lock.write_bytes(b"x")
     res = _add_one(deck, tmp_path)

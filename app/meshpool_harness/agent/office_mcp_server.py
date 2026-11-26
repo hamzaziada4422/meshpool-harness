@@ -193,8 +193,9 @@ def make_deck(request: str, files: list | None = None, audience: str | None = No
 def add_slides(deck: str, request: str, slides: int = 1, files: list | None = None):
     """New slides for a deck the user already has, built by the slides engine in that deck's look and added after
     its slides, saved into that deck in place (the chat's Undo keeps the earlier version). A copy "<name>
-    (updated).pptx" is made only when the deck is open in another app or the request asks for one (engines/forge/
-    engine.py deck_target). Daniel, round 2: "update the same deck" left a second deck beside the first."""
+    (updated).pptx" is made when the deck is outside the chat's folder (Undo could not put it back), is open in
+    another app, or the request asks for one (engines/forge/engine.py deck_target). Daniel, round 2: "update the same
+    deck" left a second deck beside the first."""
     n = max(1, min(int(slides or 1), 12))
     return _engine("slides", f"[add to deck: {deck}] {request} ({n} slide{'s' if n != 1 else ''})",
                    [deck] + [f for f in files or [] if f != deck])

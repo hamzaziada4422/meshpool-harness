@@ -377,6 +377,9 @@ def run(jid: str, timeout: float | None = None, should_stop=None, env_extra: dic
         pass
     # the job ends itself after its deadline (a little after ours) or once this process is gone (guard_from_env)
     env.update(MH_JOB_DEADLINE=str(time.time() + timeout + 60), MH_JOB_PARENT=str(os.getpid()))
+    env.pop("MH_CHECKPOINT_ROOT", None)     # the chat's folder, which its Undo checkpoints cover: add_slides changes a
+    if j.get("root") is not None:           # deck in place only inside it (engines/forge/engine.py deck_target)
+        env["MH_CHECKPOINT_ROOT"] = str(Path(j["root"]).resolve())
     kw = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}   # no console flashes up;
     # its own process group, so Stop and the timeout end LibreOffice and model-written scripts too, not only the engine
     proc = None
