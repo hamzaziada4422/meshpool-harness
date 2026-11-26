@@ -344,6 +344,8 @@ class Terminal:
                                 self._esc_pressed()
                                 return
                             self.typeahead.extend(K.parse_keys(ch))
+                            if self._typed_exit():
+                                return
                         else:
                             time.sleep(0.05)
                 else:
@@ -355,12 +357,34 @@ class Terminal:
                                 return
                             if k is not None:             # typed ahead: kept for the next prompt
                                 self.typeahead.append(k)
+                                if self._typed_exit():
+                                    break
                         self.typeahead.extend(keys.pending)    # keys read together with the last one
                         keys.pending = []
+                    if self.stopping:                 # /exit typed: the turn is stopping, the keys wait for the prompt
+                        return
             except Exception:  # noqa: BLE001 - no usable terminal: Ctrl+C still stops
                 return
             finally:
                 self.keys_free.set()
+
+    def _typed_exit(self) -> bool:
+        """OM-06: /exit (or /quit, /q) typed while the agent works stops the turn; the typed line stays ahead, so the
+        prompt that follows runs it and the program ends. Anything else typed ahead waits for the next prompt."""
+        keys = self.typeahead
+        if not keys or keys[-1] != "enter":
+            return False
+        line: list = []
+        for k in reversed(keys[:-1]):
+            if k == "enter":
+                break
+            if not (isinstance(k, str) and len(k) == 1):
+                return False                    # an arrow, a paste or a deletion: not a plain /exit line
+            line.append(k)
+        if "".join(reversed(line)).strip() not in ("/exit", "/quit", "/q"):
+            return False
+        self._esc_pressed()
+        return True
 
     def _kb(self):
         """The lock that makes "is a question open?" and "take the keyboard" one step for the Esc watcher (FL-L1)."""

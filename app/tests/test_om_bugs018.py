@@ -146,10 +146,17 @@ def test_om01_in_the_sandbox_p_runs_ordinary_commands_without_a_question(monkeyp
 # ---------------------------------------------------------------------------------------------------- OM-04
 @pytest.fixture
 def endpoint(monkeypatch):
-    """A local OpenAI-style endpoint that serves two models and answers 404 model_not_found for any other name."""
+    """A local OpenAI-style endpoint that serves two models and answers 404 model_not_found for any other name.
+    mock-slow streams a long answer, one word every 0.15 s, when asked to stream. `asked` lists the models called;
+    asked.bodies keeps each request."""
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    served, asked = ["mock-edit", "mock-slow"], []
+    served = ["mock-edit", "mock-slow"]
+
+    class Asked(list):
+        bodies: list = []
+    asked = Asked()
+    asked.bodies = []
 
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -169,16 +176,36 @@ def endpoint(monkeypatch):
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
             asked.append(body.get("model"))
+            asked.bodies.append(body)
             if body.get("model") not in served:
                 return self._json(404, {"error": {"message": f"The model `{body.get('model')}` does not exist",
                                                   "type": "invalid_request_error", "code": "model_not_found"}})
+            if body.get("stream") and body["model"] == "mock-slow":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                try:
+                    for i in range(200):
+                        ch = {"id": "x", "object": "chat.completion.chunk", "model": body["model"],
+                              "choices": [{"index": 0, "delta": {"content": f"word{i} "}, "finish_reason": None}]}
+                        self.wfile.write(b"data: " + json.dumps(ch).encode() + b"\n\n")
+                        self.wfile.flush()
+                        time.sleep(0.15)
+                    self.wfile.write(b"data: [DONE]\n\n")
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                self.close_connection = True
+                return
             self._json(200, {"id": "x", "object": "chat.completion", "model": body["model"], "choices": [
                 {"index": 0, "message": {"role": "assistant", "content": "hello from " + body["model"]},
                  "finish_reason": "stop"}], "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}})
 
     srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    monkeypatch.setenv("MESHPOOL_BASE_URL", f"http://127.0.0.1:{srv.server_address[1]}/v1")
+    asked.url = f"http://127.0.0.1:{srv.server_address[1]}/v1"
+    monkeypatch.setenv("MESHPOOL_BASE_URL", asked.url)
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     monkeypatch.setenv("MH_STREAM", "0")
@@ -239,3 +266,108 @@ def test_om09_a_resumed_chat_takes_the_mode_and_model_from_the_command_line(home
     A.LIVE.clear()
     rc = T.main(str(proj), resume=True, auto=True, no_mcp=True, prompt="three", json_out="json")
     assert rc == 0 and chats.read_meta(v["id"])["mode"] == "auto"     # --auto asked for it: full access
+
+
+
+# ---------------------------------------------------------------------------------------------------- OM-06
+TRACE = "Traceback (most recent call last):\n  File \"ledgerly/money.py\", line 7\ndecimal.InvalidOperation: XYZZY"
+
+
+def _idle(s, secs=20):
+    end = time.time() + secs
+    with s.changed:
+        while s.state in ("working", "waiting") and time.time() < end:
+            s.changed.wait(0.2)
+
+
+def test_om06_a_stopped_turn_is_kept_with_what_it_said_and_marked_stopped(home, proj, capfd, endpoint, monkeypatch):
+    """OM-06: a turn the user stopped left no trace of the reply, and the next request read the pasted stack trace
+    as a question still to answer. The history now keeps the message, what the reply said so far and a mark that it
+    was stopped, and `meshpool -c` sends all of it to the model."""
+    monkeypatch.setenv("MH_STREAM", "1")
+    v = chats.create({"workdir": str(proj), "no_mcp": True, "model": "mock-slow"})
+    s = chats.get(v["id"])
+    s.send(TRACE)
+    end = time.time() + 20
+    while time.time() < end and not any(e.get("type") == "text_delta" for e in list(s.events)):
+        time.sleep(0.05)
+    time.sleep(0.5)
+    s.stop()
+    _idle(s)
+    s.close()
+    A.LIVE.clear()
+    msgs = chats.saved_messages(v["id"])
+    assert len(msgs) >= 2 and "XYZZY" in str(msgs[-2]["content"]) and msgs[-1]["role"] == "assistant", msgs
+    assert msgs[-1]["content"].startswith("word0 word1") and msgs[-1]["content"].endswith(core.STOPPED_MARK)
+    monkeypatch.setenv("MH_STREAM", "0")
+    rc = T.main(str(proj), resume=True, no_mcp=True, prompt="what was the error?", json_out="json", model="mock-edit")
+    assert rc == 0, capfd.readouterr().err
+    sent = json.dumps(endpoint.bodies[-1]["messages"])
+    assert "XYZZY" in sent and "Stopped by the user" in sent and "what was the error?" in sent
+
+
+def test_om06_exit_typed_while_the_agent_works_stops_the_turn_and_quits(home, proj, endpoint):
+    """OM-06: /exit typed in the terminal UI while a reply streamed did nothing until the reply ended. It now stops
+    the turn and quits, and the stopped turn is saved. Driven in a pty, as a person types."""
+    import os
+    import pty
+    import re
+    import select
+    import signal
+    mh = home / "mh_pty"
+    mh.mkdir()
+    (mh / "meshpool.config").write_text(f"MESHPOOL_BASE_URL={endpoint.url}\nMESHPOOL_API_KEY=sk-test-key-123456\n"
+                                        "MH_MODEL=mock-edit\n")
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("MH_", "MESHPOOL_"))}
+    env.update(MESHPOOL_HOME=str(mh), PYTHONPATH=str(Path(__file__).resolve().parents[1]), TERM="xterm-256color",
+               NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost", MH_TRUST_PROJECT="1",
+               COLUMNS="100", LINES="30")
+    pid, fd = pty.fork()
+    if pid == 0:                                                   # the child: meshpool's terminal UI
+        os.chdir(str(proj))
+        os.execve(sys.executable, [sys.executable, "-m", "meshpool_harness", "--model", "mock-slow"], env)
+    out = bytearray()
+
+    def pump(secs, until=None):
+        end = time.time() + secs
+        while time.time() < end:
+            r, _, _ = select.select([fd], [], [], 0.05)
+            if r:
+                try:
+                    d = os.read(fd, 65536)
+                except OSError:
+                    return False
+                if not d:
+                    return False
+                out.extend(d)
+                if until and until in re.sub(rb"\x1b\[[0-9;?]*[a-zA-Z]", b"", bytes(out)):
+                    return True
+        return True
+
+    def typ(text):
+        for ch in text:
+            os.write(fd, ch.encode())
+            time.sleep(0.01)
+    try:
+        pump(30, until=b"shift+tab")                             # the prompt is up
+        typ("explain this\r")
+        pump(30, until=b"word3")                                  # the reply is streaming
+        t0 = time.time()
+        typ("/exit\r")
+        pump(15, until=b"Session saved")
+        done = 0
+        while time.time() - t0 < 15 and not done:
+            done, _ = os.waitpid(pid, os.WNOHANG)
+            time.sleep(0.05)
+        assert done, "still running after /exit: " + out.decode("utf8", "replace")[-600:]
+        assert time.time() - t0 < 10
+    finally:
+        try:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+        except (OSError, ChildProcessError):
+            pass
+    from meshpool_harness import session_store as SS
+    saved = [SS.read(d) for d in (mh / "runs" / "sessions").iterdir()]
+    msgs = [m for sd in saved for m in sd["messages"]]
+    assert any(m["role"] == "assistant" and str(m["content"]).endswith(core.STOPPED_MARK) for m in msgs), msgs
