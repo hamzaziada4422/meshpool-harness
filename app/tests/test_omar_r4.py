@@ -217,3 +217,42 @@ def test_tips_is_listed_in_help_and_in_the_slash_menu(_cfg):
     from types import SimpleNamespace
     TUI.Session.cmd_help(SimpleNamespace(term=t), "")
     assert "/tips [on|off]" in out.getvalue()
+
+
+# ---------------------------------------------------------------------------------------------- item 5
+ANSWER = "The commit did not go through. Git could not sign it, and the signing service refused the connection."
+PROMISE = "I'll retry the commit as before, with signing left on, in case the signing service is back up."
+
+
+def _turn_with_final(tmp_path, final):
+    root = tmp_path / "proj"
+    root.mkdir(exist_ok=True)
+    seen = []
+    a = _scripted_agent(root, [_tool_call("bash", {"command": "ls"}),
+                               *[{"role": "assistant", "content": final}] * 4], mode="auto")   # the nudge may fire twice
+    a.emit = seen.append
+    return a, a.send("commit the changelog"), seen
+
+
+def test_a_final_reply_ending_in_a_promise_is_shown_without_that_paragraph(tmp_path, _quiet):
+    a, reply, seen = _turn_with_final(tmp_path, ANSWER + "\n\n" + PROMISE)
+    assert reply == ANSWER
+    assert PROMISE not in [m["content"] for m in a.messages if m["role"] == "assistant" and m.get("content")][-1]
+    assert any(e.get("type") == "reply_trim" and e["text"] == ANSWER for e in seen)
+    assert PROMISE in (a.ws.run_dir / "turn.log").read_text()               # kept in the log
+
+
+def test_a_reply_that_is_only_a_question_or_a_plain_answer_is_left_alone(tmp_path, _quiet):
+    ask = ANSWER + "\n\nShall I retry the commit with signing off?"
+    _, reply, seen = _turn_with_final(tmp_path, ask)
+    assert reply == ask and not any(e.get("type") == "reply_trim" for e in seen)
+
+
+def test_print_mode_writes_the_trimmed_answer(tmp_path):
+    out, err = io.StringIO(), io.StringIO()
+    t = TUI.Terminal(print_mode=True, out=out, err=err)
+    t.emit({"type": "text_delta", "text": ANSWER + "\n\n" + PROMISE})
+    t.emit({"type": "assistant", "text": "", "streamed": True, "has_tools": False})
+    t.emit({"type": "reply_trim", "text": ANSWER})
+    t.flush_held()
+    assert out.getvalue().strip() == ANSWER

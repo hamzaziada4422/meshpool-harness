@@ -162,7 +162,7 @@ def _tilde(path: str) -> str:
 
 # events that may arrive between a final answer and the review round that replaces it (print mode holds the answer)
 _HOLD_THROUGH = ("model_wait", "assistant", "review_round", "status", "usage", "model_start", "model_end", "text_delta", "thought",
-                 "stream_reset")
+                 "stream_reset", "reply_trim")
 
 class Terminal:
     """Draws the session. `emit` takes the agent's events; `approve` and `ask_questions` take its questions.
@@ -560,6 +560,11 @@ class Terminal:
             # -p: the "Checked:" line goes to stderr, so a script that reads the answer from stdout gets the answer
             # alone (the JSON result has it as "checked")
             self._write(str(ev.get("text") or "") + "\n", self.info)
+        elif t == "reply_trim":
+            # the answer without its trailing promise (core._without_trailing_promise): -p swaps the held text; what a
+            # terminal already streamed stays on screen
+            if self.print_mode and getattr(self, "_held", None) is not None:
+                self._held = str(ev.get("text") or "")
         elif t == "assistant" and self.print_mode and not ev.get("has_tools"):
             if ev.get("append") and getattr(self, "_held", None) is not None:
                 self._held += "\n\n" + str(ev.get("text") or "")      # the Checked line joins the answer it ends

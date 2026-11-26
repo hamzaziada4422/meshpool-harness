@@ -4530,6 +4530,7 @@ class Agent:
                     again, final = self._grade_gate(g, turn, final)   # independent check of a big task (agent/grader.py)
                     if again:
                         continue
+                    final = self._without_trailing_promise(final)
                     break
                 if tools_off and os.environ.get("MH_REPEAT_STOP", "8") != "0":
                     g["off_calls"] = g.get("off_calls", 0) + 1     # tools were off for this reply, yet it asked for some
@@ -5743,6 +5744,29 @@ class Agent:
             from meshpool_harness.agent import grader as GR
             check += "  \n**Independent check:** " + GR.receipt_line(rv)
         return f"**Changed:** {', '.join(parts)}{more}  \n**Checked:** {check}"
+
+    def _without_trailing_promise(self, final: str) -> str:
+        """The turn ended with no tool call, and its last paragraph still promises an action ("I'll retry the commit
+        as before..."), after the promise nudge fired or when it did not apply. The answer above it says what
+        happened; the promise would contradict it. Drop that paragraph from what is shown (the chat, -p, the reply
+        the run returns) and keep the full reply in the run's turn.log. A reply that is only the promise stays."""
+        paras = re.split(r"\n\s*\n", str(final or "").rstrip())
+        if len(paras) < 2 or len(paras[-1]) > 300 or not _announces_action(paras[-1]) \
+                or not "".join(paras[:-1]).strip():
+            return final
+        kept = str(final).rstrip()[:len(str(final).rstrip()) - len(paras[-1])].rstrip()
+        try:
+            with (self.ws.run_dir / "turn.log").open("a", encoding="utf-8", errors="replace") as f:
+                f.write("\n[dropped trailing promise]\n" + paras[-1] + "\n")
+        except (OSError, AttributeError):
+            pass
+        for m in reversed(self.messages):                  # the chat shows the answer without it
+            if m.get("role") == "assistant" and not m.get("tool_calls"):
+                if isinstance(m.get("content"), str) and m["content"].rstrip().endswith(paras[-1]):
+                    m["content"] = kept
+                break
+        self.emit({"type": "reply_trim", "text": kept})
+        return kept
 
     def _fails_before_turn(self):
         """The test ids that failed in the last test run before this turn's first edit; None when none ran then."""
