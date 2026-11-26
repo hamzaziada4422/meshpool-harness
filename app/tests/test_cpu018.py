@@ -3,6 +3,17 @@ that used to be redone per call, and checks the kept answer still sees a change.
 
 - CPU-01 profiles.load_all parsed every profile YAML file on each model request (for_model runs several times a step).
 - CPU-02 modelcaps._hints read and parsed model_hints.json on each resolve() once a reply had taught anything.
+- CPU-03 the chat view's trust note read up to 14 JSON files on every poll.
+- CPU-04 hooks files and the trust list were read before and after every tool call.
+- CPU-05 the sidebar read four files of every project, several times per refresh.
+- CPU-06 the PDF preview opened the PDF twice per page image, and once for a cached page.
+- CPU-07 the open editor read and hashed its file (up to 2 MB) every 4 s.
+- CPU-08 the @ picker read and scanned every source file of the project per keystroke.
+- CPU-09 the @ picker ran git ls-files twice per keystroke.
+- CPU-10 a shell command walked the project tree four times.
+- CPU-11 each .py / .json / .toml / .yaml edit check started a Python process.
+- CPU-12 a JavaScript edit started node --check three times.
+- CPU-13 the session panel ran the saved-file pattern over every tool output on each refresh.
 """
 import json
 import os
@@ -51,20 +62,24 @@ def home(tmp_path, monkeypatch):
     return h
 
 
-def test_parse_cached_rereads_a_file_changed_in_the_last_seconds(tmp_path):
+def test_parse_cached_rereads_a_file_changed_in_the_last_seconds(tmp_path, monkeypatch):
     f = tmp_path / "a.json"
     f.write_text('{"a": 1}')
+    assert fsio.RACY_S == 2.0
     n0 = fsio.READS[0]
     for _ in range(3):
         assert fsio.parse_cached(f, json.loads, "t") == {"a": 1}
     assert fsio.READS[0] - n0 == 3                     # just written: a same-tick change could hide, so it is read
+    monkeypatch.setattr(fsio, "RACY_S", 0.0)           # as if those two seconds had passed
     _age(f)
-    time.sleep(0.01)
     fsio.parse_cached(f, json.loads, "t")
     n1 = fsio.READS[0]
     for _ in range(5):
-        fsio.parse_cached(f, json.loads, "t")
-    assert fsio.READS[0] == n1 or fsio.RACY_S > 0     # ctime is new here; with the guard on it may still re-read
+        assert fsio.parse_cached(f, json.loads, "t") == {"a": 1}
+    assert fsio.READS[0] == n1
+    f.write_text('{"a": 2}')                           # same size, mtime set back: the change time still shows it
+    _age(f)
+    assert fsio.parse_cached(f, json.loads, "t") == {"a": 2}
     f.unlink()
     assert fsio.parse_cached(f, json.loads, "t", missing="gone") == "gone"
 
