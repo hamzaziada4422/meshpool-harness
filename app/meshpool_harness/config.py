@@ -120,6 +120,9 @@ FIELDS = [
     ("MH_SANDBOX_NETWORK", "Network for sandboxed commands", "", "Empty or 1 = commands may use the network. 0 = no network inside the sandbox."),
     ("MH_SHELL_ENV_ALLOW", "Secrets the agent's commands may see", "", "Optional. Comma-separated variable names (for example OPENAI_API_KEY) kept in the "
      "environment of the agent's commands. Everything named like a key, token, secret, password or credential is removed otherwise."),
+    ("MH_LOOK_REVIEW", "Look at web pages it makes", "1", "1 (default): before it says a web page, document, deck, "
+     "sheet or chart is done, meshpool renders it (a headless browser at desktop and phone width, or LibreOffice), "
+     "measures what is wrong and has the model check it against the request and fix it, at most twice. 0: off."),
     ("MH_AUTO_CHECK", "Check after edits", "off", "off, lint, test or both: after a Code chat edits files, run the project's linter and/or the tests "
      "for the touched files, and give failures back to the agent once."),
     ("MH_ACP_IDLE_S", "Agent idle limit (seconds)", "300", "A connected coding agent that sends nothing for this long during a turn is stopped and restarted."),

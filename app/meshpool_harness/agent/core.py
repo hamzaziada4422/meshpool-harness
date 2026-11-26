@@ -3208,7 +3208,8 @@ class Agent:
         g["req"] = self.messages[-1].get("content") if self.messages else ""
         g.update({"since_todo": 0, "plan_asked": False})
         g.update({"msg0": max(0, len(self.messages) - 1), "t0": time.time(), "cmd0": len(self.ws.commands),
-                  "after_plan": bool(getattr(self, "_prev_plan", False)), "grade_rounds": 0})
+                  "after_plan": bool(getattr(self, "_prev_plan", False)), "grade_rounds": 0,
+                  "trace0": len(getattr(self, "trace", []))})
         self._last_g, self._last_final = g, ""
         self._turn_no = getattr(self, "_turn_no", 0) + 1
         cx = self._codex()
@@ -3511,6 +3512,11 @@ class Agent:
                             "not ask permission for work you were given. If you are truly finished or truly blocked, "
                             "say so plainly, without promising more.")})
                         continue
+                    if not self._pace_wrapped:
+                        from meshpool_harness.agent import look as _LOOK   # look at a page or file it made (0.0.18)
+                        again, final = _LOOK.gate(self, g, final)
+                        if again:
+                            continue
                     again, final = self._grade_gate(g, turn, final)   # independent check of a big task (agent/grader.py)
                     if again:
                         continue
@@ -4581,6 +4587,10 @@ class Agent:
             check += f" ({len(after)} command{'s' if len(after) > 1 else ''} after the last change)"
         else:
             check = "nothing was run after the last change, so it is not verified"
+        lk = getattr(self, "last_look", None)              # the page or file was looked at (agent/look.py)
+        if lk and lk.get("turn") == getattr(self, "_turn_no", 0):
+            seen = lk["line"].split(":", 1)[-1].strip().rstrip(".")
+            check = seen if not after else check + "; " + seen
         rv = getattr(self, "last_review", None)
         if rv and rv.get("turn") == getattr(self, "_turn_no", 0):
             from meshpool_harness.agent import grader as GR
