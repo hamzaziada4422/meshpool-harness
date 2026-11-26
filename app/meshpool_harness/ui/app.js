@@ -2904,7 +2904,7 @@ async function renderSection(sec) {
       $$("[data-perm]", b).forEach(x => x.onclick = () => draw({id: x.dataset.perm}));
       $("#permAuto", b).onchange = async e => {
         const v = e.target.value, cur = normMode(get0("MH_AGENT_PERMISSIONS"));
-        const values = v === "full" ? {MH_AGENT_PERMISSIONS: "auto"} : {MH_SANDBOX_AUTO: v, ...(cur === "auto" ? {MH_AGENT_PERMISSIONS: "ask"} : {})};
+        const values = v === "full" ? {MH_AGENT_PERMISSIONS: "auto"} : {MH_SANDBOX_AUTO: v, ...(cur === "auto" || (v === "0" && cur !== "ask") ? {MH_AGENT_PERMISSIONS: "ask"} : {})};   // "before every change" also ends Accept edits
         try { await post("/api/settings", {values}); await loadSettings(); S.draft.mode = ""; renderBar(); draw();
               toast(v === "full" ? "Saved. New chats start in Full access; an open chat keeps its mode (change it next to the send button)." : "Saved. It applies to your chats from their next step."); }
         catch (err) { $("#permAutoRes", b).className = "res bad"; $("#permAutoRes", b).textContent = err.message; }
