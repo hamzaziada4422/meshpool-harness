@@ -3514,7 +3514,7 @@ class Agent:
                         continue
                     if not self._pace_wrapped:
                         from meshpool_harness.agent import look as _LOOK   # look at a page or file it made (0.0.18)
-                        again, final = _LOOK.gate(self, g, final)
+                        again, final = _LOOK.gate(self, g, final, turn=turn)
                         if again:
                             continue
                     again, final = self._grade_gate(g, turn, final)   # independent check of a big task (agent/grader.py)
@@ -5328,9 +5328,10 @@ class Agent:
         finally:
             _AUX.on = False
 
-    def _aux_complete(self, system: str, user: str, turn: dict, max_tokens: int = 700) -> str:
+    def _aux_complete(self, system: str, user, turn: dict, max_tokens: int = 700, source: str = "review") -> str:
         """One separate chat completion (fresh messages, no tools) on the same model and endpoint. Goes through
-        _post, so auth, the refused-field list and usage accounting are the agent's own. Raises on failure."""
+        _post, so auth, the refused-field list and usage accounting are the agent's own. Raises on failure. `user` is
+        text, or a list of content parts (text and images, for the look reviewer, agent/lookreview.py)."""
         from meshpool_harness import providers as PV
         prov, model = PV.split(self.current_model())
         base, key = PV.endpoint(prov)
@@ -5338,6 +5339,8 @@ class Agent:
             raise RuntimeError("no plain chat endpoint for the reviewer")
         body = {"model": model, "max_tokens": max_tokens, "temperature": 0,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+        ulen = len(user) if isinstance(user, str) else sum(
+            len(p.get("text", "")) if p.get("type") == "text" else 1500 for p in user if isinstance(p, dict))
         _apply_refused(body)
         body = self._prepare(body)
         resp = None
@@ -5346,14 +5349,14 @@ class Agent:
         if h.is_down():                                    # a side call never waits out an outage
             raise _EndpointDown("HTTP 0: the model endpoint is down; the review was skipped")
         for _ in range(3):
-            res = usage.reserve(model, request_chars=len(system) + len(user), max_tokens=max_tokens, base=base, task=task)
+            res = usage.reserve(model, request_chars=len(system) + ulen, max_tokens=max_tokens, base=base, task=task)
             try:
                 slot = h.acquire(self._check_stop, self.emit)
                 tok: dict = {}
                 resp, _s = self._wait(self._post_slotted, h, slot, base, key, body, False, tok,
                                       on_abandon=lambda: tok.__setitem__("abort", True))
-                usage.record(model, resp.get("usage"), base=base, source="review", task=task, reservation=res,
-                             request_chars=len(system) + len(user), reply_chars=_reply_chars(resp))
+                usage.record(model, resp.get("usage"), base=base, source=source, task=task, reservation=res,
+                             request_chars=len(system) + ulen, reply_chars=_reply_chars(resp))
                 break
             except RuntimeError as e:
                 if not _adapt_params(body, str(e)):

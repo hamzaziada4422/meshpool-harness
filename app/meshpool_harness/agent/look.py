@@ -1,9 +1,12 @@
 """Look at what was made before saying it is done (release 0.0.18).
 
-When a turn made or changed something with a visible result, meshpool renders the real result, measures what is wrong,
-and gives the model one review message: the user's request, the screenshots (when the model takes images) and the
-measured findings as text. The model compares the result with the request and fixes what it finds. Then meshpool looks
-again. At most MAX_ROUNDS review messages per turn; the turn ends with a "Checked: ..." line.
+When a turn made or changed something with a visible result, meshpool renders the real result and measures what is
+wrong. Then an independent reviewer (agent/lookreview.py: a separate model call with a fresh context) takes the seat of
+the person who would really use the thing, tries it, and gives a verdict. The builder gets that verdict (the persona,
+the problems by severity) next to the measured findings and fixes what it finds. Then meshpool looks again and asks the
+same persona again. It stops when the reviewer passes it, or after MAX_ROUNDS review messages per turn. If the reviewer
+cannot be had, the builder gets the measured findings alone and the line says "Checked: measured only". The turn ends
+with a "Checked: ..." line.
 
 What it looks at:
 - A web page the turn wrote or changed (HTML, CSS, JS/TS, JSX/TSX, Vue, Svelte, a static site, a built page): the
@@ -62,6 +65,11 @@ def enabled() -> bool:
         except Exception:  # noqa: BLE001
             v = None
     return str(v if v not in (None, "") else "1").strip().lower() not in ("0", "off", "false", "no")
+
+
+def reviewer_on() -> bool:
+    """The independent reviewer (MH_LOOK_REVIEWER, on by default). Off: the builder reads the measured findings alone."""
+    return str(os.environ.get("MH_LOOK_REVIEWER", "1")).strip().lower() not in ("0", "off", "false", "no")
 
 
 # ---------- the instructions the model reads -----------------------------------------------------------------------------
@@ -371,7 +379,7 @@ def _launch(pw):
         return pw.chromium.launch(headless=True, executable_path=path)
 
 
-def _web_once(url: str, out_dir: Path, tag: str, request: str, launch) -> dict:
+def _web_once(url: str, out_dir: Path, tag: str, request: str, launch, hold=None) -> dict:
     from playwright.sync_api import sync_playwright
     from meshpool_harness import ui_audit as UA
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -434,33 +442,52 @@ def _web_once(url: str, out_dir: Path, tag: str, request: str, launch) -> dict:
                 from urllib.parse import unquote, urlparse
                 target = unquote(urlparse(url).path)
             it = _interact(target, request, str(out_dir), browser)
+            for e in it.get("console_errors") or []:
+                merged.setdefault(("console", "", str(e)), {"rule": "console", "msg": str(e)[:200], "sel": "",
+                                                            "views": ["use"]})
+            res["findings"] = sorted(merged.values(), key=lambda f: (f["rule"] != "console", f["rule"]))
+            res["interact"], res["steps"] = apply_choices([str(x)[:240] for x in it.get("findings") or []],
+                                                          it.get("steps") or [], request)
+            bad = [s.get("shot") for s in res["steps"] if s.get("shot") and not s.get("ok", True)]
+            extra = list(dict.fromkeys(bad + [s for s in (it.get("shots") or []) if s]))[:2]
+            res["shots"] = shots + [("using it", Path(s)) for s in extra if Path(s).is_file()]
+            if hold is not None:                 # the reviewer may ask for actions: keep this browser for them
+                hold.res = res
+                hold.ready.set()
+                hold.serve(browser, url, out_dir, tag)
         finally:
             browser.close()
-    for e in it.get("console_errors") or []:
-        merged.setdefault(("console", "", str(e)), {"rule": "console", "msg": str(e)[:200], "sel": "", "views": ["use"]})
-    res["findings"] = sorted(merged.values(), key=lambda f: (f["rule"] != "console", f["rule"]))
-    res["interact"], res["steps"] = apply_choices([str(x)[:240] for x in it.get("findings") or []],
-                                                  it.get("steps") or [], request)
-    bad = [s.get("shot") for s in res["steps"] if s.get("shot") and not s.get("ok", True)]
-    extra = list(dict.fromkeys(bad + [s for s in (it.get("shots") or []) if s]))[:2]
-    res["shots"] = shots + [("using it", Path(s)) for s in extra if Path(s).is_file()]
     return res
 
 
-def render_web(url: str, out_dir, tag: str = "r1", request: str = "", launch=None, timeout: float = 90) -> dict:
+def render_web(url: str, out_dir, tag: str = "r1", request: str = "", launch=None, timeout: float = 90,
+               hold=None) -> dict:
     """Render once at desktop and phone width in a fresh headless Chromium, closed before returning. Runs on a thread
-    of its own: Playwright's sync API cannot run inside a thread that has an event loop."""
+    of its own: Playwright's sync API cannot run inside a thread that has an event loop. With a `hold` (lookreview.Hold)
+    it returns as soon as the pictures are taken and leaves the browser open on its thread until hold.close()."""
     box: dict = {}
 
     def run():
         try:
-            box["r"] = _web_once(url, Path(out_dir), tag, request, launch)
+            box["r"] = _web_once(url, Path(out_dir), tag, request, launch, hold)
         except Exception as e:  # noqa: BLE001
             box["e"] = e
+        finally:
+            if hold is not None:
+                hold.ready.set()
     th = threading.Thread(target=run, daemon=True, name="meshpool-look")
     t = time.time()
     th.start()
-    th.join(timeout)
+    if hold is not None:
+        hold.thread = th
+        hold.ready.wait(timeout)
+        if hold.res is not None:
+            hold.res["secs"] = round(time.time() - t, 2)
+            return hold.res
+        hold.close(5)
+        th.join(2)
+    else:
+        th.join(timeout)
     if "r" in box:
         box["r"]["secs"] = round(time.time() - t, 2)
         return box["r"]
@@ -516,8 +543,9 @@ def _image(path) -> dict | None:
     return {"mime": mime, "data": base64.b64encode(data).decode()}
 
 
-def message(kind: str, target: dict, res: dict, request: str, blind: bool) -> dict:
-    """The review message: the request, what was measured, the screenshots when the model takes images."""
+def message(kind: str, target: dict, res: dict, request: str, blind: bool, verdict: dict | None = None) -> dict:
+    """The review message: the request, what was measured, the screenshots when the model takes images. With a
+    reviewer's verdict (agent/lookreview.py) it also says who reviewed it and what that person found."""
     from meshpool_harness.agent.core import _image_part
     if kind == "web":
         what = (f"{target['label']} in a headless browser at desktop width ({DESKTOP[0]}x{DESKTOP[1]}) and phone width "
@@ -533,6 +561,15 @@ def message(kind: str, target: dict, res: dict, request: str, blind: bool) -> di
     files = [os.path.basename(str(f)) for f in target.get("files") or []][:12]
     if files:
         text += ["Files made or changed this turn: " + ", ".join(files), ""]
+    if verdict:
+        from meshpool_harness.agent import lookreview as LR
+        text[0] += (f" A separate reviewer, who did not see your work or this conversation, then used it as "
+                    f"{verdict['persona']}.")
+        text += [f"What the reviewer found, as {verdict['persona']} (could they do what they came to do: "
+                 f"{'yes' if verdict['can_do_the_job'] else 'no'}):"] + LR.verdict_lines(verdict)
+        if verdict.get("actions"):
+            text += ["", "What the reviewer asked meshpool to try, and what happened:"] + LR.action_lines(verdict)
+        text.append("")
     text.append("What meshpool measured:" if lines else "What meshpool measured: no problems found by the checks.")
     text += ["- " + ln for ln in lines[:30]]
     if steps:
@@ -547,7 +584,12 @@ def message(kind: str, target: dict, res: dict, request: str, blind: bool) -> di
                  else "No picture could be taken."]
     else:
         text += ["", "Pictures attached: " + ", ".join(lbl for lbl, _ in shots[:MAX_IMAGES]) + "."]
-    text += ["", rubric, "", TAIL]
+    if verdict:
+        text += ["", "Fix the blockers first, then the major problems, then the minor ones if they are quick. The same "
+                 "reviewer looks again after your fix."]
+    else:
+        text += ["", rubric]
+    text += ["", TAIL]
     body = "\n".join(text)
     if blind or not shots:
         return {"role": "user", "content": body}
@@ -592,9 +634,25 @@ def _phrases(res: dict) -> list:
 
 
 def summary_line(kind: str, st: dict) -> str:
-    """The closing line, from the measured findings before and after: "Checked: looked at the page at desktop and
-    phone width; fixed low contrast on 'See prices' and a console error; still open: keyboard focus is invisible on
-    the nav links"."""
+    """The closing line. With the reviewer's verdicts: "Checked: a customer on her phone ordering a birthday cake tried
+    it; fixed the order form error and low contrast; still open: no delivery date picker." Without: from the measured
+    findings before and after: "Checked: looked at the page at desktop and phone width; fixed low contrast on 'See
+    prices' and a console error; still open: keyboard focus is invisible on the nav links". When the reviewer was
+    meant to run and could not, it starts "Checked: measured only"."""
+    last = st.get("last") or {}
+    if st.get("evals"):
+        from meshpool_harness.agent import lookreview as LR
+        extra = _phrases(last) if st.get("measured_after") else []
+        line = LR.summary_line(kind, st, extra)
+        if st.get("measured_only"):
+            line = line[:-1] + "; the second review could not run, so that look was measured only."
+        return line
+    if st.get("measured_only") and not last.get("error"):
+        return "Checked: measured only (the reviewer could not run); " + _measured_line(kind, st)[len("Checked: "):]
+    return _measured_line(kind, st)
+
+
+def _measured_line(kind: str, st: dict) -> str:
     first, last = st.get("first") or {}, st.get("last") or {}
     if last.get("error"):
         return f"Checked: {last['error']}."
@@ -638,14 +696,17 @@ def out_dir(agent) -> Path:
     return C.home() / "look" / re.sub(r"[^\w.-]", "_", str(getattr(agent, "id", "chat")))[:80]
 
 
-def gate(agent, g: dict, final: str, *, render_web_fn=None, render_doc_fn=None) -> tuple[bool, str]:
+def gate(agent, g: dict, final: str, *, render_web_fn=None, render_doc_fn=None, turn: dict | None = None,
+         actions_fn=None) -> tuple[bool, str]:
     """At the final answer: look at what the turn made. Returns (True, final) when a review message was added and the
-    model should go on, else (False, final with the "Checked:" line). Never raises."""
+    model should go on, else (False, final with the "Checked:" line). Never raises. `turn` is the turn's usage total, so
+    the reviewer's calls are counted in it."""
     try:
         if (not enabled() or getattr(agent, "plan", False) or getattr(agent, "_is_grader", False)
                 or getattr(agent, "_delegate_depth", 0) or not (final or "").strip()):
             return False, final
         st = g.setdefault("look", {"rounds": 0})
+        agent._look_st = st
         if st.get("done"):
             return False, final
         if "kind" not in st:
@@ -673,8 +734,21 @@ def gate(agent, g: dict, final: str, *, render_web_fn=None, render_doc_fn=None) 
         agent.emit({"type": "status", "look": True, "text": "Looking at the result" + (" again" if st["rounds"] else "")
                     + " before finishing..."})
         req = request_of(agent, g)
+        asking = (reviewer_on() and not st.get("measured_only") and st["rounds"] < MAX_ROUNDS
+                  and hasattr(agent, "_aux_complete"))
+        hold = None
         if kind == "web":
-            res = (render_web_fn or render_web)(target["url"], out_dir(agent), tag, req)
+            kw = {}
+            if asking and not st.get("persona"):
+                from meshpool_harness.agent import lookreview as LR
+                hold = LR.Hold()                       # the first look of a page: the reviewer may ask for actions
+                kw["hold"] = hold
+            try:
+                res = (render_web_fn or render_web)(target["url"], out_dir(agent), tag, req, **kw)
+            except BaseException:
+                if hold is not None:
+                    hold.close()
+                raise
         else:
             st["label"] = target["label"]
             res = (render_doc_fn or render_doc)(target["file"], out_dir(agent), tag)
@@ -690,8 +764,33 @@ def gate(agent, g: dict, final: str, *, render_web_fn=None, render_doc_fn=None) 
             st["done"] = True
             return False, _close(agent, final, f"Checked: {res['error']}.")
         found = finding_lines(res)
-        if st["rounds"] < MAX_ROUNDS and (st["rounds"] == 0 or found) and not res.get("error"):
-            msg = message(kind, target, res, req, _blind(agent))
+        verdict = None
+        if asking and not res.get("error"):
+            from meshpool_harness.agent import lookreview as LR
+            try:
+                verdict = LR.review(agent, turn if isinstance(turn, dict) else {"in": 0, "cached": 0, "out": 0, "calls": 0},
+                                    kind, target, res, req, st, blind=_blind(agent), finding_lines=found, hold=hold,
+                                    out_dir=out_dir(agent), tag=tag, actions_fn=actions_fn,
+                                    announce=lambda p: agent.emit({"type": "status", "look": True, "persona": p,
+                                                                   "text": "Checking it as: " + p + "..."}))
+            finally:
+                if hold is not None:
+                    hold.close()
+            if verdict is None:
+                st["measured_only"] = True               # the reviewer could not run: the builder gets the measurements
+            else:
+                st.setdefault("evals", []).append(verdict)
+                st["persona"] = verdict["persona"]
+        elif hold is not None:
+            hold.close()
+        if verdict is not None and verdict["pass"]:
+            st["done"] = True
+            return False, _close(agent, final, summary_line(kind, st))
+        if verdict is None and st["rounds"] >= MAX_ROUNDS:
+            st["measured_after"] = True                    # looked again after the last fix, with no reviewer call
+        if st["rounds"] < MAX_ROUNDS and not res.get("error") and (
+                verdict is not None or st["rounds"] == 0 or found):
+            msg = message(kind, target, res, req, _blind(agent), verdict)
             if st["rounds"]:                               # a later round: lead with what is still wrong
                 _lead_again(msg)
             st["rounds"] += 1
@@ -716,7 +815,10 @@ def gate(agent, g: dict, final: str, *, render_web_fn=None, render_doc_fn=None) 
 
 def _close(agent, final: str, line: str) -> str:
     """The "Checked:" line goes under the final reply (and into the chat history and the turn's receipt)."""
+    st = getattr(agent, "_look_st", None) or {}
     agent.last_look = {"turn": getattr(agent, "_turn_no", 0), "line": line}
+    if st.get("reviewer"):                                 # what the reviewer's calls added: calls, tokens, seconds
+        agent.last_look["reviewer"] = dict(st["reviewer"], persona=st.get("persona", ""))
     agent.emit({"type": "assistant", "text": line, "streamed": False, "has_tools": False, "append": True})   # joins the reply
     if agent.messages and agent.messages[-1].get("role") == "assistant" and isinstance(
             agent.messages[-1].get("content"), str):

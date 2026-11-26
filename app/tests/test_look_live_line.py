@@ -69,9 +69,9 @@ def test_looking_line_goes_when_the_checked_line_arrives_and_the_footer_names_th
         cur.q = [{type: "user", text: "x", i: 0}, {type: "assistant", text: "Done.", i: 1},
                  {type: "status", look: true, text: "Looking at the result before finishing...", i: 2}];
         drainQ(cur, true);
-        const during = [cur.activity, document.querySelectorAll('#col .note').length];
+        const during = [cur.activity, Array.from(document.querySelectorAll('#col .note')).filter(n => n.textContent.trim() !== 'This chat is gone.').length];
         cur.q = [{type: "assistant", text: line, append: true, i: 3}]; drainQ(cur, true);
-        return {during, after: document.querySelectorAll('#col .note').length,
+        return {during, after: Array.from(document.querySelectorAll('#col .note')).filter(n => n.textContent.trim() !== 'This chat is gone.').length,
                 ai: Array.from(document.querySelectorAll('#col .msg-ai')).map(e => e.textContent.replace(/\s+/g, ' ').trim())};
     }""", LINE)
     assert got["during"] == ["Looking at the result before finishing", 1], got

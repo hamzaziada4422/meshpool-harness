@@ -35,7 +35,8 @@ answer to the user (never empty). Arguments must match the tool's parameters exa
 Never write <function_calls>, <invoke> or any XML tool markup: tool calls go ONLY in the JSON tool_calls list."""
 
 PLAIN = """You are the model behind an agent harness. No tools are available for this reply: answer the user directly in
-plain text (no JSON), with your complete final answer."""
+plain text, with your complete final answer. If the instructions above ask for a particular format, such as one
+JSON object, follow that format exactly and write nothing else."""
 
 
 def _text(c) -> str:
