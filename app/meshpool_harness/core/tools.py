@@ -1914,6 +1914,37 @@ class Workspace:
                          "Start servers and watchers with bash_start to read their output and stop them]").lstrip()
         return subprocess.CompletedProcess(args, rc, out, err)
 
+    def _docker_run(self, cdir, command, timeout_s):
+        """A command inside the container. Killing the local docker client does not end what runs in the container,
+        so the command runs under the container's own `timeout` when it has one, and on a timeout or Stop the process
+        is also killed inside the container. Output is capped as for a local command (_proc)."""
+        import secrets
+        pidf = f"/tmp/.meshpool-run-{secrets.token_hex(6)}.pid"
+        # the container's own limit is a little later than ours: normally our timeout ends it through _docker_kill,
+        # and this one is the backstop when that step cannot run
+        wrap = (f'if command -v timeout >/dev/null 2>&1; then timeout -k 5 {int(timeout_s) + 2} bash -lc "$1" & '
+                f'else bash -lc "$1" & fi; echo $! > {pidf} 2>/dev/null; wait $!; rc=$?; rm -f {pidf}; exit $rc')
+        try:
+            r = self._proc(["docker", "exec", "-w", cdir, self.container, "bash", "-c", wrap, "meshpool", command],
+                           None, timeout_s)
+        except subprocess.TimeoutExpired:
+            self._docker_kill(pidf)
+            raise
+        if r.returncode == 130 and "[stopped by the user]" in (r.stderr or ""):
+            self._docker_kill(pidf)
+        return r
+
+    def _docker_kill(self, pidf):
+        try:
+            subprocess.run(["docker", "exec", self.container, "sh", "-c",
+                            # `timeout` leads its own process group, so the group signal reaches what it started
+                            f'p=$(cat {pidf} 2>/dev/null) || exit 0; kill -TERM -- "-$p" 2>/dev/null || '
+                            f'kill -TERM "$p" 2>/dev/null; sleep 1; kill -KILL -- "-$p" 2>/dev/null || '
+                            f'kill -KILL "$p" 2>/dev/null; rm -f {pidf}'],
+                           capture_output=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
     def _in_scratch(self, p) -> bool:
         d = self.__dict__.get("_scratch_dir")
         try:
@@ -1950,8 +1981,7 @@ class Workspace:
                 env = self._py_env(_C.scrub_env(dict(os.environ)))
             if self.container and not command.lstrip().startswith("docker "):
                 cdir = self.cdir if not cwd else self._cpath(os.path.relpath(cwd, self.root).replace(os.sep, "/"))
-                r = subprocess.run(["docker", "exec", "-w", cdir, self.container, "bash", "-lc", command],
-                                   capture_output=True, text=True, timeout=timeout_s, errors="replace")
+                r = self._docker_run(cdir, command, timeout_s)
             else:
                 env.setdefault("PYTHONUTF8", "1")
                 self._scratch(env)
