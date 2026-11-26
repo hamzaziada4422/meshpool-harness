@@ -835,8 +835,8 @@ class PiAgent:
                 self._carry = False
                 from meshpool_harness.harnesses.acp import earlier_context
                 body = earlier_context(_before_turn(self)) + body
-                self._emit({"type": "status", "text": "Pi could not reopen its own session for this chat, so the "
-                                                      "conversation so far went along with your message."})
+                self._emit({"type": "status", "text": "The earlier session for this chat could not be reopened, "
+                                                      "so the conversation so far went along with your message."})
             self._done.clear()
             cmd = {"type": "prompt", "message": body}
             if images:

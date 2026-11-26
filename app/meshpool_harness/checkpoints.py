@@ -1053,6 +1053,34 @@ class Checkpoints:
             self._book(t, pre, post, made=made)
             self._flush()
 
+    def turn_written(self) -> list[str] | None:
+        """The files (relative paths) the open turn wrote so far: booked by its tools (journal) or seen changed since
+        it began (scan). None when no turn is open or it cannot tell (Undo off). meshpool's own end-of-turn writes
+        (xl_values.fill) touch only these: a workbook the turn only read is never rewritten (Lina, round 3: a pandas
+        check turn left region_summary.xlsx with a new size and md5, and no "file changed")."""
+        with self._lk:
+            t = self._open_turn()
+            if t is None:
+                return None
+            if self.mode == "journal":
+                pre, post = t.get("pre") or {}, dict(t.get("post") or {})
+                w = getattr(self, "_bg", None)
+                out = [p for p, v in post.items() if pre.get(p) != v and v is not None]
+                if w is None:
+                    return out
+                before = w.get("before") or {}
+            else:
+                w = getattr(self, "_win", None)
+                before = (w or {}).get("before") if w else self._begin_manifest(t)
+                out = []
+            if before is None:
+                return out if self.mode == "journal" else None
+            after = self._scan(store=False, persist=False)
+        if after is None:
+            return None
+        return list(dict.fromkeys(out + [p for p, v in after.items()
+                                         if not p.endswith("/") and before.get(p) != v and not v.startswith("!")]))
+
     @contextlib.contextmanager
     def own_write(self, paths):
         """Wrap a write Meshpool itself makes to files in the folder during a turn, outside any tool call: the

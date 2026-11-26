@@ -113,7 +113,8 @@ def _undo_case(page, app, how):
     _send(page, f"make the file {how}.txt")
     page.wait_for_function("() => S.cur && S.cur.view && S.cur.view.workdir", timeout=60000)
     _idle(page, app, 1)
-    assert (proj / "data (2).csv").exists() and (proj / f"{how}.txt").exists()          # his own data.csv got a copy
+    # round 3 (Lina): the dropped file is kept with the chat, never copied into the folder next to his own data.csv
+    assert not (proj / "data (2).csv").exists() and (proj / f"{how}.txt").exists()
     page.wait_for_function("() => document.querySelectorAll('#col .turnfoot [data-undo]').length === 1", timeout=30000)
     if how == "undo":
         page.locator("#col .turnfoot [data-undo]").click()
@@ -122,12 +123,11 @@ def _undo_case(page, app, how):
         page.locator("#col .msg-user").nth(0).locator("[data-ma='rewind']").click()
     page.click(".dlg [data-a='1']")
     page.wait_for_function("() => document.querySelectorAll('#col .msg-user').length === 0", timeout=30000)
-    assert not (proj / "data (2).csv").exists() and (proj / "data.csv").exists()
+    assert not (proj / f"{how}.txt").exists() and (proj / "data.csv").read_text() != "a,b\n9,9\n"
     assert page.evaluate("document.querySelector('#input').value") == f"make the file {how}.txt"
-    assert page.evaluate("S.attachments.length") == 0                       # no chip for a file that is gone
+    assert page.evaluate("S.attachments.map(a => a.name)") == ["data.csv"]    # still kept with the chat: its chip is back
     assert "Attached files" not in page.evaluate("document.querySelector('#input').value")
-    page.wait_for_function("() => document.querySelector('#toasts')?.innerText.includes('data (2).csv was removed with the undo. Attach it again if you need it.')",
-                           timeout=10000)
+    assert "was removed with the undo" not in page.evaluate("document.querySelector('#toasts')?.innerText || ''")
     assert page.errors == [], page.errors
 
 

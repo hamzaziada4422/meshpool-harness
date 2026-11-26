@@ -22,6 +22,24 @@ MAX_BYTES = 25 * 1024 * 1024
 _ERRORS = ("#VALUE!", "#REF!", "#NAME?", "#DIV/0!", "#N/A", "#NUM!", "#NULL!")
 _CACHE: dict = {}                      # (path, mtime_ns, size) -> {(sheet, cell): value} | None
 _LOCK = threading.Lock()
+_DONE: dict = {}                       # (path, mtime_ns, size) of versions that are filled or need nothing
+
+
+def _key(path):
+    try:
+        st = Path(path).stat()
+        return (str(Path(path).resolve()), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _done(key) -> None:
+    if key is None:
+        return
+    with _LOCK:
+        if len(_DONE) > 64:
+            _DONE.pop(next(iter(_DONE)))
+        _DONE[key] = True
 
 
 def _uncached(path) -> dict | None:
@@ -49,10 +67,9 @@ def _uncached(path) -> dict | None:
     return out
 
 
-PENDING_NOTE = ("Note for you, not the user: some formulas in this workbook have no stored results yet (openpyxl writes "
-                "none). meshpool calculates them and stores the values in the file when this turn ends, so the user "
-                "sees every value. Do not say values are missing, blank or not recalculated, and do not recalculate "
-                "it yourself for that.")
+PENDING_NOTE = ("Some formulas in this workbook have no stored results yet (openpyxl writes none). meshpool "
+                "calculates them and stores the values in the file when this turn ends, so the user sees every "
+                "value: the values are not missing, and there is no need to recalculate it.")
 
 
 def pending_note(path) -> str:
@@ -98,8 +115,11 @@ def _compute(path, timeout: float) -> dict | None:
             return None
     except OSError:
         return None
+    key = _key(path)
     need = _uncached(path)
     if not need:
+        if need == {}:
+            _done(key)                                # nothing to fill in this version of the file
         return None
     got = _recalculated(path, timeout)
     if got is None:
@@ -189,6 +209,9 @@ def fill(path, timeout: float = 25) -> int:
     if (path.with_name("~$" + path.name).exists() or path.with_name("~$" + path.name[2:]).exists()
             or path.with_name(f".~lock.{path.name}#").exists()):
         return 0
+    key = _key(path)
+    if key is not None and key in _DONE:            # this version was filled or needed nothing (the agent's loop
+        return 0                                    # and the turn's end both ask)
     vals = _compute(path, timeout)
     if not vals:
         return 0
@@ -218,6 +241,7 @@ def fill(path, timeout: float = 25) -> int:
                     zout.writestr(info, data)
         if n:
             os.replace(tmp, path)
+            _done(_key(path))
         return n
     except Exception:  # noqa: BLE001 - the file stays as it was
         return 0

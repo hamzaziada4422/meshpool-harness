@@ -518,17 +518,12 @@ def test_om03_undo_of_a_turn_removes_the_copy_of_a_file_dropped_into_it(home, pr
     s.send("which payee is the biggest expense?", files=[{"name": "sample.csv",
                                                           "data": base64.b64encode(dropped).decode()}])
     _idle(s)
-    assert (proj / "sample (2).csv").read_bytes() == dropped
+    # round 3 (Lina): a different file is no longer copied into the folder at all: it is kept with the chat
+    assert not (proj / "sample (2).csv").exists()
+    assert (s.attachments_dir() / "sample.csv").read_bytes() == dropped
     r = s.revert(s.cp.turns()[-1]["n"])
-    assert not (proj / "sample (2).csv").exists() and "sample (2).csv" in r["deleted"]
-    assert (proj / "sample.csv").exists()                                  # his own file stays
-    assert "removed 1 file (sample (2).csv)" in A.undo_message(r)[0].lower()
-    # a copy he changed after dropping it is his: Undo leaves it
-    s.send("again", files=[{"name": "sample.csv", "data": base64.b64encode(dropped).decode()}])
-    _idle(s)
-    (proj / "sample (2).csv").write_text("edited by hand\n")
-    r = s.revert(s.cp.turns()[-1]["n"])
-    assert (proj / "sample (2).csv").read_text() == "edited by hand\n" and "sample (2).csv" in r["kept"]
+    assert not r["deleted"] and (proj / "sample.csv").exists()            # his own file stays, nothing to remove
+    assert (s.attachments_dir() / "sample.csv").exists()
 
 
 # ---------------------------------------------------------------------------------------------------- OM-07

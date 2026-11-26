@@ -49,6 +49,7 @@ Rules:
 - For a request to change something (add a column, extend a chart, fix a typo), a problem is only something about what the request changed or asked for, or real breakage: an error value, a file that does not open, data lost, content running off the page. Colours, fills, print setup, column widths, fonts, alignment and other style or layout the request did not touch are never problems: put one of them in "also_noticed".
 - If you cannot see pictures, do not describe how it looks ("###", "no bars", "blank chart", "overlapping"). Say only what the measurements and the text show.
 - When the request is to convert, export, read, summarize or answer a question about an existing file, the file's own content is not yours to judge. Judge only whether the result is what was asked: it opens, it is complete, and it matches the source. Never list the source's wording, titles, numbers or design as a problem.
+- A form must not pretend. If a form's button only shows a thank-you or success message and nothing is sent anywhere (no address, no service, nothing saved), the page must say so in plain words, such as "Ordering online is coming soon", or the button is turned off with a note next to it. A form that thanks someone for an order or sign-up that goes nowhere is a "major" problem, unless the request asked for a form that does nothing yet.
 - When nothing needs changing, "problems" is [] and "pass" is true. Do not list complaints next to a pass.
 - Answer with one JSON object and nothing else."""
 
@@ -60,7 +61,7 @@ Examples: click the "Order now" button; fill the email field with "x" and submit
 
 VERDICT_ASK = """Reply with this JSON object:
 {"persona": "%s", "can_do_the_job": true | false, "problems": [{"what": "<short>", "where": "<where>", "severity": "blocker" | "major" | "minor", "in_request": true | false}], "pass": true | false, "also_noticed": "<one short line about something outside the request, or empty>"}
-Use [] for problems when there are none. "problems" holds only what the request asked for and did not get. Anything else goes in "also_noticed", never in "problems"."""
+Use [] for problems when there are none. "problems" holds only what the request asked for and did not get. Anything else goes in "also_noticed", never in "problems". A form that thanks the visitor while nothing is sent anywhere, with no note on the page saying so, is a problem (see the rules), unless the request asked for a form that does nothing yet."""
 
 DOC_NOTE = ("This is a file, not a page: you see its first pages as pictures and the text on them. You cannot click "
             "anything, so judge what a person reading or using the file would see.")

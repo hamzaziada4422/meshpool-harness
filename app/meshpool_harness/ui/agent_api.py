@@ -971,6 +971,13 @@ class Session:
             plain, raw = ET.outside(str(ev.get("text") or ""))
             if raw:
                 ev = dict(ev, text=plain, detail=raw)
+        if t == "assistant" and "<" in str(ev.get("text") or ""):
+            # tool markup the model wrote as text (Maya, round 3: "<invoke_placeholder> </invoke_placeholder>" three
+            # times in a reply, kept in the transcript): never shown, never saved as the reply
+            from meshpool_harness.core import textcalls as TC
+            clean = TC.display_safe(str(ev["text"]))
+            if clean != ev["text"]:
+                ev = dict(ev, text=clean)
         offer = False
         if t == "assistant" and ev.get("text") and self._no_folder_chat():
             from meshpool_harness import nofolder as NF          # "run this in a session that has a shell": a plain
@@ -1466,33 +1473,50 @@ class Session:
         if hasattr(self.agent, "take_back"):
             return {"text": self.agent.take_back()}
         return {"text": None}
+    def attachments_dir(self) -> Path:
+        """Where files dropped into this chat from outside its folder are kept: meshpool's data, not the user's folder
+        (runs/_uploads, which the agent, the office tools and outside agents may read)."""
+        return C.runs_dir() / "_uploads" / f"chat-{self.id}"
+
     def _save_files(self, text: str, files: list) -> str:
-        """Attached files go into this chat's own folder; the message then names them."""
+        """Attached files: one already in this chat's folder (same name, same bytes) is used where it is (WF-02);
+        any other is kept in this chat's attachments in meshpool's data, never copied into the user's folder (Lina,
+        round 3: her 2.2 MB CSV was duplicated into LinaData, and not counted as a change). The message names them;
+        what the agent makes still goes to the folder."""
         import base64
         from meshpool_harness import project_store as PS
         from meshpool_harness.ui import workbench as W
         if not self.workdir:
             raise ValueError("This chat has no folder to save files in.")
-        saved, notes = [], []
+        here, kept, notes = [], [], []
         for f in files:
             f = f if isinstance(f, dict) else {}
             try:
                 data = base64.b64decode(f.get("data", "") or "")
             except (ValueError, TypeError):
                 raise ValueError(f"Couldn't read {f.get('name') or 'the file'}.")
-            # a file that already lives in this folder (same name, same bytes) is used where it is, not copied again
-            r = W.attach_to(Path(self.workdir), f.get("name", ""), data, reuse=True)
-            saved.append(r["path"])
             name = Path(str(f.get("name") or "file")).name
-            if r.get("reused"):
-                notes.append({"name": name, "path": r["path"], "reused": True})
-            else:
-                notes.append({"name": name, "path": r["path"], "copy": True})
-                # the copy belongs to the turn this message starts: Undo of that turn removes it (OM-03)
-                self.__dict__.setdefault("_attach_made", []).append(str(Path(self.workdir) / r["path"]))
+            same = W.find_same(Path(self.workdir), Path(name).name, data)
+            if same:
+                here.append(same)
+                notes.append({"name": name, "path": same, "reused": True})
+                continue
+            box = self.attachments_dir()
+            box.mkdir(parents=True, exist_ok=True)
+            r = W.attach_to(box, name, data)
+            p = str(box / r["path"])
+            kept.append(p)
+            notes.append({"name": name, "path": p, "attached": True})
         self._attached = notes                       # the app says where each one is (session_action "attached")
         where = "this chat's folder" if PS.is_scratch(self.workdir) else "the project folder"
-        return text.rstrip() + f"\n\nAttached files (in {where}): {', '.join(saved)}"
+        out = text.rstrip()
+        if here:
+            out += f"\n\nAttached files (in {where}): {', '.join(here)}"
+        if kept:
+            out += f"\n\nAttached files (in meshpool's attachments for this chat): {', '.join(kept)}"
+            out += ("\n\n​[meshpool] The user attached these files; meshpool keeps them for this chat outside the "
+                    "project folder. Read them where they are. Save anything you make in the project folder.")
+        return out
 
     def _office_ready(self, edit_only: bool = False):
         """The office tools for this chat from this message on: an outside agent (Pi, Codex) gets its office server at
@@ -1515,12 +1539,31 @@ class Session:
                 while not ready.is_set() and time.time() < end and not getattr(self, "_stop_req", False):
                     ready.wait(0.25)                 # Stop ends the wait
 
+    def _office_to_own(self, text: str) -> None:
+        """An office deliverable (a deck, slides, a memo or document, a spreadsheet, a PDF, speaker notes, or an edit
+        to an existing .pptx, .docx or .xlsx) asked of an outside engine Auto chose moves the chat to meshpool's own
+        agent, which has the office tools, the forge engine and its checks (Daniel, round 3: after he added a folder
+        every deck, memo and notes turn went to Codex, which hand-wrote python-pptx on blank layouts with no checks).
+        An engine the user picked by hand keeps the work. Never raises."""
+        try:
+            if self.harness.get("type") not in ("acp", "pi") or not self._auto_engine():
+                return
+            from meshpool_harness.office_intent import office_work
+            if not office_work(text):
+                return
+            own = HR.builtin_for(self.kind) or "meshpool-code"
+            if own != self.harness.get("id"):
+                self.handoff(own, "office work goes to meshpool's own agent", quiet=True)
+        except Exception:  # noqa: BLE001 - the current agent still answers
+            pass
+
     def _capability_turn(self, text: str) -> list:
         """Before a message runs: what it asks Meshpool to make (capabilities.needs), and an agent that can make it.
         The chat keeps its agent when that agent can; otherwise it moves, with its history, to the agent Auto would
         pick among those that can; only when none can does it say so. Returns the capabilities the message needs,
         for the hidden note (empty when no agent can make them)."""
         from meshpool_harness import capabilities as CAP
+        self._office_to_own(text)
         try:
             caps = CAP.needs(text)
         except Exception:  # noqa: BLE001 - a check never blocks a message
@@ -1822,22 +1865,23 @@ class Session:
                 from meshpool_harness import checks as CK
                 self._emit_checks(run)
                 CK.end(run)
-                line = CK.final_line(run)
-                if line:
-                    sm = CK.summary(run)
-                    extra = {}
-                    ll = getattr(self.agent, "last_look", None)      # the look line of this turn is in the reply: one line, not two
-                    if isinstance(ll, dict) and ll.get("turn") == getattr(self.agent, "_turn_no", 0) and ll.get("line"):
-                        look = str(ll["line"]).split("\n\n")[0]
-                        with self.lock:                      # the turn's own reply, and the look's offer after it
-                            said = next((str(e.get("text") or "") for e in reversed(self.events)
-                                         if e.get("type") == "assistant" and not e.get("look")
-                                         and str(e.get("text") or "").strip()), "")
-                        merged = CK.merge_line(look, line, reply=[said, str(ll["line"])])
-                        if merged:
-                            line, extra = merged, {"look": look}
-                    self.emit({"type": "checks_line", "text": line, "items": sm.get("items", []),
-                               "details": sm.get("details", []), **extra})
+                sm = CK.summary(run)
+                look = ""
+                ll = getattr(self.agent, "last_look", None)           # the look of this turn: in the footer, not the reply
+                if isinstance(ll, dict) and ll.get("turn") == getattr(self.agent, "_turn_no", 0) and ll.get("line") \
+                        and ll.get("shown") != self._turn_id:
+                    look = str(ll["line"]).split("\n\n")[0]
+                    ll["shown"] = self._turn_id
+                with self.lock:                              # the turn's own reply: an unsure one gets no "all good"
+                    said = next((str(e.get("text") or "") for e in reversed(self.events)
+                                 if e.get("type") == "assistant" and not e.get("look")
+                                 and str(e.get("text") or "").strip()), "")
+                short, full = CK.footer(look, sm, reply=[said, str(ll["line"]) if look else ""])
+                if short:
+                    # Lina, Priya (round 3): "Checked as ...: found nothing to fix." read as noise in the answer. One
+                    # short muted line in the turn's footer ("Checked · all good"), the sentence and items in its fold.
+                    self.emit({"type": "checks_line", "text": short, "summary": full, "items": sm.get("items", []),
+                               "details": sm.get("details", []), **({"look": look} if look else {})})
             except Exception:  # noqa: BLE001
                 pass
             self._ck_run = ""
@@ -2047,6 +2091,7 @@ class Session:
                         body += "\n\n\u200b" + AS.context_block(
                             text, self.workdir, pid, chat_id=self.id, incognito=self.incognito, exclude=ex,
                             lookup=not m0.get("project_unbound"), rules=outside, tools=tools,
+                            chat=m0.get("code_mode") is not True,     # Chat mode: plain outcomes, not code
                             data_rule=outside or bool(getattr(self.agent, "_style", lambda: False)()),
                             # Pi: the office rules ride on the message that asks for a file (capabilities.note),
                             # not on every chat's first message
@@ -2163,6 +2208,7 @@ class Session:
                 return fn(*a)
             except Exception:  # noqa: BLE001
                 return None
+        guard(self._finish_values)                   # before the checkpoint closes: the write is booked to this turn
         guard(self._turn_finish)
         with _ACTIVE_LOCK:
             _ACTIVE.get(root, set()).discard(self)
@@ -2266,6 +2312,27 @@ class Session:
                         + (self.agent.title or "task")[:60], last.strip()[:200])
         except Exception:  # noqa: BLE001
             pass
+
+    def _finish_values(self) -> int:
+        """meshpool's finish hook for every harness: workbooks this turn wrote whose formulas have no stored results
+        get them (xl_values.fill), booked to the turn like any write. meshpool's own agent already does it when it
+        answers (agent/core._cache_formula_values); an outside agent (Codex, Pi, Hermes) did not, and Priya's
+        Codex-made workbook was saved with no totals showing. Only files the turn wrote: one it only read is never
+        rewritten. Returns how many cells were filled."""
+        if os.environ.get("MH_CACHE_FORMULAS", "1") == "0" or not self.cp:
+            return 0
+        wrote = self.cp.turn_written()
+        if not wrote:
+            return 0
+        from meshpool_harness import xl_values
+        n = 0
+        for rel in wrote[:200]:
+            p = Path(self.cp.root) / rel
+            if p.suffix.lower() != ".xlsx" or p.name.startswith("~$") or not p.is_file():
+                continue
+            with self.cp.own_write(p):
+                n += xl_values.fill(p)
+        return n
 
     def _end_cp_turn(self):
         """Close the open checkpoint turn, remember the turn counter, and tell the page which turn it was."""
@@ -2864,6 +2931,15 @@ def _create(body: dict, made: list) -> dict:
         hr = None
     if (harness or HR.default_for(kind)) == "meshpool-auto":
         from meshpool_harness import harness_router as HRT
+        if not kind_given and kind == "code":
+            # Chat mode in a linked folder: office work is Work's (Priya: rooms.xlsx in her Studio folder went to Codex
+            # as "docs words in a Code chat"). The Code tab (kind given) keeps its own agents (S-04).
+            try:
+                from meshpool_harness.office_intent import office_work
+                if office_work(task, body.get("files") or []):
+                    kind = "cowork"
+            except Exception:  # noqa: BLE001
+                pass
         routed = HRT.route(task, kind, category=spec_of(hr.spec).backend if hr else None,
                            model=body.get("model") or None)
         harness = routed["harness"]
@@ -3518,6 +3594,9 @@ def _purge(sid: str, force: bool = False) -> None:
     d = SESSIONS / sid
     if d.is_dir() and d.parent == SESSIONS:
         shutil.rmtree(d, ignore_errors=True)
+    att = C.runs_dir() / "_uploads" / f"chat-{sid}"   # the files dropped into it go with it
+    if att.is_dir() and "/" not in sid and "\\" not in sid and sid not in ("", ".", ".."):
+        shutil.rmtree(att, ignore_errors=True)
     list_dirty()
     try:                                              # the look's pictures of its pages go with it
         from meshpool_harness.agent import look as LK

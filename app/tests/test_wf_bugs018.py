@@ -80,6 +80,7 @@ def _bare_session(workdir: str, monkeypatch):
     s.lock = threading.RLock()
     s.agent = object()
     s.harness = {"type": "x", "id": "x"}
+    s.id = "20261126-000000-bare"
     started = []
     monkeypatch.setattr(A.Session, "_start_turn", lambda self, t, i, *a: started.append(t))
     s.emit = lambda e: None
@@ -93,6 +94,7 @@ def _b64(b: bytes) -> str:
 def test_a_dropped_file_already_in_the_folder_is_used_where_it_is(tmp_path, monkeypatch):
     """WF-02: dropping a file that already lived in the chat's folder made a second copy at the top level, without a
     word. It is now used where it is; a file that is not there is copied, and the app is told where the copy went."""
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "mh"))
     work = tmp_path / "ClientWork"
     (work / "briefs").mkdir(parents=True)
     (work / "briefs" / "brief.pdf").write_bytes(b"%PDF the real brief")
@@ -101,14 +103,16 @@ def test_a_dropped_file_already_in_the_folder_is_used_where_it_is(tmp_path, monk
     s.send("read these", files=[{"name": "brief.pdf", "data": _b64(b"%PDF the real brief")},
                                 {"name": "notes.txt", "data": _b64(b"same name, same bytes")},
                                 {"name": "new.csv", "data": _b64(b"a,b\n1,2\n")}])
-    assert sorted(p.name for p in work.iterdir()) == ["briefs", "new.csv", "notes.txt"]   # no "brief.pdf" or "(2)" copy
+    assert sorted(p.name for p in work.iterdir()) == ["briefs", "notes.txt"]   # no copy; new.csv kept with the chat
     assert "briefs/brief.pdf" in started[0] and "notes.txt" in started[0]
     notes = {a["name"]: a for a in s._attached}
     assert notes["brief.pdf"] == {"name": "brief.pdf", "path": "briefs/brief.pdf", "reused": True}
-    assert notes["notes.txt"]["reused"] and notes["new.csv"] == {"name": "new.csv", "path": "new.csv", "copy": True}
+    kept = str(s.attachments_dir() / "new.csv")
+    assert notes["notes.txt"]["reused"] and notes["new.csv"] == {"name": "new.csv", "path": kept, "attached": True}
     s2, _ = _bare_session(str(work), monkeypatch)
     s2.send("again", files=[{"name": "notes.txt", "data": _b64(b"other bytes")}])
-    assert s2._attached == [{"name": "notes.txt", "path": "notes (2).txt", "copy": True}]   # a different file: a named copy
+    kept = str(s2.attachments_dir() / "notes.txt")                         # a different file: kept with the chat
+    assert s2._attached == [{"name": "notes.txt", "path": kept, "attached": True}] and not (work / "notes (2).txt").exists()
 
 
 # ---------------------------------------------------------------------------------------------------- WF-03

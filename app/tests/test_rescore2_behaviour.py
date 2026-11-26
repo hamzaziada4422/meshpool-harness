@@ -245,11 +245,11 @@ def test_a_dead_model_service_under_an_outside_agent_is_the_service_down_line_at
     A, proj, made = chat
     monkeypatch.setenv("FAKE_HANG", "1")
     monkeypatch.setenv("MH_OUTSIDE_PROBE_S", "1")
-    v = A.create({"kind": "code", "harness": "fakecodex", "task": "make the memo", "workdir": str(proj)})
+    v = A.create({"kind": "code", "harness": "fakecodex", "task": "read the memo", "workdir": str(proj)})
     made.append(v["id"])
     s = A.LIVE[v["id"]]
     t0 = time.time()
-    s.send("make the memo")
+    s.send("read the memo")             # not office work: the chat stays on the engine (round 3)
     down = _until(lambda: next((e for e in s.events if e.get("down")), None), 20)
     assert down and time.time() - t0 < 15, [(e.get("type"), e.get("text")) for e in s.events]
     assert "connection refused" in down["text"] and "Checking again in" in down["text"], down
@@ -323,14 +323,15 @@ def test_after_undo_the_model_is_told_which_files_went_back(chat, monkeypatch):
 
 
 # ============================================================ 5: internals the model talked about
-def test_a_pdf_the_user_has_is_not_a_pdf_to_make_and_the_note_says_keep_quiet():
+def test_a_pdf_the_user_has_is_not_a_pdf_to_make_and_the_note_has_no_secrecy_line():
     from meshpool_harness import capabilities as CAP
     maya = ("Hi! My flower supplier Greenfield sent me an invoice (it's the PDF in this folder). How much do I owe "
             "them and when do I have to pay by?")
     assert CAP.needs(maya) == []
     assert CAP.needs("turn this into a PDF") == ["pdf"] and CAP.needs("make a PDF of the price list") == ["pdf"]
     for direct in (False, True):
-        assert "Do not mention this note to the user." in CAP.note(["pdf"], direct=direct)
+        note = CAP.note(["pdf"], direct=direct)          # round 3: a neutral note, no "do not mention" (Priya)
+        assert "ignore this note." in note and "mention" not in note.lower(), note
 
 
 @pytest.fixture
@@ -352,7 +353,7 @@ def test_a_workbook_whose_values_meshpool_stores_after_the_turn_says_so_in_the_t
     wb.save(proj / "room-summary.xlsx")
     out, failed = O.TOOLS["check_document"][0]("room-summary.xlsx")
     assert not failed and "stores the values in the file when this turn ends" in out, out
-    assert "do not recalculate" in out.lower() or "not recalculated" in out
+    assert "no need to recalculate" in out.lower() or "not recalculated" in out
     out, failed = O.read_document("room-summary.xlsx")
     assert not failed and "stores the values" in out, out
     plain = openpyxl.Workbook()
@@ -371,7 +372,7 @@ def test_the_clarity_pass_is_not_news_for_the_user(office, monkeypatch):
     out, failed = O.make_document("Hello.\n\nThe visit is on 12 December.", filename="client-update.docx")
     assert not failed and (proj / "client-update.docx").exists(), out
     assert "Clarity check" not in out and "small-model" not in out and "lines made clearer" not in out, out
-    assert "do not mention it to the user" in out, out
+    assert "mention" not in out.lower() and "tidied" not in out, out     # round 3: typos only, said plainly
 
 
 # ============================================================ 6: an engine that stopped, and steps that were redone
@@ -476,11 +477,12 @@ def test_failed_steps_a_later_step_redid_are_marked_retried(chat):
 
 
 # ============================================================ 8: review and engine talk in the reply (Lina)
-def test_the_look_step_tells_the_model_to_keep_the_check_to_itself():
+def test_the_look_step_tells_the_model_the_check_is_shown_under_its_answer():
     from meshpool_harness.agent import look as L
     msg = L.message("doc", {"label": "chart.png", "files": ["chart.png"]}, {"findings": []}, "make a chart", True)
     body = msg["content"] if isinstance(msg["content"], str) else msg["content"][0]["text"]
-    assert "do not mention it, the reviewer, the pictures, meshpool's measurements or any engine" in body, body
+    assert "meshpool shows the result of this check to the user under your answer" in body, body
+    assert "do not mention" not in body.lower(), body
     assert "say what you changed in plain words" in body and "List what is wrong" not in body
 
 
@@ -517,7 +519,7 @@ def test_the_engines_own_file_name_and_recalc_notes_stay_out_of_the_tool_result(
     assert "sales_2025_clean" not in text and "did not recalculate" not in text and "Engine notes" not in text, text
     assert "show their results when" not in text, text
     assert "Built region_summary.xlsx from the CSV" in text and "LinaData/region_summary.xlsx" in text, text
-    assert "Never mention the engine" in text, text
+    assert "neither do the engine" in text and "never mention" not in text.lower(), text
 
 
 # ============================================================ 7: Undo and big files (Lina)

@@ -2,6 +2,7 @@
 them (once per file version, through the kept LibreOffice) and a turn that wrote the file stores the results in it."""
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import time
@@ -79,7 +80,9 @@ def test_a_turn_that_wrote_a_workbook_leaves_cached_values_in_it(home, om_proj, 
         for k, v in {"in": 100, "cached": 0, "out": 10, "calls": 1}.items():
             turn[k] += v
             self.usage[k] += v
-        make_book(om_proj / "area.xlsx")                                      # as a python or write path would
+        cp = getattr(self, "checkpoint", None)                                # as a python or write path would,
+        with (cp.tool("bash", {"command": "python make.py"}) if cp else contextlib.nullcontext()):   # booked
+            make_book(om_proj / "area.xlsx")
         calls.append(1)
         return {"role": "assistant", "content": "Made area.xlsx."}, False
     monkeypatch.setattr(core.Agent, "_chat", fake)

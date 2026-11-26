@@ -426,6 +426,61 @@ def merge_line(look: str, checks: str, reply: str = "") -> str:
     return " ".join([f"{head}: {verdict}." if verdict else f"{head}."] + rest)
 
 
+_NUM_WORDS = {"one": 1, "a": 1, "an": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+
+
+def _count(part: str) -> int:
+    """Things named in "fixed 2 things: a and b", "fixed low contrast and a console error", "still open: a, b"."""
+    m = re.match(r"\s*(\d+|one|a|an|two|three|four|five)\s+(?:things?|problems?|issues?)\b", part, re.I)
+    if m:
+        w = m.group(1).lower()
+        return int(w) if w.isdigit() else _NUM_WORDS[w]
+    part = re.split(r"[.;]", part, maxsplit=1)[0]
+    m = re.search(r"\band (\d+) more\b", part)
+    names = [x for x in re.split(r",\s*|\s+and\s+", re.sub(r"\band \d+ more\b", "", part)) if x.strip()]
+    return max(1, len(names) + (int(m.group(1)) if m else 0))
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
+def footer(look: str, checks: dict | None = None, reply="") -> tuple[str, str]:
+    """(the short muted line for the turn's footer, the full sentence for its fold) from the look line and the
+    checks summary: "Checked · all good", "Checked · fixed 2 things", "Checked · fixed 1 thing · 1 to look at". The
+    reply itself carries no "Checked as ..." sentence (Lina, Priya, round 3). A reply that is itself unsure (open_doubt)
+    gets no "all good". ("", "") when there is nothing."""
+    look = str(look or "").strip()
+    sm = checks or {}
+    cline = str(sm.get("line") or "").strip()
+    if not look and not cline:
+        return "", ""
+    full = (merge_line(look, cline, reply=reply) if look and cline else "") or " ".join(x for x in (look, cline) if x)
+    fixed = still = 0
+    low = look.lower()
+    m = re.search(r"\bfixed\s+(.+?)(?:\.\s|$|;\s*still open)", look, re.I | re.S)
+    if m and not re.match(r"\s*nothing\b", m.group(1), re.I):
+        fixed = _count(m.group(1).split(": ", 1)[0] if re.match(r"\s*\d+\s+things?\s*:", m.group(1)) else m.group(1))
+    m = re.search(r"\bstill open:\s*(.+?)(?:\.\s|\.$|$)", look, re.I | re.S)
+    if m:
+        still += _count(m.group(1))
+    if re.search(r"\b(?:does|do) not open\b|\bis empty\b|\bare empty\b|could not (?:run|finish|open)|did not open", low):
+        still = max(still, 1)
+    m = re.search(r"\b(?:One thing to look at|Things to look at):\s*(.+?)(?:\.\s|\.$|$)", cline, re.S)
+    if m:
+        still += len([x for x in m.group(1).split("; ") if x.strip()]) if m.group(0).startswith("Things") else 1
+    bits = []
+    if fixed:
+        bits.append("fixed " + _plural(fixed, "thing"))
+    if still:
+        bits.append(f"{still} to look at")
+    if not bits:
+        if open_doubt(reply):
+            return "Checked", full
+        bits.append("all good")
+    return "Checked · " + " · ".join(bits), full
+
+
 def final_line(run_id: str) -> str:
     return summary(run_id)["line"]
 

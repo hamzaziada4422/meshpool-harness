@@ -172,3 +172,47 @@ def asks_for(request: str) -> set[str]:
                  r"across|over)\b", t):
         out.add("title")
     return out
+
+
+# The office file a request is about: Word, Excel, PowerPoint or PDF. A CSV counts only when the request also asks for
+# an office file ("turn sales.csv into a workbook"): a CSV on its own is data work any agent does.
+_OFFICE_NAME = re.compile(r"(?<![\w.()-])[.()-]*\w[\w.()-]*\.(?:xlsx|xlsm|xls|docx?|pptx?|pdf|od[tsp])\b", re.I)
+_CODE_NAME = re.compile(r"(?<![\w.()-])[.()-]*\w[\w.()-]*\.(?:py|js|mjs|ts|tsx|jsx|rb|go|rs|java|kt|cs|cpp|cc|c|h|"
+                        r"php|sh|ps1|sql|ipynb)\b", re.I)
+_CODE_ASK = re.compile(r"\b(?:bug|stack ?trace|traceback|exception|unit tests?|pytest|refactor|function|class|module|"
+                       r"script|repo(?:sitory)?|endpoint|api|library|parser|compile)\b", re.I)
+_OFFICE_SUFFIX = (".xlsx", ".xlsm", ".xls", ".docx", ".doc", ".pptx", ".ppt", ".pdf")
+# A change to a deck, memo or workbook asked in words (Daniel, round 3: "Add two slides to the same deck ... Add short
+# speaker notes to every slide too"): a doing verb a few words before an office deliverable.
+_OFFICE_ASK = re.compile(r"\b(?:make|create|build|add|edit|update|change|write|draft|prepare|turn|convert|export|"
+                         r"shorten|extend|insert|remove|delete|rewrite|redo|fix|restyle|rebrand|summari[sz]e)\b"
+                         r"(?:\W+[\w&'-]+){0,8}?\W+(?:slides?|decks?|presentations?|speaker notes|memos?|"
+                         r"spreadsheets?|workbooks?|word documents?|power ?points?|excel)\b", re.I)
+
+
+def office_work(text: str, files=()) -> bool:
+    """The request's main input or output is an office file (xlsx, xls, docx, pptx, pdf, or a CSV made into one of
+    them): meshpool Work is the engine for it. A request about code that only mentions such a file is not.
+
+    office_work("Take rooms.xlsx ... make rooms-summary.xlsx with the areas and a total")   -> True
+    office_work("Make a 10-slide pitch deck for investors")                                   -> True
+    office_work("Turn sales.csv into a workbook with a chart")                                -> True
+    office_work("clean this csv and chart revenue")                                           -> False (no office file)
+    office_work("fix the bug in export.py that writes report.xlsx")                           -> False (code)
+    """
+    t = str(text or "").split(SEP)[0]
+    if not t.strip():
+        return False
+    office_file = bool(_OFFICE_NAME.search(t)) or any(
+        Path(str(f)).suffix.lower() in _OFFICE_SUFFIX for f in files or [])
+    if _CODE_NAME.search(t) or (_CODE_ASK.search(t) and not office_file):
+        return False
+    if office_file or _OFFICE_ASK.search(t):
+        return True
+    try:
+        from meshpool_harness import capabilities as CAP
+        # a file type named outright ("the PDF", "an Excel file", "a PowerPoint"), or one asked for
+        return bool(CAP.needs(t)) or any(rx is not None and rx.search(t) for rx in CAP._STRONG_RX.values()) or (
+            bool(_SHEET_NAME.search(t)) and bool(re.search(r"\b(?:workbooks?|spreadsheets?|excel)\b", t, re.I)))
+    except Exception:  # noqa: BLE001
+        return False

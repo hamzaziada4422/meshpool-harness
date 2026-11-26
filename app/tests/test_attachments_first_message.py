@@ -29,6 +29,7 @@ def _bare_session(workdir: str, monkeypatch):
     s.workdir, s.state, s.queue, s.events = workdir, "idle", [], []
     s.lock = threading.RLock()
     s.agent = object()
+    s.id = "20261126-000000-bare"
     s.harness = {"type": "x", "id": "x"}
     started, emitted = [], []
     monkeypatch.setattr(A.Session, "_start_turn", lambda self, t, i, *a: started.append(t))   # *a: the turn token (ws09)
@@ -40,18 +41,19 @@ def _b64(t: str) -> str:
     return base64.b64encode(t.encode()).decode()
 
 
-def test_send_saves_files_into_the_scratch_folder_and_lists_them(tmp_path, monkeypatch):
+def test_send_keeps_files_with_the_chat_and_lists_them(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
     from meshpool_harness import project_store as PS
     wd = Path(PS.new_scratch())
     s, started, _ = _bare_session(str(wd), monkeypatch)
     s.send("look", files=[{"name": "a.txt", "data": _b64("hello")}])
-    assert (wd / "a.txt").read_text() == "hello"            # S-05: attachments sit at the folder root
+    assert not (wd / "a.txt").exists()                      # round 3 (Lina): kept with the chat, not in the folder
+    assert (s.attachments_dir() / "a.txt").read_text() == "hello"
     assert started and "look" in started[0]
-    assert "a.txt" in started[0] and "Attached files" in started[0]
+    assert str(s.attachments_dir() / "a.txt") in started[0] and "Attached files" in started[0]
 
 
-def test_send_into_a_read_only_folder_is_a_friendly_error_and_nothing_starts(tmp_path, monkeypatch):
+def test_send_into_a_read_only_folder_keeps_the_file_with_the_chat(tmp_path, monkeypatch):
     ro = tmp_path / "ro"
     ro.mkdir()
     s, started, emitted = _bare_session(str(ro), monkeypatch)
@@ -62,10 +64,10 @@ def test_send_into_a_read_only_folder_is_a_friendly_error_and_nothing_starts(tmp
             raise PermissionError(13, "Permission denied")
         return real_open(p, mode, *a, **k)
     monkeypatch.setattr("builtins.open", deny)
-    with pytest.raises(ValueError) as e:
-        s.send("hi", files=[{"name": "a.txt", "data": _b64("x")}])
-    assert "read-only" in str(e.value) and "Traceback" not in str(e.value) and "Errno" not in str(e.value)
-    assert not started and not emitted
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
+    s.send("hi", files=[{"name": "a.txt", "data": _b64("x")}])       # round 3: nothing is written in the folder
+    assert started and not list(ro.iterdir())
+    assert (s.attachments_dir() / "a.txt").read_text() == "x"
 
 
 def test_attach_other_oserror_is_friendly(tmp_path, monkeypatch):
@@ -183,7 +185,9 @@ def test_file_on_the_first_message_lands_in_the_new_chats_own_folder(page, app):
     page.wait_for_function("() => S.cur && S.cur.view && S.cur.view.workdir", timeout=60000)
     wd = Path(page.evaluate("S.cur.view.workdir"))
     page.wait_for_function("() => document.querySelector('#conv, #col') && document.body.innerText.includes('note.txt')", timeout=30000)
-    assert (wd / "note.txt").read_text() == "hello attach"     # S-05: attachments sit at the folder root
+    assert not (wd / "note.txt").exists()                      # round 3 (Lina): kept with the chat, not copied in
+    kept = Path(app["mh"]) / "runs" / "_uploads" / f"chat-{page.evaluate('S.cur.id')}" / "note.txt"
+    assert kept.read_text() == "hello attach"
     assert wd.parent.name == "chats"
     page.wait_for_timeout(800)
     assert len(_rows(_threads(app))) == before + 1
@@ -207,10 +211,8 @@ def test_unwritable_folder_gives_one_toast_no_empty_chat_and_keeps_the_text(page
     page.wait_for_function("() => window.__toasts.length > 0", timeout=30000)
     page.wait_for_timeout(1500)
     toasts = page.evaluate("window.__toasts")
-    assert len(toasts) == 1 and "read-only" in toasts[0], toasts
-    assert page.input_value("#input") == "Read my note"
-    assert len(_rows(_threads(app))) == before
-    assert page.evaluate("S.cur") is None
+    assert toasts == ["Attached note.txt"], toasts            # round 3: the file is kept with the chat, not written
+    assert len(_rows(_threads(app))) == before + 1             # in the read-only folder, so the chat starts
     if immutable:
         subprocess.run(["chattr", "-i", app["ro"]])
 

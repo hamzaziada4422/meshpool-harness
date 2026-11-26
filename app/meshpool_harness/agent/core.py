@@ -1414,6 +1414,24 @@ _ACT_OFFER = re.compile(r"\b(?:if you|would you|do you want|want me to|let me kn
                         r"if that|if needed|if it helps|happy to)\b", re.I)
 
 
+def malformed_fallback(root, since: float, made: str | None = None) -> str:
+    """The answer when the model's last reply was a command, markup or a path twice over: what the turn made, from
+    the file itself ("Made rooms-summary.xlsx, 1 sheet."), else a plain line that asks the user to ask."""
+    path = made or ""
+    if not path:
+        try:
+            got = _recent_files(root, since, (".xlsx", ".docx", ".pptx", ".pdf", ".csv", ".html", ".png"))
+            path = str(got[0]) if got else ""
+        except Exception:  # noqa: BLE001
+            path = ""
+    done = _made_summary(path) if path else ""
+    if done:
+        return done
+    if path:
+        return f"Made {Path(path).name}."
+    return "The work is done, but my last message came out as a command instead of an answer. Ask me what changed."
+
+
 def _announces_action(final: str) -> bool:
     """True when the reply that ended the turn says what the agent will do next with a tool ("I'll check the folder
     and read the deck...") instead of doing it. An offer to the user ("If you want, I'll add a chart") is not one.
@@ -2177,6 +2195,31 @@ def _recent_office(root, since: float, ext: str, cap: int = 20000) -> list:
     return [f for f in cache[key][1] if f.suffix.lower() == ext]
 
 
+IMG_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")
+
+
+def _recent_files(root, since: float, suffixes: tuple, cap: int = 20000) -> list:
+    """Files with these suffixes changed at or after `since` under root, newest first: one bounded walk that skips
+    version control, dependency, build and hidden folders, as _recent_office."""
+    found, seen = [], 0
+    for d, dirs, files in os.walk(str(root)):
+        dirs[:] = [x for x in dirs if x not in _WALK_SKIP and not x.startswith(".")]
+        for f in files:
+            seen += 1
+            if not f.lower().endswith(suffixes):
+                continue
+            fp = Path(d) / f
+            try:
+                mt = fp.stat().st_mtime
+            except OSError:
+                continue
+            if mt >= since:
+                found.append((mt, fp))
+        if seen >= cap:
+            break
+    return [p for _, p in sorted(found, key=lambda x: -x[0])]
+
+
 _SLIDES = re.compile(r"\b(\d{1,2})\s*(?:to|-|–|or)\s*(\d{1,2})[\s-]+slides?\b|\b(\d{1,2})[\s-]+slides?\b", re.I)
 
 
@@ -2612,7 +2655,12 @@ def _cache_formula_values(root, since: float, cp=None) -> int:
     n = 0
     try:
         from meshpool_harness import xl_values
-        for f in _recent_office(root, since, ".xlsx")[:6]:
+        files = _recent_office(root, since, ".xlsx")
+        wrote = cp.turn_written() if cp is not None else None
+        if wrote is not None:                        # only what this turn wrote: never a workbook it only read
+            mine = {str((Path(cp.root) / r).resolve()) for r in wrote}
+            files = [f for f in files if str(Path(f).resolve()) in mine]
+        for f in files[:6]:
             if f.name.startswith("~$"):
                 continue
             with (cp.own_write(f) if cp is not None else contextlib.nullcontext()):
@@ -4420,6 +4468,21 @@ class Agent:
                             self.emit({"type": "assistant", "text": done, "streamed": False, "has_tools": False})
                             final = done
                             break
+                    from meshpool_harness.core import textcalls as _TCM
+                    if _TCM.malformed_reply(final):
+                        # Priya, round 3: the answer was a raw shell command, a link, a machine path and "30000".
+                        # Not an answer: it goes from the chat, the model is asked once for words, then the turn ends
+                        # on what it made.
+                        self.emit({"type": "review_round", "malformed": True})
+                        if not g.get("malformed_nudged") and not tools_off:
+                            g["malformed_nudged"] = len(self.messages)
+                            self.messages.append({"role": "user", "content": _TCM.MALFORMED_NUDGE})
+                            continue
+                        done = malformed_fallback(self.root, g.get("t0", 0), g.get("made"))
+                        self.messages.append({"role": "assistant", "content": done})
+                        self.emit({"type": "assistant", "text": done, "streamed": False, "has_tools": False})
+                        final = done
+                        break
                     if not self._pace_wrapped:
                         from meshpool_harness.agent import look as _LOOK   # look at a page or file it made (0.0.18)
                         again, final = _LOOK.gate(self, g, final, turn=turn)
@@ -5504,6 +5567,33 @@ class Agent:
                 parts.append({"type": "text", "text": str(im["label"])})
             parts.append(_image_part(im))
         self.messages.append({"role": "user", "content": parts})
+
+    _IMG_TOOLS = ("bash", "bash_many", "shell", "exec_command", "write_file")
+    _IMG_HINT = re.compile(r"\.(?:png|jpe?g|gif|webp|svg)\b|savefig|matplotlib|plt\.|plotly|\bPIL\b|Image\.|"
+                           r"pdftoppm|--convert-to\s+(?:png|jpg)|chart|plot", re.I)
+
+    def _image_note(self, name: str, args, out: str, t0: float) -> str:
+        """A picture this call saved in the chat's folder is shown to the user in the chat, as a card under the reply.
+        The tool result says so, and, for a model that takes images, that it may look at it with view_output (Lina,
+        round 3: "I can't display images in this chat", with the chart on screen)."""
+        if name not in self._IMG_TOOLS and not (self.mcp and self.mcp.has(name)):
+            return ""
+        if not self._IMG_HINT.search(json.dumps(args, default=str)[:20000] + str(out)[-4000:]):
+            return ""                                  # no picture in sight: no walk of the folder
+        try:
+            got = [p for p in _recent_files(self.root, t0 - 0.05, IMG_SUFFIXES) if not self.ws._in_scratch(p)][:4]
+        except Exception:  # noqa: BLE001 - a note never breaks a tool
+            return ""
+        if not got:
+            return ""
+        names = ", ".join(os.path.relpath(p, self.root) for p in got)
+        one = len(got) == 1
+        note = (f"\n\n[meshpool] {names} {'is' if one else 'are'} saved in the user's folder and shown to the user in "
+                f"this chat, as {'a picture' if one else 'pictures'} under your reply. You can refer to "
+                f"{'it' if one else 'them'} as shown here.")
+        if self._sees_images():
+            note += f" You can look at {'it' if one else 'them'} yourself with view_output to check how it came out."
+        return note
 
     def _sees_images(self) -> bool:
         """True when this chat's model takes images, as the chat knows it (MH_VISION, a model that refused them)."""
@@ -7607,6 +7697,8 @@ class Agent:
         if cp_on and ok and not denied and "Call office_job_status with this id" in out:
             cp.window_open()                            # the engine goes on building: its files land later this turn
         out += self._lookup_note(name, args)
+        if ok and not denied:
+            out += self._image_note(name, args, out, t0)
         m = re.match(r"\[exit (\d+)\]", out)
         step = {"tool": name, "s": round(time.time() - t0, 2), "ok": ok and not (m and m.group(1) != "0"),
                 "arg": _summary(name, args)[:100] if isinstance(args, dict) else ""}

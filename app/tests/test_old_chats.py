@@ -61,7 +61,7 @@ def test_a_harness_that_lost_its_session_still_knows_the_chat(home):
         a.close()
     assert "Compare the pricing of Acme and Globex" in reply and "Acme is $20 a seat" in reply
     assert reply.rstrip().endswith("and what about Initech?")
-    assert any("could not reopen its own session" in (e.get("text") or "") for e in events)
+    assert any("could not be reopened" in (e.get("text") or "") for e in events)       # no engine name (round 3)
     events.clear()
     a2 = ACPAgent(manifest, str(proj), emit=events.append, approve=lambda *x, **k: ("allow_once", ""), mode="auto")
     try:

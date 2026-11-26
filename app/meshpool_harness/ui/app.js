@@ -691,6 +691,7 @@ function attachNote(list, cur) {
   if (!list || !list.length) return;
   const v = cur?.view || {}, where = v.scratch ? "this chat's own folder" : projName(v.workdir || "");
   const said = list.map(a => a.reused ? `${a.name} is already in ${where} (${a.path}), so it was used there.`
+    : a.attached ? `Attached ${a.name}`          // kept with this chat, not copied into the folder
     : `A copy of ${a.name} was saved in ${where} as ${a.path}. Your original is unchanged.`);
   toast(said.join(" "), 7000);
 }
@@ -1813,6 +1814,7 @@ function applyEvRaw(ev) {
     case "review_round": {                               // the reply above was written before the check: fold it away
       endLook(cur, "");                                  // this look is over: a second round writes its own line
       const el = cur.lastAi;
+      if (ev.malformed) { if (el && el.isConnected) el.remove(); cur.lastAi = null; cur.lastText = ""; break; }   // a command, not an answer: it goes
       if (el && el.isConnected && !el.closest("details")) {
         const d = document.createElement("details"); d.className = "notedet fold";
         d.innerHTML = `<summary>First answer, before the check</summary>`; el.replaceWith(d); d.appendChild(el);

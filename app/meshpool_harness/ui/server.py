@@ -353,6 +353,8 @@ def prune_uploads(max_age_days: float = 30, now: float | None = None) -> list[st
         rd = d.resolve()
         if any(r == rd or rd in r.parents or r in rd.parents for r in refs):
             continue
+        if d.name.startswith("chat-") and (RUNS / "sessions" / d.name[5:]).exists():
+            continue                                 # a chat's attachments live as long as the chat
         shutil.rmtree(d, ignore_errors=True)
         gone.append(d.name)
     return gone

@@ -434,3 +434,68 @@ def strip_markup(text: str) -> str:
         return out.strip()
     except Exception:  # noqa: BLE001
         return text
+
+
+# A stray tool-markup tag left in a reply: <invoke_placeholder> </invoke_placeholder> (Maya, round 3: three times in
+# one reply, kept in the transcript), <function_calls>, <parameter name="x">, <tool_call>, DSML tags. Outside code.
+_STRAY_TAG = re.compile(r"<\s*/?\s*(?:[｜|]\s*DSML\s*[｜|]\s*)?" + _XN + r"(?:invoke(?:_placeholder)?|function_calls|"
+                        r"function_results|tool_calls?|tool_use|tool_results?|parameter|antml_[a-z_]+)\b[^<>]{0,200}?/?>",
+                        re.I)
+_FENCE = re.compile(r"(```.*?(?:```|\Z)|`[^`\n]*`)", re.S)
+
+
+def display_safe(text: str) -> str:
+    """A reply as the user sees it and the transcript keeps it: call markup the model wrote as text (strip_markup),
+    then any tag-shaped tool markup left over, removed. Code blocks and inline code are left as written. Never
+    raises."""
+    try:
+        if not isinstance(text, str) or "<" not in text:
+            return text
+        out = strip_markup(text) if (_DSML_ANY.search(text) or _XML_INVOKE.search(text)) else text
+        parts = _FENCE.split(out)
+        parts = [p if i % 2 else _STRAY_TAG.sub("", p) for i, p in enumerate(parts)]
+        clean = "".join(parts)
+        if clean == text:
+            return text
+        clean = re.sub(r"[ \t]+\n", "\n", clean)
+        return re.sub(r"\n{3,}", "\n\n", clean).strip()
+    except Exception:  # noqa: BLE001
+        return text
+
+
+# ---------- a final answer that is not an answer ----------------------------------------------------------------------
+_CMD_LINE = re.compile(r"^\s*(?:\$\s+)?(?:sudo\s+)?(?:mkdir|cd|cat|ls|cp|mv|rm|echo|printf|python3?|pip3?|node|npm|npx|"
+                       r"soffice|libreoffice|bash|sh|zsh|sed|awk|grep|rg|find|head|tail|curl|wget|git|chmod|touch|"
+                       r"apply_patch|open|xdg-open|uv|pytest|tar|unzip|zip)\b[^\n]*$")
+_SHELLISH = re.compile(r"&&|\|\||2>&1|>\s*/dev/null|\$\(|<<\s*'?EOF|;\s*(?:cat|echo|ls|python3?)\b")
+_PATH_LINE = re.compile(r"^\s*(?:file://)?(?:/[\w.@~+-]+){2,}/?\s*$|^\s*[A-Za-z]:\\[^\s]*\s*$")
+_BARE = re.compile(r"^\s*[-+]?[\d.,]+\s*$|^\s*\[[^\]]*\]\([^)]*\)\s*$|^\s*\S+\.(?:csv|xlsx|docx|pptx|pdf|txt|json)\s*$")
+_PROSE = re.compile(r"[A-Za-z][a-z']+(?:\s+[A-Za-z][\w'’,-]*){4,}")
+
+
+def malformed_reply(text: str) -> bool:
+    """True when a final reply is not an answer in words: a raw shell command, tool markup or JSON, or mostly machine
+    paths and bare values (Priya, round 3: Codex ended on "mkdir -p /tmp/... && soffice --headless --convert-to csv
+    ... rooms-summary.xlsx >/dev/null 2>&1; cat", a stray link, a machine path and "30000"). A reply with real
+    sentences is never malformed, even with a command quoted in it."""
+    t = str(text or "").strip()
+    if not t:
+        return False
+    if _XML_INVOKE.search(t) or _DSML_ANY.search(t) or _TC_BLOCK.search(t) or _STRAY_TAG.search(t) and not \
+            _STRAY_TAG.sub("", t).strip():
+        return True
+    if t[:1] in "{[":
+        try:
+            json.loads(t)
+            return True
+        except ValueError:
+            pass
+    body = re.sub(r"```[\w-]*\n?|```", "", t)
+    lines = [x for x in body.splitlines() if x.strip()]
+    machine = [x for x in lines if _CMD_LINE.match(x) or _SHELLISH.search(x) or _PATH_LINE.match(x) or _BARE.match(x)]
+    words = [x for x in lines if x not in machine and _PROSE.search(re.sub(r"`[^`]*`|\S*/\S*", " ", x))]
+    strong = [x for x in machine if _CMD_LINE.match(x) or _SHELLISH.search(x) or _PATH_LINE.match(x)]   # "49995" alone can be an answer
+    return bool(strong) and len(machine) * 2 >= len(lines) and not words
+
+
+MALFORMED_NUDGE = "[Meshpool] Your last message was a command, not an answer. Answer the user in plain words."

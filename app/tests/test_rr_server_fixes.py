@@ -106,6 +106,7 @@ def test_an_ownerless_login_is_reaped_only_when_older_than_the_timeout(fake_npx)
 
 # ---- items 14 and 17: attached copies, Undo, Rewind and take_back
 import base64  # noqa: E402
+from pathlib import Path  # noqa: E402
 import json  # noqa: E402
 import re  # noqa: E402
 
@@ -128,26 +129,29 @@ def _chat_with_a_copy(home, om_proj, monkeypatch):
     s = chats.get(v["id"])
     s.send("look at this", files=[{"name": "data.csv", "data": base64.b64encode(DROPPED).decode()}])
     _idle(s)
-    assert (om_proj / "data (2).csv").read_bytes() == DROPPED
+    # round 3 (Lina): the dropped file is kept with the chat, never copied into the folder as "data (2).csv"
+    assert not (om_proj / "data (2).csv").exists() and (s.attachments_dir() / "data.csv").read_bytes() == DROPPED
     return s
 
 
-def test_item14_undo_names_the_deleted_copy_as_the_message_names_it(home, om_proj, monkeypatch):
-    """The page drops the chip for any ref in undone.deleted. So the paths must match what the message says."""
+def test_item14_undo_keeps_a_file_kept_with_the_chat_and_its_chip(home, om_proj, monkeypatch):
+    """The page drops the chip for any ref in undone.deleted. A dropped file is kept with the chat now (round 3), so
+    Undo deletes nothing it names and its chip comes back with the message."""
     s = _chat_with_a_copy(home, om_proj, monkeypatch)
     sent = [e for e in s.events if e.get("type") == "user"][0]["text"]
-    assert _refs(sent) == ["data (2).csv"]
+    assert _refs(sent) == [str(s.attachments_dir() / "data.csv")]
     out = A.session_action(s.id, "revert", {"turn": s.cp.turns()[-1]["n"]})
-    assert out["undone"]["deleted"] == _refs(sent)
-    assert not (om_proj / "data (2).csv").exists()
+    assert not set(out["undone"]["deleted"]) & set(_refs(sent))
+    assert (s.attachments_dir() / "data.csv").exists() and (om_proj / "data.csv").exists()
 
 
-def test_item14_rewind_with_files_names_the_deleted_copy_as_the_message_names_it(home, om_proj, monkeypatch):
+def test_item14_rewind_with_files_keeps_a_file_kept_with_the_chat(home, om_proj, monkeypatch):
     s = _chat_with_a_copy(home, om_proj, monkeypatch)
     ei = [e for e in s.events if e.get("type") == "user"][0]["i"]
     r = s.rewind(ei, files=True)
-    assert r["undo"]["deleted"] == ["data (2).csv"] and "data (2).csv" in r["text"]
-    assert not (om_proj / "data (2).csv").exists()
+    kept = str(s.attachments_dir() / "data.csv")
+    assert kept not in r["undo"]["deleted"] and kept in r["text"]       # the message names it, so its chip comes back
+    assert Path(kept).exists()
 
 
 # ---- item 15: a Code session listed under a project by its folder is not ticked as linked
@@ -203,10 +207,11 @@ def test_item17_a_later_turns_undo_does_not_remove_a_taken_back_messages_copy(ho
     v = chats.create({"workdir": str(om_proj), "no_mcp": True})
     s = chats.get(v["id"])
     s._save_files("check this", [{"name": "late.csv", "data": base64.b64encode(DROPPED).decode()}])
-    assert (om_proj / "late.csv").exists()
+    late = s.attachments_dir() / "late.csv"                                  # kept with the chat (round 3)
+    assert late.exists() and not (om_proj / "late.csv").exists()
     s.take_back()                                                             # the message never started a turn
     assert "_attach_made" not in s.__dict__
     s.send("say hello")
     _idle(s)
     r = s.revert(s.cp.turns()[-1]["n"])
-    assert (om_proj / "late.csv").exists() and "late.csv" not in r["deleted"]
+    assert late.exists() and "late.csv" not in r["deleted"]

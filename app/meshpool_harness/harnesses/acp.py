@@ -1129,6 +1129,7 @@ class ACPAgent:
             self.title = text.strip().splitlines()[0][:80] if text.strip() else "Session"  # first line only
         shown = text.split("\n\n\u200b")[0]          # attached skill text and image OCR go to the agent only
         self._turn_at = len(self.events)                 # the chat before this turn (earlier_context)
+        self._turn_t0 = time.time()                      # what this turn made (a malformed reply ends on it)
         self._emit({"type": "user", "text": shown, "images": [im.get("name", "image") for im in images or []],
                     "plan": self.plan})
         self.save()                                       # the thread survives a restart mid-turn
@@ -1157,9 +1158,8 @@ class ACPAgent:
             if getattr(self, "_carry", False):
                 self._carry = False
                 body = earlier_context(self._before_turn()) + body
-                self._emit({"type": "status", "text": f"{self.manifest.get('name', 'The agent')} could not reopen "
-                                                      "its own session for this chat, so the conversation so far "
-                                                      "went along with your message."})
+                self._emit({"type": "status", "text": "The earlier session for this chat could not be reopened, "
+                                                      "so the conversation so far went along with your message."})
             prompt = [{"type": "text", "text": body}]
             if images:
                 if (self.capabilities.get("promptCapabilities") or {}).get("image"):
@@ -1196,6 +1196,7 @@ class ACPAgent:
                 self._emit({"type": "stream_reset"})     # the error text shown as it streamed goes
                 self._emit({"type": "error", "text": final.strip()})
                 final = ""
+            final = self._answer_in_words(final)
             self._flush_text()
             stop = r.get("stopReason", "end_turn")
             if _auth_failure(final):
@@ -1228,6 +1229,28 @@ class ACPAgent:
                         "context": self.context})
             self.save()
         return final
+
+    def _answer_in_words(self, final: str) -> str:
+        """A final reply that is a raw command, tool markup, JSON or mostly a path is not an answer (Priya, round 3:
+        Codex ended on "mkdir -p /tmp/... && soffice --headless ... 2>&1; cat", a link, a path and "30000"). It goes
+        from the chat, the engine is asked once to answer in words, and a second miss ends on what the turn made."""
+        from meshpool_harness.core import textcalls as TC
+        if self._stop or not TC.malformed_reply(final):
+            return final
+        self._text = []
+        self._emit({"type": "stream_reset"})
+        try:
+            self._prompt_call([{"type": "text", "text": TC.MALFORMED_NUDGE}])
+        except ACPError:
+            pass
+        again = "".join(self._text)
+        if again.strip() and not TC.malformed_reply(again):
+            return again
+        from meshpool_harness.agent.core import malformed_fallback
+        self._emit({"type": "stream_reset"})
+        done = malformed_fallback(self.root, getattr(self, "_turn_t0", 0) or (time.time() - 3600))
+        self._text = [done]
+        return done
 
     def _prompt(self, prompt: list) -> dict:
         """One session/prompt. The token usage a harness reports with its answer (ACP PromptResponse.usage, e.g.

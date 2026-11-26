@@ -77,6 +77,17 @@ PLAIN = ("Write plainly, like a senior colleague, not a chatbot: the answer firs
          "you make look like a professional's work: one consistent style, restrained colour, no filler. " + ADDRESS)
 
 
+# Chat mode (not the Code tab): the person is not a developer. Round 3 replies said "add min-height: 44px; to the input
+# rule", "my tools stopped working", "cached values", and asked Maya to "put your shop address in SHOP_EMAIL near the
+# bottom of index.html". One short paragraph, sent once with the chat's first message.
+CHAT_MODE = ("This is a chat with someone who is not a developer. Tell them outcomes and decisions in plain words: "
+             "what you made, what it shows, what they may want to decide. Leave out implementation detail (code, CSS "
+             "rules, pixel sizes, file internals, tool or setting names, how your tools work) unless they ask for "
+             "it. When something needs a change in a file, a setting or a service, offer to do it yourself and ask "
+             "only for what you need (\"Tell me your email and I'll connect the form\"); never ask them to edit code "
+             "or files.")
+
+
 def dashless(text: str) -> str:
     """Text without em or en dashes used as punctuation: "a — b" reads "a, b"; a range "2025–2029" keeps a hyphen."""
     t = re.sub(r"(?<=\d)\s*[\u2013\u2014]\s*(?=\d)", "-", text or "")
@@ -409,13 +420,13 @@ def project_block(project_id: str, task: str = "", exclude=()) -> str:
 
 def context_block(task: str = "", root: str = "", project_id: str = "", chat_id: str = "", incognito: bool = False,
                   exclude=(), record: bool = True, lookup: bool = True, rules: bool = True, tools: str = "all",
-                  office: bool = True, data_rule: bool = False) -> str:
+                  office: bool = True, data_rule: bool = False, chat: bool = False) -> str:
     """Text the app adds, out of sight, to the first message of a new thread. task and root pick what memory is
     relevant: the user's core facts, the facts that match the task, and the project's notes. project_id adds the
     project's instructions, memory and knowledge files (see project_store). `incognito` reads no memory at all.
     With a chat_id, the facts given are recorded (so a reply can show its sources)."""
     return build_context(task, root, project_id, chat_id, incognito, exclude, record, lookup, rules, tools, office,
-                         data_rule)["text"]
+                         data_rule, chat)["text"]
 
 
 def _notes(tools: str, office, mem_on: bool, incognito: bool) -> str:
@@ -447,7 +458,7 @@ def _notes(tools: str, office, mem_on: bool, incognito: bool) -> str:
 
 def build_context(task: str = "", root: str = "", project_id: str = "", chat_id: str = "", incognito: bool = False,
                   exclude=(), record: bool = False, lookup: bool = True, rules: bool = True, tools: str = "all",
-                  office: bool = True, data_rule: bool = False) -> dict:
+                  office: bool = True, data_rule: bool = False, chat: bool = False) -> dict:
     """context_block with its parts: {text, facts: [ids given], sections: [{title, text, ids}]} for the X-ray.
     `rules`: add HONESTY and PLAIN (Meshpool's own agents carry them in their system prompt, so their first message
     leaves them out; Pi and Codex get them here, once). `tools`: which Meshpool tools the agent has, "all", "deferred"
@@ -474,6 +485,8 @@ def build_context(task: str = "", root: str = "", project_id: str = "", chat_id:
         parts.append(DATA_RULE)
     if rules:                                  # meshpool's own agents have SCRATCH_RULE in their system prompt
         parts.append(NO_SCRATCH_COPIES)
+    if chat:                                   # Chat mode, not the Code tab: outcomes, not implementation
+        parts.append(CHAT_MODE)
     sections.append({"title": "Meshpool's own rules", "text": "\n".join(parts), "ids": []})
     try:                                       # who the user is and the language to answer in (Settings, General)
         from meshpool_harness.ui import settings_v2 as SV

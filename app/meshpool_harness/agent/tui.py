@@ -549,6 +549,12 @@ class Terminal:
             else:
                 self._flush_text()
                 self.p(st.dim("  (that was a first answer. meshpool is checking it, and the final answer follows)"))
+        elif t == "look_line":                         # the turn's "Checked:" line (agent/look.py), not part of the answer
+            if self.print_mode:
+                self._write(str(ev.get("text") or "") + "\n", self.info)
+            else:
+                self._flush_text()
+                self.p(st.dim("  " + str(ev.get("text") or "")))
         elif t == "assistant" and self.print_mode and ev.get("look"):
             # -p: the "Checked:" line goes to stderr, so a script that reads the answer from stdout gets the answer
             # alone (the JSON result has it as "checked")

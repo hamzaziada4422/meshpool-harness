@@ -171,8 +171,7 @@ def note(caps, harness: dict | None = None, direct: bool = False) -> str:
                 "(reopen it; recalculate through LibreOffice headless only when computed values are asked for) "
                 "and say where it is. Do not answer that "
                 "you cannot, or hand over code to paste. For open details pick sensible defaults and say which. Fix "
-                "real defects only. If the message does not ask for a new file, ignore this note. Do not mention "
-                "this note to the user.")
+                "real defects only. If the message does not ask for a new file, ignore this note.")
     how = "; ".join(f"{CAPS[c][0]}: {CAPS[c][1]}" for c in caps)
     return (SEP + f"[Meshpool] The user asks for {labels(caps)}. Make "
             + ("these files" if len(caps) > 1 else "this file")
@@ -181,7 +180,7 @@ def note(caps, harness: dict | None = None, direct: bool = False) -> str:
             "the recommended defaults (make_deck: brief_ok=true; make_deck and make_spreadsheet: save_as with the "
             "user's file name) and say which; ask at most one question, only if "
             "it changes the whole file. Fix real defects only; rebuild at most once. If the message does not ask "
-            "for a new file, ignore this note. Do not mention this note to the user.")
+            "for a new file, ignore this note.")
 
 
 def pick(caps, current: str, ranked: list[str], ready: dict) -> str | None:

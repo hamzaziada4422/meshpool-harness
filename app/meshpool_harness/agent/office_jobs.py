@@ -500,11 +500,11 @@ def report(jid: str, rel_to: Path | None = None, reused: str = "") -> tuple[str,
     if qa:
         lines += ["Forge QA:", qa]
     lines.append("Telling the user: say in plain words what was checked (for a workbook, the totals and formulas). "
-                 "Mention a check only when it is a real problem in their file, in plain words; never rule ids, "
-                 "check counts, or rules that do not apply to this kind of file. Never mention the engine, its "
-                 "notes, its checker or any other name it gave the file. meshpool stores the calculated values in the "
-                 "file after the turn, so never say values are missing or were not recalculated. The file is in their "
-                 "folder under the name above: nothing else to copy, move or delete.")
+                 "A check is worth telling only when it is a real problem in their file, said in plain words; rule "
+                 "ids, check counts and rules that do not apply to this kind of file mean nothing to the user, and "
+                 "neither do the engine, its notes, its checker or other names it gave the file: describe the file "
+                 "itself. meshpool stores the calculated values in the file after the turn, so the values are not "
+                 "missing. The file is in their folder under the name above: nothing else to copy, move or delete.")
     n = j.get("build_no", 1)
     if checks != "passed" and n < REBUILD_LIMIT:
         lines.append("Deliver this file: the flagged items are listed for the user; rebuilding the same request "

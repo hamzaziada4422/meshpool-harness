@@ -107,10 +107,10 @@ RUBRIC_DOC = (
     "2. Is anything cut off, overlapping, off the page or slide, or unreadable?\n"
     "3. Does it look finished: no placeholder text, no empty pages or slides, consistent fonts and spacing?")
 TAIL = ("The user's explicit choices win over these checks: if the request says something is a placeholder or does "
-        "nothing yet, leave it as it is. Fix what is wrong or missing in the files. This check is for you, not the "
-        "user: do not mention it, the reviewer, the pictures, meshpool's measurements or any engine in your answer. "
-        "If you changed something, say what you changed in plain words, as part of your answer; if nothing is wrong, "
-        "say nothing about the check. Do not start servers or open other programs for this: meshpool looks again "
+        "nothing yet, leave it as it is. Fix what is wrong or missing in the files. meshpool shows the result of "
+        "this check to the user under your answer, so your answer needs no account of the review, the pictures or "
+        "the measurements. If you changed something, say what you changed in plain words, as part of your answer. "
+        "Do not start servers or open other programs for this: meshpool looks again "
         "after your fix. End with your answer to the user as before: what you made and where it is.")
 SCOPE_RULE = ("Change only what the user's request asked for in this turn. Anything else you notice, in this file or in "
               "any other, you leave as it is: do not fix it, and do not create another copy of a file to change it. If you "
@@ -398,7 +398,50 @@ EXTRA_JS = r"""
 }
 """
 KEEP = {"left-over-text", "placeholder-link", "chart-text-cut-off", "sideways-scroll", "past-the-edge", "text-cut-off",
-        "contrast", "broken-image", "viewport", "empty-page", "placeholder", "overlap", "empty", "console", "load"}
+        "contrast", "broken-image", "viewport", "empty-page", "placeholder", "overlap", "empty", "console", "load",
+        "fake-form"}
+
+# The page's own script files, for fake_form (same origin; read synchronously, a few at most).
+FORM_SRC_JS = r"""
+() => { if (!document.forms.length) return "";
+  return [...document.scripts].filter(s => s.src).slice(0, 6).map(s => { try { const x = new XMLHttpRequest();
+    x.open("GET", s.src, false); x.send(); return (x.responseText || "").slice(0, 200000); } catch (e) { return ""; } }).join("\n"); }
+"""
+
+# A form that pretends (Maya, round 3: "Thank you, Sam Lee! Here is your order..." while nothing was sent anywhere).
+_SENDS = re.compile(r"\bfetch\s*\(|XMLHttpRequest|sendBeacon|\baxios\b|\$\.(?:ajax|post|get)\s*\(|\.submit\s*\(\s*\)|"
+                    r"\.requestSubmit\s*\(|mailto:|navigator\.share|emailjs|formspree|firebase|supabase|WebSocket|"
+                    r"\bgtag\s*\(", re.I)
+_THANKS = re.compile(r"\bthank|\bsuccess|\breceived\b|you(?:'|’)re in\b|you are in\b|see you\b|"
+                     r"order (?:is )?(?:placed|confirmed)|signed up|booked\b|on its way", re.I)
+_HONEST = re.compile(r"coming soon|not (?:yet )?(?:sent|live|connected|working)|(?:doesn(?:'|’)t|does not|won(?:'|’)t|"
+                     r"will not) (?:send|go|reach|be sent)|nothing is sent|preview only|demo (?:form|only)|"
+                     r"(?:order|ordering|sign[- ]?up|booking)s? (?:online )?(?:is|are) (?:not|coming)", re.I)
+_FORM_INERT = re.compile(r"(?:place-?holder|dummy|fake|mock|demo|does(?:n'?t| not) (?:send|do)|not (?:yet )?(?:wired|"
+                         r"hooked|connected))", re.I)
+
+
+def fake_form(html: str, scripts: str = "", request: str = "") -> str:
+    """The finding for a page whose form only shows a success message: no action address, no code that sends
+    anything (fetch, XMLHttpRequest, a form service, mailto), a thank-you in its code, and no line on the page that
+    says orders or sign-ups do not go anywhere yet. "" when the form is honest or the request asked for a form that
+    does nothing yet."""
+    html = str(html or "")
+    forms = re.findall(r"<form\b([^>]*)>", html, re.I)
+    if not forms or _FORM_INERT.search(str(request or "")):
+        return ""
+    if any(re.search(r"\baction\s*=\s*[\"']?(?![\"'#\s>]|javascript:)[^\"'\s>]+", a, re.I) for a in forms):
+        return ""                                       # it posts somewhere
+    inline = " ".join(re.findall(r"<script\b[^>]*>(.*?)</script>", html, re.I | re.S))
+    handlers = " ".join(re.findall(r"\bon(?:submit|click)\s*=\s*\"([^\"]*)\"", html, re.I))
+    code = " ".join((inline, handlers, str(scripts or "")))
+    if _SENDS.search(code):
+        return ""
+    text = re.sub(r"<script\b.*?</script>|<style\b.*?</style>", " ", html, flags=re.I | re.S)
+    if not _THANKS.search(code + " " + text) or _HONEST.search(re.sub(r"<[^>]+>", " ", text)):
+        return ""
+    return ("the form shows a thank-you but sends nothing anywhere, and the page does not say so: say on the page that "
+            "it is not connected yet (\"Ordering online is coming soon\"), or turn the button off with a note")
 
 
 def _interact(target: str, request: str, out_dir: str, browser, **kw) -> dict:
@@ -695,6 +738,16 @@ def _web_once(browser, url: str, out_dir: Path, tag: str, request: str, allowed:
                 raise
             except Exception:  # noqa: BLE001
                 pass
+            if view == "desktop":                  # a form that thanks the visitor while it sends nothing
+                try:
+                    srcs = eval_bounded(page, FORM_SRC_JS) or ""
+                    msg = fake_form(page.content(), srcs, request)
+                    if msg:
+                        found.append({"rule": "fake-form", "msg": msg, "sel": "form"})
+                except Frozen:
+                    raise
+                except Exception:  # noqa: BLE001
+                    pass
             for p_ in dict.fromkeys(probs):
                 merged.setdefault(("console", "", p_), {"rule": "console", "msg": p_, "sel": "",
                                                         "views": []})["views"].append(view)
@@ -1416,19 +1469,18 @@ def opens_line(files) -> str:
 
 
 def _close(agent, final: str, line: str) -> str:
-    """The "Checked:" line goes under the final reply (and into the chat history and the turn's receipt). The event
-    is marked look=True, so -p can send it to stderr and keep stdout for the answer alone."""
+    """The "Checked:" line is the turn's, not the reply's: it goes in the turn's footer (Session._turn_finish puts it
+    in the checks line, "Checked · all good", with this sentence in its fold) and into the receipt, never into the
+    answer itself (Lina, Priya, round 3: "Checked as an office or facilities manager: found nothing to fix." read as
+    noise inside the answer). The look_line event carries it for the terminal (-p sends it to stderr). The reply and
+    the chat history are left as the model wrote them."""
     st = getattr(agent, "_look_st", None) or {}
     agent.last_look = {"turn": getattr(agent, "_turn_no", 0), "line": line}
     if st.get("reviewer"):                                 # what the reviewer's calls added: calls, tokens, seconds
         agent.last_look["reviewer"] = dict({k: v for k, v in st["reviewer"].items() if k != "tried"},
                                            persona=st.get("persona", ""))
-    agent.emit({"type": "assistant", "text": line, "streamed": False, "has_tools": False, "append": True,
-                "look": True})                             # joins the reply
-    if agent.messages and agent.messages[-1].get("role") == "assistant" and isinstance(
-            agent.messages[-1].get("content"), str):
-        agent.messages[-1]["content"] += "\n\n" + line
-    return (final.rstrip() + "\n\n" + line) if final else line
+    agent.emit({"type": "look_line", "text": line, "look": True})
+    return (final.rstrip() + "\n\n" + line) if final else line     # the turn's result (receipt, -p), not the reply
 
 
 def strip_checked(text: str, line: str) -> str:

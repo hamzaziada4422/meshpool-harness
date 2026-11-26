@@ -64,7 +64,8 @@ def test_the_json_result_holds_the_last_answer(proj, monkeypatch):
     a, ev, final = _two_rounds(proj, monkeypatch)
     fe = TermFrontend.__new__(TermFrontend)
     fe.s = type("S", (), {"agent": a, "lock": __import__("threading").Lock(), "events": ev})()
-    assert fe.reply() == final and fe.reply().startswith("Tried again.") and "Checked:" in fe.reply()
+    # round 3: the Checked line is the turn's footer, never part of the reply the chat keeps (Lina, Priya)
+    assert final.endswith(a.last_look["line"]) and fe.reply().startswith("Tried again.") and "Checked:" not in fe.reply()
     assert fe.answer().startswith("Tried again.") and "Checked:" not in fe.answer()    # -p: the answer alone
     assert fe.checked() == a.last_look["line"] and fe.checked().startswith("Checked:")
 
