@@ -3262,12 +3262,12 @@ function showOnboarding() {
 
 /* Bring your context: what ChatGPT, Claude or Gemini already knows about you, by prompt or by data export, and
    custom GPT / project instructions as skills. */
-async function contextPanel(box) {
+async function contextPanel(box, opts = {}) {
   if (!box) return;
   let prompt = "", local = {}, links = [];
   try { const ic = await api("/api/import-context"); prompt = ic.prompt; links = ic.links || []; } catch (e) { /* the server is older: hide the panel */ return; }
   try { local = await api("/api/import-chats"); } catch (e) { local = {}; }
-  const srcs = Object.entries(local).filter(([, v]) => v.found);
+  const srcs = opts.noLocal ? [] : Object.entries(local).filter(([, v]) => v.found);     // onboarding has the tick box for these chats: one control
   const n = x => Number(x || 0).toLocaleString();
   box.innerHTML = `<h3 class="onb-h">Bring your chats and memory</h3>
     <p class="muted">It all stays on this computer.</p>
@@ -3399,13 +3399,16 @@ async function importPanel(box, onDone) {
   box.innerHTML = `<div class="res">Looking…</div>`;
   let f;
   try { f = await api("/api/import-agents"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
-  const agents = f.agents.filter(a => a.items.length);
+  // Plain labels for what other apps hold ("Notes from Claude Code", "Saved skills"); a hook has no plain name, so it is not listed
+  const agents = f.agents.map(a => Object.assign({}, a, {items: a.items.filter(i => i.kind !== "hook")})).filter(a => a.items.length);
   if (!agents.length) { box.innerHTML = `<span></span>`; onDone?.(null); return; }
-  const KIND = {skill: "Skill", mcp: "Tool", memory: "Memory", instructions: "Instructions", hook: "Hook"};
-  const item = it => `<label class="imp ${it.exists ? "have" : ""}"><input type="checkbox" data-key="${esc(it.key)}" ${it.exists ? "disabled" : ""}><span class="tg"><b>${esc(it.name)}</b> <span class="badge modified">${KIND[it.kind]}</span>${it.exists ? ` <span class="badge">Already here</span>` : ""}${it.kind === "memory" ? "" : `<small>${esc((it.preview || "").slice(0, 140))}</small>`}${(it.stripped || []).length ? `<small>Left out: ${esc(it.stripped.join(", "))}</small>` : ""}${(it.risks || []).length ? `<small class="bad">Check first: ${esc(it.risks.slice(0, 3).join("; "))}</small>` : ""}</span></label>`;
-  const sum = a => ["skill", "mcp", "memory", "instructions", "hook"].filter(k => a.counts[k]).map(k => `${a.counts[k]} ${({skill: "skill", mcp: "tool", memory: "memor", instructions: "instruction file", hook: "hook"})[k]}${k === "memory" ? (a.counts[k] === 1 ? "y" : "ies") : a.counts[k] === 1 ? "" : "s"}`).join(", ");
+  const KIND = {skill: "Saved skill", mcp: "Connected tool", memory: "Saved memory", instructions: "Notes"};
+  let curAgent = "";
+  const itemName = it => it.kind === "instructions" ? `Notes from ${curAgent}` : it.name;
+  const item = it => `<label class="imp ${it.exists ? "have" : ""}"><input type="checkbox" data-key="${esc(it.key)}" ${it.exists ? "disabled" : ""}><span class="tg"><b>${esc(itemName(it))}</b> <span class="badge modified">${KIND[it.kind] || "Item"}</span>${it.exists ? ` <span class="badge">Already here</span>` : ""}${it.kind === "memory" ? "" : `<small>${esc((it.preview || "").slice(0, 140))}</small>`}${(it.stripped || []).length ? `<small>Left out: ${esc(it.stripped.join(", "))}</small>` : ""}${(it.risks || []).length ? `<small class="bad">Check first: ${esc(it.risks.slice(0, 3).join("; "))}</small>` : ""}</span></label>`;
+  const sum = a => ["skill", "mcp", "memory", "instructions"].map(k => [k, a.items.filter(i => i.kind === k).length]).filter(([, n]) => n).map(([k, n]) => `${n} ${({skill: "saved skill", mcp: "connected tool", memory: "saved memor", instructions: "set of notes"})[k]}${k === "memory" ? (n === 1 ? "y" : "ies") : n === 1 ? "" : k === "instructions" ? "" : "s"}`).join(", ");
   box.innerHTML = `<h3 class="onb-h">Agents on this computer</h3>
-    ${agents.map(a => `<details class="impag" open><summary><b>${esc(a.name)}</b> <small class="muted">${esc(sum(a))}</small></summary><div class="impl">${a.items.map(item).join("")}</div></details>`).join("")}${agents.some(a => a.credentials_not_read.length) ? `<small class="muted">Logins are never read.</small>` : ""}
+    ${agents.map(a => (curAgent = a.name, `<details class="impag" open><summary><b>${esc(a.name)}</b> <small class="muted">${esc(sum(a))}</small></summary><div class="impl">${a.items.map(item).join("")}</div></details>`)).join("")}${agents.some(a => a.credentials_not_read.length) ? `<small class="muted">Logins are never read.</small>` : ""}
     <div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn primary" id="impGo">Import selected</button><button class="linkbtn" id="impDry">Preview only</button></div><div class="res" id="impRes"></div>`;
   const keys = () => $$("[data-key]", box).filter(x => x.checked && !x.disabled).map(x => x.dataset.key);
   const say = (t, cls) => { const r = $("#impRes", box); r.className = "res " + (cls || ""); r.textContent = t; };
@@ -3456,17 +3459,18 @@ function permStep(host) {
     } catch (e) { /* the step still works without the list */ }
   };
   $$("[data-scope]", card).forEach(x => x.onclick = async () => {
-    $$("[data-scope]", card).forEach(y => y.setAttribute("aria-checked", y === x));
+    $$("[data-scope]", card).forEach(y => y.setAttribute("aria-checked", "false"));      // selected only once it has happened
     const res = $("#oScope", card);
     try {
       if (x.dataset.scope === "pick") {     // the folder becomes a project: in the sidebar, the picker, and new chats work in it
         const r = await pickProject({project: true, noHome: true}), p = r?.pid && S.pj.find(q => q.id === r.pid);
         if (p) { newThread(); }
         const mine = S.pj.filter(q => q.link?.type === "folder" && q.pinned);
+        x.setAttribute("aria-checked", String(mine.length > 0));
         res.className = mine.length ? "res ok" : "res"; res.textContent = mine.length ? `Added ${mine.map(q => q.name).join(", ")}. New chats work in ${p ? p.name : mine[0].name}. Add more any time with Add a folder in the sidebar.` : "No folder added yet.";
       }
-      else if (x.dataset.scope === "home") { const r = await post("/api/projects", {action: "home"}); S.projects = r.projects; renderSide(); newThread(r.picked); res.className = "res ok"; res.textContent = "meshpool can work anywhere in your home folder. It asks before deleting files, using the internet or installing anything."; }
-      else { res.className = "res"; res.textContent = "Add your own folders any time from the sidebar."; }
+      else if (x.dataset.scope === "home") { const r = await post("/api/projects", {action: "home"}); S.projects = r.projects; renderSide(); newThread(r.picked); x.setAttribute("aria-checked", "true"); res.className = "res ok"; res.textContent = "meshpool can work anywhere in your home folder. It asks before deleting files, using the internet or installing anything."; }
+      else { x.setAttribute("aria-checked", "true"); res.className = "res"; res.textContent = "Add your own folders any time from the sidebar."; }
       if (mac && x.dataset.scope !== "later") draw({id: "folders"});
     } catch (e) { res.className = "res bad"; res.textContent = e.message; }
   });
@@ -3475,7 +3479,7 @@ function permStep(host) {
   window._permVis = () => { if (!document.hidden && $("#onbPerm")) draw(); };
   document.addEventListener("visibilitychange", window._permVis);
   $("#oDone", card).onclick = () => setupStep(o, card);
-  if (!S.projects.length) { const pick = $("[data-scope=pick]", card); pick.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Click Folders I choose to pick a folder now. You can add more any time from the sidebar."; }   // "Folders I choose" is the one already picked: one click opens the folder list
+  if (!S.projects.length) { $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Click Folders I choose to pick a folder now. You can add more any time from the sidebar."; }   // nothing looks chosen until a folder is added
   draw();
 }
 
@@ -3489,7 +3493,7 @@ function setupStep(o, prev) {
     <label class="switchrow" id="oLocalRow" hidden><input type="checkbox" id="oLocal"> <span id="oLocalTxt"></span></label></div>
     <div class="onb-go"><button class="bigbtn" id="oFinish">Start using meshpool</button></div>`;
   importPanel($("#oImport", card)).then(() => { const b = $("#impGo", card); if (b) b.hidden = true; });
-  contextPanel($("#oContext", card));
+  contextPanel($("#oContext", card), {noLocal: true});
   let found = {};
   api("/api/import-chats").then(l => { found = l; const n = Object.values(l).filter(v => v.default).reduce((a, v) => a + v.found - v.imported, 0); if (n) { $("#oLocalTxt", card).textContent = `Copy my past chats from ${Object.values(l).filter(v => v.default).map(v => v.name).join(" and ")} into meshpool (${n.toLocaleString()} chat${n === 1 ? "" : "s"})`; $("#oLocalRow", card).hidden = false; } }).catch(() => {});
   store("onbStep", 3);

@@ -363,11 +363,11 @@ def test_folder_picker_has_new_folder_and_starts_in_documents(app, page):
     page.keyboard.press("Escape")
 
 
-def test_onboarding_preselects_folders_i_choose(app, page):
-    """Onboarding preselected "Start without a folder", so choosing a folder took two clicks and a confirm."""
+def test_onboarding_does_not_preselect_start_without_a_folder(app, page):
+    """Onboarding preselected "Start without a folder", so choosing a folder took two clicks and a confirm. (Round 2: it no
+    longer marks "Folders I choose" either before a folder is added: see test_round2_019.py.) One click on it opens the list."""
     page.evaluate("() => { S.projects = []; permStep(); }")
     page.wait_for_selector("#onbPerm [data-scope=pick]")
-    assert page.get_attribute("[data-scope=pick]", "aria-checked") == "true"
     assert page.get_attribute("[data-scope=later]", "aria-checked") != "true"
 
 

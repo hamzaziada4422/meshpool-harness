@@ -332,3 +332,52 @@ def test_permissions_has_no_linux_line():
     from meshpool_harness.ui import desktop
     if sys.platform.startswith("linux"):
         assert desktop.permissions()["note"] == ""
+
+
+# ------------------------------------------------------------------------------------------------------ item 8
+def test_onboarding_marks_a_folder_choice_only_when_it_happened(app, page):
+    """"Folders I choose" looked selected before anything was added, and stayed selected after a cancelled picker."""
+    page.evaluate("() => { S.projects = []; S.pj = []; permStep(); }")
+    page.wait_for_selector("#onbPerm [data-scope=pick]")
+    state = "() => [...document.querySelectorAll('#onbPerm [data-scope]')].map(b => b.getAttribute('aria-checked'))"
+    assert "true" not in page.evaluate(state), page.evaluate(state)
+    page.evaluate("() => { window.pickProject = async () => null; }")          # the person closes the folder picker
+    page.click("#onbPerm [data-scope=pick]")
+    page.wait_for_function("() => document.querySelector('#oScope').textContent.includes('No folder added yet')")
+    assert "true" not in page.evaluate(state), page.evaluate(state)
+    page.click("#onbPerm [data-scope=later]")
+    assert page.evaluate(state) == ["false", "false", "true"], page.evaluate(state)
+    assert page.errors == [], page.errors
+
+
+AGENTS = {"agents": [
+    {"id": "claude", "name": "Claude Code", "credentials_not_read": [], "counts": {"skill": 1, "hook": 1}, "items": [
+        {"key": "skill:claude:unslop", "kind": "skill", "name": "unslop", "preview": "Turns vibecoded UI into a designed interface."},
+        {"key": "hook:claude:Stop:0", "kind": "hook", "name": "Stop: bash ~/.claude/stop.sh", "preview": "bash ~/.claude/stop.sh"}]},
+    {"id": "hermes", "name": "Hermes", "credentials_not_read": [], "counts": {"instructions": 1}, "items": [
+        {"key": "instructions:hermes:SOUL.md", "kind": "instructions", "name": "SOUL.md", "preview": "You are Hermes Agent. Be direct."}]}]}
+CHATS = {"claude": {"name": "Claude Code", "found": 12, "imported": 0, "default": True}}
+
+
+def test_onboarding_step_two_uses_plain_labels_and_one_control_for_past_chats(app, page):
+    """Step two read "Skill", "Instructions" and "SOUL.md", and had both an Import button and a tick box for the same chats."""
+    import json
+    import re
+
+    def fake(route, request):
+        url = request.url
+        body = AGENTS if "import-agents" in url else CHATS if "import-chats" in url else {"prompt": "x", "links": []}
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+    page.route(re.compile(r"/api/import-(agents|chats|context)"), fake)
+    page.evaluate("() => { S.projects = []; permStep(); }")
+    page.wait_for_selector("#onbPerm")
+    page.evaluate("() => setupStep(document.querySelector('#onb'), document.querySelector('#onbPerm'))")
+    page.wait_for_selector("#onbSetup .impag")
+    page.wait_for_function("() => !document.querySelector('#oLocalRow').hidden && document.querySelector('#oContext h3')")
+    txt = page.inner_text("#onbSetup")
+    for bad in ("SOUL.md", "Instructions", "Stop: bash", "Hook", "Skill\n"):
+        assert bad not in txt, (bad, txt)
+    assert "Notes from Hermes" in txt and "Saved skill" in txt and "unslop" in txt, txt
+    assert page.locator("#onbSetup [data-local]").count() == 0, "an Import button next to the tick box"
+    assert page.locator("#oLocal").count() == 1
+    assert page.errors == [], page.errors
