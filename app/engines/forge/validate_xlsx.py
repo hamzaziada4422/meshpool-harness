@@ -61,12 +61,32 @@ def _defined_names(wb) -> list[tuple[str, str]]:
     return out
 
 
+TABLE_SKIPS = ("X1", "X12")
+_MODEL_TABS = re.compile(r"(?i)input|assumption|driver|calc|model|forecast|budget|scenario|valuation|dcf|lbo|p&l|"
+                         r"pnl|income|balance|cash ?flow|historical|comps|precedent|statement")
+
+
+def is_model(sheetnames, roles: dict | None = None) -> bool:
+    """A model has model tabs (Inputs, Calc, a forecast, statements) or a checks tab; a list, a table or a simple
+    summary (Data, Summary, Price list, Rooms) has none."""
+    return any(r == "checks" for r in (roles or {}).values()) or any(_MODEL_TABS.search(str(n)) for n in sheetnames)
+
+
 def _is_num(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def _label(ws, row: int) -> str:
-    for c in range(1, min(ws.max_column, 6) + 1):
+    # openpyxl works out max_column from every cell on each read: asked once per row, a 50k-row data sheet took
+    # over ten minutes (Lina's sales export). Read it once per sheet.
+    cols = getattr(ws, "_mp_label_cols", None)
+    if cols is None:
+        cols = min(ws.max_column, 6)
+        try:
+            ws._mp_label_cols = cols
+        except AttributeError:
+            pass
+    for c in range(1, cols + 1):
         v = ws.cell(row, c).value
         if isinstance(v, str) and v.strip() and not v.startswith("="):
             return v.strip()
@@ -715,6 +735,13 @@ def validate(path: str, rules: dict | None = None, recompute: dict | None = None
              "formula_literals": sum(s["formula_literals"] for s in sheet_stats.values())}
     if changes is not None:
         stats["diff"] = changes[:500]
+    if not is_model(wb.sheetnames, roles):
+        # A list, table or simple summary is not a model: a Checks tab with a master flag (X12) and "typed numbers
+        # on a calc sheet" (X1, the data itself) do not apply, so they are not run or reported. priya018: a room list
+        # was reported as failing X1 and X12, and the reply explained "a rule meant for financial models".
+        failures = [f for f in failures if f["rule"] not in TABLE_SKIPS]
+        failures += [F(r, "not_applicable", "Not run: the workbook is a list or table, not a model.",
+                       status="not_run", severity="info", fix_scope="renderer") for r in TABLE_SKIPS]
     rules_status = summarize(failures, RULES)
     try:                                    # the visible-checks recorder: the rules that ran (no-op when idle)
         from meshpool_harness import checks

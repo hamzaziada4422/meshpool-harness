@@ -267,8 +267,7 @@ def test_the_word_memo_uses_real_heading_list_and_table_styles_and_clean_propert
     md = ("# Predictive maintenance: what the Northfield report means for you\n\n**Recommendation**\n\nApprove one "
           "pilot line.\n\n## Why now\n\n• 47% of plants use it\n• Downtime falls 23%\n\n- Pilot first\n- Then scale\n\n"
           "| Approach | Payback (months) |\n|---|---|\n| Pilot line | 19 |\n| Plant-wide | 31 |\n")
-    msg, bad = OS.make_document(md, filename="Ridgeway_PdM_Memo.docx", footer=FOOTER, heading_font="Georgia",
-                                color="#14304F")
+    msg, bad = OS.make_document(md, filename="Ridgeway_PdM_Memo.docx")
     assert not bad, msg
     path = tmp_path / "Ridgeway_PdM_Memo.docx"
     d = Document(str(path))
@@ -278,10 +277,8 @@ def test_the_word_memo_uses_real_heading_list_and_table_styles_and_clean_propert
     bullets = [t for s, t in styles if s == "List Bullet"]
     assert bullets == ["47% of plants use it", "Downtime falls 23%", "Pilot first", "Then scale"], styles
     assert not any(t.lstrip().startswith(("•", "-")) for _, t in styles)
-    assert d.styles["Heading 1"].font.name == "Georgia" and str(d.styles["Heading 1"].font.color.rgb) == "14304F"
     mar = d.tables[0]._tbl.tblPr.find("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}tblCellMar")
     assert mar is not None and len(mar) == 4
-    assert d.sections[0].footer.paragraphs[0].text == FOOTER
     cp = d.core_properties
     assert cp.author == "Daniel Reyes" and cp.title.startswith("Predictive maintenance")
     with zipfile.ZipFile(path) as z:

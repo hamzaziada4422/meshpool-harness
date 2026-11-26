@@ -276,7 +276,7 @@ def test_engine_stages_reach_the_chat_as_job_stage_events_not_checks(home, monke
     assert [e["type"] for e in evs] == ["job_stage", "check", "job_stage"], evs
     assert evs[0]["text"] == "Deck: writing 6 slides"
     assert evs[2]["text"] == "Workbook: step 4, writing a file, running a step"
-    assert CK.final_line(run) == "Checked the deck: all 37 checks passed."
+    assert CK.final_line(run) == "Checked the slide layout and text."
 
 
 # ---------------------------------------------------------------------------------------------------- WF-I

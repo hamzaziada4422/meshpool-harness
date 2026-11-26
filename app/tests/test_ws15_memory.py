@@ -553,9 +553,12 @@ def test_F_17_defaults_and_servers_stay_off_until_tested(home, tmp_path, monkeyp
     scan = CI.scan_local()
     assert scan["claude-code"]["default"] is True and scan["codex"]["default"] is False
     js = (Path(__file__).resolve().parents[1] / "meshpool_harness" / "ui" / "app.js").read_text(encoding="utf-8")
-    # agent items are ticked unless known not to work; another app's chats are copied only when the user ticks the
-    # box (PF-04: the import was opt-out)
-    assert 'id="oLocal">' in js and 'id="oLocal" checked' not in js and "it.default === false" in js
+    # nothing from another tool is ticked by default (persona re-score 0.0.18: skills and files of other agents were
+    # pre-ticked); another app's chats are copied only when the user ticks the box (PF-04: the import was opt-out)
+    assert 'id="oLocal">' in js and 'id="oLocal" checked' not in js
+    item = js[js.index("const item = it => `<label class=\"imp"):]
+    item = item[:item.index("\n")]
+    assert 'data-key="${esc(it.key)}"' in item and " checked" not in item and "it.default" not in item
 
 
 # ---- F-32: the export's context uses the configured model and a checked answer -------------------------------------------------------------------------

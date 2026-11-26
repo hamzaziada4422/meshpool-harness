@@ -16,9 +16,10 @@ Tools
   measure_office_file(path, pages?)   -> how a .pptx/.xlsx/.pdf is built (reverse-engineering a reference file)
   find_icon(query, set?, style?, ...) -> bundled icons (Lucide, Tabler, Phosphor, Material, Carbon, ...) for a meaning
 
-Engine jobs run in the background. A call waits up to OFFICE_WAIT_S (default 100 s, under the common 120 s MCP
-timeout; Meshpool's own client sets 280 s with a 330 s timeout); a longer job returns a job id to check with
-office_job_status. Files go to "<project>/Meshpool outputs".
+Engine jobs run in the background, in meshpool's own data folder. A call waits up to OFFICE_WAIT_S (default 100 s,
+under the common 120 s MCP timeout; meshpool's own client sets 280 s with a 330 s timeout); a longer job returns a
+"still running" handle to wait on with office_job_status, never a timeout. Only the deliverable lands in the
+project folder, under its own name.
 """
 from __future__ import annotations
 
@@ -102,6 +103,13 @@ def _save_copy(jid: str, want: str) -> str:
         return f"\nNot saved as {want}: the job made no {ext or 'such'} file."
     done = OJ.JOBS[jid].get("saved_as")
     if not done:
+        try:                                     # delivered under that name already: nothing to move
+            asked = _resolve(want).resolve()
+        except (OSError, ValueError):
+            asked = None
+        if asked is not None and made[0].resolve() == asked:
+            OJ.JOBS[jid]["saved_as"] = done = str(asked)
+    if not done:
         dest = _dest(want, made[0].name, ext, named=True)
         try:
             shutil.move(str(made[0]), str(dest))
@@ -132,17 +140,19 @@ def _engine(engine: str, request: str, files: list | None, save_as: str | None =
                            model=getattr(_CALL, "model", None) or None)   # the chat's model, as office_task passes it
     if reused == "refused":
         return OJ.refusal_text(jid), False
-    if save_as and str(save_as).strip():
+    if save_as and str(save_as).strip() and not SAVE_AS.get(jid):
         SAVE_AS[jid] = str(save_as).strip()
     if reused == "done":
         return _report(jid, reused=reused)
-    if reused == "running":
+    if reused == "running":                      # a retry of a build that still runs: wait on it, never a second one
         OJ.JOBS[jid]["event"].wait(WAIT)
         return _report(jid)
-    from meshpool_harness.agent.mcp_stdio import cancel_check
-    t = threading.Thread(target=_run_job, args=(jid, cancel_check()), daemon=True)   # the client's Stop ends the job
+    from meshpool_harness.agent.mcp_stdio import stop_check
+    # The job runs on after this call returns. Only the user's Stop ends it: a client that gave up waiting has not
+    # asked for that, and killing the job made the agent build the same workbook again (Lina).
+    t = threading.Thread(target=_run_job, args=(jid, stop_check()), daemon=True)
     t.start()
-    t.join(WAIT)
+    OJ.JOBS[jid]["event"].wait(WAIT)             # set once the file is delivered and checked: the report is quick
     return _report(jid)
 
 
@@ -189,10 +199,13 @@ def office_job_status(job_id: str):
     if job_id not in JOBS:
         return f"No job with id {job_id} (jobs are kept while this server runs).", True
     j = JOBS[job_id]
-    if not j.get("done"):
-        deadline = time.time() + WAIT
-        while not j.get("done") and time.time() < deadline:
-            time.sleep(1)
+    if not j.get("done"):                        # wait for the job; still running at the end: say so, never a timeout
+        if j.get("event") is not None:
+            j["event"].wait(WAIT)
+        else:
+            deadline = time.time() + WAIT
+            while not j.get("done") and time.time() < deadline:
+                time.sleep(1)
     return _report(job_id)
 
 
@@ -255,8 +268,9 @@ def _safe_name(filename: str, default: str, ext: str) -> str:
 def _dest(filename: str | None, default: str, ext: str, named: bool | None = None) -> Path:
     """Where a file made for `filename` goes. A name the user gave (not the tool's default) is written exactly there
     when it is a plain name or a path inside the project folder, so "make report.pdf" gives ./report.pdf; with no
-    name (or one outside the project) it goes to "<project>/Meshpool outputs". Either way an existing file is never
-    replaced: a free "name (2).ext" is used."""
+    name (or one outside the project) it goes to the top of the project folder under that name, never into a
+    "Meshpool outputs" folder of its own (Lina, Maya, Priya: a folder they had not asked for, which the agent then
+    told them to delete). Either way an existing file is never replaced: a free "name (2).ext" is used."""
     name = _safe_name(filename or "", default, ext)
     given = str(filename or "").strip()
     if named is None:
@@ -271,9 +285,7 @@ def _dest(filename: str | None, default: str, ext: str, named: bool | None = Non
                 return _free(d / name)
         except OSError:
             pass
-    out = _project() / "Meshpool outputs"
-    out.mkdir(parents=True, exist_ok=True)
-    return _free(out / name)
+    return _free(_project() / name)
 
 
 def _pdf_font(text: str) -> tuple[str, str]:
@@ -347,25 +359,94 @@ def _set_num(par, num_id: int):
     ppr.numPr.get_or_add_ilvl().val = 0
 
 
+LETTER_REGIONS = {"US", "CA"}      # where Letter paper is the norm (and a few others that rarely ask)
+
+
+def _locale_region() -> str:
+    """The user's region ("US", "DE", "GB") from the locale, the way the app reads it: LC_ALL, LC_PAPER or LANG
+    ("en_US.UTF-8"), the Windows user locale ("en-US"), else the system's default locale. "" when unknown."""
+    names = [os.environ.get(k, "") for k in ("LC_ALL", "LC_PAPER", "LANG")]
+    if os.name == "nt":
+        try:
+            from meshpool_harness import config as C
+            names.append(C._windows_locale_name())
+        except Exception:  # noqa: BLE001
+            pass
+    if sys.platform == "darwin":
+        try:
+            names.append(subprocess.run(["defaults", "read", "-g", "AppleLocale"], capture_output=True, text=True,
+                                        timeout=2).stdout.strip())
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:
+        import locale
+        names.append(locale.getlocale()[0] or "")
+    except (ValueError, TypeError):
+        pass
+    for n in names:
+        m = re.match(r"^[a-z]{2,3}[_-]([A-Z]{2})\b", str(n or ""))
+        if m:
+            return m.group(1)
+    return ""
+
+
+def page_size(paper: str | None = None) -> str:
+    """"A4" or "Letter" for a new document: what the user asked for, else Letter in the US and Canada and A4
+    everywhere else (Priya, in the UK, got US Letter pages)."""
+    p = str(paper or "").strip().lower()
+    if p in ("a4",):
+        return "A4"
+    if p in ("letter", "us letter", "us-letter", "letter size"):
+        return "Letter"
+    return "Letter" if _locale_region() in LETTER_REGIONS else "A4"
+
+
+def _same_text(a: str, b: str) -> bool:
+    k = lambda s: re.sub(r"[\W_]+", " ", re.sub(r"[*_`]", "", str(s or ""))).strip().lower()   # noqa: E731
+    return bool(k(a)) and k(a) == k(b)
+
+
+def _drop_title_heading(markdown: str, title: str | None) -> str:
+    """The markdown without its first heading when that heading is the title again. Priya's client update showed
+    "Library Extension: Client Update" twice at the top: the Title paragraph, then a Heading 1 with the same words."""
+    if not title:
+        return markdown
+    lines = markdown.split("\n")
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        if not s:
+            continue
+        m = re.match(r"^#{1,6}\s+(.*)$", s)
+        if m and _same_text(m.group(1), title):
+            del lines[i]
+            while i < len(lines) and not lines[i].strip() and (i == 0 or not lines[i - 1].strip()):
+                del lines[i]
+            return "\n".join(lines)
+        return markdown
+    return markdown
+
+
 def make_document(markdown: str, filename: str = "document.docx", title: str | None = None, _clarity: bool = True,
-                  _named: bool | None = None, footer: str | None = None, author: str | None = None,
-                  heading_font: str | None = None, font: str | None = None, color: str | None = None):
-    """footer: text on every page; heading_font / font: faces for headings and body; color: hex for headings;
-    author: File > Info author (default: the name in Settings > Profile). See engines/forge/docstyle.py."""
+                  _named: bool | None = None, paper: str | None = None):
     from docx import Document
-    from docx.shared import Pt
+    from docx.shared import Mm, Pt
     markdown, title = _clean_md(markdown), _clean(title) or None
+    markdown = _drop_title_heading(markdown, title)
     doc = Document()
     doc.styles["Normal"].font.name = "Calibri"
     doc.styles["Normal"].font.size = Pt(11)
-    try:                                                   # real Heading and List styles, table padding, the brand,
-        if str(APP) not in sys.path:                       # core properties (Daniel, 0.0.19)
+    size = page_size(paper)
+    for sec in doc.sections:
+        sec.page_width, sec.page_height = (Mm(210), Mm(297)) if size == "A4" else (Mm(215.9), Mm(279.4))
+        sec.left_margin = sec.right_margin = Mm(25.4)
+    try:                                                   # real Heading and List styles, table padding and core
+        if str(APP) not in sys.path:                       # properties (Daniel, 0.0.19: engines/forge/docstyle.py)
             sys.path.insert(0, str(APP))
         from engines.forge import docstyle as DS
     except Exception:  # noqa: BLE001 - engines not shipped: plain python-docx defaults
         DS = None
     if DS:
-        DS.style(doc, heading_font=heading_font, font=font, color=color)
+        DS.style(doc)
     if title:
         doc.add_heading(title, level=0)
     clarity_note = ""
@@ -451,7 +532,7 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
             _runs(doc.add_paragraph(), s)
         i += 1
     if DS:
-        DS.finish(doc, title=title or DS.first_heading(markdown), footer=_clean(footer) or None, author=author)
+        DS.finish(doc, title=title or DS.first_heading(markdown))
     path = _dest(filename, "document.docx", ".docx", _named)
     doc.save(path)
     return f"Saved the Word document: {path}.{clarity_note}", False
@@ -1043,14 +1124,17 @@ def _pdf_image(src: str, max_w: float):
     return Image(str(path), width=iw * scale, height=ih * scale)
 
 
-def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = None, _named: bool | None = None):
+def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = None, _named: bool | None = None,
+             paper: str | None = None):
     from reportlab.lib import colors
-    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.pagesizes import A4, LETTER
     from reportlab.lib.styles import getSampleStyleSheet
     from reportlab.lib.units import cm
     from reportlab.platypus import ListFlowable, ListItem, Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle
     name = _safe_name(filename, "document.pdf", ".pdf")
     markdown, title = _clean_md(markdown), _clean(title) or None
+    markdown = _drop_title_heading(markdown, title)
+    page = LETTER if page_size(paper) == "Letter" else A4
     st = getSampleStyleSheet()
     reg, bold = _pdf_font(markdown + (title or ""))
     for k in ("Title", "BodyText", "Heading1", "Heading2", "Heading3", "Heading4", "Code"):
@@ -1101,7 +1185,7 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
             flush()
             src = re.match(r"^!\[[^\]]*\]\(([^)]+)\)", s).group(1).strip()
             try:
-                flow += [_pdf_image(src, A4[0] - 4 * cm), Spacer(1, 8)]
+                flow += [_pdf_image(src, page[0] - 4 * cm), Spacer(1, 8)]
             except ValueError as e:
                 return f"Could not add the image: {e}. Nothing was saved.", True
         elif re.match(r"^#{1,6}\s", s):
@@ -1129,7 +1213,7 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
         i += 1
     flush()
     path = _dest(filename, "document.pdf", ".pdf", _named)
-    SimpleDocTemplate(str(path), pagesize=A4, leftMargin=2 * cm, rightMargin=2 * cm, topMargin=2 * cm,
+    SimpleDocTemplate(str(path), pagesize=page, leftMargin=2 * cm, rightMargin=2 * cm, topMargin=2 * cm,
                       bottomMargin=2 * cm, title=title or name).build(flow)
     return f"Saved the PDF: {path}", False
 
@@ -1238,6 +1322,7 @@ def find_icon(query: str = "", set: str | None = None, limit: int = 8, style: st
 
 S = {"type": "string"}
 FILES = {"type": "array", "items": S, "description": "Input files (project-relative or absolute)"}
+PAPER = {"type": "string", "enum": ["A4", "Letter"], "description": "Only when the user asks; else from their region"}
 # Descriptions stay short: they ride in every request. Option lists (themes, icon sets, edit operations) are in the
 # BRIEF NEEDED answer, in an error message or in find_icon list_sets, which the model reaches only when it needs them.
 TOOLS = {
@@ -1259,11 +1344,8 @@ TOOLS = {
                          {"request": S, "files": FILES, "save_as": {"type": "string", "description": "The file name the user asked for, e.g. deck.pptx"}}, ["request"]),
     "analyze_data": (analyze_data, "Analyze CSV or Excel data into charts, tables and a summary.",
                      {"request": S, "files": FILES}, ["request", "files"]),
-    "make_document": (make_document, "Save Markdown as a .docx (# and ## are Heading 1 and 2, - lists are real "
-                      "bullets, tables get padding). Saved as `filename` in the project folder. Optional: `footer` "
-                      "(text on every page), `heading_font`, `font`, `color` (hex for headings), `author`.",
-                      {"markdown": S, "filename": S, "title": S, "footer": S, "heading_font": S, "font": S,
-                       "color": S, "author": S}, ["markdown"]),
+    "make_document": (make_document, "Save Markdown as a .docx. Saved as `filename` in the project folder.",
+                      {"markdown": S, "filename": S, "title": S, "paper": PAPER}, ["markdown"]),
     "read_document": (read_document, "Read a PDF, Word, PowerPoint, Excel, CSV, Power BI, OpenDocument, notebook, "
                       "email, HTML or image file as text (OCR for scans). `sheet`, `pages` (\"1-3,7\"), `language`, "
                       "`ocr` (auto, always, never) are optional.",
@@ -1280,7 +1362,7 @@ TOOLS = {
                  "```chart block with JSON {\"type\": \"bar\"|\"line\"|\"pie\", \"title\", \"labels\": [...], "
                  "\"values\": [...]} (or \"series\": {name: [...]}) is drawn as a real chart; ![caption](file.png) "
                  "embeds an image. Never draw a chart with text characters.",
-                 {"markdown": S, "filename": S, "title": S}, ["markdown"]),
+                 {"markdown": S, "filename": S, "title": S, "paper": PAPER}, ["markdown"]),
     "convert_document": (convert_document, "Convert a document to another format (docx, pptx, xlsx, md to pdf; pdf to "
                          "docx). `to` is the target extension; `output` names the result.",
                          {"path": S, "to": S, "output": S}, ["path", "to"]),
