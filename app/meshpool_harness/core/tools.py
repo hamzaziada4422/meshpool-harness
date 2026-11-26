@@ -1831,6 +1831,7 @@ class Workspace:
                 mode = self.get_mode() if self.get_mode else None
                 if bash and os.name == "nt":                     # Git Bash: keep the working folder
                     env["CHERE_INVOKING"] = "1"
+                    _C.msys_lang(env)                            # no "/usr/bin/locale: No such file" in every output
                     if _SB.requested(mode):
                         _SB.wrap(["x"], self.root, platform="win32")     # says once that it is not available here
                     r = self._proc([bash, "-lc" if login else "-c", fix_nul_redirect(command)], env, timeout_s,
