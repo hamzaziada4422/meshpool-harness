@@ -205,7 +205,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .appr .btn.danger{border-color:var(--line);color:var(--ink-2);background:none}   /* Deny is a quiet choice, not an alarm */
 .appr .btn.danger:hover{color:var(--del);background:var(--hover)}
 .appr b{display:block;margin-bottom:8px;font-weight:600}
-.appr pre{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-s);padding:8px 10px;max-height:280px;overflow:auto;font:var(--fs-xs)/1.5 var(--mono);margin:0 0 12px;white-space:pre}
+.appr pre{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-s);padding:8px 10px;max-height:280px;overflow:auto;font:var(--fs-xs)/1.5 var(--mono);margin:0 0 12px;white-space:pre-wrap;overflow-wrap:anywhere}
 .appr .acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .appr input{flex:1;min-width:150px;border:1px solid var(--line-3);border-radius:var(--r-s);padding:5px 10px;background:var(--surface)}
 .appr.done{border-color:var(--line);background:none;padding:8px 12px;display:flex;gap:8px;align-items:baseline;color:var(--ink-2)}
@@ -369,7 +369,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .flist .p{font-family:var(--mono);font-size:var(--fs-xs);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .flist .a{color:var(--add);font-family:var(--mono);font-size:var(--fs-xs)}
 .flist .r{color:var(--del);font-family:var(--mono);font-size:var(--fs-xs)}
-.patch{font:var(--fs-xs)/1.6 var(--mono);margin:0;padding:8px 0;white-space:pre;overflow:auto}
+.patch{font:var(--fs-xs)/1.6 var(--mono);margin:0;padding:8px 0;white-space:pre-wrap;overflow-wrap:anywhere;overflow:auto}   /* OM-10: long lines wrap, never cut */
 .patch .l{display:block;padding:0 12px}
 .patch .l.a{background:var(--add-bg);color:var(--add)}
 .patch .l.d{background:var(--del-bg);color:var(--del)}

@@ -598,6 +598,7 @@ def _lighten(messages: list) -> None:
         _compact(messages, keep_recent=8)
 
 
+STOPPED_MARK = "(Stopped by the user before this reply was finished.)"
 RESUME_NOTE = ("\n\n\u200b[Meshpool] Your previous turn was cut off by an error (such as a rate limit or a lost "
                "connection) before you finished. Unless this message asks for something else, pick the task up exactly "
                "where it stopped: the tool calls and results above are what was already done, so do not redo finished "
@@ -706,6 +707,30 @@ def _plain_command_title(script: str) -> str:
     if first and any(f in first for f in files):
         on = ""
     return f"Run {first}{on}?" if first else "Run this command?"
+
+
+def _unknown_model_text(bare: str, prov: str = "key") -> str:
+    """OM-04: the error for a model named with --model that the endpoint does not serve, with the closest names it
+    does serve (one read of the endpoint's model list, made only now that the call failed)."""
+    import difflib
+    ids: list = []
+    try:
+        if prov == "chatgpt":
+            from meshpool_harness.core import chatgpt as CG
+            ids = list(CG.models())
+        else:
+            from meshpool_harness.ui import workbench as W
+            ids = [str(r.get("id")) for r in W.models().get("models") or [] if r.get("id")]
+            ids = [i.split(":", 1)[1] if i.startswith("chatgpt:") else i for i in ids]
+    except Exception:  # noqa: BLE001 - the list is a help, never a second failure
+        ids = []
+    ids = list(dict.fromkeys(ids))
+    close = difflib.get_close_matches(bare, ids, n=5, cutoff=0.4) or \
+        [i for i in ids if bare.lower().split("-")[0] in i.lower()][:5]
+    text = f"The endpoint does not serve the model {bare}."
+    if close:
+        text += " Close names it does serve: " + ", ".join(close) + "."
+    return text + " Pick one with --model, or run `meshpool models` to see them all."
 
 
 def _summary_of(name: str, args: dict) -> str:
@@ -3551,7 +3576,9 @@ class Agent:
                     "\"continue\") to carry on. The limit is \"Max steps per reply\" in Settings (MH_MAX_STEPS; 0 = no "
                     "limit).")})
         except (Interrupted, KeyboardInterrupt):
+            n0 = len(self.messages)
             self._repair()
+            self._mark_stopped(n0)
             for cid, nm in list(self._open_calls.items()):       # no card stays "running" after a Stop
                 self._open_calls.pop(cid, None)
                 self.emit({"type": "tool_end", "id": cid, "name": nm, "ok": False, "denied": False,
@@ -4982,6 +5009,10 @@ class Agent:
                         continue
                     raise RuntimeError("The endpoint rejected the API key. Check it in settings. " + msg[:200])
                 if kind == "model_missing":
+                    if getattr(self, "model_named", False):
+                        # OM-04: a model the user named on the command line (--model) is not swapped for another one
+                        # without a word: the run stops and says which names the endpoint does serve.
+                        raise RuntimeError(_unknown_model_text(body["model"], prov))
                     # A chat from weeks ago on a model the endpoint has dropped: continue on today's default for
                     # its provider, once per call. Otherwise say so at once; retrying the same model cannot help.
                     C.load_into_env(override=True)
@@ -5580,6 +5611,8 @@ class Agent:
                     _MC.observe_first_byte(base, _bare, time.time() - t_sent)   # remembered: the next wait is 3x it
                 thinking = []                            # one "Thinking…" status per call, before any text
                 parts: list = []                         # the reply so far: kept if the stream drops (_keep_partial)
+                if not aux:                              # and if the user stops it (_mark_stopped, OM-06)
+                    self._stream_parts = (len(self.messages), parts)
                 thought: list = []                       # the model's reasoning, when it sends it
 
                 def flush_thought():
@@ -6532,6 +6565,20 @@ class Agent:
             return WEB.format_page(WEB.fetch(url), start, max(2000, min(int(max_chars or 15000), 60000)), links)
         except WEB.WebError as e:
             raise ToolError(str(e))
+
+    def _mark_stopped(self, n0: int) -> None:
+        """OM-06: a turn the user stopped ends in the history with what the reply had said so far and a mark that it
+        was stopped, so the next message (also after -c) reads it as a stopped request, not one still to answer.
+        n0: the number of messages when Stop came; the streamed text counts only if its call started then."""
+        cut = getattr(self, "_partial_text", "") or ""
+        sp = self.__dict__.pop("_stream_parts", None)
+        if not cut.strip() and sp and sp[0] == n0:
+            cut = "".join(sp[1])
+        self._partial_text = ""
+        last = self.messages[-1] if self.messages else {}
+        if last.get("role") in ("user", "tool"):
+            self.messages.append({"role": "assistant",
+                                  "content": (cut.rstrip() + "\n\n" if cut.strip() else "") + STOPPED_MARK})
 
     def _repair(self, note: str = "Not run: the user stopped the agent."):
         """After an interruption every tool call must still have a result, or the next request is invalid."""

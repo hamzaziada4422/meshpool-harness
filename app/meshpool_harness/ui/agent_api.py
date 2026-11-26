@@ -161,6 +161,9 @@ def undo_message(r: dict) -> tuple[str, str]:
     restored, deleted, kept, outside = (list(r.get(k) or []) for k in ("restored", "deleted", "kept", "outside"))
     done = [s for s in (count(restored, "Restored") if restored else "",
                         count(deleted, "removed" if restored else "Removed") if deleted else "") if s]
+    if not done and r.get("conversation") is False and not kept and not outside:
+        # OM-08: nothing left the conversation and no file changed: "Undone." said something happened that did not
+        return "Nothing to undo: that turn changed no files and is no longer in the conversation.", ""
     msg = "Undone. " + (" and ".join(done) + "." if done else "No files in this chat's folder had changed.")
     if kept:
         msg += f" Not restored: {names(kept)} (changed since, or not saved before; see details)."
@@ -1153,6 +1156,7 @@ class Session:
                 self._after_stop.append((text, images))
                 queued_as, n = "after", len(self._after_stop)
             elif hasattr(self.agent, "steer") and not acp and self._undo_token != self._turn_id:
+                self._attach_to_turn(getattr(self, "_turn_n", None))         # added to the running turn: its copies too
                 self.agent.steer(self._body(text, images), images=images)    # emits an event: the lock is re-entrant
                 from meshpool_harness import pace as PACE
                 if PACE.classify(text, bool(images)) != "quick":
@@ -1169,6 +1173,15 @@ class Session:
             return {"queued": True}
         self._start_turn(text, images, token)
         return {"queued": False}
+
+    def _attach_to_turn(self, n) -> None:
+        """The copies of attached files made for the message that starts (or joins) checkpoint turn n (OM-03)."""
+        made = self.__dict__.pop("_attach_made", None)
+        if made and n and self.cp:
+            try:
+                self.cp.note_attached(n, made)
+            except Exception:  # noqa: BLE001 - never stops a turn
+                pass
 
     def take_back(self) -> dict:
         """The last message sent while the agent worked, back to the user: from the queue, or from the running
@@ -1203,6 +1216,8 @@ class Session:
                 notes.append({"name": name, "path": r["path"], "reused": True})
             else:
                 notes.append({"name": name, "path": r["path"], "copy": True})
+                # the copy belongs to the turn this message starts: Undo of that turn removes it (OM-03)
+                self.__dict__.setdefault("_attach_made", []).append(str(Path(self.workdir) / r["path"]))
         self._attached = notes                       # the app says where each one is (session_action "attached")
         where = "this chat's folder" if PS.is_scratch(self.workdir) else "the project folder"
         return text.rstrip() + f"\n\nAttached files (in {where}): {', '.join(saved)}"
@@ -1568,6 +1583,7 @@ class Session:
                         t = self.cp.begin_turn(text.strip().splitlines()[0] if text.strip() else "Images", idx,
                                                event_index=ev0)
                         self._turn_n = (t or {}).get("n")
+                        self._attach_to_turn(self._turn_n)
                         if t is None and self.cp.disabled and not getattr(self, "_cp_noted", False):
                             self._cp_noted = True          # say it once per thread, not on every turn
                             self.emit({"type": "status", "text": self.cp.disabled})
@@ -2113,6 +2129,8 @@ class Session:
 
     def _revert(self, turn: int) -> dict:
         cut = self._turn_cut(turn)
+        with self.lock:
+            had = (len(getattr(self.agent, "messages", None) or []), len(self.events))
         r = self.cp.revert_to_before(int(turn))
         idx = r.get("message_index")
         built_in = self.harness["type"] not in ("acp", "pi")
@@ -2141,6 +2159,8 @@ class Session:
                     self.agent.events = [{k: v for k, v in e.items() if k not in ("i", "t")} for e in self.events]
                     self.agent.save()
         self.epoch += 1
+        with self.lock:                          # whether the conversation lost anything (undo_message says so)
+            r["conversation"] = (len(getattr(self.agent, "messages", None) or []), len(self.events)) != had
         self._persist(running=False)
         try:                                     # Undo counts against every logged turn it removed; never breaks Undo
             from meshpool_harness.hrouter import outcomes as OUT

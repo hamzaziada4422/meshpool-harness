@@ -153,6 +153,45 @@ def hard_wrap(s: str, width: int) -> list[str]:
     return out + [cur]
 
 
+def word_wrap(s: str, width: int) -> list[int]:
+    """Where each row starts when `s` is word-wrapped at `width` columns (greedy: a row breaks before the word that
+    does not fit; a word wider than a row is cut). Rows before the last never change as text is added, so a streamed
+    paragraph is wrapped from the start of its last row only (OM-08)."""
+    width = max(1, width)
+    starts, n, i, L = [0], 0, 0, len(s)
+    while i < L:
+        j = i
+        while j < L and s[j] != " ":
+            j += 1
+        word = s[i:j]
+        ww = vlen(word)
+        if n and n + ww > width:                   # the word goes to a new row
+            starts.append(i)
+            n = 0
+        if ww > width:                             # longer than a row: cut it
+            for k, ch in enumerate(word):
+                c = cw(ch)
+                if n + c > width and n:
+                    starts.append(i + k)
+                    n = 0
+                n += c
+        else:
+            n += ww
+        while j < L and s[j] == " ":
+            j += 1
+            n += 1
+        i = j
+    return starts
+
+
+def exec_output(out: str) -> str:
+    """The output of an exec_command result without the lines meant for the model (Chunk ID, Wall time, Process
+    exited, Original token count, Output:): the screen shows the command's own output (OM-08)."""
+    m = re.match(r"Chunk ID: [0-9a-f]+\nWall time: [^\n]*\n(?:Process exited with code -?\d+\n)?"
+                 r"(?:Original token count: \d+\n)?Output:\n?", out or "")
+    return out[m.end():] if m else out
+
+
 # ---------- markdown -----------------------------------------------------------------------------------------------
 _INLINE = re.compile(
     r"(?P<code>(`+)(?P<c>.+?)\2)|(?P<b>\*\*(?P<bt>.+?)\*\*)|(?P<b2>__(?P<b2t>.+?)__)|"
@@ -305,9 +344,10 @@ def guard(fn, st: Style, *a, **k):
 
 
 def shell_block(command: str, output: str, took: float | None, st: Style, width: int, meta: str = "",
-                limit: int = 10, ok: bool = True) -> tuple[list[str], int]:
+                limit: int = 10, ok: bool = True, expand: bool = True) -> tuple[list[str], int]:
     """A shell call as a full-width block: bold `$ command` (with dim metadata at the end of the last line), a blank
-    line, the output (dim), a blank line, `Took 2.6s`. Returns (lines, hidden output line count)."""
+    line, the output (dim), a blank line, `Took 2.6s`. Returns (lines, hidden output line count). expand: say that
+    Ctrl+O shows the hidden lines (not in a -p run, where no key can be pressed)."""
     inner = max(4, width - 2)
     fill = st.on_bg(FILL) if st.on else st
     cmd_lines = []
@@ -329,7 +369,8 @@ def shell_block(command: str, output: str, took: float | None, st: Style, width:
     if shown or hidden:
         rows.append("")
         if hidden:
-            rows.append(fill.dim(f"… ({hidden} earlier line{'s' if hidden != 1 else ''}, ctrl+o to expand)"))
+            rows.append(fill.dim(f"… ({hidden} earlier line{'s' if hidden != 1 else ''}"
+                                 + (", ctrl+o to expand)" if expand else ")")))
         for ln in shown:
             for seg in hard_wrap(ln, inner):
                 rows.append(fill.dim(seg) if ok else fill.red(seg))

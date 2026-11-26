@@ -291,21 +291,29 @@ class Terminal:
             self._write(self._clear_seq() + "\n".join(lines) + "\n" + self._paint_seq())
 
     # ---------- spinner ----------
+    LIVE_ROWS = 6                                  # rows of a streaming paragraph shown above the spinner
+
+    def _live_rows(self) -> list[str]:
+        """The paragraph being streamed, word-wrapped, its last LIVE_ROWS rows (OM-08: it was one clipped line that
+        could not be read while it streamed). Redrawn on every token, so only the open last row is wrapped again:
+        rows before it are final (R.word_wrap is greedy) and kept, which keeps a long paragraph O(n)."""
+        p, w = self._partial.replace("\t", " "), max(8, self.width - 4)
+        pw = self.__dict__.get("_pw")
+        if pw is None or pw["w"] != w or pw["start"] > len(p):
+            pw = self._pw = {"w": w, "start": 0, "rows": []}
+        seg = p[pw["start"]:]
+        starts = R.word_wrap(seg, w)
+        for a, b in zip(starts, starts[1:]):
+            pw["rows"].append(seg[a:b].rstrip())
+        pw["rows"] = pw["rows"][-self.LIVE_ROWS:]
+        pw["start"] += starts[-1]
+        return (pw["rows"] + [seg[starts[-1]:]])[-self.LIVE_ROWS:]
+
     def _turn_live(self):
-        lines = []
-        if self._partial:
-            # Redrawn on every streamed token: measure only the end of a long line. A model writes a paragraph as one
-            # line, and measuring all of it each token made a long paragraph cost O(n^2). The last 2w+8 characters
-            # already being wider than w means the whole line is (no character is narrower than 0 columns).
-            w = self.width - 4
-            p, k = self._partial, 2 * max(w, 1) + 8
-            tail = p[-k:].replace("\t", "    ")
-            if not (len(p) > k and R.vlen(tail) > w):
-                tail = p.replace("\t", "    ")
-            lines.append("  " + (tail if R.vlen(tail) <= w else "…" + tail[-(w - 1):]))
+        # the reply's rows already fit (word_wrap at width - 4): only the spinner line is measured on each redraw
+        lines = ["  " + r for r in self._live_rows()] if self._partial else []
         secs = int(self.clock() - self._busy_t0) if self._busy_t0 is not None else 0
-        lines.append(" " + R.spinner_line(self.st, self._frame, self._label or "Working", secs))
-        lines = [R.clip(x, self.width - 1) for x in lines]
+        lines.append(R.clip(" " + R.spinner_line(self.st, self._frame, self._label or "Working", secs), self.width - 1))
         return lines, (len(lines) - 1, 0)
 
     def turn_begin(self):
@@ -344,6 +352,8 @@ class Terminal:
                                 self._esc_pressed()
                                 return
                             self.typeahead.extend(K.parse_keys(ch))
+                            if self._typed_exit():
+                                return
                         else:
                             time.sleep(0.05)
                 else:
@@ -355,12 +365,34 @@ class Terminal:
                                 return
                             if k is not None:             # typed ahead: kept for the next prompt
                                 self.typeahead.append(k)
+                                if self._typed_exit():
+                                    break
                         self.typeahead.extend(keys.pending)    # keys read together with the last one
                         keys.pending = []
+                    if self.stopping:                 # /exit typed: the turn is stopping, the keys wait for the prompt
+                        return
             except Exception:  # noqa: BLE001 - no usable terminal: Ctrl+C still stops
                 return
             finally:
                 self.keys_free.set()
+
+    def _typed_exit(self) -> bool:
+        """OM-06: /exit (or /quit, /q) typed while the agent works stops the turn; the typed line stays ahead, so the
+        prompt that follows runs it and the program ends. Anything else typed ahead waits for the next prompt."""
+        keys = self.typeahead
+        if not keys or keys[-1] != "enter":
+            return False
+        line: list = []
+        for k in reversed(keys[:-1]):
+            if k == "enter":
+                break
+            if not (isinstance(k, str) and len(k) == 1):
+                return False                    # an arrow, a paste or a deletion: not a plain /exit line
+            line.append(k)
+        if "".join(reversed(line)).strip() not in ("/exit", "/quit", "/q"):
+            return False
+        self._esc_pressed()
+        return True
 
     def _kb(self):
         """The lock that makes "is a question open?" and "take the keyboard" one step for the Esc watcher (FL-L1)."""
@@ -436,6 +468,7 @@ class Terminal:
         while "\n" in self._partial:
             line, self._partial = self._partial.split("\n", 1)
             done += R.markdown(line, self.width - 2, self.st, self._md)
+            self._pw = None                            # a new paragraph: its rows start again
         if done:
             self.scroll(["  " + x if x else "" for x in done])
         elif self._live_fn:
@@ -443,6 +476,7 @@ class Terminal:
 
     def _flush_text(self):
         if self.interactive:
+            self._pw = None
             if self._partial:
                 rest, self._partial = self._partial, ""
                 self.scroll(["  " + x if x else "" for x in R.markdown(rest, self.width - 2, self.st, self._md)])
@@ -605,9 +639,10 @@ class Terminal:
             return
         ok = bool(ev.get("ok"))
         if name in R.SHELL_TOOLS:
+            out = R.exec_output(out).rstrip()
             meta = f"(timeout {info['timeout']}s)" if info.get("timeout") else ""
             lines, hidden = R.guard(R.shell_block, st, info["summary"], out, took, st, self.width, meta=meta,
-                                    limit=self.output_limit, ok=ok)
+                                    limit=self.output_limit, ok=ok, expand=self.interactive)
             self.last_block = {"command": info["summary"], "output": out, "took": took, "meta": meta, "ok": ok,
                                "hidden": hidden}
             self.scroll(lines)
@@ -1914,6 +1949,27 @@ def _trust_step(term: "Terminal", wd: str, interactive: bool) -> None:
         term.p(st.dim("  Trusted. Its hooks and rules are on. Undo with: meshpool trust --revoke"))
     else:
         term.p(st.dim("  Its hooks and allow rules are off. Trust it later with: meshpool trust"))
+def _resume_access(term, s, mode: str | None, model: str | None) -> None:
+    """OM-09: -c and --resume take the access mode and model given on the command line. Without a mode flag the chat
+    resumes in the default mode, never in full access without a word: a chat left in full access comes back asking,
+    and a default of full access (set in Settings) is said on screen."""
+    st = term.st
+    before = getattr(s, "mode", None) or getattr(s.agent, "mode", None)
+    want = mode or C.permission_mode()
+    if want != before:
+        s.set_mode(want)
+    if want == "auto" and not mode:
+        term.p(st.amber("  Full access is on: it is your default access mode in Settings."))
+    elif before == "auto" and want != "auto":
+        term.p(st.dim(f"  This chat was in full access. It resumes in {_MODE_NAMES.get(want, want)}; add --auto for "
+                      "full access."))
+    if model:
+        s.set_model(model)
+
+
+_MODE_NAMES = {"ask": "ask before changes", "edits": "accept edits", "auto": "full access"}
+
+
 def _resume_target(wd: str, session: str | None) -> str | None:
     """The chat -c / --resume means: the id given, or the newest chat of this folder (the app's own listing)."""
     from pathlib import Path
@@ -1991,11 +2047,14 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
                     old, sid = sid, CRW.fork(sid, None)
                     term.p(st.dim(f"Continuing {old} as a new session, {sid}."))
                 s = chats.get(sid, no_mcp=no_mcp)
+                _resume_access(term, s, body.get("mode"), model)
         if sid is None:
             s = chats.get(chats.create(body)["id"], no_mcp=no_mcp)
     except (ValueError, KeyError) as e:           # a missing folder, an agent that cannot run, a chat open elsewhere
         term.p(st.red(str(e).strip("'\"")))
         return 1
+    if model:
+        s.agent.model_named = True                # --model: a name the endpoint lacks stops the run (OM-04)
     if not s.harness.get("ready", True):
         term.p(st.red(f"{s.harness['name']} cannot run yet. {s.harness.get('setup') or ''} Run: meshpool setup"))
         return 1

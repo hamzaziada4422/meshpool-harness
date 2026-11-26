@@ -1851,7 +1851,7 @@ function settleSteps(label) {
   }
 }
 function bindFoot(foot) {
-  $$("[data-diff]", foot).forEach(b => b.onclick = () => { S.diffTurn = +b.dataset.diff; togglePanel(curMode() === "cowork" ? "outputs" : "diff", true); });
+  $$("[data-diff]", foot).forEach(b => b.onclick = () => { S.diffTurn = +b.dataset.diff; S.diffUndone = null; togglePanel(curMode() === "cowork" ? "outputs" : "diff", true); });
   $$("[data-undo]", foot).forEach(b => b.onclick = () => undoTurn(+b.dataset.undo));
 }
 /* Settings, Permissions: every saved rule, with Remove, and a way to add one. */
@@ -1920,8 +1920,15 @@ async function undoTurn(n) {
   const ue = threadLog().find(e => e.type === "user" && (t.message_index != null && e.mi === t.message_index)) ||
     threadLog().find(e => e.type === "user" && t.event_index != null && e.i === t.event_index);
   const asked = ue?.text || "";
-  try { const root = curRoot(); const r = await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); if (asked) fillInput(asked, {back: true}); renderBranch(true); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel(); afterUndo(root, r.undone); }
+  try { const root = curRoot(); const r = await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); if (asked) fillInput(asked, {back: true}); diffTurnGone(n); renderBranch(true); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel(); afterUndo(root, r.undone); }
   catch (e) { toast(e.message); }
+}
+// OM-05: Undo and Rewind take the reply out of the chat (a rewind, by design), so the Changes tab showing that reply
+// asked the server for it and printed "No such turn.". It now shows every change, under a note that the reply was undone.
+// n: the reply undone (it and every later one are gone); null: a rewind, which names no reply number.
+function diffTurnGone(n) {
+  if (S.diffTurn == null || (n != null && S.diffTurn < n)) return;
+  S.diffUndone = {cid: S.cur?.id, n: S.diffTurn}; S.diffTurn = null;
 }
 // After Undo or Rewind: a preview of a file Undo removed closes, one of a file it put back shows the restored version.
 function afterUndo(root, u) {
@@ -1946,6 +1953,7 @@ async function rewindFork(kind, el) {
     const r = await post(`/api/agent/${cur.id}/rewind`, {event_index: ei, files: a.checked, since: 1e9});
     if (r.forked) { await loadThreads(); openThread(r.forked); toast("This agent cannot go back in place, so the conversation up to there is a new chat.", 5000); return; }
     if (r.text) fillInput(r.text, {back: true});
+    if (a.checked) diffTurnGone(null);
     renderBranch(true); clearTimeout(cur.pollT); resetChat(cur); poll(); if (S.panel === "diff") renderPanel();
     afterUndo(cur.view?.workdir || curRoot(), r.undo);
   } catch (e) { toast(e.message); }
@@ -2100,9 +2108,10 @@ async function panelDiff(body) {
   if (!S.cur) { body.innerHTML = `<div class="pnote">This chat hasn't changed any files yet. Each reply's changes show here, and you can undo them.</div>`; return; }
   const turns = S.cur.view?.turns || [];
   const sel = S.diffTurn ?? "";
+  const gone = S.diffUndone && S.diffUndone.cid === S.cur.id && !sel ? `<div class="pnote" id="dgone">This turn was undone, so it has no changes to show. Below: every change still in this chat.</div>` : "";
   body.innerHTML = `<div class="pbar"><select id="dturn" aria-label="Which changes"><option value="">All changes in this chat</option>${turns.slice().reverse().map(t => `<option value="${t.n}" ${+sel === t.n ? "selected" : ""}>Reply ${t.n}${t.title ? ": " + esc(clip(t.title, 50)) : ""}</option>`).join("")}</select>
-    <button class="btn" id="dref" title="Refresh">${ICON.refresh}</button><button class="btn" id="dsplit" aria-pressed="${store("diffSplit") === "1"}" title="Show old and new next to each other">${store("diffSplit") === "1" ? "Unified" : "Side by side"}</button>${sel && (turns.find(t => t.n === +sel)?.changed || []).length ? `<button class="btn danger" id="dundo">${ICON.undo} Undo</button>` : ""}</div><div id="dbody" class="pbody"><div class="pnote">Loading...</div></div>`;
-  $("#dturn").onchange = () => { S.diffTurn = $("#dturn").value ? +$("#dturn").value : null; renderPanel(); };
+    <button class="btn" id="dref" title="Refresh">${ICON.refresh}</button><button class="btn" id="dsplit" aria-pressed="${store("diffSplit") === "1"}" title="Show old and new next to each other">${store("diffSplit") === "1" ? "Unified" : "Side by side"}</button>${sel && (turns.find(t => t.n === +sel)?.changed || []).length ? `<button class="btn danger" id="dundo">${ICON.undo} Undo</button>` : ""}</div>${gone}<div id="dbody" class="pbody"><div class="pnote">Loading...</div></div>`;
+  $("#dturn").onchange = () => { S.diffTurn = $("#dturn").value ? +$("#dturn").value : null; S.diffUndone = null; renderPanel(); };
   $("#dref").onclick = renderPanel;
   $("#dsplit").onclick = () => { store("diffSplit", store("diffSplit") === "1" ? "0" : "1"); renderPanel(); };
   $("#dundo")?.addEventListener("click", () => undoTurn(+sel));
@@ -2116,7 +2125,11 @@ async function panelDiff(body) {
       <ul class="flist">${d.files.map((f, i) => `<li data-i="${i}"><span class="badge ${f.status}">${f.status[0].toUpperCase()}</span><span class="p">${esc(String(f.path).replace(/^"|"$/g, ""))}</span><span class="a">+${f.add || 0}</span><span class="r">−${f.del || 0}</span></li>`).join("")}</ul>
       ${store("diffSplit") === "1" ? `<div class="sbs-wrap" id="patch">${splitHTML(d.patch)}</div>` : `<pre class="patch" id="patch">${patchHTML(d.patch)}</pre>`}`;
     $$("#dbody .flist li").forEach(li => li.onclick = () => { const f = d.files[+li.dataset.i]; const el = $(`#patch [data-file="${CSS.escape(f.path)}"]`); el?.scrollIntoView({block: "start"}); });
-  } catch (e) { if (!panelStale(body, gen)) $("#dbody").innerHTML = `<div class="pnote">${esc(e.message)}</div>`; }
+  } catch (e) {
+    if (panelStale(body, gen)) return;
+    if (sel && /No such turn/.test(e.message)) { diffTurnGone(null); renderPanel(); return; }   // undone elsewhere (the terminal)
+    $("#dbody").innerHTML = `<div class="pnote">${esc(e.message)}</div>`;
+  }
 }
 /* The same patch with old and new next to each other: removed lines on the left, added on the right, paired in
    order within each run of changes; unchanged lines on both sides. */

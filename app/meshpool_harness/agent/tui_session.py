@@ -28,12 +28,15 @@ DESTRUCTIVE_HINT = ("commands that delete recursively, rewrite git history or us
 
 
 def _denied(ev: dict) -> dict:
-    """What a -p run reports about a refused action: a destructive command by its text, not the bare word."""
+    """What a -p run reports about a refused action: a command by its text, not the bare "Run this command?"."""
     if ev.get("title") == "Run this destructive command?":     # the card shows the command itself
         return {"kind": "bash", "title": ev.get("title"), "destructive": True,
                 "command": " ".join(str(ev.get("detail") or "").split())[:300]}
     if ev.get("title") != "destructive":
-        return {"kind": ev.get("kind"), "title": ev.get("title")}
+        d = {"kind": ev.get("kind"), "title": ev.get("title")}
+        if ev.get("kind") == "bash" and str(ev.get("detail") or "").strip():
+            d["command"] = str(ev.get("detail")).strip()[:300]
+        return d
     cmd = ""
     try:
         args = json.loads(ev.get("detail") or "{}")
@@ -264,15 +267,70 @@ class TermFrontend:
         return out
 
     def denial_note(self) -> str:
+        """What -p prints after a run that refused actions: each one by name, with the flag or rule that allows it,
+        then a re-run that works for all of them. "--permission-mode edits" is offered only for file edits: it never
+        lets a command run (OM-01)."""
         if not self.denied:
             return ""
-        titles = "; ".join(f"`{d['command'][:80]}`" if d.get("command") else str(d.get("title") or d.get("kind"))
-                           for d in self.denied[:5])
-        more = f" (and {len(self.denied) - 5} more)" if len(self.denied) > 5 else ""
-        hint = "re-run with --auto, --permission-mode edits, or --allowed-tools edit,bash:..."
-        if any(d.get("destructive") for d in self.denied):
-            hint = DESTRUCTIVE_HINT if all(d.get("destructive") for d in self.denied) else hint + "; " + DESTRUCTIVE_HINT
-        return f"{len(self.denied)} action(s) were not allowed: {titles}{more}. In -p mode nobody can approve them; {hint}"
+        rows, kinds = [], set()
+        for d in self.denied[:8]:
+            what, how, k = _allow_hint(d, getattr(self.s.agent, "mode", "ask"))
+            kinds.add(k)
+            rows.append(f"  {what}: {how}")
+        more = [f"  (and {len(self.denied) - 8} more)"] if len(self.denied) > 8 else []
+        if kinds <= {"edit"}:
+            hint = "re-run with --permission-mode edits (or --auto for full access)."
+        elif kinds <= {"destructive"}:
+            hint = DESTRUCTIVE_HINT
+        else:
+            hint = ("re-run with --permission-mode auto (full access, the same as --auto), or allow each one as "
+                    "shown above.")
+            if "destructive" in kinds:
+                hint += " " + DESTRUCTIVE_HINT
+        if "command" in kinds and getattr(self.s.agent, "mode", "ask") in ("ask", "edits"):
+            try:
+                from meshpool_harness.core import sandbox as SBX
+                if not SBX.available():
+                    hint += (" Ordinary commands in the folder run without a question only inside the command sandbox "
+                             "(bubblewrap on Linux, sandbox-exec on macOS), which this computer does not have.")
+            except Exception:  # noqa: BLE001
+                pass
+        return "\n".join([f"{len(self.denied)} action(s) were not allowed. In -p mode nobody can approve them:",
+                          *rows, *more, "To allow them, " + hint])
+
+
+def _allow_hint(d: dict, mode: str) -> tuple[str, str, str]:
+    """(what was refused, what allows it, its kind) for one refused action of a -p run. A rule offered here is checked
+    against the permission code itself, so it is one that really lets the command through."""
+    from meshpool_harness.agent import core as K
+    from meshpool_harness.core import permrules as PR
+    title = str(d.get("title") or d.get("kind") or "an action").rstrip("?")
+    cmd = str(d.get("command") or "")
+    if d.get("destructive"):
+        rule = f"bash:{cmd}"
+        ok = cmd and K._allow_hit([rule], "bash", {"command": cmd})
+        return (f"`{cmd[:120]}`", (f'--auto --allowed-tools "{rule}"' if ok else "run it yourself")
+                + " (deletes or rewrites things)", "destructive")
+    if d.get("kind") == "bash" and cmd:
+        shown = f"`{' '.join(cmd.split())[:120]}`"
+        if title.startswith("Your rule"):
+            return shown, "your saved ask rule covers it; change the rule in permissions.json", "rule"
+        if title.startswith("Change "):
+            return shown, "it changes meshpool's own rule files; run it yourself", "rule"
+        for p in PR.grant_patterns(cmd)[:1]:
+            rule = f"bash:{p}*"
+            if K._allow_hit([rule], "bash", {"command": cmd}):
+                return shown, f'--allowed-tools "{rule}"', "command"
+        if K._allow_hit(["bash"], "bash", {"command": cmd}):
+            return shown, "--allowed-tools bash (every command that does not delete things)", "command"
+        return shown, "--permission-mode auto", "command"
+    if d.get("kind") == "edit":
+        if title.startswith("Change "):
+            return title, "it changes meshpool's own rule files; make that change yourself", "rule"
+        return title, "--permission-mode edits", "edit"
+    if d.get("kind") == "read":
+        return title, "--permission-mode auto (it reaches outside the folder)", "other"
+    return title, "--permission-mode auto", "other"
 
 
 _IMAGES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
@@ -402,8 +460,9 @@ class SharedCommands:
             return None
         if arg.isdigit():
             return int(arg)
-        i = t.choose(title, [], [f"{x['n']}. {x.get('title') or ''}" + ("  (" + str(len(x['changed'])) + " files)"
-                                                                       if x.get('changed') else "") for x in turns],
+        # the menu numbers its rows itself: a row that began with the turn's number read "1. 1. fix the test" (OM-08)
+        i = t.choose(title, [], [(x.get('title') or f"Turn {x['n']}") + ("  (" + str(len(x['changed'])) + " files)"
+                                                                         if x.get('changed') else "") for x in turns],
                      sel=len(turns) - 1)
         return None if i is None else turns[i]["n"]
 
@@ -433,13 +492,18 @@ class SharedCommands:
         n = self._turn_pick(arg, "Undo from which turn?")
         if n is None:
             return
+        turns_before = self.s.cp.turns() if self.s.cp else []
         d = self.s.cp.diff(n)
         if d.get("patch"):
             self._show_patch(d["patch"])
         i = t.choose(f"Undo turn {n} and everything after it?", [], ["Undo", "Cancel"], sel=1)
         if i == 0:
-            self.s.revert(n)
+            r = self.s.revert(n)
             self._rebind()
+            if r.get("conversation"):            # the status line names the files; say what left the conversation
+                title = next((x.get("title") for x in turns_before if x.get("n") == n), "") or ""
+                t.p(t.st.dim(f"  The conversation is back to before turn {n}" + (f" ({title})" if title else "")
+                             + "."))
 
     def cmd_grade(self, arg):
         if not self._need_shared():
