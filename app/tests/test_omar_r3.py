@@ -293,4 +293,4 @@ def test_2_the_receipt_skips_a_no_match_search_and_names_the_test_run(tmp_path):
 def test_2_the_runner_and_counts_are_named():
     assert A._check_line("pytest -q", "pytest -q", 0, "14 passed in 0.2s").startswith("Verified: pytest, 14 passed")
     assert A._check_line("python -m pytest | tail", "python -m pytest | tail", 0,
-                         "2 failed, 14 passed in 1s").startswith("Not verified: pytest, 2 failed, 14 passed")
+                         "2 failed, 14 passed in 1s").startswith("pytest: 2 failed, 14 passed")   # round 4: no earlier run to compare, so the counts, not "Not verified"
