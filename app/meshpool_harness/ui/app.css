@@ -758,7 +758,7 @@ details .keyrow input{flex:1;min-width:0;padding:8px 12px;border:1px solid var(-
 .note.route{display:flex;align-items:center;gap:8px;position:relative}
 .routechip{font:inherit;font-size:var(--fs-s);color:var(--ink-2);background:var(--hover);border:1px solid var(--line,#e5e7eb);
   border-radius:var(--r-m);padding:2px 12px;cursor:pointer}
-.routechip:hover,.routechip:focus-visible{border-color:var(--accent,#1670e8);color:var(--ink)}
+.routechip:hover,.routechip:focus-visible{border-color:var(--line-3);color:var(--ink)}
 .routewhy{color:var(--ink-3);font-size:var(--fs-s)}
 .routemenu{position:absolute;top:28px;left:0;z-index:30;background:var(--bg,#fff);border:1px solid var(--line,#e5e7eb);
   border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);padding:4px;display:grid;grid-template-columns:1fr 1fr;width:440px}
