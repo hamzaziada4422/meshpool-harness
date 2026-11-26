@@ -272,3 +272,54 @@ def update_json(path, fn: Callable[[Any], Any], default: Any = None, *, timeout:
             new = cur
         atomic_write_json(path, new, private=private)
         return new
+
+
+# ---------- small files read again and again ---------------------------------------------------------------------------
+# Hooks, the trust list, project records and model tables were read and parsed on every tool call, chat poll or model
+# request. parse_cached keeps the parsed value while the file is unchanged: the same modification time, size, inode
+# and change time. A file changed in the last RACY_S seconds is read again each time, because a second write in the
+# same clock tick could leave all four the same (FAT keeps times in 2 s steps).
+RACY_S = 2.0
+_PARSED: dict = {}
+_PARSED_LOCK = threading.Lock()
+READS = [0]                          # files parse_cached really read (tests count them)
+
+
+def file_stamp(path) -> tuple | None:
+    """(mtime_ns, size, inode, ctime_ns) of a file, or None when it cannot be seen."""
+    try:
+        st = os.stat(path)
+    except (OSError, ValueError):
+        return None
+    return (st.st_mtime_ns, st.st_size, st.st_ino, st.st_ctime_ns)
+
+
+def parse_cached(path, parse: Callable[[bytes], Any], kind: str, missing: Any = None) -> Any:
+    """``parse(raw bytes)`` of the file, kept while the file is unchanged; ``missing`` when it does not exist or
+    cannot be read. ``kind`` names the parser (one file can be parsed two ways). ``parse`` handles its own errors and
+    returns a default. The value is shared between callers: they must not change it."""
+    key = (os.path.abspath(str(path)), kind)
+    stamp = file_stamp(path)
+    if stamp is None:
+        with _PARSED_LOCK:
+            _PARSED.pop(key, None)
+        return missing
+    with _PARSED_LOCK:
+        hit = _PARSED.get(key)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    t0 = time.time()
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError:
+        return missing
+    READS[0] += 1
+    val = parse(raw)
+    old = (t0 - RACY_S) * 1e9
+    if file_stamp(path) == stamp and stamp[0] < old and stamp[3] < old:
+        with _PARSED_LOCK:
+            if len(_PARSED) > 1024:
+                _PARSED.clear()
+            _PARSED[key] = (stamp, val)
+    return val

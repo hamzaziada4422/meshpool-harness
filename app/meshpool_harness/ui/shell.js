@@ -571,9 +571,22 @@ function exportMenu(e) {
     {label: "Save as a file", icon: ICON.dl, fn: () => { const a = Object.assign(document.createElement("a"), {href: URL.createObjectURL(new Blob([chatMarkdown()], {type: "text/markdown"})), download: ((S.cur.view.title || "chat").replace(/[\\/:*?"<>|\x00-\x1f]+/g, "").trim().slice(0, 60) || "chat") + ".md"}); document.body.appendChild(a); a.click(); a.remove(); }},
   ]);
 }
-async function renderBranch() {
+// The branch chip: every header redraw used to run git status on the server. A fresh answer is reused for 15 s, and
+// one request at a time per folder; renderBranch(true) after a turn ends or files are rewound asks again at once.
+async function renderBranch(force) {
   const root = curRoot(); const el = $("#branchChip"); if (!el || !root) return;
   if (curMode() === "cowork" || S.cur?.view?.scratch) { el.innerHTML = ""; return; }
+  S.branchAt = S.branchAt || {}; S.branchBusy = S.branchBusy || {};
+  if (!force && S.branchHTML && root in S.branchHTML && Date.now() - (S.branchAt[root] || 0) < 15000) {
+    if (!el.querySelector("#brChip") && S.branchHTML[root]) {
+      el.innerHTML = S.branchHTML[root];
+      $("#brChip")?.addEventListener("click", () => togglePanel("git", true));
+      if (S.git?.repo && S.git?.github) ciChip(root);
+    }
+    return;
+  }
+  if (S.branchBusy[root]) return;
+  S.branchBusy[root] = true; S.branchAt[root] = Date.now();
   try {
     const g = await api("/api/git?root=" + encodeURIComponent(root));
     S.git = g;
@@ -582,7 +595,8 @@ async function renderBranch() {
     if (curRoot() === root && el.innerHTML !== html) el.innerHTML = html;
     $("#brChip")?.addEventListener("click", () => togglePanel("git", true));
     if (g.repo && g.github) ciChip(root);
-  } catch (e) { el.innerHTML = ""; }
+  } catch (e) { el.innerHTML = ""; S.branchAt[root] = 0; }
+  finally { S.branchBusy[root] = false; }
 }
 const CI_TEXT = {passing: "Checks passing", failing: "Checks failing", running: "Checks running"};
 async function ciChip(root, fresh) {

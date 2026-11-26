@@ -635,6 +635,7 @@ class Terminal:
         from meshpool_harness import __version__
         from meshpool_harness import providers as PV
         self.version = __version__
+        self._login_at = None                   # a sign-in or a new chat: look at the key and sign-in again
         model = agent.current_model() if hasattr(agent, "current_model") else ""
         prov, bare = PV.split(model)
         self.model = bare or model
@@ -673,13 +674,19 @@ class Terminal:
         if self.status_fn:
             return self.status_fn()
         items = []
-        try:
-            from meshpool_harness import providers as PV
-            if not (PV.key() or os.environ.get("MH_PROVIDER") == "chatgpt" or PV.ready("chatgpt")) \
-                    and not hasattr(self.agent, "manifest"):
-                items += [("err", "Not logged in"), ("err", "Run /login")]
-        except Exception:  # noqa: BLE001
-            pass
+        # The box is redrawn on every key. Whether there is a key or a ChatGPT sign-in means reading the settings
+        # file and the sign-in file, so the answer is kept for a few seconds instead of read again per key.
+        now = self.clock()
+        if getattr(self, "_login_at", None) is None or now - self._login_at > 5:
+            out = True
+            try:
+                from meshpool_harness import providers as PV
+                out = bool(PV.key() or os.environ.get("MH_PROVIDER") == "chatgpt" or PV.ready("chatgpt"))
+            except Exception:  # noqa: BLE001
+                pass
+            self._logged_in, self._login_at = out, now
+        if not self._logged_in and not hasattr(self.agent, "manifest"):
+            items += [("err", "Not logged in"), ("err", "Run /login")]
         try:
             from meshpool_harness import autoupdate as AU
             s = AU._ST.get("state")
@@ -1913,7 +1920,11 @@ def _resume_target(wd: str, session: str | None) -> str | None:
     if session:
         return session
     root = str(Path(wd).expanduser().resolve())
-    return next((r["id"] for r in chats.listing() if r.get("workdir") == root), None)
+    here = [r["id"] for r in chats.listing() if r.get("workdir") == root]
+    # A session opened and left without a word is saved too. -c must not land in that empty chat and leave the last
+    # real conversation behind it: the newest chat with a message wins, an empty one only when there is nothing else.
+    from meshpool_harness.ui import agent_api as A
+    return next((sid for sid in here if A._has_user_message(sid)), here[0] if here else None)
 
 
 _KINDS = {"code": "code", "work": "cowork", "cowork": "cowork", "auto": None}

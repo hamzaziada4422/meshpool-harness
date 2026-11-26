@@ -269,7 +269,9 @@ def handle(method: str, u, body: bytes = b"") -> tuple:
     if path == "/api/memory/exclude":
         from meshpool_harness.ui import agent_api as AG
         cid = b.get("chat", "")
-        ids = [i for i in b.get("ids", []) if isinstance(i, str)][:200]
+        if not isinstance(cid, str) or not AG.exists(cid):
+            return 404, {"error": "That chat no longer exists."}
+        ids =[i for i in b.get("ids", []) if isinstance(i, str)][:200]
         AG.write_meta(cid, memory_exclude=ids)
         return 200, {"ok": True, "ids": ids}
     return 404, {"error": "not found"}

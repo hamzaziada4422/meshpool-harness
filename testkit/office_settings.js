@@ -19,7 +19,9 @@ const ok = (c, w) => { console.log((c ? "PASS " : "FAIL ") + w); if (!c) failure
   await p.waitForSelector("#ofRemove:visible", {timeout: 30000});
   ok(/Wrote the add-in manifest/.test(await p.innerText("#ofLines")), "install reports what it did");
   const r = await ctx.request.get(PANEL + "/office/taskpane.html");
-  ok(r.ok() && /name="mp-token" content="[A-Za-z0-9_-]{20,}"/.test(await r.text()), "the panel is served over HTTPS right away, no restart");
+  const html = await r.text();
+  ok(r.ok() && /id="pairCode"/.test(html), "the panel is served over HTTPS right away, no restart");
+  ok(!/mp-token/.test(html), "the panel page carries no token: the panel pairs with the app instead");
   await p.screenshot({path: (process.env.SHOT_DIR || "/tmp") + "/office_settings.png"});
   await p.click("#ofRemove");
   await p.waitForSelector("text=Not added yet.", {timeout: 30000});

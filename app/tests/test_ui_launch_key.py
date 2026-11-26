@@ -43,7 +43,7 @@ def test_launch_key_sets_a_session_cookie_that_opens_the_page(srv):
     cookie = h.get("Set-Cookie", "")
     assert cookie.startswith("mp_s=") and "HttpOnly" in cookie and "SameSite=Strict" in cookie
     code, body, _ = _get(srv, "/", {"Cookie": cookie.split(";")[0]})
-    assert code == 200 and SV.TOKEN in body
+    assert code == 200 and SV.TOKEN not in body and "/session" in body     # the boot page (SV-13 in 0.0.18)
     code, body, _ = _get(srv, "/", {"Cookie": "mp_s=forged"})
     assert code == 403 and SV.TOKEN not in body
 

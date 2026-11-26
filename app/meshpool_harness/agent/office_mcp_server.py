@@ -453,6 +453,59 @@ _XLSX_ALIASES = {"set_formula": "set_cell", "set_value": "set_cell", "write_cell
                  "create_sheet": "add_sheet", "write_range": "set_range", "append_row": "add_row"}
 
 
+# Sheet extensions (extLst ext uri) openpyxl drops on save, by what the user sees.
+_XLSX_EXT_NAMES = {"{78C0D931-6437-407D-A8EE-F0AAD7539E65}": "data bars or other Excel 2010 conditional formats",
+                   "{05C60535-1F16-4FD2-B633-F4F36F0B64E0}": "sparklines",
+                   "{CCE6A557-97BC-4B89-ADB6-D9C93CAAB3DF}": "Excel 2010 data validation lists",
+                   "{A8765BA9-456A-4DAB-B4F3-ACF838C121DE}": "slicers",
+                   "{3A4CF648-6AED-40F4-86FF-DC5316D8AED3}": "slicers"}
+_SHAPE = re.compile(rb"<(?:\w+:)?(?:sp|grpSp|cxnSp)[\s>/]")
+_EXT_URI = re.compile(rb"<(?:\w+:)?ext\b[^>]*?\suri=\"(\{[^\"]+\})\"")
+
+
+def _xlsx_lost_parts(p: Path) -> list[str]:
+    """What an openpyxl load and save would drop from this workbook, in words for the user; [] when nothing.
+    openpyxl keeps cells, styles, charts, images and plain comments, but not shapes and text boxes, form controls,
+    slicers, timelines, threaded comments or the Excel 2010 extensions in a sheet (data bars, sparklines)."""
+    import zipfile
+    found: list[str] = []
+
+    def add(what):
+        if what not in found:
+            found.append(what)
+    try:
+        with zipfile.ZipFile(p) as z:
+            for name in z.namelist():
+                low = name.lower()
+                if low.startswith("xl/drawings/drawing") and low.endswith(".xml"):
+                    if _SHAPE.search(z.read(name)):
+                        add("shapes or text boxes")
+                elif low.startswith("xl/ctrlprops/"):
+                    add("form controls")
+                elif low.startswith(("xl/slicers/", "xl/slicercaches/")):
+                    add("slicers")
+                elif low.startswith(("xl/timelines/", "xl/timelinecaches/")):
+                    add("timelines")
+                elif low.startswith("xl/threadedcomments/"):
+                    add("threaded comments")
+                elif low.startswith("xl/worksheets/sheet") and low.endswith(".xml"):
+                    tail = b""                       # streamed: a big sheet is never held whole
+                    with z.open(name) as f:
+                        while chunk := f.read(1 << 20):
+                            text = tail + chunk
+                            if b"extLst" in text:
+                                for uri in _EXT_URI.findall(text):
+                                    what = _XLSX_EXT_NAMES.get(uri.decode("ascii", "replace").upper())
+                                    if what:
+                                        add(what)
+                                    elif uri.upper() != b"{B025F937-C7B1-47D3-B67F-A62EFF666E3E}":
+                                        add("other Excel 2010 sheet extensions")   # that uri only links a rule to its x14 part
+                            tail = text[-400:]
+    except (OSError, zipfile.BadZipFile, KeyError):
+        return []                                    # openpyxl reports a damaged file itself
+    return found
+
+
 def edit_office_file(path: str, operations: list, output: str | None = None, in_place: bool = False):
     """Change an existing .docx, .xlsx or .pptx without rebuilding it: styles, formulas and layout stay. Works without
     LibreOffice. By default the result is a copy '<name> (edited).<ext>'; in_place=true changes the file itself."""
@@ -471,13 +524,19 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                 "delete_rows{sheet,row,count}, add_sheet{name}, delete_sheet{sheet}, freeze_panes{sheet,cell}. PowerPoint: replace_text{find,replace}, "
                 "set_notes{slide,text}."), True
     out = p if in_place else (_resolve(output) if output else _free(p.with_name(f"{p.stem} (edited){ext}")))
-    if out != p:
-        shutil.copyfile(p, out)
+    lost = _xlsx_lost_parts(p) if ext == ".xlsx" else []
+    kept_original = False
+    if lost and out.resolve() == p.resolve():          # never rewrite the user's own file without those parts
+        out, kept_original = _free(p.with_name(f"{p.stem} (edited){ext}")), True
+    # Read from the source and write a part file next to `out`, moved into place only once it is whole: a failed
+    # edit leaves no half-made copy behind, and a failed in-place save never truncates the user's file.
+    part = out.with_name(f".{out.stem}.{os.getpid()}.{threading.get_ident()}.part{ext}")
     done, errors = [], []
     try:
+        out.parent.mkdir(parents=True, exist_ok=True)
         if ext == ".docx":
             from docx import Document
-            doc = Document(str(out))
+            doc = Document(str(p))
             for o in operations:
                 op = {"replace": "replace_text", "find_replace": "replace_text"}.get(o.get("op"), o.get("op"))
                 if op == "replace_text" and o.get("tracked") in (True, "true", "yes", 1):
@@ -507,11 +566,11 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                 else:
                     errors.append(f"unknown op {op!r} (replace_text, tracked_replace, tracked_delete, "
                                   "tracked_insert_after, append_paragraph, add_comment)")
-            doc.save(str(out))
+            doc.save(str(part))
         elif ext == ".xlsx":
             import openpyxl
             from openpyxl.comments import Comment
-            wb = openpyxl.load_workbook(str(out))
+            wb = openpyxl.load_workbook(str(p))
             for o in operations:
                 op, ws = o.get("op"), None
                 try:
@@ -576,14 +635,14 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                     done.append(f"comment on {ws.title}!{o['cell']}")
                 else:
                     errors.append(f"unknown op {op!r} ({XLSX_OPS})")
-            wb.save(str(out))
+            wb.save(str(part))
         else:
             from pptx import Presentation
-            prs = Presentation(str(out))
+            prs = Presentation(str(p))
             for o in operations:
                 op = {"replace": "replace_text", "find_replace": "replace_text"}.get(o.get("op"), o.get("op"))
                 if op == "replace_text":
-                    paras = [pp for sl in prs.slides for sh in sl.shapes if sh.has_text_frame for pp in sh.text_frame.paragraphs]
+                    paras = [pp for sl in prs.slides for pp in _pptx_paragraphs(sl.shapes)]
                     n = _replace_in_paragraphs(paras, o.get("find", ""), o.get("replace", ""))
                     (done if n else errors).append(f"replace_text {o.get('find', '')[:30]!r}: {n} place(s)" if n else f"text not found: {o.get('find', '')[:40]!r}")
                 elif op == "set_notes":
@@ -595,10 +654,26 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                     done.append(f"notes set on slide {i + 1}")
                 else:
                     errors.append(f"unknown op {op!r} (replace_text, set_notes)")
-            prs.save(str(out))
+            prs.save(str(part))
+        if out == p:
+            shutil.copymode(p, part)                         # in place: the file keeps its permissions
+        os.replace(part, out)
     except Exception as e:  # noqa: BLE001
+        try:
+            part.unlink()
+        except OSError:
+            pass
         return f"Could not edit {p.name}: {e}", True
-    msg = f"{'Changed' if in_place else 'Saved a copy as'} {out}. " + "; ".join(done)
+    what = ", ".join(lost)
+    if kept_original:
+        msg = (f"Did not change {p.name} in place: the edit goes through openpyxl, which would drop its {what}. "
+               f"Saved a copy as {out} instead, and the original is unchanged. ")
+    else:
+        msg = f"{'Changed' if out == p else 'Saved a copy as'} {out}. "
+    msg += "; ".join(done)
+    if lost:
+        msg += (f"\nThe copy lacks the original's {what} (openpyxl cannot keep them). Tell the user before the copy "
+                "replaces the original.")
     return msg + (("\nNot done: " + "; ".join(errors)) if errors else ""), bool(errors) and not done
 
 
@@ -665,14 +740,51 @@ def _tracked(paragraphs, op: str, find: str, new: str, author: str) -> bool:
 
 
 def _docx_paragraphs(doc):
-    out = list(doc.paragraphs)
-    for t in doc.tables:
-        for row in t.rows:
-            for c in row.cells:
-                out += c.paragraphs
+    """Every paragraph of the document once: the body (tables, nested tables and content controls included), then
+    each header and footer that has its own text. A header linked to the previous section is the same part, and a
+    merged table cell is the same element in several grid cells: listed once, or a replacement is made twice."""
+    from docx.oxml.ns import qn
+    from docx.text.paragraph import Paragraph
+    out, seen = [], set()
+
+    def add(root, parent):
+        for p in root.iter(qn("w:p")):
+            if p not in seen:
+                seen.add(p)
+                out.append(Paragraph(p, parent))
+    add(doc.element.body, doc._body)
     for sec in doc.sections:
-        out += list(sec.header.paragraphs) + list(sec.footer.paragraphs)
+        for hf in (sec.header, sec.footer, sec.first_page_header, sec.first_page_footer, sec.even_page_header,
+                   sec.even_page_footer):
+            if not hf.is_linked_to_previous:          # reading a linked one would add an empty header part
+                add(hf._element, hf)
     return out
+
+
+def _pptx_paragraphs(shapes) -> list:
+    """The text paragraphs of a slide's shapes: text boxes, the shapes inside groups and the cells of tables."""
+    out = []
+    for sh in shapes:
+        if getattr(sh, "shape_type", None) == 6 and hasattr(sh, "shapes"):      # group
+            out += _pptx_paragraphs(sh.shapes)
+        elif getattr(sh, "has_text_frame", False):
+            out += list(sh.text_frame.paragraphs)
+        elif getattr(sh, "has_table", False):
+            out += [pp for row in sh.table.rows for c in row.cells for pp in c.text_frame.paragraphs]
+    return out
+
+
+def _para_runs(pp) -> list:
+    """The runs whose text makes up the paragraph, in order: Word runs inside a hyperlink count too (python-docx's
+    .runs leaves them out while .text keeps their text, so offsets from .text pointed at the wrong run)."""
+    try:
+        from docx.text.paragraph import Paragraph
+        from docx.text.run import Run
+    except ImportError:
+        return list(pp.runs)
+    if isinstance(pp, Paragraph):
+        return [Run(r, pp) for r in pp._p.xpath("./w:r | ./w:hyperlink/w:r")]
+    return list(pp.runs)                                     # PowerPoint: a:r runs (a:br and a:fld hold no run)
 
 
 def _replace_in_paragraphs(paragraphs, find: str, replace: str) -> int:
@@ -683,10 +795,11 @@ def _replace_in_paragraphs(paragraphs, find: str, replace: str) -> int:
     for pp in paragraphs:
         search = 0                                           # continue after the last replacement: a replacement
         while True:                                          # that contains `find` must not be matched again
-            start = pp.text.find(find, search)
+            runs = _para_runs(pp)                            # offsets come from the runs themselves: a line break or
+            start = "".join(r.text for r in runs).find(find, search)   # field in .text is in no run
             if start < 0:
                 break
-            runs, pos = pp.runs, 0
+            pos = 0
             first = None
             for r in runs:
                 a, b = pos, pos + len(r.text)
@@ -877,6 +990,26 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
     return f"Saved the PDF: {path}", False
 
 
+CONVERT_TIMEOUT = 300                         # seconds for one convert_document run
+
+
+def _run_soffice(cmd: list, timeout: float) -> subprocess.CompletedProcess:
+    """Run LibreOffice in its own process group (a console-less new group on Windows), so a timeout ends soffice and
+    the soffice.bin it starts, not only the launcher (which left soffice.bin holding the pipes open). Raises
+    TimeoutExpired once the whole tree is gone."""
+    kw = {"creationflags": 0x08000000 | 0x00000200} if os.name == "nt" else {"start_new_session": True}
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace", **kw)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        from meshpool_harness.agent.mcp import kill_tree
+        kill_tree(proc)
+        proc.kill()
+        proc.communicate()
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
 def _soffice() -> str | None:
     from meshpool_harness import office_runtime      # the copy bundled in the app (never the system's)
     return office_runtime.find_soffice()
@@ -909,15 +1042,26 @@ def convert_document(path: str, to: str = "pdf", output: str | None = None):
         return (f"Converting Office files needs Meshpool's LibreOffice, which is not available: "
                 f"{office_runtime.missing_reason()}. Or build the file directly with make_pdf, make_document, "
                 "make_deck or make_spreadsheet."), True
-    kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
+    # A throwaway profile: LibreOffice already open on this computer (or a second conversion at the same time) holds
+    # the default profile's lock, and the headless run then hands the job over and makes nothing.
     import shutil
     import tempfile
-    with tempfile.TemporaryDirectory() as tmp:          # convert aside, then save under a free name: a conversion
-        r = subprocess.run([exe, "--headless", *infilter, "--convert-to", to, "--outdir", tmp, str(src)],   # never replaces a file
-                           capture_output=True, text=True, timeout=300, **kw)
-        made = Path(tmp) / (src.stem + "." + to)
-        if r.returncode != 0 or not made.exists():
-            return f"LibreOffice could not convert {src.name}: {(r.stderr or r.stdout)[-500:]}", True
+    from meshpool_harness import lo_session
+    with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory(prefix="mh_lo_") as profile:
+        # the kept LibreOffice first (no new process); a one-off run with its own profile when it is not available:
+        # without one, a LibreOffice the user has open took the job over and then quit
+        made = lo_session.convert(exe, str(src), to, tmp, CONVERT_TIMEOUT,
+                                  infilter=infilter[0].split("=", 1)[1] if infilter else "")
+        if made is None:
+            try:
+                r = _run_soffice([exe, f"-env:UserInstallation={Path(profile).as_uri()}", "--headless", *infilter,
+                                  "--convert-to", to, "--outdir", tmp, str(src)], CONVERT_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                return (f"Converting {src.name} took longer than {CONVERT_TIMEOUT} seconds and was stopped. The file "
+                        "may be very large or damaged."), True
+            made = Path(tmp) / (src.stem + "." + to)
+            if r.returncode != 0 or not made.exists():
+                return f"LibreOffice could not convert {src.name}: {(r.stderr or r.stdout or '')[-500:]}", True
         dst = _dest(output, made.name, "." + to, bool(output))
         shutil.move(str(made), str(dst))
     return f"Saved: {dst}", False

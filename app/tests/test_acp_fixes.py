@@ -184,7 +184,10 @@ def test_stop_on_the_first_turn_keeps_servers_started_with_the_harness(fake):
     server = min(kids, key=lambda k: k.create_time())
     a.stop()
     t.join(20)
-    time.sleep(1.3)                                                  # the second sweep after Stop
+    sweep = a._kill_timer                                            # the second sweep after Stop
+    assert sweep is not None
+    sweep.join(10)                                                   # wait until it has run, not a fixed time
+    assert not sweep.is_alive()
     assert server.is_running() and server.status() != psutil.STATUS_ZOMBIE
 
 

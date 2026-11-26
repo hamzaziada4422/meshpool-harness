@@ -1,5 +1,27 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
+**New in 0.0.18**
+- **One LibreOffice, kept running.** Deck renders, workbook recalculations, previews and document conversions used to start a new LibreOffice each time. meshpool now keeps one running and sends every conversion to it, then closes it after five minutes unused. On 8 different files: 1 start and 1.66 s of CPU, against 8 starts and 4.75 s before. If it cannot start, conversions run the old way. Set `MH_LO_RESIDENT=0` to turn it off. The download is somewhat larger because it now carries LibreOffice's own Python, which drives the kept copy.
+- **Less CPU in the app.** Measured with counting tests:
+  - The chat view no longer re-reads the trust files on every poll: 350 file reads for 25 polls before, none now.
+  - A sidebar refresh no longer reads 4 files of every project: 960 reads for 10 refreshes, none now.
+  - The @ picker no longer re-reads every source file on each key, and asks git once per burst of keys instead of twice per key.
+  - The open editor no longer hashes the file every 4 seconds.
+  - Header redraws reuse the branch name instead of running git status each time.
+  - A Python or JSON edit checks its syntax without starting a new Python process, and a JavaScript edit asks node once, not three times.
+  - The hooks files, model hints and model profiles are read once while unchanged, not on every tool call or model step.
+  - A long-running terminal command is polled every 2 seconds once its panel is closed, not 4 times a second for good.
+- **Notifications come from meshpool.** On macOS a finished task's notification was filed under another app (people saw it as TextEdit). It is now posted by meshpool itself, and not at all when meshpool is not running as the app. On Windows, notifications showed as "Windows PowerShell". They now show as meshpool. Neither change has been checked on a real Mac or Windows computer yet.
+- **The platform audit's second pass is closed.** docs/audit/LEDGER-pass2.md checks all 123 of its findings: 119 are fixed with a test, 1 needs no test and 3 could not be reproduced. Among the last fixes: iframes in the browser engine, Undo removing the folders it emptied, and file-name scans that stay fast on long messages.
+- **Bugs fixed, each with a test.** docs/audit/LEDGER-0.0.18.md lists 106 bugs found after 0.0.17 by six area bug hunts and a later pass, each with the test that checks it. Among them:
+  - Security: the /files route and the memory settings could reach files outside their folders. A sandboxed command on Linux could change meshpool's own settings. The read-only shortcut ignored a command's folder. "Allow in this chat" for `uv run` or `npx` covered any program they started. The browser was opened with the app's lifetime key on its command line, and the desktop app wrote that key into its log. Another local server opened in the same browser received meshpool's session cookie and could use it to read the page's API token. The Office panel's page carried its access token, so any program on the computer could read it. The panel now pairs: it shows a 6-digit code, you allow the same code in meshpool, and only then does it connect. It pairs again each time it is opened and after meshpool restarts.
+  - Office files: Word replacements could change the wrong text after a hyperlink, or change linked headers twice. A failed in-place save could destroy the original. Reads now include tracked insertions, footnotes, footers, content controls and hidden-sheet and hidden-slide marks. Windows CSVs keep their accents. A password-protected file says so. An Excel file with shapes, slicers, sparklines or threaded comments is edited as a copy, because saving it in place would lose them.
+  - Converting a document while LibreOffice was open on the computer could quit that LibreOffice.
+  - `meshpool scheduler` could delete the user's other cron entries when `crontab -l` failed.
+  - A refused key is no longer sent again until retries run out, and part of a key can no longer show in an error message.
+  - A reopened chat keeps each turn's steps in one group, and Stop no longer marks steps as failed.
+  - On Windows, the letter à typed in the terminal is no longer lost.
+
 **New in 0.0.17**
 - **Less CPU.** Measured before and after on the same machine:
   - Five open chats start no helper processes until one is used, then share one (15 helper processes before). Idle CPU with them open fell about 5 times.

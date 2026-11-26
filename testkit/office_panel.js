@@ -1,8 +1,11 @@
 // The Office panel end to end, with stand-in Excel, Word and PowerPoint objects (no real Office here).
-// Usage: node testkit/office_panel.js https://localhost:44399
+// Usage: node testkit/office_panel.js https://localhost:44399 "http://127.0.0.1:8790/?k=<launch key>"
 // Needs: the mock model on 8911 and an app started with MH_OFFICE_PORT and a certificate (meshpool office install).
+// The second argument is the link the app printed when it started: the panel pairs, and this script allows its code
+// in the app's own window, as a user would.
 const {chromium} = require("playwright");
 const BASE = process.argv[2] || "https://localhost:44399";
+const APP = process.argv[3] || "";
 
 const STUB = String.raw`
 (function () {
@@ -48,6 +51,22 @@ const STUB = String.raw`
 })();`;
 
 let failures = 0, PAGE = null;
+
+/** The panel shows a code; the app's own window shows a prompt with the same code; allow it there. */
+async function allowPanel(page) {
+  await page.waitForFunction(() => /^\d{3} \d{3}$/.test(document.getElementById("pairCode").textContent), null, {timeout: 15000});
+  const code = (await page.textContent("#pairCode")).trim();
+  ok(await page.locator("#composer").isHidden(), "the panel cannot send anything before it is connected");
+  const app = await page.context().newPage();
+  await app.goto(APP);
+  await app.waitForSelector(`#opDlg [data-c="${code}"][data-a=allow]`, {timeout: 15000});
+  ok(true, "the app asks to connect the panel, with the code the panel shows");
+  await app.click(`#opDlg [data-c="${code}"][data-a=allow]`);
+  await app.close();
+  await page.waitForSelector("#pair", {state: "hidden", timeout: 15000});
+  ok(await page.locator("#composer").isVisible(), "once allowed, the panel is connected");
+}
+
 const ok = (cond, what) => { console.log((cond ? "PASS " : "FAIL ") + what); if (!cond) failures++; };
 const sent = [];                                       // what the panel sent to meshpool, message by message
 const lastRequest = () => sent[sent.length - 1] || "";
@@ -63,6 +82,7 @@ const lastRequest = () => sent[sent.length - 1] || "";
 
   // ---------------- Excel
   await page.goto(BASE + "/office/taskpane.html?host=Excel");
+  await allowPanel(page);                             // the token stays in this tab's sessionStorage from here on
   await page.waitForFunction(() => /Sheet1!A1:B2/.test(document.getElementById("ctxText").textContent));
   ok(true, "Excel: the panel shows the selected range");
   ok(await page.locator("#quick button").count() === 4, "Excel: four quick actions");

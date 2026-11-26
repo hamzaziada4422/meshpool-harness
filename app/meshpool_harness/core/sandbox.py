@@ -136,6 +136,21 @@ def _writable(root: Path) -> list[str]:
     return [c for c in dict.fromkeys(cands) if os.path.isdir(c)]
 
 
+def _data_folder() -> str | None:
+    """meshpool's data folder (config.home()), resolved, when it exists."""
+    try:
+        from meshpool_harness import config as C
+        p = Path(C.home()).resolve()
+        return str(p) if p.is_dir() else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _under(p: str, base: str) -> bool:
+    """p is base or inside it."""
+    return p == base or p.startswith(base.rstrip(os.sep) + os.sep)
+
+
 def wrap(argv: list[str], root, platform: str | None = None, which=shutil.which, cwd=None, mode: str | None = None) -> list[str]:
     """argv, wrapped so it can only write where it should. Unchanged when the sandbox is off or unavailable (with a
     notice, once, when it was wanted)."""
@@ -148,13 +163,34 @@ def wrap(argv: list[str], root, platform: str | None = None, which=shutil.which,
         out = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--die-with-parent", "--unshare-pid"]
         if not net:
             out.append("--unshare-net")
-        for w in _writable(root):
+        ws = _writable(root)
+        for w in ws:
             out += ["--bind", w, w]
+        data = _data_folder()
+        if data and any(_under(data, os.path.realpath(w)) for w in ws):
+            # meshpool's own data folder (~/.local/share/meshpool, inside the writable ~/.local) holds the settings
+            # (MH_SANDBOX itself), permissions.json, hooks.json and mcp.json: a command that writes them turns the
+            # sandbox off or approves its own next commands. Read-only, except the folders a command works in.
+            out += ["--ro-bind", data, data]
+            for w in ws:
+                rw = os.path.realpath(w)
+                if _under(rw, data) and (rw != data or rw == str(root)):
+                    out += ["--bind", w, w]
         return out + ["--chdir", str(Path(cwd).resolve() if cwd else root), "--"] + argv
     if plat == "darwin" and which("sandbox-exec"):
-        allow = "".join(f'(subpath "{p}")' for p in _writable(root) + ["/private/tmp", "/private/var/folders"])
+        ws = _writable(root)
+        allow = "".join(f'(subpath "{p}")' for p in ws + ["/private/tmp", "/private/var/folders"])
         profile = ('(version 1)(allow default)(deny file-write*)' + ("" if net else "(deny network*)") +
                    f'(allow file-write* {allow} (literal "/dev/null") (literal "/dev/dtracehelper") (regex #"^/dev/tty"))')
+        data = _data_folder()
+        if data and any(_under(data, os.path.realpath(w)) for w in ws):
+            # as for bwrap above: meshpool's data folder (settings, permissions.json, hooks.json) is read-only when a
+            # writable folder covers it, except the folders a command works in. The last matching rule wins.
+            back = [os.path.realpath(w) for w in ws]
+            back = [rw for rw in dict.fromkeys(back) if _under(rw, data) and (rw != data or rw == str(root))]
+            profile += f'(deny file-write* (subpath "{data}"))'
+            if back:
+                profile += "(allow file-write* " + "".join(f'(subpath "{rw}")' for rw in back) + ")"
         return ["sandbox-exec", "-p", profile] + argv
     _say("unavailable", unavailable_notice(plat))
     return argv

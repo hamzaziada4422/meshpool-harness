@@ -8,8 +8,18 @@ import yaml
 DIR = Path(__file__).resolve().parents[1] / "profiles"
 
 
+def _yaml(raw: bytes):
+    return yaml.safe_load(raw.decode("utf-8", "replace"))
+
+
 def load_all() -> dict:
-    return {p.stem: yaml.safe_load(p.read_text()) for p in DIR.glob("*.yaml")}
+    """Every profile by name. for_model runs on every model request (the request body, the client, the context
+    window, model capabilities), and parsing the YAML files each time was most of its cost: each file's parse is kept
+    while the file is unchanged (fsio.parse_cached). Callers get their own copy."""
+    import copy
+
+    from meshpool_harness import fsio
+    return {p.stem: copy.deepcopy(fsio.parse_cached(p, _yaml, "profile-yaml")) for p in DIR.glob("*.yaml")}
 
 
 def for_model(model: str, override: str | None = None) -> dict:

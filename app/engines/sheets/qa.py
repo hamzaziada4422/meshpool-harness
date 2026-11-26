@@ -37,6 +37,12 @@ def recalc(xlsx_path: str, out_dir: str | None = None) -> str:
     key = convert_key(xlsx_path, "xlsx:Calc MS Excel 2007 XML", soffice, "calc")
     if convert_cached(key, dest):
         return str(dest)
+    from meshpool_harness import lo_session                  # the kept LibreOffice: no new process per workbook
+    made = lo_session.convert(soffice, xlsx_path, "xlsx:Calc MS Excel 2007 XML", str(out), RECALC_TIMEOUT_S,
+                              recalc=True)
+    if made is not None and made.exists():
+        convert_keep(key, made)
+        return str(made)
     t0 = time.time()
     with tempfile.TemporaryDirectory() as profile:
         # its own process group, killed whole on a timeout: soffice.bin outlives a plain kill of soffice

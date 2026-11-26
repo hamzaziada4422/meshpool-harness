@@ -141,7 +141,7 @@ function insightUnder010(c) {
 /* A suggestion is one quiet line above the composer: what it is, one button, a way to dismiss. One at a time. */
 const nudgeQ010 = [];
 function insightCard010(c) {
-  if (nudgeQ010.some(x => x.id === c.id) || $(`.nudge010[data-id="${c.id}"]`)) return;
+  if (nudgeQ010.some(x => x.id === c.id) || $(`.nudge010[data-id="${CSS.escape(String(c.id))}"]`)) return;
   nudgeQ010.push(c); nextNudge010();
 }
 function nextNudge010() {
@@ -325,7 +325,7 @@ async function rewind010(ei) {
   const cur = S.cur;
   const r = await post(`/api/agent/${cur.id}/rewind`, {event_index: ei, files: true, since: 1e9});
   if (r.forked) { await loadThreads(); openThread(r.forked); return r; }
-  renderBranch(); clearTimeout(cur.pollT); resetChat(cur); await poll(); if (S.panel === "diff") renderPanel();
+  renderBranch(true); clearTimeout(cur.pollT); resetChat(cur); await poll(); if (S.panel === "diff") renderPanel();
   return r;
 }
 async function retry010(ei, n) {
@@ -346,7 +346,7 @@ document.addEventListener("click", async e => {
   const b = e.target.closest('[data-ma="edit"]'); if (!b || !S.cur) return;
   const msgs = $$(".msg-user").filter(m => $(".macts", m)), mine = b.closest(".msg-user"), idx = msgs.indexOf(mine) + 1;
   const ei = mine && mine.dataset.ei !== undefined && mine.dataset.ei !== "" ? +mine.dataset.ei : NaN;
-  const text = $(".b", mine)?.innerText.replace(/^Plan mode\n?/, "").trim() || "";
+  const text = userText(mine);                    // as sent: without the tag and the names of attached pictures
   e.stopImmediatePropagation();
   const fill = () => fillInput(text);             // a draft in the box is kept: the message goes after it
   if (S.cur.busy || idx < 1 || isNaN(ei)) { fill(); return toast("Edit it and send to ask again.", 3500); }

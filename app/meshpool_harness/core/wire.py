@@ -560,6 +560,9 @@ class SimpleLedger:
                 continue
             if attempt >= retries:
                 break
+            if 400 <= status < 500 and status not in (408, 425) and b"rejected as invalid" not in raw:
+                break                                    # a refused key or a request the server will not take:
+            #                                              sending it again cannot help (the gateway's random 400 can)
             attempt += 1
             time.sleep(1.5 * attempt)
         payload = json.loads(raw.decode("utf-8", "replace")) if raw[:1] in (b"{", b"[") else {"raw": raw[:300].decode("utf-8", "replace")}

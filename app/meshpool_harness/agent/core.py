@@ -1823,7 +1823,7 @@ def _docx_hidden_text_miss(asked: str, root, since: float) -> str:
                 hits = list(Path(root).glob(f"*/{n}"))[:1]          # ./data/reference.txt (the task names the file only)
                 fp = hits[0] if hits else fp
             if fp.is_file() and fp.stat().st_size <= 200_000:
-                body = _norm_text(fp.read_text(errors="replace"))
+                body = _norm_text(fp.read_text(encoding="utf-8", errors="replace"))   # not the locale (cp1252)
                 if len(body) >= 15:
                     snippets.append((fp.name, body[:40]))
         if not snippets:
@@ -1943,11 +1943,14 @@ def _recalc_formulas(path, tmp: str, forms: dict | None = None, timeout: float =
             return {} if not forms else None
         out = Path(tmp) / Path(path).parent.name
         out.mkdir(parents=True, exist_ok=True)
-        kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
-        prof = Path(tmp) / "lo-profile"                   # its own profile: never blocked by a LibreOffice already open
-        subprocess.run([exe, f"-env:UserInstallation={prof.as_uri()}", "--headless", "--calc", "--convert-to", "xlsx",
-                        "--outdir", str(out), str(path)], capture_output=True, timeout=max(1, timeout), **kw)
-        made = out / Path(path).name
+        from meshpool_harness import lo_session          # the kept LibreOffice, else a one-off run
+        made = lo_session.convert(exe, str(path), "xlsx", str(out), max(1, timeout), recalc=True)
+        if made is None:
+            kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
+            prof = Path(tmp) / "lo-profile"               # its own profile: never blocked by a LibreOffice already open
+            subprocess.run([exe, f"-env:UserInstallation={prof.as_uri()}", "--headless", "--calc", "--convert-to",
+                            "xlsx", "--outdir", str(out), str(path)], capture_output=True, timeout=max(1, timeout), **kw)
+            made = out / (Path(path).stem + ".xlsx")
         if not made.is_file():
             return None
         vals = openpyxl.load_workbook(made, data_only=True)
@@ -3923,7 +3926,8 @@ class Agent:
         sig = self._tree_sig() if sh else None
         if sh and sig is not None:
             bg = self.ws.__dict__.get("_bg") or {}
-            killed = [r for r in runs if r[0] == key and len(r) > 6 and r[6]]
+            # killed with no project file changed since: a changed input or fixed code may well run now
+            killed = [r for r in runs if r[0] == key and len(r) > 6 and r[6] and r[5] == sig]
             if len(killed) >= 2 and not any(e["p"].poll() is None for e in list((self.ws.__dict__.get("_bg") or {}).values())):
                 return ("[Meshpool] Not run: this command was killed twice already (exit 137 or 124: it ran out of memory "
                         "or time). Running it again will not change that. Use a smaller input, a shorter timeout, or "
@@ -3937,7 +3941,14 @@ class Agent:
                 if sq.get("sig") == sig and sq.get("n", 0) >= 10:
                     return ("[Meshpool] Shell checks stopped for this turn: ten runs in a row gave the same result and no "
                             "project file changed. Give your best answer from what you have, and say what is unresolved.")
-        out = self._run_tool(c, cut=cut)
+        # exec_command fingerprints the tree before and after it runs, and this guard did the same around it: four
+        # walks of up to 4,000 files per command. The guard's walk is handed to _run_tool and _run_tool's back.
+        self.__dict__.pop("_sig_post", None)
+        self._sig_pre = (id(c), sig) if sh else None
+        try:
+            out = self._run_tool(c, cut=cut)
+        finally:
+            self._sig_pre = None
         import hashlib
         h = hashlib.md5(str(out).encode("utf-8", "replace")).hexdigest()
         failed = bool(re.search(r"\[exit (?!0\b)\d+\]|Process exited with code (?!0\b)-?\d+|timed out|Traceback|Error|"
@@ -3961,7 +3972,8 @@ class Agent:
             if not last or last[-1][3] != failed:
                 g["wprog"] = g.get("wprog", 0) + 1
         if sh:
-            sig2 = self._tree_sig()
+            post = self.__dict__.pop("_sig_post", None)
+            sig2 = post[1] if post and post[0] == id(c) and post[1] is not None else self._tree_sig()
             sq = g.get("sseq") or {}
             sq = {"sig": sig2, "h": h, "n": sq["n"] + 1} if sq and sq.get("sig") == sig2 and sq.get("h") == h and sig2 is not None \
                 else {"sig": sig2, "h": h, "n": 1}
@@ -3970,8 +3982,10 @@ class Agent:
                 wnote += "\n[Meshpool] Your checks keep giving the same result; change approach or answer."
             sig = sig2
         out = str(out) + wnote if wnote else out
-        oom = bool(re.search(r"\[exit (137|124)\]|\brc=(137|124)\b|exit(?:ed with)? code (137|124)\b|\bKilled\b|timed out",
-                             str(out)))
+        # a kill by memory or time: the exit code, bash's "1234 Killed" line or the tool's own timeout note; not the
+        # words "timed out" or "Killed" anywhere in a log (a passing test_request_timed_out)
+        oom = bool(re.search(r"\[exit (137|124)\]|\brc=(137|124)\b|exit(?:ed with)? code (137|124)\b|"
+                             r"(?m:^|\d\s+)Killed\b|\[timed out after \d+s\]", str(out)))
         runs.append((key, h, edits, failed, str(out)[:240], sig, oom))   # a failed call counts for the failure breaker; a read for the read breaker
         del runs[:-12]
         return out
@@ -5640,7 +5654,7 @@ class Agent:
             answered = True
             notes.append(note or "")
         guard = self._power_file(name, args)
-        if guard and name in ("bash", "shell", "bash_start", "bash_many", "exec_command") and self.mode == "auto":
+        if guard and name in ("bash", "shell", "bash_start", "bash_many", "exec_command", "probe", "trace") and self.mode == "auto":
             guard = ""                             # full access: commands run as the user chose
         if guard:                                  # hooks, allow rules, MCP servers: the agent never grants itself these
             if not self.approve:
@@ -5684,8 +5698,14 @@ class Agent:
         if risky:
             group = "outside-" + name
         cmds = PR.commands_of(name, args) if group == "bash" and not risky else []
-        if cmds and self.mode in ("ask", "edits") and not _destructive(args, self.root) and \
-                all(PR.safe_read(c, self.root) for c in cmds):
+        wd, wd_ok = None, True                     # shell and exec_command run in their workdir: paths start there
+        if cmds and name in ("shell", "exec_command") and args.get("workdir"):
+            try:
+                wd = self.ws._path(str(args["workdir"]))
+            except Exception:  # noqa: BLE001
+                wd_ok = False                      # unresolvable: never the shortcut
+        if cmds and wd_ok and self.mode in ("ask", "edits") and not _destructive(args, self.root) and \
+                all(PR.safe_read(c, self.root, wd) for c in cmds):
             return True, ""                    # H-15: a plain read-only command inside the project needs no question
         if group == "bash":
             pats = [x[5:] for x in self.always if x.startswith("bash:")]
@@ -5774,9 +5794,11 @@ class Agent:
             s = os.path.normcase(str(x)).casefold()
             s = re.sub(r"::\$data$", "", s)
             return re.sub(r"[. ]+$", "", s)
-        if name in ("bash", "shell", "bash_start", "bash_many"):
+        if name in ("bash", "shell", "bash_start", "bash_many", "exec_command", "probe", "trace"):
+            # every shell tool, each with its own argument (exec_command's script is `cmd`)
             text = " ".join(str(x) for x in ([args.get("command")] if not isinstance(args.get("command"), list)
-                                             else args.get("command")) + list(args.get("commands") or []))
+                                             else args.get("command")) + list(args.get("commands") or [])
+                            + [args.get("cmd") or ""])
             low = text.casefold().replace("\\", "/")
             return next((f for f in (".meshpool", ".mcp", "hooks.json", "permissions.json", "mcp.json",
                                      "trusted-folders.json") if f in low), "")   # globs and writers included
@@ -6045,10 +6067,13 @@ class Agent:
                 done = sum(i["status"] == "completed" for i in items)
                 out = f"Plan updated: {done} of {len(items)} done."
             elif name == "exec_command":               # Codex 0.171 (profile c171): its result format, as Codex sends it
-                before = self._tree_sig()
+                pre = getattr(self, "_sig_pre", None)  # the repeat guard's fingerprint of this same call
+                before = pre[1] if pre and pre[0] == id(c) else self._tree_sig()
                 out = self.ws.exec_command(**args)
                 ok = T.exec_exit_code(out) == 0
-                if before is not None and self._tree_sig() != before:
+                after = self._tree_sig() if before is not None else None
+                self._sig_post = (id(c), after)
+                if before is not None and after != before:
                     self.ws.edits += 1                 # a heredoc write is an edit: the loop guards see the progress
             else:
                 out = getattr(self.ws, name)(**args)

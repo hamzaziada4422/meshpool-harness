@@ -2,7 +2,7 @@
 
 Meshpool runs LibreOffice only headless, for these jobs: draw a .pptx or .docx as PDF or PNG (render checks, slide
 previews, convert_document) and recalculate an .xlsx (sheets QA and the forge validators). Nothing opens a window, so
-the installers do not need the user interface, help, Base (databases), Math (formulas), Java, the Python-UNO runtime,
+the installers do not need the user interface, help, Base (databases), Math (formulas), Java, Python macros,
 extensions and dictionaries, other UI languages, galleries, templates, spare icon themes, importers for formats
 Meshpool never reads, or the spare fonts. PDF import stays (xpdfimport, pdfimportlo): convert_document turns a PDF
 into a Word file with it. build_all.py calls prune() right after the download is unpacked (macOS and
@@ -49,7 +49,8 @@ BASE = ["abplo", "biblo", "dbahsqllo", "dbalo", "sdbtlo", "dbaselo", "dbaxmllo",
         "Engine12", "ifbclient", "fbclient*", "pcrlo", "mozbootstraplo", "macab*", "mork*"]
 MATH = ["smlo", "smdlo"]
 JAVA = ["javaloaderlo", "javavmlo", "java_uno", "juh", "juhx", "officebean"]
-PYTHON = ["python3*", "pythonloaderlo", "pyuno*"]
+PYTHON = ["pythonloaderlo"]       # Python macros only. LibreOffice's Python and pyuno stay: the kept LibreOffice
+#                                    session (meshpool_harness/lo_session.py) drives it through them
 FOREIGN = ["hwplo", "lwpftlo", "wpft*lo", "writerperfectlo", "mwaw*", "etonyek*", "wps*", "wpd*", "wpg*", "revenge*",
            "librevenge*", "odfgen*", "staroffice*", "libstaroffice*", "xsltfilterlo", "t602filterlo",
            "OGLTranslo", "PresentationMinimizerlo", "solverlo", "lpsolve55", "CoinMP*", "Cbc*", "Clp*", "Cgl*", "Osi*",
@@ -130,11 +131,14 @@ RULES: list[tuple] = [
     ("Base, Math and desktop configuration", "{S}/registry/gnome.xcd"),
     ("Base, Math and desktop configuration", "{S}/registry/kde*.xcd"),
     ("Base, Math and desktop configuration", "{S}/registry/ogltrans.xcd"),
-    # Python-UNO runtime and the scripts that use it
-    ("Python-UNO", "{P}/python"), ("Python-UNO", "{P}/python-core-*"), ("Python-UNO", "{P}/pyuno*"), ("Python-UNO", "{P}/*.py"),
-    ("Python-UNO", "{P}/*.pyi"), ("Python-UNO", "{P}/__pycache__"), ("Python-UNO", "{P}/pythonloader.*"),
-    ("Python-UNO", "{P}/wizards"), ("Python-UNO", "{L}/LibreOfficePython.framework"),
-    ("Python-UNO", "{exe:python}"), ("Python-UNO", "{exe:python.bin}"), ("Python-UNO", "{exe:pythonw}"),
+    # Python macros and the scripts that use them. LibreOffice's Python, pyuno and uno.py stay: meshpool's kept
+    # LibreOffice session (meshpool_harness/lo_session.py, lo_worker.py) drives the converter through them
+    ("Python macros", "{P}/*.pyi"), ("Python macros", "{P}/__pycache__"), ("Python macros", "{P}/pythonloader.*"),
+    ("Python macros", "{P}/wizards"), ("Python macros", "{exe:pythonw}"),
+    # modules of LibreOffice's Python that the session worker never imports and that need system libraries a bare
+    # Linux may lack (libcrypt.so.2, libuuid.so.1): lo_deps_check.py would report them missing
+    ("Python macros", "{P}/python-core-*/lib/lib-dynload/_crypt*"),
+    ("Python macros", "{P}/python-core-*/lib/lib-dynload/_uuid*"),
     # programs that are not the converter: other module launchers, updater, tools
     ("other programs", "{exe:updater}"), ("other programs", "{exe:update_service}"),
     ("other programs", "{exe:mar}"), ("other programs", "{exe:odbcconfig}"), ("other programs", "{exe:quickstart}"),

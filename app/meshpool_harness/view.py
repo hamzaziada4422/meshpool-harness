@@ -75,9 +75,15 @@ def _pdf_pages(pdf: Path, pages, out: Path, stem: str, width: int = 1200) -> tup
 
 
 def _table_html(path: Path) -> str:
-    delim = "\t" if path.suffix.lower() == ".tsv" else ","
-    with path.open(newline="", encoding="utf-8", errors="replace") as fh:
-        rows = list(csv.reader(fh, delimiter=delim))[:200]
+    import io
+    import itertools
+
+    from meshpool_harness.docread import decode_text, sniff_delimiter
+    with path.open("rb") as fh:                  # 200 rows are drawn: the start of a big file is enough
+        raw = fh.read(2_000_001)
+    text = decode_text(raw[:2_000_000], cut=len(raw) > 2_000_000)
+    delim = "\t" if path.suffix.lower() == ".tsv" else sniff_delimiter(text)
+    rows = list(itertools.islice(csv.reader(io.StringIO(text, newline=""), delimiter=delim), 200))
     head, body = (rows[0], rows[1:]) if rows else ([], [])
     tr = lambda cells, tag: "<tr>" + "".join(f"<{tag}>{html.escape(c)}</{tag}>" for c in cells) + "</tr>"
     return ("<!doctype html><meta charset=utf-8><style>body{font:14px system-ui;margin:16px}table{border-collapse:collapse}"
@@ -116,7 +122,10 @@ def render(path: str, pages=None, out_dir: Path | None = None, launch=None, widt
     texts.clear()
     out = Path(out_dir) if out_dir else Path(tempfile.mkdtemp(prefix="view_"))
     out.mkdir(parents=True, exist_ok=True)
-    stem = p.stem
+    import hashlib
+    # the folder's own hash in the name: a/report.pdf and b/report.pdf in one shared views folder kept overwriting
+    # each other's pictures
+    stem = f"{p.stem}-{hashlib.sha1(str(p.resolve()).encode('utf-8', 'surrogatepass')).hexdigest()[:6]}"
     shots: list = []
     notes: list[str] = []
     if k == "image":

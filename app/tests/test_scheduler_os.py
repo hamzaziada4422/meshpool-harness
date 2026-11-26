@@ -57,3 +57,43 @@ def test_an_unattended_run_never_waits_for_an_approval(monkeypatch):
     s = A.Session.__new__(A.Session)
     decision, note = s.approve("bash", "Run?", "ls")
     assert decision == "no" and "unattended" in note
+
+
+def test_a_crontab_that_cannot_be_read_is_never_rewritten():
+    """crontab -l failing for another reason than "no crontab" (a broken spool, a permission error) made install and
+    uninstall write the crontab from an empty list, deleting every other entry the user had."""
+    import subprocess as sp
+    import pytest as _pt
+    from meshpool_harness import scheduler_os as SO
+    writes = []
+
+    def run(cmd, input=None, **kw):
+        if cmd[:2] == ["crontab", "-l"]:
+            return sp.CompletedProcess(cmd, 1, "", "crontab: cannot open /var/spool/cron: Permission denied")
+        writes.append(input)
+        return sp.CompletedProcess(cmd, 0, "", "")
+    with _pt.raises(RuntimeError, match="left as it is"):
+        SO.install(run=run, platform="linux")
+    with _pt.raises(RuntimeError, match="left as it is"):
+        SO.uninstall(run=run, platform="linux")
+    assert writes == []
+
+
+def test_no_crontab_yet_still_installs_and_uninstall_leaves_other_entries_alone():
+    import subprocess as sp
+    from meshpool_harness import scheduler_os as SO
+    state = {"tab": None}
+
+    def run(cmd, input=None, **kw):
+        if cmd[:2] == ["crontab", "-l"]:
+            if state["tab"] is None:
+                return sp.CompletedProcess(cmd, 1, "", "no crontab for user")
+            return sp.CompletedProcess(cmd, 0, state["tab"], "")
+        state["tab"] = input
+        return sp.CompletedProcess(cmd, 0, "", "")
+    SO.install(run=run, platform="linux")
+    assert SO.TAG in state["tab"]
+    state["tab"] = "0 1 * * * backup.sh\n"                   # meshpool's line is gone already
+    writes_before = state["tab"]
+    SO.uninstall(run=run, platform="linux")
+    assert state["tab"] == writes_before                     # not rewritten at all

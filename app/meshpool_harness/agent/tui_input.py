@@ -15,6 +15,10 @@ _CTRL = {"\x01": "ctrl_a", "\x02": "ctrl_b", "\x03": "ctrl_c", "\x04": "ctrl_d",
          "\x0b": "ctrl_k", "\x0c": "ctrl_l", "\x0e": "ctrl_n", "\x0f": "ctrl_o", "\x10": "ctrl_p", "\x15": "ctrl_u",
          "\x17": "ctrl_w", "\x1a": "ctrl_z", "\x12": "ctrl_r", "\x07": "ctrl_g", "\x13": "ctrl_s", "\t": "tab", "\x7f": "backspace", "\x08": "backspace", "\r": "enter",
          "\n": "enter"}
+# Windows console scan codes that follow "\x00" or "\xe0" for the keys this terminal uses
+_WIN_SCAN = {"H": "up", "P": "down", "K": "left", "M": "right", "G": "home", "O": "end", "S": "delete",
+             "\x0f": "shift_tab", "I": "pageup", "Q": "pagedown", "s": "word_left", "t": "word_right"}
+_WIN_EXT = set(_WIN_SCAN) | set("Rwu")      # also Insert, Ctrl+Home, Ctrl+End: keys, though this terminal ignores them
 
 
 def parse_keys(data: str) -> list:
@@ -150,18 +154,31 @@ class RawKeys:
         self.pending = keys[1:]
         return keys[0]
 
+    @staticmethod
+    def _win_ext(msvcrt, c: str):
+        """After getwch() gave "\\x00" or "\\xe0": (key name, None) for a special key, or (None, text) when "\\xe0"
+        was the letter à typed or pasted (getwch gives the same character for both). A special key's scan code
+        follows at once and is one of a few known codes; à alone, or à before ordinary text, is text."""
+        if c == "\xe0" and not msvcrt.kbhit():
+            return None, c
+        code = msvcrt.getwch()
+        if c == "\xe0" and not (code in _WIN_EXT or "\x80" <= code < "\xa0"):
+            return None, c + code
+        return _WIN_SCAN.get(code, "unknown"), None
+
     def _read_win(self):
         import msvcrt
         c = msvcrt.getwch()
-        if c in ("\x00", "\xe0"):
-            code = msvcrt.getwch()
-            return [{"H": "up", "P": "down", "K": "left", "M": "right", "G": "home", "O": "end", "S": "delete",
-                     "\x0f": "shift_tab"}.get(code, "unknown")]
         text = c
+        if c in ("\x00", "\xe0"):
+            key, text = self._win_ext(msvcrt, c)
+            if key:
+                return [key]
         while msvcrt.kbhit():                       # a paste arrives as a burst: read it all, not one key at a time
             nxt = msvcrt.getwch()
             if nxt in ("\x00", "\xe0"):
-                msvcrt.getwch()
+                key, more = self._win_ext(msvcrt, nxt)
+                text += more or ""
                 continue
             text += nxt
         if len(text) > 1 and ("\r" in text or "\n" in text):

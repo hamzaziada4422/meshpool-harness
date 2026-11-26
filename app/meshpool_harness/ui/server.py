@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from meshpool_harness import config as C
 from meshpool_harness import harnesses as HR
 from meshpool_harness.ui import agent_api as A
+from meshpool_harness.ui import office_pair as OP
 from meshpool_harness.settings_api import _key_follows_host  # noqa: F401  (test_connection and the tests use it here)
 from meshpool_harness.ui import workbench as W
 
@@ -37,28 +38,87 @@ EXTRA_PREFIXES = ("/api/memory", "/api/xray", "/api/insights", "/api/work", "/ap
 TOKEN = secrets.token_urlsafe(24)
 OF_DIR = HERE.parent / "office"
 _ICONS: dict = {}
-# The Office panel's own token: good only on the HTTPS listener and only for the few calls the panel makes.
-OFFICE_TOKEN = secrets.token_urlsafe(24)
 # A chat's event stream sends what is new at most about 30 times a second: a streaming reply came as ~80 frames a
 # second at 10 ms, each one parsed and applied by the page (CPU audit). The page paces the text per animation frame.
 SSE_FRAME_S = 0.03
+# Seconds a connection may stay silent (no byte read or written) before the server closes it and frees its thread.
+IDLE_TIMEOUT_S = 120
 # Only Office on the web may show the panel in a frame (its add-in frames live on these hosts; the desktop apps do not
 # frame it). No SharePoint or live.com: any tenant can put pages there.
 OFFICE_FRAMES = ("frame-ancestors 'self' https://*.officeapps.live.com https://*.office.com https://*.office365.com "
                  "https://*.microsoft365.com https://*.cloud.microsoft")
 OFFICE_HTTPD: list = []
 OFFICE_CHATS: set = set()      # the chats the Office panel started: the only ones its token reaches
-# The page that carries TOKEN is served only to the app's own window: it opens app_url(port), whose launch key sets an
+# The page that carries TOKEN is served only to the app's own window: it opens open_url(port), whose key sets an
 # HttpOnly, SameSite=Strict session cookie. Any other local process (a sandboxed command, a script the user allowed)
 # that asks for / gets no token, so it cannot reach /api/term or /api/settings (security review: `curl
 # http://127.0.0.1:8765/` handed the token to anything on the machine). The key lives in this process's memory only.
 LAUNCH_KEY = secrets.token_urlsafe(24)
 SESSION = secrets.token_urlsafe(24)
+# Cookies are not scoped by port, so every other server on 127.0.0.1 the user opens in the same browser (a dev server
+# the agent started) receives mp_s and could replay it. The cookie alone therefore opens only a page without the token
+# (BOOT_PAGE). That page reads PAGE from localStorage, which is scoped to this origin with its port, and trades cookie
+# and PAGE together at POST /session for a one-time address. The full page hands PAGE to the window that opened it.
+PAGE = secrets.token_urlsafe(24)
 
 
 def app_url(port: int) -> str:
-    """The URL that opens the app: the launch key in it lets the page carry the API token."""
+    """The URL that opens the app: the launch key in it lets the page carry the API token. Printed in the terminal
+    only; a browser or window the app opens itself gets open_url(port)."""
     return f"http://127.0.0.1:{int(port)}/?k={LAUNCH_KEY}"
+
+
+# Keys of the addresses the app hands to a browser or a window. The address ends up where other processes can read
+# it (the browser's command line, the window process's arguments, the browser history), so its key opens the page
+# once; the page then has its session cookie. A second load within ONCE_GRACE_S (a webview that loads twice) works.
+_ONCE: dict = {}                     # key -> time of first use (None: not used yet)
+_ONCE_LOCK = threading.Lock()
+ONCE_GRACE_S = 20
+
+
+def _once_key() -> str:
+    key = secrets.token_urlsafe(24)
+    with _ONCE_LOCK:
+        if len(_ONCE) > 50:          # never used ones from long ago: no window is still on its way
+            for k in [k for k, t in _ONCE.items() if t is not None][:25]:
+                _ONCE.pop(k, None)
+        _ONCE[key] = None
+    return key
+
+
+def open_url(port: int) -> str:
+    """A one-time address for the app's own window or browser tab."""
+    return f"http://127.0.0.1:{int(port)}/?k={_once_key()}"
+
+
+# What a reload with only the session cookie gets: no token. Its script sends the cookie with PAGE (kept by the full
+# page in this origin's localStorage) to POST /session and goes on to the one-time address it gets back.
+BOOT_PAGE = (b"<!doctype html><meta charset=utf-8><title>meshpool</title><body style=\"font:15px -apple-system,Segoe UI,"
+             b"sans-serif;color:#0B131F\"><p id=m>Opening meshpool...</p><script>(async () => {"
+             b"let page = \"\"; try { page = localStorage.getItem(\"mp_page\") || \"\"; } catch (e) {}"
+             b"try { if (page) { const r = await fetch(\"/session\", {method: \"POST\", cache: \"no-store\", "
+             b"headers: {\"Content-Type\": \"application/json\"}, body: JSON.stringify({page})});"
+             b"if (r.ok) { const d = await r.json(); location.replace(d.url + location.hash); return; } } } catch (e) {}"
+             b"document.getElementById(\"m\").textContent = \"Open meshpool from its app icon, or with the link the app "
+             b"printed when it started.\"; })();</script>")
+
+
+def _key_ok(key: str) -> bool:
+    if not key:
+        return False
+    if secrets.compare_digest(key, LAUNCH_KEY):
+        return True
+    with _ONCE_LOCK:
+        if key not in _ONCE:
+            return False
+        first = _ONCE[key]
+        now = time.time()
+        if first is None:
+            _ONCE[key] = now
+            return True
+        return now - first < ONCE_GRACE_S
+
+
 UI_VER = secrets.token_hex(4)
 DESKTOP = False
 LAST_PING = [time.time()]
@@ -213,6 +273,73 @@ def save_upload(name: str, data: bytes) -> dict:
     return {"path": str(p), "name": safe, "size": len(data)}
 
 
+def _upload_refs() -> list[Path] | None:
+    """Every path a saved company profile or project record names, resolved; None when one of those files cannot be
+    read, so nothing is removed on a guess."""
+    import contextlib
+    found: list[str] = []
+
+    def strings(v):
+        if isinstance(v, str):
+            found.append(v)
+        elif isinstance(v, dict):
+            for x in v.values():
+                strings(x)
+        elif isinstance(v, list):
+            for x in v:
+                strings(x)
+    files = [C.home() / "brand" / "profiles.json"]
+    from meshpool_harness import project_store as PS
+    with contextlib.suppress(OSError):
+        files += [d / "project.json" for d in PS.root().iterdir() if d.is_dir()]
+    for f in files:
+        try:
+            strings(json.loads(f.read_text(encoding="utf-8")))
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            return None
+    out = []
+    for s in found:
+        if "_uploads" in s:
+            with contextlib.suppress(OSError, ValueError):
+                out.append(Path(s).expanduser().resolve())
+    return out
+
+
+def prune_uploads(max_age_days: float = 30, now: float | None = None) -> list[str]:
+    """Remove upload folders (runs/_uploads/<id>) not changed for max_age_days that no saved company profile or
+    project points at. /api/upload wrote them and nothing ever removed them. Called at start-up. Returns the names
+    removed."""
+    import shutil
+    try:
+        dirs = [d for d in UPLOADS.iterdir() if d.is_dir()]
+    except OSError:
+        return []
+    cutoff = (now or time.time()) - max_age_days * 86400
+    old = []
+    for d in dirs:
+        try:
+            newest = max([d.stat().st_mtime] + [p.stat().st_mtime for p in d.rglob("*")])
+        except OSError:
+            continue
+        if newest < cutoff:
+            old.append(d)
+    if not old:
+        return []
+    refs = _upload_refs()
+    if refs is None:
+        return []
+    gone = []
+    for d in old:
+        rd = d.resolve()
+        if any(r == rd or rd in r.parents or r in rd.parents for r in refs):
+            continue
+        shutil.rmtree(d, ignore_errors=True)
+        gone.append(d.name)
+    return gone
+
+
 # ---------- HTTP ---------------------------------------------------------------------------------------------------
 
 def _disposition(kind: str, name: str) -> str:
@@ -255,6 +382,13 @@ class _Body(dict):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "Meshpool"
+
+    def setup(self):
+        # A connection that sends nothing (a browser preconnect, a stuck client) must not hold its thread until the app
+        # quits. The limit is on each socket read or write, so a long answer or an event stream is not cut by it.
+        if self.timeout is None:
+            self.timeout = IDLE_TIMEOUT_S
+        super().setup()
 
     def log_message(self, *a):          # quiet console
         pass
@@ -358,7 +492,12 @@ class Handler(BaseHTTPRequestHandler):
                     s = A.get(sid)
                     n, state = len(s.events), s.state
                 except Exception:  # noqa: BLE001 - a chat whose folder vanished: send what there is, then stop
-                    put("data: " + json.dumps(A.view(sid, cursor), default=str) + "\n\n")
+                    try:                          # a deleted chat has nothing left to send: the headers are out, so
+                        put("data: " + json.dumps(A.view(sid, cursor), default=str) + "\n\n")
+                    except (BrokenPipeError, ConnectionResetError):
+                        raise
+                    except Exception:  # noqa: BLE001 - no second HTTP answer may go into this stream
+                        pass
                     put("event: end\ndata: {}\n\n")
                     return
                 if n > cursor or state != last_state:
@@ -388,15 +527,19 @@ class Handler(BaseHTTPRequestHandler):
                 time.sleep(SSE_FRAME_S)           # let a burst of text_delta pile up into one frame
         except (BrokenPipeError, ConnectionResetError, OSError):
             return
+        except Exception:  # noqa: BLE001 - e.g. the chat was deleted between two reads: end this stream, never
+            try:                                  # start a second HTTP answer inside it (the page polls instead)
+                put("event: end\ndata: {}\n\n")
+            except OSError:
+                pass
+            return
 
     def _office(self, name: str, size: str | None):
         from meshpool_harness import office as OF
         if size:
             png = _ICONS.get(size) or _ICONS.setdefault(size, OF.icon_png(int(size)))
             return self._send(200, png, "image/png", {"Cache-Control": "max-age=86400"})
-        data = (OF_DIR / name).read_bytes()
-        if name == "taskpane.html":
-            data = data.replace(b"__MESHPOOL_TOKEN__", OFFICE_TOKEN.encode())
+        data = (OF_DIR / name).read_bytes()             # no token in the page: the panel pairs (ui/office_pair.py)
         ctype = {"html": "text/html; charset=utf-8", "js": "text/javascript; charset=utf-8",
                  "css": "text/css; charset=utf-8"}[name.rsplit(".", 1)[1]]
         return self._send(200, data, ctype, {"Content-Security-Policy": OFFICE_FRAMES} if name.endswith(".html") else None)
@@ -407,13 +550,17 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
             key = parse_qs(u.query).get("k", [""])[0]
-            keyed = bool(key) and secrets.compare_digest(key, LAUNCH_KEY)
-            if not (keyed or self._session_ok() or os.environ.get("MH_UI_OPEN_PAGE") == "1"):
+            keyed = _key_ok(key)
+            if not keyed and os.environ.get("MH_UI_OPEN_PAGE") != "1" and self._session_ok():
+                return self._send(200, BOOT_PAGE, "text/html; charset=utf-8",
+                                  {"Content-Security-Policy": "frame-ancestors 'none'"})
+            if not (keyed or os.environ.get("MH_UI_OPEN_PAGE") == "1"):
                 return self._send(403, b"<!doctype html><meta charset=utf-8><title>Meshpool</title><p>Open Meshpool "
                                        b"from its app icon, or with the link the app printed when it started.</p>",
                                   "text/html; charset=utf-8", {"Content-Security-Policy": "frame-ancestors 'none'"})
             html = (HERE / "index.html").read_text(encoding="utf-8").replace("__MESHPOOL_TOKEN__", TOKEN) \
-                .replace("__MESHPOOL_DESKTOP__", "true" if DESKTOP else "false").replace("__MESHPOOL_VER__", UI_VER)
+                .replace("__MESHPOOL_DESKTOP__", "true" if DESKTOP else "false").replace("__MESHPOOL_VER__", UI_VER) \
+                .replace("__MESHPOOL_PAGE__", PAGE)
             extra = {"Content-Security-Policy": "frame-ancestors 'none'", "Cache-Control": "no-store"}
             if keyed:
                 extra["Set-Cookie"] = f"mp_s={SESSION}; HttpOnly; SameSite=Strict; Path=/"
@@ -476,7 +623,8 @@ class Handler(BaseHTTPRequestHandler):
             if q.get("t", [""])[0] != TOKEN:
                 return self._send(403, {"error": "forbidden"})
             parts = unquote(u.path[len("/files/"):]).split("/", 1)
-            if len(parts) != 2:
+            # the run id is one plain folder name: "..", a drive ("C:") or a backslash path would leave the runs folder
+            if len(parts) != 2 or not re.fullmatch(r"[\w-][\w.-]*", parts[0]) or ".." in parts[0]:
                 return self._send(404, {"error": "not found"})
             base = (RUNS / parts[0] / "out").resolve()
             p = (base / parts[1]).resolve()
@@ -718,9 +866,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(403, {"error": "forbidden"})
             shown = any(fn() for fn in list(ON_SHOW))
             if not shown and HTTPD[0] is not None:     # no window of ours: this instance opens one with its own key
-                webbrowser.open(app_url(HTTPD[0].server_address[1]))   # (the second launch never learns the key)
+                webbrowser.open(open_url(HTTPD[0].server_address[1]))   # (the second launch never learns the key)
                 shown = True
             return self._send(200, {"ok": True, "native": shown})
+        if u.path == "/session":               # BOOT_PAGE: the session cookie and PAGE together buy a one-time address
+            try:
+                page = self._json().get("page") if self._json_type() else None
+            except ValueError:
+                page = None
+            if not (isinstance(page, str) and page and secrets.compare_digest(page.encode(), PAGE.encode())
+                    and self._session_ok() and self._origin_ok()):
+                return self._send(403, {"error": "forbidden"})
+            return self._send(200, {"url": f"/?k={_once_key()}"})
         if self.headers.get("X-Meshpool-Token") != TOKEN:
             return self._send(403, {"error": "forbidden"})
         if u.path.startswith("/api/company"):        # Settings > Company, the company look for decks
@@ -1321,6 +1478,10 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
         prune_codex_homes()
     except Exception:  # noqa: BLE001
         pass
+    try:                                                       # uploads nothing points at any more
+        prune_uploads()
+    except Exception:  # noqa: BLE001
+        pass
     global DESKTOP
     DESKTOP = desktop
     RUNS.mkdir(parents=True, exist_ok=True)
@@ -1374,7 +1535,10 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
         on_ready(port)
     print("")
     print("  Meshpool is running.")
-    print(f"  Open {url} in your browser if it did not open by itself.")
+    if desktop:                                     # the window opens itself; this output goes to app.log, which
+        print(f"  Address: http://127.0.0.1:{port}/")   # any local process may read: no launch key in it
+    else:
+        print(f"  Open {url} in your browser if it did not open by itself.")
     print(f"  Settings file: {C.config_path()}")
     print(f"  Task outputs:  {RUNS}")
     if office:
@@ -1382,7 +1546,7 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     print("  Use Quit in the app to stop Meshpool." if desktop else "  Close this window (or press Ctrl+C) to stop Meshpool.")
     print("", flush=True)                           # a log file gets the address now, not when its buffer fills
     if open_browser:
-        threading.Timer(0.8, lambda: webbrowser.open(url)).start()   # the app itself, in a browser tab (not the desktop app)
+        threading.Timer(0.8, lambda: webbrowser.open(open_url(port))).start()   # the app in a browser tab: a one-time key
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -1397,14 +1561,16 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
 
 
 class OfficeHandler(Handler):
-    """The HTTPS listener Excel, PowerPoint and Word load the panel from. It serves the panel's files and the few
-    calls the panel makes (start a chat, send, read, stop, answer an approval, read settings), with the panel's own
-    token. Nothing else of the app is reachable here, and what the panel can ask for is narrowed (_json)."""
+    """The HTTPS listener Excel, PowerPoint and Word load the panel from. It serves the panel's files, the pairing
+    calls (ui/office_pair.py), and the few calls a paired panel makes (start a chat, send, read, stop, answer an
+    approval, read settings) with the session token the user allowed in the app. Nothing else of the app is reachable
+    here, and what the panel can ask for is narrowed (_json)."""
     timeout = 60                                      # an idle or half-open connection never holds a thread for good
     _FILES = re.compile(r"/office/(taskpane\.html|taskpane\.js|taskpane\.css|compat\.js|commands\.html|help\.html|"
                         r"icon-(16|32|64|80)\.png)")
     _GET = re.compile(r"/api/agent/[\w-]+|/api/settings")
     _POST = re.compile(r"/api/agent(/[\w-]+/(send|stop|answer))?")
+    _PAIR = re.compile(r"/office/pair(/check)?")
 
     def _gate(self) -> bool:
         if not self._host_ok():
@@ -1417,8 +1583,8 @@ class OfficeHandler(Handler):
         if not rule.fullmatch(path):
             self._send(404, {"error": "not found"})
             return False
-        if self.headers.get("X-Meshpool-Token") != OFFICE_TOKEN:
-            self._send(403, {"error": "forbidden"})
+        if not OP.session_ok(self.headers.get("X-Meshpool-Token")):     # a panel the user allowed in the app
+            self._send(401, {"error": "This panel is not connected to meshpool."})   # 401: the panel pairs again
             return False
         m = re.fullmatch(r"/api/agent/([\w-]+)(/.*)?", path)
         if m and m.group(1) in A.DELETED:             # a deleted chat: forgotten here too
@@ -1455,7 +1621,47 @@ class OfficeHandler(Handler):
             return self._office(m.group(1), m.group(2))
         return super().do_GET()
 
+    def _origin_ok(self) -> bool:
+        """No Origin, or the panel's own (https://localhost:<this port>)."""
+        o = self.headers.get("Origin")
+        if o is None:
+            return True
+        try:
+            u = urlparse(o.strip())
+            return u.scheme == "https" and u.hostname in ("localhost", "127.0.0.1") and \
+                u.port == self.server.server_address[1]
+        except ValueError:
+            return False
+
+    def _pair(self, path: str):
+        """POST /office/pair {"host"} starts a request; POST /office/pair/check {"pair"} reads its answer. Neither
+        needs a token: what they hand out only works after the user allows the code in the app. The pairing id goes
+        in the body, never in the address. A web page cannot send application/json here (no CORS preflight is ever
+        answered), and its Origin would not be the panel's."""
+        if not self._json_type() or not self._origin_ok():
+            return self._send(403, {"error": "forbidden"})
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            if not 0 <= n <= 4096:
+                raise ValueError
+            b = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
+            if not isinstance(b, dict):
+                raise ValueError
+        except ValueError:
+            return self._send(400, {"error": "Bad request."})
+        if path.endswith("/check"):
+            return self._send(200, OP.check(str(b.get("pair") or "")))
+        try:
+            return self._send(200, OP.start(str(b.get("host") or "")))
+        except OP.TooMany as e:
+            return self._send(429, {"error": str(e)})
+
     def do_POST(self):
+        path = urlparse(self.path).path
+        if self._PAIR.fullmatch(path):
+            if not self._host_ok():
+                return self._send(403, {"error": "forbidden"})
+            return self._pair(path)
         if not self._gate():
             return None
         return super().do_POST()
