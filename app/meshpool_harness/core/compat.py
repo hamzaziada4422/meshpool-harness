@@ -346,7 +346,7 @@ def _typed_by_user(m: dict) -> bool:
         first = next((p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text"), "")
     else:
         first = _text(c)
-    return not (first.startswith("Image returned by") or first.startswith("[Meshpool]"))
+    return not (first.startswith("Image returned by") or first.startswith(("[Meshpool]", "[meshpool]")))
 
 
 def cap_images(messages: list, keep: int = 4, step: int | None = None) -> list:

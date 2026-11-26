@@ -557,7 +557,7 @@ def _image_in_newest_ask(messages: list) -> bool:
         c = m.get("content")
         text = c if isinstance(c, str) else " ".join(str(p.get("text") or "") for p in c or []
                                                        if isinstance(p, dict) and p.get("type") == "text")
-        if text.startswith(("Image returned by", "[Meshpool]")):
+        if text.startswith(("Image returned by", "[Meshpool]", "[meshpool]")):
             continue                                    # attached by a tool (_attach_images) or a harness note
         return isinstance(c, list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in c)
     return False

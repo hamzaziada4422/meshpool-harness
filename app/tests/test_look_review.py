@@ -541,3 +541,18 @@ def test_dead_button_and_unchecked_form_reach_the_review(proj, monkeypatch):
     assert "empty fields" in t, t                                      # the form takes empty fields without a word
     assert sum(p.get("type") == "image_url" for p in rv[0]["content"]) <= 4
     assert not _chrome_children()
+
+
+def test_the_review_message_says_lowercase_meshpool_and_is_still_a_harness_note():
+    """The notes the harness writes into the chat are skipped when it looks for what the user asked: that must hold for
+    the review's lowercase "[meshpool]" too."""
+    from meshpool_harness.agent import look as L, grader
+    from meshpool_harness.agent.core import _has_images
+    assert "[Meshpool]" not in L.AGAIN
+    msg = L.message("web", {"label": "index.html", "url": "file:///x/index.html", "files": ["x/index.html"]},
+                    {"findings": [], "steps": [], "shots": []}, "make a page", False)
+    first = msg["content"] if isinstance(msg["content"], str) else msg["content"][0]["text"]
+    assert first.startswith("[meshpool] Before you call this done")
+    msgs = [{"role": "user", "content": "make a page"}, {"role": "assistant", "content": "Made it."}, msg]
+    assert grader.requests(msgs, 0) == ["make a page"]
+    assert _has_images(msgs) is False

@@ -129,7 +129,7 @@ def requests(messages: list, start: int, before: int = 2) -> list[str]:
             continue
         raw = m.get("content")
         txt = clean_text(raw)
-        if txt.startswith(("[Independent review]", "[Meshpool]")) or not txt:
+        if txt.startswith(("[Independent review]", "[Meshpool]", "[meshpool]")) or not txt:
             continue
         if txt.startswith("[Added by the user while you were working]"):
             txt = txt.replace("[Added by the user while you were working]", "(added while it worked)", 1).strip()

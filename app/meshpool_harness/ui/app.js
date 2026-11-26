@@ -1279,8 +1279,20 @@ function drainQ(cur, all) {
       if (ev.text.length > budget) { const head = ev.text.slice(0, budget); ev.text = ev.text.slice(budget); const part = {type: "text_delta", text: head}; cur.log.push(part); applyEv(part); break; }
       q.shift(); budget -= ev.text.length;
     } else { q.shift(); if (!(ev.type === "thought" && ev.delta)) evs++; }   // reasoning pieces are text: they use up no step
-    cur.log.push(ev); applyEv(ev);
+    logEv(cur, ev); applyEv(ev);
   }
+}
+// A line meant to end the reply ("Checked: ...", agent/look.py) joins the reply's own log entry, as it does in the
+// saved history, so the reply reads the same live, after a reload, in a copy and in an export.
+function logEv(cur, ev) {
+  if (ev.type === "assistant" && ev.append) {
+    for (let i = cur.log.length - 1; i >= 0; i--) {
+      const e = cur.log[i];
+      if (e.type === "user" && !e.steer) break;
+      if (e.type === "assistant" && (e.text || "").trim()) { e.text = e.text.replace(/\s+$/, "") + "\n\n" + ev.text; ev.merged = true; break; }
+    }
+  }
+  if (!ev.merged) cur.log.push(ev);
 }
 function flushLive(cur) {
   if (!(cur.live && cur.liveDirty)) return;
@@ -1595,6 +1607,8 @@ function applyEvRaw(ev) {
     case "stream_reset": if (cur.live) { cur.live.remove(); cur.live = null; cur.liveDirty = false; } break;
     case "retry_ok": clearRetry(); break;
     case "assistant":
+      if (ev.append && ev.merged && cur.lastAi && cur.lastAi.isConnected && cur.lastText) {
+        const full = cur.lastText.replace(/\s+$/, "") + "\n\n" + stripGoal(ev.text); mdRender(cur.lastAi, full); cur.lastText = full; break; }
       { const txt = stripGoal(ev.text); if (txt) clearRetry();
       if (cur.live) { if (txt) { mdRender(cur.live, txt); easeEnd(cur.live); cur.lastAi = cur.live; } else cur.live.remove(); cur.live = null; cur.liveDirty = false; }
       else if (txt) { closeGroup(); cur.lastAi = add("", "msg-ai"); mdRender(cur.lastAi, txt); } }

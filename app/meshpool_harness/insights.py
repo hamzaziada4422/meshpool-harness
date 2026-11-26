@@ -195,7 +195,7 @@ def chat_record(sid: str, meta: dict | None = None, sess: dict | None = None) ->
     for m in sess.get("messages") or []:
         if m.get("role") == "user":
             t = _text_of(m.get("content"))
-            if t and not AUTO_TEXT.match(t) and not t.startswith("[Meshpool]"):
+            if t and not AUTO_TEXT.match(t) and not t.startswith(("[Meshpool]", "[meshpool]")):
                 texts.append(t)
         elif m.get("role") == "assistant":
             for c in m.get("tool_calls") or []:

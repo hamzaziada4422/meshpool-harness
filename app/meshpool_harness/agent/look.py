@@ -84,7 +84,7 @@ RUBRIC_DOC = (
 TAIL = ("List what is wrong or missing in a few short lines, then fix it in the files. If nothing is wrong, say so in "
         "one line. Do not start servers or open other programs for this: meshpool looks again after your fix. End "
         "with your answer to the user as before: what you made and where it is.")
-AGAIN = ("[Meshpool] meshpool looked again after your fix. These problems are still there. Fix them, or say in one "
+AGAIN = ("[meshpool] meshpool looked again after your fix. These problems are still there. Fix them, or say in one "
          "line why they are right as they are.")
 
 
@@ -481,7 +481,7 @@ def message(kind: str, target: dict, res: dict, request: str, blind: bool) -> di
         rubric = RUBRIC_DOC
     lines = finding_lines(res)
     steps = [s for s in res.get("steps") or [] if isinstance(s, dict)]
-    text = [f"[Meshpool] Before you call this done, look at what you made. meshpool opened {what}.",
+    text = [f"[meshpool] Before you call this done, look at what you made. meshpool opened {what}.",
             "", "The user's request:", request or "(not available)", ""]
     files = [os.path.basename(str(f)) for f in target.get("files") or []][:12]
     if files:
@@ -649,7 +649,7 @@ def gate(agent, g: dict, final: str, *, render_web_fn=None, render_doc_fn=None) 
 def _close(agent, final: str, line: str) -> str:
     """The "Checked:" line goes under the final reply (and into the chat history and the turn's receipt)."""
     agent.last_look = {"turn": getattr(agent, "_turn_no", 0), "line": line}
-    agent.emit({"type": "assistant", "text": line, "streamed": False, "has_tools": False})   # shown under the reply
+    agent.emit({"type": "assistant", "text": line, "streamed": False, "has_tools": False, "append": True})   # joins the reply
     if agent.messages and agent.messages[-1].get("role") == "assistant" and isinstance(
             agent.messages[-1].get("content"), str):
         agent.messages[-1]["content"] += "\n\n" + line
