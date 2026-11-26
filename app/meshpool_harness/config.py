@@ -24,6 +24,11 @@ MODE_INFO = {
     "auto": ("Full access", "Edits files and runs commands without asking. Destructive commands (rm -r, git reset "
                             "--hard, sudo) still ask."),
 }
+# The same three modes in one short line each, for the terminal's footer ("Ask: runs in this folder, asks before risky
+# steps"). The names are MODE_INFO's; a test keeps the two together.
+MODE_FOOTER = {"ask": "runs in this folder, asks before risky steps",
+               "edits": "edits and local commits run without asking",
+               "auto": "asks only before destructive steps"}
 
 # Keys the web app shows and edits, in display order. (key, label, default, help)
 FIELDS = [

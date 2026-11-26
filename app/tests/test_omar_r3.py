@@ -160,6 +160,27 @@ def test_4_other_forms_still_ask(tmp_path, monkeypatch, cmd):
     assert not PR.git_local_ok(cmd, proj)
 
 
+# ------------------------------------------------------------------------------------------------- 5: mode wording
+def test_5_the_terminal_footer_uses_the_mode_words_of_config():
+    from meshpool_harness import config as C
+    from meshpool_harness.agent import tui_render as R
+    from meshpool_harness.agent.tui_render import Style
+    assert set(C.MODE_FOOTER) == set(C.MODE_INFO)
+    st = Style(0)
+    for key, (name, _) in C.MODE_INFO.items():
+        line = R.mode_hint(st, key)
+        assert f"{name}: {C.MODE_FOOTER[key]}" in line, line
+        assert "ask before changes" not in line
+    assert "Ask: runs in this folder, asks before risky steps" in R.mode_hint(st, "ask")
+
+
+def test_5_permission_mode_help_shows_both_names():
+    out = subprocess.run([sys.executable, "-m", "meshpool_harness", "--help"], capture_output=True, text=True,
+                         cwd=Path(__file__).resolve().parents[1], timeout=60).stdout
+    flat = " ".join(out.split())
+    assert "ask (Ask" in flat and "edits (Accept edits)" in flat and "auto (Full access)" in flat and "plan" in flat, flat
+
+
 # ----------------------------------------------------------------------------------- 2: the verification line
 def _project(root):
     (root / "calc.py").write_text("def add(a, b):\n    return a - b\n")

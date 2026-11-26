@@ -2023,7 +2023,7 @@ def _resume_access(term, s, mode: str | None, model: str | None) -> None:
         s.set_model(model)
 
 
-_MODE_NAMES = {"ask": "ask before changes", "edits": "accept edits", "auto": "full access"}
+_MODE_NAMES = {"ask": "Ask", "edits": "Accept edits", "auto": "Full access"}       # config.MODE_INFO's names
 
 
 def _resume_target(wd: str, session: str | None) -> str | None:
