@@ -1869,6 +1869,7 @@ function applyEvRaw(ev) {
         // transcript, on the line's tooltip and in the Session panel's Agent section.
         const why = ev.auto && ev.auto.reason ? String(ev.auto.reason) : "";
         if (/^Using meshpool\b/i.test(ev.text || "") && !ev.back && !ev.handoff) { sessionSoon(); break; }   // meshpool's own agent: nothing to announce
+        if (chatMode()) { sessionSoon(); break; }        // Chat mode: no engine names in the thread ("Using Codex", "Use meshpool Code instead")
         const un = add(`<span${why ? ` title="${esc(why)}"` : ""}>${esc(lowBrand(ev.text))}</span>` + (ev.back ? ` <button class="linkbtn" data-back="1">Use ${esc(lowBrand(ev.back.name))} instead</button>` : ""), "note using");
         $("[data-back]", un)?.addEventListener("click", async () => {   // one click back to the mode's own agent, history kept
           try { const v = await post(`/api/agent/${cur.id}/harness`, {harness: ev.back.harness, since: 1e9}); cur.view.harness = v.harness || harness(ev.back.harness); $("[data-back]", un)?.remove(); renderBar();

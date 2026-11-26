@@ -100,8 +100,8 @@ async function checkThis010(btn) {
 /* ---------- the receipt line: time, cost, model ----------
    Drawn from the receipt's own fields the way receipts.py line() writes it now, so a chat saved by an older version
    reads the same: "3 min 45 s · <$0.01 · DeepSeek V4.1 Flash, chosen for documents". The saved text is the fallback. */
-function receiptBits010(ev) {
-  if (!("secs" in ev) && !("model" in ev)) return String(ev.text || "").split(" · ");
+function receiptBits010(ev, withWho = true) {
+  if (!("secs" in ev) && !("model" in ev)) return String(ev.text || "").split(" · ").filter(b => withWho || !/chosen for|^(Codex|Claude|Gemini|OpenCode|Pi|meshpool Code)\b| on [A-Z]/.test(b));
   const bits = [], unp = Number(ev.unpriced_calls) || 0, tok = (Number(ev.tokens_in) || 0) + (Number(ev.tokens_out) || 0);
   if (ev.secs != null) bits.push(fmtDur(ev.secs));
   if (ev.cost != null) bits.push(fmtCost(ev.cost) + (unp ? ` + ${unp} unpriced call${unp === 1 ? "" : "s"}` : ""));
@@ -113,7 +113,7 @@ function receiptBits010(ev) {
   const who = [own ? "" : lowBrand(ev.harness_name || ""), ev.model ? modelName(ev.model) : ""].filter(Boolean).join(" on ");
   const why = String(ev.text || "").match(/, (chosen for [^·]+|[^,·]+)$/);
   const whyText = why && ev.reason && !/\b(code|chat|work|cowork) mode\b/i.test(why[1]) ? ", " + why[1].trim() : "";   // "code mode" is the router's note, not for people
-  if (who) bits.push(who + whyText);
+  if (who && withWho) bits.push(who + whyText);
   return bits;
 }
 
@@ -143,9 +143,11 @@ function ev010(ev) {
   }
   if (ev.type === "task_receipt") {
     // "cost not known (unpriced model)" on every reply said nothing new: it moves to the line's tooltip.
-    const bits = receiptBits010(ev), unk = bits.some(b => /^cost not known/.test(b));
-    const tip = [unk ? "The cost is not known: this model has no price list." : "", ev.reason || ""].filter(Boolean).join(" ");
-    under010(`<span title="${esc(tip)}">${esc(bits.filter(b => !/^cost not known/.test(b)).join(" · "))}</span>`, "rcpt010"); return;
+    const chat = chatMode();      // Chat mode: no engine or router names in the footer; the model is in the fold
+    const bits = receiptBits010(ev, !chat), unk = bits.some(b => /^cost not known/.test(b));
+    const tip = [unk ? "The cost is not known: this model has no price list." : "", chat ? "" : ev.reason || ""].filter(Boolean).join(" ");
+    const line = esc(bits.filter(b => !/^cost not known/.test(b)).join(" · ")), mdl = chat && ev.model ? modelName(ev.model) : "";
+    under010(mdl ? `<details class="rcfold"><summary title="${esc(tip)}">${line}</summary><div>Model: ${esc(mdl)}</div></details>` : `<span title="${esc(tip)}">${line}</span>`, "rcpt010"); return;
   }
   if (ev.type === "insight" && ev.card) {
     insightUnder010(ev.card);

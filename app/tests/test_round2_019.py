@@ -276,3 +276,28 @@ def test_file_cards_show_the_name_in_two_lines_with_the_extension_and_a_type_ico
     icons = [by[n]["icon"] for n in ("Bouquet Price List.xlsx", names[1], "pitch.pptx", "open-house.html", "photo.png", "notes.pdf")]
     assert len(set(icons[:4])) == 4, "sheet, doc, deck and web page each have their own icon"
     assert page.errors == [], page.errors
+
+
+# ------------------------------------------------------------------------------------------------------ item 6
+def test_chat_mode_shows_no_engine_names_but_code_mode_keeps_them(app, page):
+    """"Codex on DeepSeek V4.1 Flash, chosen for documents" in the footer, "Using Codex / Use meshpool Code instead" in the
+    thread and the model name on the home screen. Chat mode shows the model in the picker's list and in the receipt fold
+    only. Code mode is unchanged."""
+    _chat(page, app["work"], None, "no engines")
+    _fake_chat(page, page.evaluate("() => S.cur.id"))
+    page.evaluate("() => { S.cur.view = Object.assign(S.cur.view || {}, {code_mode: false, kind: 'cowork'}); }")
+    got = page.evaluate("""() => { $('#col').replaceChildren(); applyEv({type: 'user', text: 'go', i: 0});
+        applyEv({type: 'status', using: true, text: 'Using Codex', back: {name: 'meshpool Code', harness: 'meshpool'}});
+        applyEv({type: 'assistant', text: 'Done.', streamed: false}); applyEv({type: 'turn_end'});
+        S.cur.lastFoot = document.querySelector('#col .msg-ai').insertAdjacentElement('afterend', Object.assign(document.createElement('div'), {className: 'foot'}));
+        ev010({type: 'task_receipt', text: '3 min 45 s · <$0.01 · Codex on DeepSeek V4.1 Flash, chosen for documents', secs: 225, cost: 0.004,
+               harness_name: 'Codex', model: 'deepseek-v4.1-flash', reason: 'docs words (1)'});
+        renderSel();
+        return {col: document.querySelector('#col').textContent, pill: document.querySelector('#mPill .lbl').textContent,
+                foot: document.querySelector('.rcpt010 summary').textContent, fold: document.querySelector('.rcfold div').textContent}; }""")
+    assert "Codex" not in got["col"] and "Use meshpool Code" not in got["col"] and "chosen for" not in got["col"], got
+    assert "DeepSeek" not in got["pill"] and got["pill"] == "Model", got
+    assert got["foot"] == "3 min 45 s · <$0.01" and got["fold"] == "Model: DeepSeek V4.1 Flash", got
+    page.evaluate("() => { S.cur.view.code_mode = true; S.cur.view.kind = 'code'; S.mode = 'code'; }")
+    assert page.evaluate("() => { renderSel(); return document.querySelector('#mPill .lbl').textContent; }") != "Model"
+    assert page.errors == [], page.errors
