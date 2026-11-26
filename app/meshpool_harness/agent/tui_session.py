@@ -299,6 +299,18 @@ def collect_attachments(paths: list, workdir: str) -> tuple[str, list]:
     return ("Attached: " + " ".join(names)) if names else "", images
 
 
+def split_args(arg: str) -> list:
+    """The words of a slash command's argument, with "quoted words" kept together (/schedule add --name "Daily news").
+    A backslash is kept as it is, so a Windows path stays whole. Unbalanced quotes fall back to plain words."""
+    import shlex
+    try:
+        lex = shlex.shlex(arg or "", posix=True)
+        lex.whitespace_split, lex.escape, lex.commenters = True, "", ""
+        return list(lex)
+    except ValueError:
+        return (arg or "").split()
+
+
 # ---------- slash commands that call the Session ---------------------------------------------------------------
 
 class SharedCommands:
@@ -523,16 +535,16 @@ class SharedCommands:
     def cmd_project(self, arg):
         if arg.startswith("use ") and self._need_shared():          # move this chat into a project
             return self._cli(["chats", "move", self.s.id, arg[4:].strip()])
-        self._cli(["projects"] + (arg.split() if arg else ["list"]))
+        self._cli(["projects"] + (split_args(arg) if arg else ["list"]))
 
     def cmd_memory(self, arg):
         self._cli(["memory"] + (arg.split(None, 1) if arg else ["list"]))
 
     def cmd_skills(self, arg):
-        self._cli(["skills"] + (arg.split() if arg else ["list"]))
+        self._cli(["skills"] + (split_args(arg) if arg else ["list"]))
 
     def cmd_schedule(self, arg):
-        self._cli(["schedule"] + (arg.split() if arg else ["list"]))
+        self._cli(["schedule"] + (split_args(arg) if arg else ["list"]))
 
     def cmd_settings(self, arg):
         parts = arg.split(None, 1)

@@ -30,7 +30,8 @@ def _settings(out: list):
     if not f.is_file():
         return
     try:
-        lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        # read the way config.read reads it: a Notepad byte-order mark or a UTF-16 file is a valid settings file
+        lines = C.decode_settings(f.read_bytes())[0].replace("﻿", "").splitlines()
     except OSError as e:
         out.append(_p("error", f, f"cannot be read: {e}"))
         return
@@ -83,7 +84,11 @@ def _rules(f: Path, out: list):
         return
     if not isinstance(d, dict):
         return out.append(_p("error", f, "must be a JSON object with allow, deny and ask lists"))
-    layers = [("", d)] + [(f"projects[{k}].", v) for k, v in (d.get("projects") or {}).items() if isinstance(v, dict)]
+    projects = d.get("projects")
+    if projects is not None and not isinstance(projects, dict):
+        out.append(_p("error", f, "projects must be an object of folder to rules, so it is ignored"))
+        projects = None
+    layers = [("", d)] + [(f"projects[{k}].", v) for k, v in (projects or {}).items() if isinstance(v, dict)]
     for pre, layer in layers:
         for k in ("allow", "deny", "ask"):
             v = layer.get(k)

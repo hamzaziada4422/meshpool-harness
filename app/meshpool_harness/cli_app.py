@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import re
 import sys
 
 HELP = {
@@ -28,7 +29,8 @@ HELP = {
     "mcp": "Usage: meshpool mcp            start the configured MCP servers and show their status\n"
            "       meshpool mcp list | enable NAME | disable NAME | test NAME | library [add ID]",
     "schedule": "Usage: meshpool schedule list | add --name N --prompt P [--when daily|weekly|once|every] [--time HH:MM]\n"
-                "       [--day mon] [--at ISO] [--minutes N] [--folder DIR] [--agent ID] | update ID --field VALUE...\n"
+                "       [--day mon] [--at ISO] [--minutes N] [--cron \"M H D MON DOW\"] [--folder DIR] [--agent ID]\n"
+                "       | update ID --field VALUE...\n"
                 "       | delete ID | enable ID | disable ID | run ID",
     "agents": "Usage: meshpool agents list | default ID [--mode code|work]\nThe agents a chat can run on (/agent in a session).",
     "models": "Usage: meshpool models list [--refresh] | default ID | favorite ID [--off]",
@@ -92,6 +94,9 @@ def _split(args, valued=(), flags=()):
             opt[a], i = args[i + 1], i + 2
         elif a in flags:
             opt[a], i = True, i + 1
+        elif re.fullmatch(r"--[A-Za-z][\w-]*", a):       # a mistyped or unsupported option is said, not dropped
+            known = ", ".join(sorted({*valued, *flags})) or "none"
+            raise ValueError(f"Unknown option {a}. This command takes: {known}.")
         else:
             pos.append(a)
             i += 1
@@ -303,7 +308,7 @@ def _plugins(a):
 def _mcp(a):
     from meshpool_harness import chats
     pos, o = _split(a, (), ("--json",))
-    sub, js = pos[0], bool(o.get("--json"))
+    sub, js = (pos[0] if pos else "list"), bool(o.get("--json"))   # `meshpool mcp --json`: the list, as JSON
     pos = pos[1:]
     if sub == "list":
         r = chats.mcp_info()
@@ -332,7 +337,7 @@ def _mcp(a):
 def _schedule(a):
     from meshpool_harness import assistant as AS
     pos, o = _split(a, ("--name", "--prompt", "--when", "--time", "--day", "--at", "--minutes", "--folder", "--agent",
-                        "--mode", "--field"), ("--json",))
+                        "--mode", "--field", "--cron"), ("--json",))
     sub, js = (pos[0] if pos else "list"), bool(o.get("--json"))
     pos = pos[1:]
     if sub == "list":
@@ -340,7 +345,8 @@ def _schedule(a):
         _out(rows, js, [f"{t['id']}  {'on ' if t.get('enabled', True) else 'off'} {t.get('name')}  {t.get('describe', '')}"
                         for t in rows] or ["(no scheduled tasks)"])
         return 0
-    body = {k: o[f"--{k}"] for k in ("name", "prompt", "when", "time", "day", "at", "minutes", "folder") if f"--{k}" in o}
+    body = {k: o[f"--{k}"] for k in ("name", "prompt", "when", "time", "day", "at", "minutes", "folder", "cron")
+            if f"--{k}" in o}
     if "--agent" in o:
         body["harness"] = o["--agent"]
     if "--mode" in o:

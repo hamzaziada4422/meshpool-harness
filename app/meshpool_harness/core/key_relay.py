@@ -45,6 +45,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _error(self, code: int, msg: str, kind: str = "api_error"):
+        self.close_connection = True          # the request body may be unread: it must not be read as the next request
         self._json(code, {"error": {"message": msg, "type": kind}})
 
     def do_GET(self):
@@ -61,13 +62,18 @@ class _Handler(BaseHTTPRequestHandler):
             return self._error(401, "Missing or wrong relay token.", "authentication_error")
         if self.path.rstrip("/") not in ("/v1/chat/completions", "/chat/completions"):
             return self._error(404, "Not found.")
-        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = 0
         if n <= 0 or n > MAX_BODY:
             return self._error(413 if n > MAX_BODY else 400, "Bad request size.", "invalid_request_error")
         try:
             body = json.loads(self.rfile.read(n))
         except ValueError:
             return self._error(400, "The body is not JSON.", "invalid_request_error")
+        if not isinstance(body, dict):
+            return self._error(400, "The body must be a JSON object.", "invalid_request_error")
         from meshpool_harness import providers as PV
         base, key = PV.key_base(), PV.key()
         kind, ver = PV.key_kind(), PV.key_api_version()
@@ -88,7 +94,10 @@ class _Handler(BaseHTTPRequestHandler):
         with r:
             ctype = r.headers.get("Content-Type", "application/json")
             if "text/event-stream" not in ctype:
-                data = r.read()
+                try:
+                    data = r.read()
+                except OSError as e:                 # a timeout or a dropped connection mid-reply: still answer
+                    return self._error(502, f"{PV.host(base)} stopped answering: {e}")
                 self.send_response(r.status)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(data)))
@@ -107,7 +116,7 @@ class _Handler(BaseHTTPRequestHandler):
                         break
                     self.wfile.write(line)
                     self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
+            except OSError:                          # the agent went away, or the upstream stalled past the timeout
                 pass
             self.close_connection = True
 

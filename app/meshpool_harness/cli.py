@@ -218,14 +218,16 @@ def _agent_parser():
 def _settings_file(path) -> dict:
     """{KEY: value} from a JSON object or KEY=VALUE lines; only meshpool's own MH_ and MESHPOOL_ keys."""
     import json
-    text = Path(path).expanduser().read_text(encoding="utf-8", errors="replace")
+    # read the way the settings file itself is read: a byte-order mark or UTF-16 is fine, and KEY="value" loses its
+    # quotes, so a line copied from meshpool.config means the same here
+    text = _config.decode_settings(Path(path).expanduser().read_bytes())[0].replace("﻿", "")
     if text.lstrip().startswith("{"):
         d = json.loads(text)
         if not isinstance(d, dict):
             raise ValueError("the JSON must be an object")
         pairs = d.items()
     else:
-        pairs = [ln.split("=", 1) for ln in text.splitlines() if "=" in ln and not ln.lstrip().startswith("#")]
+        pairs = _config._parse(text).items()
     out = {}
     for k, v in pairs:
         k = str(k).strip()
