@@ -1669,8 +1669,21 @@ function markRetried(d) {
     if (st && key(o) === k) { st.className = "st"; st.textContent = "retried"; o.classList.add("retried"); }
   }
 }
+// A failed step is a problem only when the turn ended with it, or when the reply says so. A find that found nothing, or a
+// check that was run again, is a normal part of the work and is not counted (round 2: "3 steps, 1 had a problem").
+const PROBLEM_RX = /\b(could not|couldn't|can't|cannot|unable|didn't work|did not work|not able to|wasn't able|failed|went wrong|problem|error)\b/i;
+function groupFails(g) {
+  if (!g.dataset.done) return 0;
+  const bad = $$(".tool", g).map(t => !!$(".st.bad", t));
+  let tail = 0; for (let i = bad.length - 1; i >= 0 && bad[i]; i--) tail++;
+  if (tail) return tail;
+  let reply = "", n = g.nextElementSibling;
+  while (n && !n.classList.contains("work") && !n.classList.contains("msg-user")) { if (n.classList.contains("msg-ai")) reply += " " + n.textContent; n = n.nextElementSibling; }
+  return PROBLEM_RX.test(reply) ? bad.filter(Boolean).length : 0;
+}
 function bumpGroup(g, done) {
-  const n = $$(".tool", g).length; const fails = $$(".tool .st.bad", g).length;
+  if (done) g.dataset.done = "1";
+  const n = $$(".tool", g).length; const fails = groupFails(g);
   $(".wl", g).textContent = `${n} step${n === 1 ? "" : "s"}${fails ? `, ${fails} had a problem` : ""}`;
   if (done) { g.dataset.done = "1"; g.open = !!S.steps || !!$(".appr:not(.done)", g); const el = $(".gel", g); if (el) el.textContent = ""; $(".gdots", g)?.remove(); }
 }
@@ -1748,13 +1761,15 @@ function applyEvRaw(ev) {
       const g = workGroup();
       const raw = ev.name || "";
       const name = ev.mcp ? raw.split("__").slice(2).join("__") : raw;
-      const label = TOOL_RUN[name] || TOOL_LABEL[name] || plainTool(name, ev.mcp, "run");
+      const pl = chatMode() && ev.plain ? ev.plain : null;      // Chat mode: the server's plain title; the raw command stays in the details
+      const label = pl ? pl.run : TOOL_RUN[name] || TOOL_LABEL[name] || plainTool(name, ev.mcp, "run");
       const d = document.createElement("details"); d.className = "tool"; d.id = "tool-" + ev.id; d.dataset.name = name; if (ev.mcp) d.dataset.mcp = "1";
-      const st0 = stepTitle(stepSummary(name, ev));     // a long script is a short title; the whole script is in the body
+      if (pl) { d.dataset.pdone = pl.done; d.dataset.pbase = pl.base; d.dataset.prun = pl.run; }
+      const st0 = pl ? {title: "", full: pl.done === "Used a connector" ? "" : stepSummary(name, ev).trim()} : stepTitle(stepSummary(name, ev));     // a long script is a short title; the whole script is in the body
       d.innerHTML = `<summary><span class="ic">${TOOL_ICON(name)}</span><span class="tn"${ev.mcp ? ` title="${esc(name.replace(/_/g, " "))}"` : ""}>${esc(label)}</span><span class="ts">${esc(st0.title)}</span><span class="st run"></span></summary>${st0.full ? `<pre class="script">${esc(st0.full)}</pre>` : ""}${ev.diff ? `<pre>${diffLines(ev.diff)}</pre>` : ""}`;
       $(".rows", g).appendChild(d); cur.tools[ev.id] = d; bumpGroup(g);
       if (/(^|__|[.:])browser_open$/.test(raw) && cur.ready && typeof browserAutoOpen === "function") browserAutoOpen(cur);
-      { const sm = stepSummary(name, ev); cur.activity = `${label}${sm ? " " + sm : ""}`; } break; }
+      { const sm = pl ? "" : stepSummary(name, ev); cur.activity = `${label}${sm ? " " + sm : ""}`; } break; }
     case "tool_output": {                               // a command's output while it runs (live only, not saved)
       const d = cur.tools[ev.id] || document.getElementById("tool-" + ev.id); if (!d || d.dataset.done) break;
       let pre = $("pre.live", d);
@@ -1776,7 +1791,8 @@ function applyEvRaw(ev) {
       const st = $(".st", d); st.className = "st " + (ev.ok || stopped || unfinished || planned || ev.denied ? "" : "bad");
       st.textContent = ev.denied ? "not run" : ev.ok ? "" : stopped ? "stopped" : unfinished ? "not finished" : planned ? "not allowed in Plan mode" : "failed";
       const nm = d.dataset.name || "";
-      $(".tn", d).textContent = ev.ok ? (TOOL_DONE[nm] || TOOL_LABEL[nm] || plainTool(nm, d.dataset.mcp, "done")) : (TOOL_BASE[nm] || TOOL_LABEL[nm] || plainTool(nm, d.dataset.mcp, "base"));
+      if (d.dataset.pdone) $(".tn", d).textContent = ev.ok ? d.dataset.pdone : d.dataset.pbase;
+      else $(".tn", d).textContent = ev.ok ? (TOOL_DONE[nm] || TOOL_LABEL[nm] || plainTool(nm, d.dataset.mcp, "done")) : (TOOL_BASE[nm] || TOOL_LABEL[nm] || plainTool(nm, d.dataset.mcp, "base"));
       const shown = cleanToolOut(ev.output);
       if (shown && !$("pre:not(.script)", d)) d.insertAdjacentHTML("beforeend", `<pre class="out">${esc(shown)}</pre>`);
       if (ev.ok) markRetried(d);
@@ -1784,7 +1800,7 @@ function applyEvRaw(ev) {
       break; }
     case "approval": {
       const gKeep = cur.group && cur.group === col.lastElementChild ? cur.group : null;
-      for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st) { st.textContent = "Needs your approval"; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_BASE[nm] || TOOL_LABEL[nm] || nm; } }
+      for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st) { st.textContent = "Needs your approval"; const nm = t.dataset.name || ""; $(".tn", t).textContent = t.dataset.pbase || TOOL_BASE[nm] || TOOL_LABEL[nm] || nm; } }
       closeGroup();
       const OPT = {allow_once: "Allow just this", allow_always: "Allow for this whole chat", reject_once: "Deny", reject_always: "Always deny"};
       // 0.0.19 wording, the same on every card: each answer says what it covers (the chat grant's reach is in its tip)
@@ -1808,7 +1824,7 @@ function applyEvRaw(ev) {
         catch (e) { $$("button", d).forEach(x => x.disabled = false); toast(e.message); }
       });
       scrollConv(true); break; }
-    case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /approval|waiting/i.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
+    case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /approval|waiting/i.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = t.dataset.prun || TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
       const d = cardEl("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); $(".apdet", d)?.remove(); $(".apsum", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.closed ? "Closed when meshpool restarted." : ev.decision === "stopped" ? "Stopped before running." : ev.decision === "timeout" ? "No answer in time." : ev.reason ? esc(ev.reason) : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "save" ? "Allowed, and saved for this folder." : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
         const g = d.previousElementSibling; if (g?.classList.contains("work") && d === col.lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
@@ -1907,6 +1923,7 @@ function applyEvRaw(ev) {
       cur.gateEl?.remove(); cur.gateEl = null; cur.jobStage = ""; cur.down = false; cur.downEl = null;
       settleSteps("");
       closeGroup();
+      $$(".work[data-done]", col).forEach(g => bumpGroup(g));      // the reply is in: count the problems it reports
       if (ev.synthetic) break;                  // a turn that never ran (or one cut short by a restart): no footer, no Build this plan
       const u = ev.turn || {};
       const foot = add("", "turnfoot"); if (u.calls) foot.title = `${u.calls} model call${u.calls === 1 ? "" : "s"} · ${fmt(u.in)} tokens in · ${fmt(u.out)} out`;
@@ -2019,6 +2036,7 @@ function settleSteps(label) {
     const st = $(".st.run", d); if (!st) continue;
     const nm = d.dataset.name || "";
     st.className = "st"; st.textContent = label === "stopped" ? "not run" : "";
+    if (d.dataset.pdone) { $(".tn", d).textContent = label === "stopped" ? d.dataset.pbase : d.dataset.pdone; continue; }
     $(".tn", d).textContent = label === "stopped" ? (TOOL_BASE[nm] || TOOL_LABEL[nm] || plainTool(nm, d.dataset.mcp, "base")) : (TOOL_DONE[nm] || TOOL_LABEL[nm] || plainTool(nm, d.dataset.mcp, "done"));
   }
 }
@@ -2284,12 +2302,13 @@ function progressSteps() {
   const tools = {};
   let turnIds = [];
   for (const e of turn) {
-    if (e.type === "tool_start") { const nm = e.mcp ? String(e.name || "").split("__").slice(2).join("__") : e.name; const sm = stepSummary(nm, e); tools[e.id] = {name: nm, sm, text: `${TOOL_RUN[nm] || e.label || plainTool(nm, e.mcp, "run")}${sm ? " " + sm : ""}`, status: "in_progress", mcp: !!e.mcp}; }
-    if (e.type === "tool_end" && tools[e.id] && e.ok) tools[e.id].text = `${TOOL_DONE[tools[e.id].name] || TOOL_LABEL[tools[e.id].name] || plainTool(tools[e.id].name, tools[e.id].mcp, "done")}${tools[e.id].sm ? " " + tools[e.id].sm : ""}`;
+    if (e.type === "tool_start") { const nm = e.mcp ? String(e.name || "").split("__").slice(2).join("__") : e.name; const pl = chatMode() && e.plain ? e.plain : null; const sm = pl ? "" : stepSummary(nm, e); tools[e.id] = {name: nm, sm, pl, text: pl ? pl.run : `${TOOL_RUN[nm] || e.label || plainTool(nm, e.mcp, "run")}${sm ? " " + sm : ""}`, status: "in_progress", mcp: !!e.mcp}; }
+    if (e.type === "tool_end" && tools[e.id] && tools[e.id].pl) tools[e.id].text = e.ok ? tools[e.id].pl.done : tools[e.id].pl.base;
+    else if (e.type === "tool_end" && tools[e.id] && e.ok) tools[e.id].text = `${TOOL_DONE[tools[e.id].name] || TOOL_LABEL[tools[e.id].name] || plainTool(tools[e.id].name, tools[e.id].mcp, "done")}${tools[e.id].sm ? " " + tools[e.id].sm : ""}`;
     if (e.type === "tool_end" && tools[e.id]) tools[e.id].status = tools[e.id].status === "stopped" ? "stopped" : e.ok ? "completed" : /^Not finished: the turn ended/.test(String(e.output || "")) ? "stopped" : "failed";
     if (e.type === "user" && !e.steer) turnIds = [];
     if (e.type === "tool_start") turnIds.push(e.id);
-    if (e.type === "interrupted") for (const id of turnIds) { const t = tools[id]; if (t && (t.status === "in_progress" || t.status === "failed")) { t.status = "stopped"; t.text = `${TOOL_LABEL[t.name] || t.name}${t.sm ? " " + t.sm : ""} (stopped)`; } }
+    if (e.type === "interrupted") for (const id of turnIds) { const t = tools[id]; if (t && (t.status === "in_progress" || t.status === "failed")) { t.status = "stopped"; t.text = t.pl ? `${t.pl.base} (stopped)` : `${TOOL_LABEL[t.name] || t.name}${t.sm ? " " + t.sm : ""} (stopped)`; } }
     if (e.type === "turn_end") for (const t of Object.values(tools)) if (t.status === "in_progress") t.status = "completed";
   }
   const items = Object.entries(tools).map(([id, t]) => Object.assign({key: "t" + id}, t));

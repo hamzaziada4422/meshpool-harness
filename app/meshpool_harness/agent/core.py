@@ -785,6 +785,134 @@ def _plain_command_title(script: str) -> str:
     return f"Run {first}{on}?" if first else "Run this command?"
 
 
+# A step row in Chat mode, in plain words (round 2: "Ran a command: ls -la", a whole heredoc, "Used a connector /tmp/..."):
+# (pattern, imperative, running, done) for each title _plain_command_title can give. The first that matches wins.
+_STEP_FORMS = [
+    (r"Look at files in this folder", "Look at the files in the folder", "Looking at the files in the folder", "Looked at the files in the folder"),
+    (r"Read (.+)", r"Read \1", r"Reading \1", r"Read \1"),
+    (r"Change (.+)", r"Change \1", r"Changing \1", r"Changed \1"),
+    (r"Write (.+)", r"Create \1", r"Creating \1", r"Created \1"),
+    (r"Delete (.+)", r"Delete \1", r"Deleting \1", r"Deleted \1"),
+    (r"Run an? (\w+) step(?: on (.+?))?(?: \(.*)?", None, None, None),
+    (r"Install software.*", "Install software", "Installing software", "Installed software"),
+    (r"Send your commits.*", "Send your commits", "Sending your commits", "Sent your commits"),
+    (r"Download from a git repository", "Download from a git repository", "Downloading from a git repository", "Downloaded from a git repository"),
+    (r"Use the internet.*", "Use the internet", "Using the internet", "Used the internet"),
+    (r"Use files outside this folder.*", "Use files in your home folder", "Using files in your home folder", "Used files in your home folder"),
+    (r"Search your computer's files", "Search the files", "Searching the files", "Searched the files"),
+    (r"Check which programs are installed", "Check which programs are installed", "Checking which programs are installed", "Checked which programs are installed"),
+    (r"Run (\d+) steps.*", r"Run \1 steps", r"Running \1 steps", r"Ran \1 steps"),
+    (r"Run this command", "Run a command", "Running a command", "Ran a command"),
+    (r"Run (.+?)(?: on .*)?", r"Run \1", r"Running \1", r"Ran \1"),
+]
+
+
+def _plain_forms(title: str):
+    t = re.sub(r"\s+", " ", str(title or "")).strip().rstrip("?").strip()
+    for rx, imp, run, done in _STEP_FORMS:
+        m = re.fullmatch(rx, t)
+        if not m:
+            continue
+        if imp is None:                                    # "Run a Python step on a.py"
+            lang, on = m.group(1), m.group(2)
+            tail = f" on {on}" if on else ""
+            return f"Run a {lang} step{tail}", f"Running a {lang} step{tail}", f"Ran a {lang} step{tail}"
+        return tuple(m.expand(x) for x in (imp, run, done))
+    return None
+
+
+_OFFICE_VERBS = {"check document": ("Check", "Checking", "Checked"), "read document": ("Read", "Reading", "Read"),
+                 "convert document": ("Convert", "Converting", "Converted"), "edit office file": ("Change", "Changing", "Changed"),
+                 "add slides": ("Add slides to", "Adding slides to", "Added slides to"),
+                 "fill template": ("Fill in", "Filling in", "Filled in"),
+                 "merge decks": ("Combine decks into", "Combining decks into", "Combined decks into")}
+
+
+def _no_heredocs(script: str) -> str:
+    """The script without the text inside its heredocs (a file written with cat <<EOF is a wall of text, not steps)."""
+    out, end = [], None
+    for line in str(script or "").split("\n"):
+        if end is not None:
+            if line.strip() == end:
+                end = None
+            continue
+        out.append(line)
+        m = re.search(r"<<-?\s*['\"]?(\w+)['\"]?", line)
+        if m:
+            end = m.group(1)
+    return "\n".join(out)
+
+
+def plain_step(name: str, summary: str, mcp: bool = False) -> dict | None:
+    """The step row of one tool call in plain words, for Chat mode: {"base": "Create a.html", "run": "Creating a.html",
+    "done": "Created a.html"}; None when the tool needs no change (its row already reads well). It reads the same plain
+    titles the approval cards use (_plain_command_title, office_card), so the page never guesses at a command. A title
+    never holds file contents: the raw command stays in the step's details."""
+    nm = str(name or "").replace("-", "_")
+    short = nm.split("__", 2)[-1] if nm.startswith("mcp__") else nm
+    s = str(summary or "")
+    if short in ("bash", "bash_many", "shell", "exec_command", "terminal"):
+        if s.startswith("Edit ") and "\n" not in s and len(s) < 200:      # _patch_step: "Edit a.py, then run ..." is plain
+            tail = s[5:]
+            return {"base": "Change " + tail, "run": "Changing " + tail, "done": "Changed " + tail}
+        script = s.replace(" ; ", "\n") if short == "bash_many" else s
+        script = _no_heredocs(re.sub(r"^cd\s+\S+\s*&&\s*", "", script))
+        base, run, done = _plain_forms(_plain_command_title(script)) or ("Run a command", "Running a command", "Ran a command")
+        return {"base": base[:90], "run": run[:90], "done": done[:90]}
+    if short == "read_document":
+        f = ""
+        try:
+            a = json.loads(s) if s.strip().startswith("{") else {}
+            f = os.path.basename(str(a.get("path") or a.get("filename") or ""))
+        except ValueError:
+            pass
+        if not f and ("/" in s or "\\" in s or _FILE_WORD.search(s)):
+            f = os.path.basename(s.strip().strip("'\"").replace("\\", "/"))
+        what = f[:60] or "the file"
+        return {"base": f"Read {what}", "run": f"Reading {what}", "done": f"Read {what}"}
+    if short in ("make_document", "make_pdf", "make_spreadsheet", "make_deck", "office_task", "analyze_data") or \
+            (nm.startswith("mcp__") and "office" in nm):
+        title = s.strip()
+        if title.startswith("{"):
+            try:
+                a = json.loads(title)
+                title = str(a.get("filename") or a.get("path") or a.get("save_as") or a.get("title") or "")
+            except ValueError:
+                title = ""
+        files = [m.group(0).rsplit("/", 1)[-1] for m in _FILE_WORD.finditer(title)]
+        f = files[0] if files else ""
+        m = re.match(r"Use the office tool ([a-z ]+?)(?: on .*)?$", title)
+        if m and m.group(1) in _OFFICE_VERBS:
+            v = _OFFICE_VERBS[m.group(1)]
+            what = f or "the file"
+            return {"base": f"{v[0]} {what}", "run": f"{v[1]} {what}", "done": f"{v[2]} {what}"}
+        if title.startswith("Make a") or short in ("make_document", "make_pdf", "make_spreadsheet", "make_deck"):
+            if f:
+                return {"base": f"Make {f}", "run": f"Making {f}", "done": f"Made {f}"}
+            noun = {"make_document": "a Word document", "make_pdf": "a PDF", "make_spreadsheet": "a spreadsheet",
+                    "make_deck": "a deck"}.get(short) or (re.sub(r"^Make (?:a new |an? )?", "", title) or "file")
+            noun = noun if noun.startswith(("a ", "an ")) else "a " + noun
+            return {"base": f"Make {noun}", "run": f"Making {noun}", "done": f"Made {noun}"}
+        what = f or "the file"
+        for rx, v in ((r"^(?:Change|Shorten|Fix)\b", ("Change", "Changing", "Changed")),
+                      (r"^Convert|^Make a PDF of", ("Convert", "Converting", "Converted")),
+                      (r"^Analyse", ("Analyse", "Analysing", "Analysed")),
+                      (r"^Add slides", ("Add slides to", "Adding slides to", "Added slides to")),
+                      (r"^Fill in", ("Fill in", "Filling in", "Filled in")),
+                      (r"^Combine", ("Combine decks into", "Combining decks into", "Combined decks into"))):
+            if re.match(rx, title):
+                if v[0] == "Analyse":
+                    what = ", ".join(dict.fromkeys(m2.group(0).rsplit("/", 1)[-1] for m2 in _FILE_WORD.finditer(title))) or "the data"
+                return {"base": f"{v[0]} {what}", "run": f"{v[1]} {what}", "done": f"{v[2]} {what}"}
+        return {"base": f"Work on {what}", "run": f"Working on {what}", "done": f"Worked on {what}"}
+    if mcp or nm.startswith("mcp__"):
+        if short in ("web_search", "web_fetch", "web_research", "memory_save", "run_subtasks", "schedule_task") \
+                or short.startswith("browser_"):
+            return None
+        return {"base": "Connector step", "run": "Using a connector", "done": "Used a connector"}
+    return None
+
+
 def _unknown_model_text(bare: str, prov: str = "key", msg: str = "", key: str = "") -> str:
     """OM-04: the error for a model named with --model that the endpoint does not serve, with the closest names it
     does serve (one read of the endpoint's model list, made only now that the call failed). When the endpoint says

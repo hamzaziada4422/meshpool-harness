@@ -142,6 +142,19 @@ def _messages_from_events(events: list) -> list:
     return out
 
 
+def _with_plain(e: dict) -> dict:
+    """A step event with its plain title for Chat mode (core.plain_step, built on the approval cards' own titles), so the
+    page shows "Created open-house.html" and keeps the command itself in the step's details."""
+    if e.get("type") != "tool_start" or "plain" in e:
+        return e
+    try:
+        from meshpool_harness.agent.core import plain_step
+        p = plain_step(e.get("name") or "", e.get("summary") or "", bool(e.get("mcp")))
+    except Exception:  # noqa: BLE001 - a title is a help, never a second failure
+        p = None
+    return dict(e, plain=p) if p else e
+
+
 def _redact(text: str) -> str:
     from meshpool_harness.errors import tool_card    # a reopened chat's cards read like the live ones
     from meshpool_harness.redact import redact
@@ -2311,6 +2324,7 @@ class Session:
             n = len(self.events)
             raw = self.events[since:]
         evs = [e for e in raw if not e.get("gone")]  # a folded reply's deltas: its assistant event shows the text
+        evs = [_with_plain(e) for e in evs]
         a = self.agent
         meta = read_meta(self.id)
         try:
@@ -2823,7 +2837,7 @@ def view(sid: str, since: int) -> dict:
     except ProjectMissing as e:
         tr = _transcript(sid) or {}
         evs = tr.get("events") or events_from_messages(saved_messages(sid))
-        evs = [dict(x, i=i) for i, x in enumerate(evs)]
+        evs = [_with_plain(dict(x, i=i)) for i, x in enumerate(evs)]
         evs.append({"type": "error", "i": len(evs), "text": f"This chat's project folder ({e}) was moved or deleted, "
                     "so it can't continue here. Its history is below; start a new chat to keep working."})
         meta = read_meta(sid)
