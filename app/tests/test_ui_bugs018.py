@@ -412,3 +412,24 @@ def test_a_project_path_inside_a_link_or_diagram_keeps_the_reply_intact(page):
     assert "target=" not in got["body"] and "<button" not in got["body"], got["body"]
     assert got["open"] == ["notes.md"], got                     # a path in plain text still becomes a file button
     assert page.errors == [], page.errors
+
+
+# ---------------------------------------------------------------------------------------------------- UI-14
+def test_header_redraws_do_not_run_git_status_each_time(page):
+    """UI-14: every header redraw (renderTop) asked /api/git, which runs git status on the server. A fresh answer is
+    now reused for 15 s; a turn ending or a rewind still asks again at once (renderBranch(true))."""
+    import subprocess as sp
+    work = Path(page.app["work"]) / "alpha"
+    if not (work / ".git").exists():
+        sp.run(["git", "init", "-q", str(work)], check=True)
+    _code_chat(page, str(work))
+    page.wait_for_timeout(800)
+    seen = []
+    page.on("request", lambda r: seen.append(r.url) if "/api/git?root=" in r.url else None)
+    page.evaluate("async () => { for (let i = 0; i < 10; i++) { renderTop(); await new Promise(r => setTimeout(r, 30)); } }")
+    page.wait_for_timeout(800)
+    assert len(seen) <= 1, seen                                  # was one git status per redraw
+    page.evaluate("() => renderBranch(true)")
+    page.wait_for_timeout(800)
+    assert len(seen) >= 1 and len(seen) <= 2, seen               # a forced refresh still asks
+    assert page.errors == [], page.errors

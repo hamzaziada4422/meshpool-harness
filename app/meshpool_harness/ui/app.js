@@ -1116,7 +1116,7 @@ function ingest(cur, v) {
   if (first) scrollConv(true);
   if (!cur.ready) setTimeout(() => { if (S.cur === cur && !cur.stage) cur.ready = true; }, 50);
   if (prevState && prevState !== v.state && S.panel === "session") S.spTick?.();     // 4 s while it works, 15 s while idle
-  if (prevState && prevState !== v.state && !busy) { loadThreads(); renderBranch(); if (S.panel === "diff") renderPanel(); }
+  if (prevState && prevState !== v.state && !busy) { loadThreads(); renderBranch(true); if (S.panel === "diff") renderPanel(); }
   return false;
 }
 /* Folder trust: a project's own hooks and allow rules are ignored until the user trusts the folder (trust.py). */
@@ -1748,7 +1748,7 @@ async function undoTurn(n) {
   const ue = threadLog().find(e => e.type === "user" && (t.message_index != null && e.mi === t.message_index)) ||
     threadLog().find(e => e.type === "user" && t.event_index != null && e.i === t.event_index);
   const asked = ue?.text || "";
-  try { await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); if (asked) fillInput(asked); renderBranch(); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel(); }
+  try { await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); if (asked) fillInput(asked); renderBranch(true); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel(); }
   catch (e) { toast(e.message); }
 }
 
@@ -1768,7 +1768,7 @@ async function rewindFork(kind, el) {
     const r = await post(`/api/agent/${cur.id}/rewind`, {event_index: ei, files: a.checked, since: 1e9});
     if (r.forked) { await loadThreads(); openThread(r.forked); toast("This agent cannot go back in place, so the conversation up to there is a new chat.", 5000); return; }
     if (r.text) fillInput(r.text);
-    renderBranch(); clearTimeout(cur.pollT); resetChat(cur); poll(); if (S.panel === "diff") renderPanel();
+    renderBranch(true); clearTimeout(cur.pollT); resetChat(cur); poll(); if (S.panel === "diff") renderPanel();
   } catch (e) { toast(e.message); }
 }
 
@@ -2101,7 +2101,7 @@ async function gitAct(b) {
     const r = await post("/api/git", {root, ...b});
     if (b.action === "pr" && r.pr) { renderPanel(); setTimeout(() => { const el = $("#gres"); if (el) el.innerHTML = `${esc(r.note || "Pull request ready:")} <a href="${esc(r.pr)}" target="_blank" rel="noopener">${esc(r.pr)}</a>`; }, 300); }
     else { toast({checkout: "Switched branch", commit: "Committed", push: "Pushed", pull: "Pulled", init: "Repository created", stage: "Staged", unstage: "Unstaged"}[b.action] || "Done"); renderPanel(); }
-    renderBranch();
+    renderBranch(true);
   } catch (e) { toast(e.message, 5000); }
 }
 function panelPreview(body) {

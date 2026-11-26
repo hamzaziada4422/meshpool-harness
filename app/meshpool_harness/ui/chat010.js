@@ -325,7 +325,7 @@ async function rewind010(ei) {
   const cur = S.cur;
   const r = await post(`/api/agent/${cur.id}/rewind`, {event_index: ei, files: true, since: 1e9});
   if (r.forked) { await loadThreads(); openThread(r.forked); return r; }
-  renderBranch(); clearTimeout(cur.pollT); resetChat(cur); await poll(); if (S.panel === "diff") renderPanel();
+  renderBranch(true); clearTimeout(cur.pollT); resetChat(cur); await poll(); if (S.panel === "diff") renderPanel();
   return r;
 }
 async function retry010(ei, n) {
