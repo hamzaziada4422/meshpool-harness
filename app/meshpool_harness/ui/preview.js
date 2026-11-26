@@ -32,7 +32,7 @@ function pvType(path) {
   return {label: g ? g[1] : (ext ? ext.toUpperCase() : "File"), ext};
 }
 // chat=: the chat on screen, for a file dropped into it (runs/_uploads/chat-<id>), which only that chat may open; an <img>
-// cannot send the X-Meshpool-Chat header.
+// cannot send the x-meshpool-chat header.
 const pvQuery = (root, path) => `root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}` +
   (typeof S !== "undefined" && S.cur && S.cur.id ? `&chat=${encodeURIComponent(S.cur.id)}` : "");
 const pvPage = (root, path, n, w, v) => `/api/preview?${pvQuery(root, path)}&page=${n}&w=${w}&v=${v || 0}&t=${encodeURIComponent(MP.token)}`;

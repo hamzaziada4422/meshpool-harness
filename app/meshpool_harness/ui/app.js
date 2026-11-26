@@ -195,8 +195,8 @@ const ICON = {
 
 async function api(path, opts = {}) {
   let r;
-  // X-Meshpool-Chat: the chat on screen. Files dropped into a chat (runs/_uploads/chat-<id>) open only from that chat.
-  const chat = (typeof S !== "undefined" && S.cur && S.cur.id) ? {"X-Meshpool-Chat": String(S.cur.id)} : {};
+  // x-meshpool-chat: the chat on screen. Files dropped into a chat (runs/_uploads/chat-<id>) open only from that chat.
+  const chat = (typeof S !== "undefined" && S.cur && S.cur.id) ? {"x-meshpool-chat": String(S.cur.id)} : {};
   try { r = await fetch(path, {...opts, headers: {"X-Meshpool-Token": MP.token, ...chat, ...(opts.body ? {"Content-Type": "application/json"} : {}), ...(opts.headers || {})}}); }
   catch (e) { throw new Error("meshpool isn't responding. If this keeps happening, quit and reopen meshpool."); }
   let j = null, unread = false; try { const t = await r.text(); if (t) j = JSON.parse(t); else unread = r.status !== 204; } catch (e) { unread = true; }   /* not JSON */
