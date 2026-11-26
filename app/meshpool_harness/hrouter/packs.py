@@ -507,7 +507,8 @@ def quick_check(ws, path: str) -> str:
                 lines += [l for l in r.stdout.splitlines() if re.match(r".+:\d+:\d+: ", l)]
         elif rel.endswith((".js", ".mjs", ".cjs")):
             node = shutil.which("node")
-            if node:
+            from meshpool_harness.core.tools import node_check_known
+            if node and not node_check_known(p, node):       # the edit tool checked this very text already
                 r = subprocess.run([node, "--check", rel], cwd=ws.root, capture_output=True, text=True, timeout=15)
                 if r.returncode:
                     err = next((l.strip() for l in r.stderr.splitlines() if re.match(r"\s*\w*Error:", l)), "syntax error")

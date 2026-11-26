@@ -407,3 +407,44 @@ def test_cpu11_edit_check_starts_no_python_process_for_the_same_python(tmp_path,
     monkeypatch.setattr(PK, "_same_python", lambda exe: False)
     assert {rel: PK.quick_check(ws, rel) for rel in files} == got
     assert len(spawned) == len(files)
+
+
+# ---------------------------------------------------------------------------------------------------- CPU-12
+@pytest.mark.skipif(not shutil.which("node"), reason="node is not installed")
+def test_cpu12_a_javascript_edit_asks_node_once(tmp_path, monkeypatch):
+    import subprocess
+
+    from meshpool_harness.core import tools as T
+    from meshpool_harness.hrouter import packs as PK
+    root = tmp_path / "proj"
+    root.mkdir()
+    ws = T.Workspace(str(root), str(tmp_path / "run"))
+    getattr(T, "_NODE_CHECKS", {}).clear()
+    real = subprocess.run
+    nodes = []
+
+    def counting(cmd, *a, **k):
+        if "--check" in [str(c) for c in cmd]:
+            nodes.append(cmd)
+        return real(cmd, *a, **k)
+    monkeypatch.setattr(subprocess, "run", counting)
+
+    def step(name, **args):                            # what the agent does for an edit in a code chat
+        out = getattr(ws, name)(**args)
+        return out + PK.quick_check(ws, args["path"])
+    step("write_file", path="app.js", content="function a(x) {\n  return x + 1;\n}\n")
+    for i in range(3):
+        ws.read_file("app.js")
+        step("edit", path="app.js", old=f"x + {i + 1}", new=f"x + {i + 2}")
+    assert len(nodes) == 4, f"{len(nodes)} node processes for one write and three edits"
+    out = step("write_file", path="broken.js", content="function (\n")
+    assert "does not parse" in out
+    with pytest.raises(T.ToolError):                   # an edit that would break a file is still refused
+        ws.read_file("app.js")
+        ws.edit(path="app.js", old="return x + 4;", new="return (x + 4;")
+    # inside a "type": "module" package the file itself is checked, as before
+    (root / "esm").mkdir()
+    (root / "esm" / "package.json").write_text('{"type": "module"}')
+    n = len(nodes)
+    step("write_file", path="esm/m.js", content="export const a = 1;\n")
+    assert len(nodes) == n + 2

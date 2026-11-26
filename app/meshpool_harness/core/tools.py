@@ -854,9 +854,37 @@ def validate(name: str, raw_args, allowed: list[str]) -> dict:
 
 
 _PY_VERSIONS: dict = {}
+_NODE_CHECKS: dict = {}            # (extension, node, sha1 of the text) -> its node --check answer, oldest first
+_NODE_LOCK = threading.Lock()
 
 
 _BOM = b"\xef\xbb\xbf"
+
+
+def node_check_known(p: Path, node: str) -> bool:
+    """True when the edit tools already asked this node to --check the file's current text (packs.quick_check then
+    has nothing to add). Only where the check of a copy in the temp folder means the same as a check of the file:
+    .mjs and .cjs, and .js outside a package whose package.json says "type": "module"."""
+    suf = p.suffix.lower()
+    if suf == ".js":
+        for d in p.resolve().parents:
+            pj = d / "package.json"
+            if pj.is_file():
+                try:
+                    if json.loads(pj.read_text(encoding="utf-8")).get("type") == "module":
+                        return False
+                except (OSError, ValueError, AttributeError):
+                    return False
+                break
+    elif suf not in (".mjs", ".cjs"):
+        return False
+    try:
+        text = read_src(p)[0]
+    except OSError:
+        return False
+    key = (suf, node, hashlib.sha1(text.encode("utf-8", "surrogateescape")).hexdigest())
+    with _NODE_LOCK:
+        return key in _NODE_CHECKS
 
 
 def read_src(p: Path) -> tuple[str, str, bool]:
@@ -1345,23 +1373,41 @@ class Workspace:
             node = shutil.which("node")
             if not node:
                 return None
-            try:
-                with tempfile.NamedTemporaryFile("w", suffix=suf, delete=False, encoding="utf-8", errors="surrogateescape") as f:
-                    f.write(text)
-                r = subprocess.run([node, "--check", f.name], capture_output=True, text=True, timeout=10)
-            except (OSError, subprocess.SubprocessError):
-                return None
-            finally:
-                try:
-                    os.unlink(f.name)
-                except (OSError, NameError):
-                    pass
-            if r.returncode == 0:
-                return None
-            m = re.search(r":(\d+)\n", r.stderr)
-            msg = next((x for x in r.stderr.splitlines() if "Error" in x), "syntax error").strip()
-            return where(int(m.group(1)), 1, msg) if m else msg
+            # An edit checks the text before and after, and the next edit's "before" is this edit's "after": each
+            # was a node process. The answer for the same text from the same node is kept.
+            key = (suf, node, hashlib.sha1(text.encode("utf-8", "surrogateescape")).hexdigest())
+            with _NODE_LOCK:
+                if key in _NODE_CHECKS:
+                    _NODE_CHECKS[key] = _NODE_CHECKS.pop(key)
+                    return _NODE_CHECKS[key]
+            got = Workspace._node_check(node, suf, text, where)
+            if got != "":
+                with _NODE_LOCK:
+                    _NODE_CHECKS[key] = got
+                    while len(_NODE_CHECKS) > 64:
+                        _NODE_CHECKS.pop(next(iter(_NODE_CHECKS)))
+            return got or None
         return None
+
+    @staticmethod
+    def _node_check(node: str, suf: str, text: str, where) -> str | None:
+        """node --check on the text: None when it parses, the error when it does not, "" when node could not run."""
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=suf, delete=False, encoding="utf-8", errors="surrogateescape") as f:
+                f.write(text)
+            r = subprocess.run([node, "--check", f.name], capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        finally:
+            try:
+                os.unlink(f.name)
+            except (OSError, NameError):
+                pass
+        if r.returncode == 0:
+            return None
+        m = re.search(r":(\d+)\n", r.stderr)
+        msg = next((x for x in r.stderr.splitlines() if "Error" in x), "syntax error").strip()
+        return where(int(m.group(1)), 1, msg) if m else msg
 
     NOOP_EDIT = ("edit rejected: `new` is identical to `old`, so nothing would change and {path} is unchanged. Put "
                  "the changed text in `new` (keep `old` exactly as it is in the file).")
