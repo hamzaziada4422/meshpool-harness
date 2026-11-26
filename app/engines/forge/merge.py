@@ -83,7 +83,7 @@ def append(target: str, source: str, out: str) -> int:
             new._element.cSld.insert(0, copy.deepcopy(bg))
         if s.has_notes_slide and s.notes_slide.notes_text_frame is not None:
             from .notes import write as _write_notes          # presenter prose only (notes.py)
-            _write_notes(new, s.notes_slide.notes_text_frame.text)
+            _write_notes(new, s.notes_slide.notes_text_frame.text, None)   # the render already kept their length
         added += 1
     dst.save(out)
     return added

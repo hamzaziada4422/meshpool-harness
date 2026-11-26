@@ -1368,21 +1368,24 @@ def _flow_pointer(sl, placed) -> None:
     left = [b for b in ev if b[0] + b[2] <= x + 0.01 and b[1] < y + h and b[1] + b[3] > y]
     above = [b for b in ev if b[1] + b[3] <= y + 0.01 and b[0] < x + w and b[0] + b[2] > x]
     gx = max([b[0] + b[2] for b in left] or [x])
-    if left and x - gx >= 0.22:                          # a gutter wide enough: pointing right, at mid-height
-        R.circled_chevron(sl, gx + (x - gx) / 2, y + h / 2, min(0.3, x - gx - 0.04), "ov_FlowPointer")
+    air = 0.12                                           # the pointer keeps this much white on each side: one
+    # squeezed into a 0.26 in gap between the stats and "So what" read as a stray mark over the panel (Daniel, round 2)
+    if left and x - gx - 2 * air >= 0.18:                # a gutter wide enough: pointing right, at mid-height
+        R.circled_chevron(sl, gx + (x - gx) / 2, y + h / 2, min(0.3, x - gx - 2 * air), "ov_FlowPointer")
     elif above:
         gy = max(b[1] + b[3] for b in above)
         ex = [b for b in above if b[1] + b[3] >= gy - 0.01][0]
         cx_ = max(x, ex[0]) + (min(x + w, ex[0] + ex[2]) - max(x, ex[0])) / 2   # centred on the shared span
         E = 914400                                       # from what is drawn there (a table ends above its slot)
-        drawn = [(sh.top + sh.height) / E for sh in sl.shapes
-                 if sh.left / E < cx_ < (sh.left + sh.width) / E and gy - 3 < (sh.top + sh.height) / E <= y - 0.02
+        span_ = min(x + w, ex[0] + ex[2]) - max(x, ex[0])
+        length = min(1.1, max(0.6, span_ * 0.18))
+        drawn = [(sh.top + sh.height) / E for sh in sl.shapes        # anything under the pointer's whole width
+                 if sh.left / E < cx_ + length / 2 + air and cx_ - length / 2 - air < (sh.left + sh.width) / E
+                 and gy - 3 < (sh.top + sh.height) / E <= y - 0.02
                  and sh.top / E >= ex[1] - 0.01 and not (sh.name or "").startswith("Heading")]
         gy = max(drawn) if drawn else gy
-        if y - gy >= 0.2:                                # BCG's flat chevron in the gap, pointing down at the so-what
-            span_ = min(x + w, ex[0] + ex[2]) - max(x, ex[0])
-            R.chevron_arrow(sl, cx_, gy + (y - gy) / 2, min(1.1, max(0.6, span_ * 0.18)), min(0.2, y - gy - 0.06),
-                            "down", "ov_FlowPointer")
+        if y - gy - 2 * air >= 0.12:                     # BCG's flat chevron in the gap, pointing down at the so-what
+            R.chevron_arrow(sl, cx_, gy + (y - gy) / 2, length, min(0.2, y - gy - 2 * air), "down", "ov_FlowPointer")
 
 
 _STOP = {"a", "an", "the", "of", "per", "in", "by", "and", "to", "for", "on", "at", "vs", "year", "%", "share", "rate"}

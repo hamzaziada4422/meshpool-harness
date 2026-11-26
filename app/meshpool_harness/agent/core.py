@@ -442,7 +442,7 @@ Research budget: when the request or its files already hold sourced research, us
 mark as a gap; otherwise prefer a few authoritative sources (filings, the company's releases) over many pages, and \
 stop researching once each number you need has a source. To change text, cells, comments or tracked changes in a Word, Excel or PowerPoint file the user already has, call edit_office_file (it keeps their formatting; never rewrite the file's XML by hand). Never build a deck or a workbook yourself with python-pptx or openpyxl when make_deck, make_spreadsheet or \
 office_task can make it: the engines carry the design system and the checks. To add or change slides in a deck the \
-user already has, use add_slides (it builds them in that deck's look and keeps the original): never write slides \
+user already has, use add_slides (it builds them in that deck's look and saves them into it; Undo keeps the earlier version): never write slides \
 with python-pptx code. If an engine call returns a job id, \
 wait for it with office_job_status. If its result has a problem, call it again with the specific fix in the request \
 (e.g. "exactly 10 slides; merge the two risk slides"). Run check_deck on every .pptx, check_workbook on every .xlsx \
@@ -2780,8 +2780,8 @@ def _office_card(name: str, args: dict, root) -> tuple[str, list]:
         return "Make a PDF" + (f", {base(args.get('filename'))}" if args.get("filename") else ""), [new_file]
     if tool == "add_slides":
         deck = base(args.get("deck"))
-        return f"Add slides to {deck or 'a deck'}", [f"It saves a copy, {os.path.splitext(deck)[0]} (updated).pptx; "
-                                                    f"{deck or 'the deck'} stays as it is."]
+        return f"Add slides to {deck or 'a deck'}", [f"It saves them into {deck or 'the deck'}; Undo puts the earlier "
+                                                    "version back."]
     if tool == "analyze_data":
         return "Analyse " + (", ".join(files[:3]) if files else "data") + " into charts and a summary", [new_file]
     if tool == "office_task" or name == "office_task":

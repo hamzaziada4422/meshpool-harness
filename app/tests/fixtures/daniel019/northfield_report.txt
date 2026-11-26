@@ -1,0 +1,74 @@
+Predictive Maintenance in European Mid-Market
+Manufacturing
+Industry Benchmark Report 2025 - Northfield Research
+
+Executive summary
+This report surveys 412 plant managers across Germany, Italy, Poland and the Netherlands.
+Adoption of predictive maintenance (PdM) among plants with 250 to 2,000 employees reached 47%
+in 2025, up from 18% in 2021. Adopters report a median 23% reduction in unplanned downtime and
+a 14% reduction in maintenance spend within 24 months.
+Despite this momentum, 53% of plants have not started. The main blockers are unclear return on
+investment (58%), legacy PLC equipment that cannot stream data (52%) and poor data quality
+(47%). Companies that began with a single pilot line reached payback in a median of 19 months;
+those that launched plant-wide programmes took 31 months.
+
+1. Adoption trend
+
+Adoption has grown at roughly 7 points per year since 2021. Germany leads at 58%, followed by
+the Netherlands at 51%, Italy at 42% and Poland at 31%. Automotive suppliers and food processors
+are the fastest adopters; metal fabrication lags at 33%.
+Growth has been driven by falling sensor prices (down 35% since 2021) and by cloud analytics
+bundled with equipment service contracts.
+
+2. Barriers to adoption
+
+Unclear ROI is the most cited barrier (58%). Plants that ran a structured business case before the
+pilot were 2.4 times more likely to scale beyond the pilot. Skills are a rising concern: 41% lack
+in-house data engineers, and only 12% have a reliability engineer who also codes.
+
+3. Economics
+
+A typical five-plant rollout costs EUR 3.4m over three years (sensors 38%, software 27%,
+integration 22%, training 13%). Net benefit turns positive in year 1 and reaches EUR 3.1m
+cumulative by year 3, driven by avoided downtime (62% of benefit), lower spare parts inventory
+(21%) and energy savings (17%).
+
+4. Implementation approaches
+Approach
+
+Median payback (months)
+
+Success rate
+
+Single pilot line, then scale
+
+19
+
+71%
+
+Plant-wide launch
+
+31
+
+44%
+
+Vendor-managed service
+
+24
+
+63%
+
+Pilot-first approaches succeed more often because they surface data issues early.
+Vendor-managed services trade lower upfront effort for higher long-run cost and lock-in; 38% of
+such adopters said they would not renew on current terms.
+
+5. Recommendations
+1. Start with one high-downtime line and a written business case. 2. Retrofit gateways to legacy
+PLCs rather than replace them; this cuts integration cost by roughly 40%. 3. Hire or train one
+reliability engineer per two plants. 4. Review vendor lock-in clauses before signing multi-year
+services. 5. Track three KPIs from day one: unplanned downtime hours, maintenance cost per unit,
+and mean time between failures.
+Methodology: online survey, March to May 2025, 412 respondents, margin of error plus or minus
+4.8 points at 95% confidence. Figures for economics are modelled from 37 case studies.
+
+
