@@ -9,12 +9,12 @@
   const css = document.createElement("style");
   css.textContent = `
 .co-top{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 16px}
-.co-top select{min-width:220px;border:1px solid var(--line-3);border-radius:var(--r-s);padding:6px 10px;background:var(--surface);color:var(--ink)}
+.co-top select{min-width:220px;border:1px solid var(--line-3);border-radius:var(--r-s);padding:8px 12px;background:var(--surface);color:var(--ink)}
 .co-drop{border:1px dashed var(--line-3);border-radius:var(--r-m);padding:16px;text-align:center;color:var(--ink-2);font-size:var(--fs-s);cursor:pointer;margin:0 0 20px}
 .co-drop:hover,.co-drop.over{background:var(--hover)}
 .co-drop b{color:var(--ink);font-weight:500}
 .co-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px;margin:0 0 16px}
-.co-sw{display:flex;gap:10px;align-items:center;border:1px solid var(--line);border-radius:var(--r-s);padding:8px 10px}
+.co-sw{display:flex;gap:8px;align-items:center;border:1px solid var(--line);border-radius:var(--r-s);padding:8px 12px}
 .co-sw input[type=color]{width:34px;height:34px;border:1px solid var(--line-3);border-radius:var(--r-s);padding:0;background:none;flex:none;cursor:pointer}
 .co-sw span{display:flex;flex-direction:column;min-width:0;font-size:var(--fs-s);font-weight:500}
 .co-sw small{font-weight:400;color:var(--ink-3);font-size:var(--fs-xs);line-height:1.3}
@@ -24,7 +24,7 @@
 .co-logo .im{width:180px;height:56px;border:1px solid var(--line);border-radius:var(--r-s);display:grid;place-items:center;background:#fff;color:#6B6B6B;font-size:var(--fs-xs)}
 .co-logo img{max-width:170px;max-height:48px}
 .co-row{display:flex;gap:12px;flex-wrap:wrap}.co-row .field{flex:1 1 220px}
-.co-opts{display:flex;flex-direction:column;gap:6px;margin:0 0 16px;font-size:var(--fs-s)}
+.co-opts{display:flex;flex-direction:column;gap:8px;margin:0 0 16px;font-size:var(--fs-s)}
 .co-opts label{display:flex;gap:8px;align-items:flex-start}.co-opts small{display:block;color:var(--ink-3);font-size:var(--fs-xs)}
 .co-prev{width:100%;max-width:560px;aspect-ratio:16/9;border:1px solid var(--line-3);border-radius:var(--r-s);background:#fff;position:relative;overflow:hidden;color:#111;margin:0 0 16px}
 .co-prev .co-t{position:absolute;left:4.5%;top:6%;right:4.5%;font-weight:700;font-size:15px;line-height:1.2}
@@ -33,19 +33,19 @@
 .co-prev .co-bars i{flex:1;display:flex;flex-direction:column;justify-content:flex-end}
 .co-prev .co-side{position:absolute;left:61%;right:4.5%;top:25%;height:58%;padding:3%;font-size:9px;line-height:1.35}
 .co-prev .co-side b{display:block;font-size:10px;margin-bottom:4px}
-.co-prev .co-hl{margin-top:8px;padding:3px 5px;font-weight:700}
-.co-prev .co-call{margin-top:6px;padding:4px 6px;color:#fff;font-weight:600}
-.co-prev .co-ft{position:absolute;left:4.5%;right:4.5%;bottom:4%;display:flex;justify-content:space-between;align-items:center;font-size:7px;border-top:1px solid #999;padding-top:3px}
+.co-prev .co-hl{margin-top:8px;padding:4px 4px;font-weight:700}
+.co-prev .co-call{margin-top:4px;padding:4px 8px;color:#fff;font-weight:600}
+.co-prev .co-ft{position:absolute;left:4.5%;right:4.5%;bottom:4%;display:flex;justify-content:space-between;align-items:center;font-size:7px;border-top:1px solid #999;padding-top:4px}
 .co-prev .co-ft img{max-height:12px;max-width:70px}
 .co-styles{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin:0 0 8px}
-.co-style{display:flex;flex-direction:column;gap:6px;text-align:left;border:1px solid var(--line);border-radius:var(--r-s);padding:8px 10px;background:var(--surface);color:var(--ink);cursor:pointer;font:inherit}
+.co-style{display:flex;flex-direction:column;gap:8px;text-align:left;border:1px solid var(--line);border-radius:var(--r-s);padding:8px 12px;background:var(--surface);color:var(--ink);cursor:pointer;font:inherit}
 .co-style:hover{background:var(--hover)}
 .co-style[aria-pressed=true]{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
 .co-style .sw{display:flex;height:18px;border-radius:3px;overflow:hidden;border:1px solid var(--line)}
 .co-style .sw i{flex:1}
 .co-style b{font-size:var(--fs-s);font-weight:500}
 .co-style small{color:var(--ink-3);font-size:var(--fs-xs);line-height:1.3}
-.co-note{font-size:var(--fs-s);color:var(--ink-2);margin:0 0 6px}
+.co-note{font-size:var(--fs-s);color:var(--ink-2);margin:0 0 4px}
 .co-note.bad{color:var(--del)}
 `;
   document.head.appendChild(css);

@@ -56,7 +56,7 @@ async function xray010(anchor) {
   const draw = () => `<h4>What the agent sees</h4><p class="note">${esc(x.note)} ${x.incognito ? "Incognito: no memory." : x.memory_on ? "" : "Memory is off."}</p>
     ${x.sections.map(sec => `<div class="sec2">${esc(sec.title)}</div>${sec.facts.length ? sec.facts.map(f => `<label class="it"><span><input type="checkbox" data-leave="${esc(f.id)}" ${exclude.has(f.id) ? "" : "checked"}> ${esc(f.text)}<small>${esc(f.scope_label)}</small></span></label>`).join("") : `<details><summary class="note">Show</summary><pre>${esc(sec.text.length > 500 ? sec.text.slice(0, 500) + "…" : sec.text)}</pre></details>`}`).join("")}
     ${(x.excluded || []).length ? `<div class="sec2">Left out of this chat</div>${x.excluded.map(f => `<label class="it"><span><input type="checkbox" data-leave="${esc(f.id)}" ${exclude.has(f.id) ? "" : "checked"}> ${esc(f.text)}</span></label>`).join("")}` : ""}
-    <p class="note" style="margin-top:10px">Untick to leave a fact out of this chat. <button class="linkbtn" id="xrMem">Open memory</button></p>`;
+    <p class="note" style="margin-top:8px">Untick to leave a fact out of this chat. <button class="linkbtn" id="xrMem">Open memory</button></p>`;
   const p = popAt(anchor, draw(), "xray");
   const bind = () => {
     $$("[data-leave]", p).forEach(c => c.onchange = async () => {

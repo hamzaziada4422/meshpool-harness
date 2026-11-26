@@ -19,38 +19,38 @@
     s.id = "mw-css";
     s.textContent = `
 .mw{max-width:960px;margin:0 auto;padding:36px 32px 48px;color:var(--ink)}
-.mw h2{font:600 var(--fs-l)/1.3 var(--display);margin:0 0 10px}
-.mw .mw-sub{color:var(--ink-3);font-size:var(--fs-s);margin:0 0 18px}
+.mw h2{font:600 var(--fs-l)/1.3 var(--display);margin:0 0 8px}
+.mw .mw-sub{color:var(--ink-3);font-size:var(--fs-s);margin:0 0 16px}
 .mw-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:28px}
-.mw-stat{border:1px solid var(--line);border-radius:var(--r-l);padding:14px 16px;background:var(--bg)}
+.mw-stat{border:1px solid var(--line);border-radius:var(--r-l);padding:16px 16px;background:var(--bg)}
 .mw-stat b{display:block;font:700 28px/1.1 var(--display);letter-spacing:-.02em}
 .mw-stat span{color:var(--ink-3);font-size:var(--fs-s)}
-.mw-sec{margin:0 0 30px}
+.mw-sec{margin:0 0 32px}
 .mw-cols{display:grid;grid-template-columns:1fr 1fr;gap:28px}
-.mw-bar{display:grid;grid-template-columns:150px 1fr 40px;align-items:center;gap:10px;margin:6px 0;font-size:var(--fs-m)}
+.mw-bar{display:grid;grid-template-columns:150px 1fr 40px;align-items:center;gap:8px;margin:4px 0;font-size:var(--fs-m)}
 .mw-bar i{display:block;height:10px;border-radius:5px;background:var(--pool);min-width:4px}
 .mw-bar em{font-style:normal;color:var(--ink-3);text-align:right;font-size:var(--fs-s)}
 .mw-chips{display:flex;flex-wrap:wrap;gap:8px}
 .mw-chip{border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:var(--fs-s);background:var(--bg);color:var(--ink-2)}
 .mw-chip b{color:var(--ink);font-weight:600;margin-left:4px}
-.mw-hours{display:flex;align-items:flex-end;gap:3px;height:64px}
+.mw-hours{display:flex;align-items:flex-end;gap:4px;height:64px}
 .mw-hours span{flex:1;background:var(--pool-soft);border-radius:3px 3px 0 0;min-height:2px}
 .mw-hours span.top{background:var(--pool)}
 .mw-axis{display:flex;justify-content:space-between;color:var(--ink-3);font-size:var(--fs-xs);margin-top:4px}
-.mw-gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
-.mw-file{border:1px solid var(--line);border-radius:var(--r-m);padding:10px 12px;background:var(--bg);min-width:0}
+.mw-gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.mw-file{border:1px solid var(--line);border-radius:var(--r-m);padding:12px 12px;background:var(--bg);min-width:0}
 .mw-file b{display:block;font-weight:500;font-size:var(--fs-s);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mw-file small{color:var(--ink-3);font-size:var(--fs-xs)}
-.mw-line{display:flex;gap:10px;padding:7px 0;border-bottom:1px solid var(--line-2);font-size:var(--fs-m)}
+.mw-line{display:flex;gap:8px;padding:8px 0;border-bottom:1px solid var(--line-2);font-size:var(--fs-m)}
 .mw-line small{color:var(--ink-3);min-width:56px}
-.mw-sug{display:flex;align-items:center;gap:14px;border:1px solid var(--line);border-radius:var(--r-l);padding:14px 16px;margin-bottom:10px;background:var(--bg)}
+.mw-sug{display:flex;align-items:center;gap:12px;border:1px solid var(--line);border-radius:var(--r-l);padding:16px 16px;margin-bottom:8px;background:var(--bg)}
 .mw-sug div{flex:1;min-width:0}.mw-sug b{display:block;font-weight:600}.mw-sug span{color:var(--ink-3);font-size:var(--fs-s)}
 .mw-recap{display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap}
 .mw-recap img{width:240px;border-radius:var(--r-m);border:1px solid var(--line);background:var(--fill)}
-.mw-note{color:var(--ink-3);font-size:var(--fs-s);margin-top:6px}
-.mw-brief h3{font:600 var(--fs-m)/1.3 var(--body);margin:16px 0 6px}
-.mw-brief ul{margin:0;padding-left:18px}.mw-brief li{margin:3px 0}
-.mw-catch{border:1px solid var(--line);border-radius:var(--r-l);padding:14px 16px;background:var(--pool-soft);margin:14px 0}
+.mw-note{color:var(--ink-3);font-size:var(--fs-s);margin-top:4px}
+.mw-brief h3{font:600 var(--fs-m)/1.3 var(--body);margin:16px 0 4px}
+.mw-brief ul{margin:0;padding-left:20px}.mw-brief li{margin:4px 0}
+.mw-catch{border:1px solid var(--line);border-radius:var(--r-l);padding:16px 16px;background:var(--pool-soft);margin:16px 0}
 @media (max-width:640px){.mw{padding:24px 16px 40px}.mw-stats{grid-template-columns:1fr 1fr}.mw-cols{grid-template-columns:1fr}.mw-bar{grid-template-columns:110px 1fr 36px}}`;
     document.head.appendChild(s);
   }
@@ -109,7 +109,7 @@
       e.target.disabled = true;
       try {
         const p = await get(`/api/work/recap?range=${state.range}`);
-        prev.innerHTML = `<img alt="Recap preview" src="data:image/png;base64,${p.png_b64}"><div style="margin-top:10px"><button class="btn primary" id="mwSave">Save as image</button></div>`;
+        prev.innerHTML = `<img alt="Recap preview" src="data:image/png;base64,${p.png_b64}"><div style="margin-top:8px"><button class="btn primary" id="mwSave">Save as image</button></div>`;
         prev.querySelector("#mwSave").onclick = async () => {
           const r = await fetch(`/api/work/recap.png?range=${state.range}&download=1`, {headers: {"X-Meshpool-Token": (window.MP || {}).token || ""}});
           const url = URL.createObjectURL(await r.blob());
@@ -157,7 +157,7 @@
       const out = box.querySelector("#mwCatchOut");
       try {
         const r = await post("/api/summaries/catchup", {id: pid});
-        out.innerHTML = `<div class="mw-catch"><b>${r.since ? "Since " + day(r.since) : "So far"}</b><p style="margin:6px 0 0">${esc(r.text)}</p>${r.items.length ? `<ul>${r.items.slice(0, 6).map(i => `<li>${esc(i.summary || i.title)}</li>`).join("")}</ul>` : ""}</div>`;
+        out.innerHTML = `<div class="mw-catch"><b>${r.since ? "Since " + day(r.since) : "So far"}</b><p style="margin:4px 0 0">${esc(r.text)}</p>${r.items.length ? `<ul>${r.items.slice(0, 6).map(i => `<li>${esc(i.summary || i.title)}</li>`).join("")}</ul>` : ""}</div>`;
       } catch (err) { out.innerHTML = `<p class="mw-note">${esc(err.message)}</p>`; }
       e.target.disabled = false;
     };
