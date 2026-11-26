@@ -157,6 +157,10 @@ Section "Meshpool" SecMain
   WriteRegStr HKCU "${UNINST}" "UninstallString" '"$INSTDIR\Uninstall Meshpool.exe"'
   WriteRegDWORD HKCU "${UNINST}" "NoModify" 1
   WriteRegDWORD HKCU "${UNINST}" "NoRepair" 1
+  ; Meshpool's AppUserModelID (ui/desktop.py WIN_AUMID): toasts sent with it show as "Meshpool", not "Windows
+  ; PowerShell". The app writes the same key at run time; an unregistered ID makes Windows drop the toast.
+  WriteRegStr HKCU "Software\Classes\AppUserModelId\Meshpool.Desktop" "DisplayName" "Meshpool"
+  WriteRegStr HKCU "Software\Classes\AppUserModelId\Meshpool.Desktop" "IconUri" "$INSTDIR\Meshpool.ico"
 SectionEnd
 
 Section "Uninstall"
@@ -195,5 +199,6 @@ Section "Uninstall"
   !insertmacro WinSetup "" "" "$INSTDIR\bin;$INSTDIR"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Meshpool"
   DeleteRegKey HKCU "Software\Meshpool"
+  DeleteRegKey HKCU "Software\Classes\AppUserModelId\Meshpool.Desktop"
   ; settings and sessions in %APPDATA%\Meshpool are kept on purpose
 SectionEnd

@@ -1837,6 +1837,11 @@ class Session:
                 and prov != self.harness["provider"] and self.agent.acp_session):
             raise ValueError(f"This chat runs {self.harness['name']} on {self.harness.get('runs_on')}. To use "
                              f"{PV.name(prov)}, start a new chat.")
+        # An agent on the picker's models: a name the known list lacks is refused (the chat's own model stays allowed).
+        if prov and self.harness.get("models") == "meshpool" and model != getattr(self.agent, "model", None):
+            known = _known_models(prov)
+            if known is not None and PV.split(model)[1] not in known:
+                raise ValueError(f"The endpoint does not offer a model named {model}. Pick one from the model list.")
         if hasattr(self.agent, "set_model"):
             self.agent.set_model(model)
         else:
@@ -2397,6 +2402,19 @@ def worktree_users(folder: str, exclude: str = "") -> list:
             out.append({"id": s.id, "title": m.get("title") or nice_title(s.agent.title or "New chat"),
                         "state": s.state})
     return out
+
+
+def _known_models(prov: str) -> set | None:
+    """Model ids (without the provider prefix) a provider is known to serve, from the lists already read; None when
+    no list is known, so a model picker that is offline never blocks a name. Never a network call."""
+    try:
+        if prov == "chatgpt":
+            from meshpool_harness.core import chatgpt as CG
+            return set(CG._known()) or None
+        from meshpool_harness.ui import workbench as W
+        return W.known_models()
+    except Exception:  # noqa: BLE001 - a check that cannot run allows the name
+        return None
 
 
 def _short_harness(name: str) -> str:

@@ -491,6 +491,20 @@ class _EndpointDown(RuntimeError):
     """The endpoint stayed down for the whole recovery wait: report it, do not wait again."""
 
 
+class _ModelFailing(RuntimeError):
+    """The model answered every try with a server error (5xx) until the retries were used up."""
+
+
+def _clip(text: str, n: int = 120) -> str:
+    """text on one line, at most n characters, cut at a word with an ellipsis when it is longer."""
+    t = " ".join(str(text).split())
+    if len(t) <= n:
+        return t
+    cut = t[:n - 1]
+    sp = cut.rfind(" ")
+    return (cut[:sp] if sp > n // 2 else cut).rstrip(" ,;:") + "…"
+
+
 def _urlopen(req, timeout: float, sink):
     """urllib.request.urlopen with the connection handed to sink (proxies from the environment as usual)."""
     from meshpool_harness.core import endpoint as _EP
@@ -1652,7 +1666,14 @@ def _total_row_miss(asked: str, root, since: float) -> str:
             "with a live =SUM formula and a \"Total\" label in that row, save it and check again.")
 
 
-_TEMPLATE = re.compile(r"[\w][\w.()-]*template[\w.()-]*\.docx\b|\btemplate\b", re.I)
+# File names in a message: a match starts only where a run of name characters starts ("(a.docx" gives "a.docx").
+# The old form, [\w][\w.()-]*\.docx, retried from every character of one long token: quadratic, so a pasted
+# 100 KB token held the turn for minutes (pass-2 audit P2-uiserver-2, same shape).
+def _names_re(ext: str) -> str:
+    return r"(?<![\w.()-])[.()-]*(\w[\w.()-]*\.(?:" + ext + r"))\b"
+
+
+_TEMPLATE = re.compile(r"(?<![\w.()-])[.()-]*\w[\w.()-]*template[\w.()-]*\.docx\b|\btemplate\b", re.I)
 
 
 def _template_format_miss(asked: str, root, since: float) -> str:
@@ -1663,7 +1684,7 @@ def _template_format_miss(asked: str, root, since: float) -> str:
     text = str(asked or "").split(_SEP)[0]
     if not _TEMPLATE.search(text):
         return ""
-    names = re.findall(r"[\w][\w.()-]*\.docx\b", text)
+    names = re.findall(_names_re("docx"), text)
     tpl = next((Path(root) / n for n in names if "template" in n.lower() and (Path(root) / n).is_file()), None)
     if tpl is None:
         return ""
@@ -1789,7 +1810,7 @@ def _docx_hidden_text_miss(asked: str, root, since: float) -> str:
       the text and does not ask to summarise, rewrite, translate or restyle it."""
     from meshpool_harness.capabilities import SEP as _SEP
     text = str(asked or "").split(_SEP)[0]
-    names = re.findall(r"[\w][\w.()-]*\.(?:txt|md)\b", text)
+    names = re.findall(_names_re("txt|md"), text)
     if not names:
         return ""
     verbatim = bool(_ADD_TEXT.search(text)) and not _REWORD.search(text)
@@ -1856,11 +1877,11 @@ def _unchanged_output_miss(asked: str, root, since: float) -> str:
                   str(getattr(getattr(c.fill, "fgColor", None), "rgb", "")) if c.fill else "", c.number_format)
                  for c in row] for ws in wb.worksheets for row in ws.iter_rows()]
     try:
-        names = {n.lower() for n in re.findall(r"[\w][\w.()-]*\.xlsx\b", text)}
+        names = {n.lower() for n in re.findall(_names_re("xlsx"), text)}
         outs = _recent_office(root, since, ".xlsx")
         if not outs:
             return ""
-        inputs = [Path(root) / n for n in re.findall(r"[\w][\w.()-]*\.xlsx\b", text)
+        inputs = [Path(root) / n for n in re.findall(_names_re("xlsx"), text)
                   if (Path(root) / n).is_file() and (Path(root) / n).stat().st_mtime < since]
         if not inputs:
             return ""
@@ -1950,7 +1971,7 @@ def _formula_result_miss(asked: str, root, since: float) -> str:
         outs = _recent_office(root, since, ".xlsx")[:4]
         if not outs:
             return ""
-        inputs = [Path(root) / n for n in re.findall(r"[\w][\w.()-]*\.xlsx\b", text)
+        inputs = [Path(root) / n for n in re.findall(_names_re("xlsx"), text)
                   if (Path(root) / n).is_file() and (Path(root) / n).stat().st_mtime < since]
         says_wrong = bool(re.search(_SAYS_WRONG, text, re.I))
         errors, same = [], []
@@ -3396,6 +3417,9 @@ class Agent:
                        "the key's limit, or pick another model or key in Settings, then send \"continue\".")
             elif re.search(r"rejected the API key|stopped accepting the API key", msg):
                 msg = "The endpoint rejected the API key. Check it in Settings, then send your message again."
+            elif isinstance(e, _ModelFailing):       # every retry got a server error: waiting a moment will not help
+                msg = ("The model keeps failing: it returned a server error on every try. Everything done so far is "
+                       "kept. Switch to another model and send \"continue\", or try this one again later.")
             elif re.search(r"HTTP 0|connection problem|timed out|urlopen error", msg, re.I) and \
                     "answers small requests" not in msg and self._recover_off():
                 msg = (f"Couldn't reach the model endpoint ({self._endpoint_host()}). Check the network and the "
@@ -3415,7 +3439,7 @@ class Agent:
                 _lighten(self.messages)                # the next message starts lighter, on a fresh route
                 self.rotate_route()
             if msg != raw:
-                msg += f" ({raw[:120]})"               # the detail, for support and the command line
+                msg += f" ({_clip(raw)})"              # the detail, for support and the command line
             rid = getattr(self, "last_request_id", "")
             if rid and rid not in msg:
                 msg += f" Request id: {rid}."
@@ -4977,7 +5001,7 @@ class Agent:
                         continue
                     if attempt >= 5:                       # up, yet this conversation's requests keep failing
                         if re.search(r"HTTP 5\d\d", msg):  # the endpoint itself fails: no claim that it is fine
-                            raise RuntimeError(msg)
+                            raise _ModelFailing(msg) from e
                         raise RuntimeError(msg + " (the endpoint answers small requests, but this conversation's "
                                            "requests keep failing)")
                     if re.search(r"timed out", msg, re.I):   # up but slow to start (prefill, a queue): wait longer
@@ -4990,6 +5014,8 @@ class Agent:
                         stream = False
                         self.emit({"type": "status", "text": "Trying again without streaming."})
                 elif attempt >= 5:
+                    if re.search(r"HTTP 5\d\d", msg):      # a server error on every try: the model keeps failing
+                        raise _ModelFailing(msg) from e
                     raise
                 stalled = re.search(r"HTTP 5\d\d|timed out", msg, re.I)   # 5xx, or no byte back within the timeout
                 if stalled and attempt >= 1:               # a big request that keeps failing upstream:

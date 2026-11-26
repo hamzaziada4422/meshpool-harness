@@ -23,17 +23,26 @@ WIN_SYSTEM = ("api-ms-win-", "ext-ms-win-", "kernel32", "user32", "gdi32", "adva
               "dbghelp", "mscoree", "msi", "cabinet", "oledlg", "avrt", "mf", "mfplat", "mfreadwrite", "winhttp",
               "dwrite", "d2d1", "d3d11", "dcomp", "ncrypt", "sensapi", "credui", "urlmon", "wintrust", "powrprof",
               "twain_32", "gdi32full", "win32u", "oleacc", "wer", "httpapi", "activeds", "fontsub", "msvcp_win", "ucrt", "bcryptprimitives", "cfgmgr32", "avicap32", "msvfw32", "ole32")
-LINUX_SYSTEM_PREFIXES = ("libc.so", "libm.so", "libdl.so", "libpthread.so", "librt.so", "libgcc_s", "libstdc++",
-                         "ld-linux", "libX", "libxcb", "libGL", "libEGL", "libfontconfig", "libfreetype", "libz.so",
-                         "libuuid", "libexpat", "libcups", "libdbus", "libglib", "libgobject", "libgio", "libgmodule",
-                         "libpng", "libjpeg", "libxml2", "libxslt", "libicu", "libcrypto", "libssl", "libnss", "libnspr",
-                         "libsmime", "libplc", "libplds", "libcairo", "libpixman", "libharfbuzz", "libgraphite",
-                         "libSM", "libICE", "libsystemd", "libbz2", "liblzma", "libzstd", "libcurl", "libkrb5",
-                         "libgssapi", "libk5crypto", "libcom_err", "libresolv", "libnsl", "libutil", "libselinux",
-                         "libpcre", "libgpg", "libgcrypt", "libidn", "libldap", "liblber", "libsasl", "libwayland",
-                         "libdrm", "libgbm", "libxkbcommon", "libatk", "libgdk", "libgtk", "libpango", "libwebp",
-                         "libtiff", "libboost", "libmariadb", "libpq", "liblcms", "libfribidi", "libjbig", "libXss",
-                         "libavahi")      # Impress links Avahi; every desktop Linux has it (docs/SETUP.md, Linux)
+# Linux libraries a desktop has (docs/SETUP.md, Linux: X11, fontconfig, NSS, GLib, Cairo, Pango, ALSA, CUPS, Avahi):
+# glibc, the C++ runtime and zlib, plus what the release workflow's bare Ubuntu 22.04 smoke test installs as "what a
+# desktop has". Nothing LibreOffice ships itself (curl, ICU, libxml2, OpenSSL, harfbuzz, image formats...): a library
+# it bundles that the prune removed by mistake must show up as missing. app/tests/test_fix_pass2_open_engines.py holds
+# each entry to that package list.
+LINUX_SYSTEM_PREFIXES = ("libc.so", "libm.so", "libdl.so", "libpthread.so", "librt.so", "libresolv.so", "libutil.so",
+                         "ld-linux", "libgcc_s", "libstdc++", "libz.so",
+                         "libX11.so", "libX11-xcb.so", "libxcb.so", "libXext.so", "libXrender.so", "libXinerama.so",
+                         "libXrandr.so", "libXcomposite.so", "libXdamage.so", "libXfixes.so", "libxkbcommon.so",
+                         "libSM.so", "libICE.so", "libfontconfig.so", "libfreetype.so",
+                         "libnss3.so", "libnssutil3.so", "libsmime3.so", "libssl3.so",   # NSS (libssl3.so is NSS's)
+                         "libnspr4.so", "libplc4.so", "libplds4.so",
+                         "libdbus-1.so", "libglib-2.0.so", "libgobject-2.0.so", "libgio-2.0.so", "libgmodule-2.0.so",
+                         "libcups.so", "libavahi-client.so", "libavahi-common.so",   # Impress links Avahi
+                         "libcairo.so", "libpango-1.0.so", "libatk-1.0.so", "libatk-bridge-2.0.so",
+                         "libdrm.so", "libgbm.so", "libasound.so",
+                         "libgssapi_krb5.so")    # the bundled libcurl links it; the system libcurl4 brings it
+# Files nothing in the app loads, so their imports are not checked: the LibreOfficeKit GTK widget is for programs that
+# embed LibreOffice (soffice never loads it) and links GTK 3, which is not in the list above.
+LINUX_NOT_LOADED = ("liblibreofficekitgtk.so",)
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -66,7 +75,7 @@ def check(root: Path, plat: str) -> dict[str, set[str]]:
             elif plat == "mac" and p.read_bytes()[:4] in (b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xfe\xed\xfa\xcf"):
                 deps = macho_deps(p)
                 bad = [d for d in deps if not d.startswith(("/usr/lib", "/System")) and Path(d).name.lower() not in have]
-            elif plat == "linux" and p.read_bytes()[:4] == b"\x7fELF":
+            elif plat == "linux" and p.name not in LINUX_NOT_LOADED and p.read_bytes()[:4] == b"\x7fELF":
                 deps = elf_needed(p)
                 bad = [d for d in deps if d.lower() not in have and not d.startswith(LINUX_SYSTEM_PREFIXES)]
             else:

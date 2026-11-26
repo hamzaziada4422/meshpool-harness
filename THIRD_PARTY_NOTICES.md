@@ -50,6 +50,9 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 
 ## Python packages
 
+What the desktop builds install into the bundled Python, dependencies included (`packaging/python-packages.txt`
+names them and how they were worked out; `app/tests/test_fix_pass2_open_engines.py` holds this table to it).
+
 | Package | Version | License |
 |---|---|---|
 | faster-whisper | 1.2.1 | MIT |
@@ -64,7 +67,6 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | annotated-doc | 0.0.6 | MIT |
 | annotated-types | 0.8.0 | MIT |
 | anyio | 4.16.0 | MIT |
-| apsw | 3.54.1.0 | any-OSI |
 | attrs | 26.1.0 | MIT |
 | bottle | 0.13.4 | MIT License |
 | cairocffi | 1.7.1 | BSD License |
@@ -75,7 +77,6 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | click | 8.5.1 | BSD-3-Clause |
 | clr_loader | 0.3.1 | see package |
 | colorama | 0.4.6 | BSD License |
-| colorlog | 6.12.0 | MIT License |
 | concurrent-log-handler | 0.9.29 | Apache-2.0 |
 | croniter | 6.0.0 | MIT License |
 | cryptography | 50.0.0 | Apache-2.0 OR BSD-3-Clause |
@@ -99,7 +100,6 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | jiter | 0.19.0 | MIT |
 | jsonschema | 4.26.0 | MIT |
 | jsonschema-specifications | 2025.9.1 | MIT |
-| kaitaistruct | 0.11 | MIT |
 | lxml | 6.1.3 | BSD-3-Clause |
 | Markdown | 3.10.2 | BSD-3-Clause |
 | markdown-it-py | 4.3.0 | MIT License |
@@ -107,36 +107,29 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | mcp | 2.0.0 | MIT License |
 | mcp-types | 2.0.0 | MIT License |
 | mdurl | 0.1.2 | MIT License |
-| mss | 10.2.0 | MIT License |
-| nemo-relay | 0.8.4 | Apache-2.0 |
+| nemo-relay (a Hermes dependency on Linux, Windows and Apple silicon Macs) | 0.8.4 | Apache-2.0 |
 | numpy | 2.5.3 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 |
 | olefile | 0.47 | BSD License |
-| omegaconf | 2.4.0 | BSD License |
-| onnxruntime | 1.31.1 | MIT License |
 | openai | 2.24.0 | Apache Software License |
-| opencv-python-headless | 5.0.0.93 | Apache Software License |
 | openpyxl | 3.1.5 | MIT License |
 | opentelemetry-api | 1.45.2 | Apache-2.0 |
 | packaging | 26.0 | Apache-2.0 OR BSD-2-Clause |
 | pandas | 3.0.5 | BSD License |
 | pathspec | 1.1.1 | Mozilla Public License 2.0 (MPL 2.0) |
-| pbixray | 0.15.5 | MIT License |
 | pdfminer.six | 20260107 | MIT |
 | pillow | 12.3.0 | MIT-CMU |
 | pillow_heif | 1.8.1 | BSD-3-Clause |
-| pip | 24.1.2 | MIT License |
+| pip (comes with the bundled Python) | 24.1.2 | MIT License |
 | playwright | 1.65.1 | Apache-2.0 |
 | portalocker | 4.4.2 | BSD-3-Clause |
 | prompt_toolkit | 3.0.52 | BSD License |
-| protobuf | 7.36.2 | 3-Clause BSD License |
+| protobuf | 7.36.2 (Mac: 6.33.5) | 3-Clause BSD License |
 | proxy_tools | 0.1.0 | MIT License |
 | psutil | 7.2.2 | BSD-3-Clause |
 | ptyprocess | 0.7.0 | ISC License (ISCL) |
-| pyclipper | 1.4.0 | OSI Approved; MIT License |
 | pycparser | 3.12 | BSD-3-Clause |
 | pydantic | 2.13.4 | MIT |
 | pydantic_core | 2.46.4 | MIT |
-| pyee | 16.0.2 | MIT License |
 | Pygments | 2.21.0 | BSD-2-Clause |
 | PyJWT | 2.13.0 | MIT |
 | pyobjc-core | 13.0 | MIT |
@@ -146,8 +139,7 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | pyobjc-framework-UniformTypeIdentifiers | 13.0 | MIT |
 | pyobjc-framework-WebKit | 13.0 | MIT |
 | pypdf | 7.0.1 | BSD-3-Clause |
-| pypdfium2 | 5.15.2 | BSD-3-Clause, Apache-2.0, dependency licenses |
-| python-bidi | 0.6.12 | GNU Library or Lesser General Public License (LGPL) |
+| pypdfium2 | 5.15.2 (Mac: 4.30.1) | BSD-3-Clause, Apache-2.0, dependency licenses |
 | python-dateutil | 4.0.0 | BSD-3-Clause |
 | python-docx | 1.2.0 | MIT License |
 | python-dotenv | 1.2.2 | BSD-3-Clause |
@@ -159,7 +151,6 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | pywin32 | 311 | Python Software Foundation License |
 | pywinpty | 2.0.15 | MIT |
 | PyYAML | 6.0.3 | MIT License |
-| rapidocr | 3.10.0 | Apache-2.0 |
 | referencing | 0.37.0 | MIT |
 | reportlab | 5.1.0 | BSD License |
 | requests | 2.33.0 | Apache Software License |
@@ -167,8 +158,6 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | rpds-py | 2026.9.1 | MIT |
 | ruamel.yaml | 0.18.17 | MIT License |
 | ruamel.yaml.clib | 0.2.15 | MIT License |
-| shapely | 2.2.0 | BSD-3-Clause |
-| six | 1.17.0 | MIT License |
 | sniffio | 1.3.1 | MIT License; Apache Software License |
 | snowballstemmer | 3.1.1 | BSD-3-Clause |
 | socksio | 1.0.0 | MIT License |
@@ -191,9 +180,14 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | websockets | 15.0.1 | BSD License |
 | xlrd | 2.0.2 | BSD License |
 | xlsxwriter | 3.3.1 | BSD-2-Clause |
-| xmhuffman | 0.3.2 | MIT License |
-| xpress8 | 0.1.1 | MIT License |
-| xpress9 | 0.3.9 | MIT License |
+| anthropic | 0.87.0 | MIT |
+| appnope | 1.0.0 | BSD-2-Clause |
+| coloredlogs | 15.0.1 | MIT License |
+| docstring_parser | 0.18.0 | MIT License |
+| humanfriendly | 10.0 | MIT License |
+| mpmath | 1.3.0 | BSD License |
+| pyreadline3 | 3.5.6 | BSD License |
+| sympy | 1.14.0 | BSD License |
 | asttokens | 3.0.2 | Apache 2.0 |
 | beautifulsoup4 | 4.15.0 | MIT License |
 | bleach | 6.4.0 | Apache Software License |
