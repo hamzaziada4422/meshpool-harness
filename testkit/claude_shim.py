@@ -31,7 +31,8 @@ run its tools, listed below. Answer with ONE JSON object and nothing else (no pr
 {"content": "<text for the user, may be empty while you still work>", "tool_calls": [{"name": "<tool>", "arguments": {...}}]}
 Put the tool calls you want run now in tool_calls (several are fine when they do not depend on each other). Leave
 tool_calls empty only when the task is finished or you need the user; then content MUST be your complete final
-answer to the user (never empty). Arguments must match the tool's parameters exactly."""
+answer to the user (never empty). Arguments must match the tool's parameters exactly.
+Never write <function_calls>, <invoke> or any XML tool markup: tool calls go ONLY in the JSON tool_calls list."""
 
 PLAIN = """You are the model behind an agent harness. No tools are available for this reply: answer the user directly in
 plain text (no JSON), with your complete final answer."""
@@ -82,8 +83,8 @@ def ask_claude(system: str, prompt: str) -> str:
     return r.stdout.strip()
 
 
-_INVOKE = re.compile(r'<invoke name="([^"]+)">(.*?)</invoke>', re.S)
-_PARAM = re.compile(r'<parameter name="([^"]+)">(.*?)</parameter>', re.S)
+_INVOKE = re.compile(r'<(?:\w+:)?invoke name="([^"]+)">(.*?)</(?:\w+:)?invoke>', re.S)
+_PARAM = re.compile(r'<(?:\w+:)?parameter name="([^"]+)">(.*?)</(?:\w+:)?parameter>', re.S)
 
 
 def _invokes(out: str) -> tuple[str, list]:
@@ -100,13 +101,15 @@ def _invokes(out: str) -> tuple[str, list]:
                 args[k] = v
         calls.append({"id": "call_" + uuid.uuid4().hex[:12], "type": "function",
                       "function": {"name": name, "arguments": json.dumps(args)}})
-    text = re.split(r"<(?:function_calls|invoke)\b", out, maxsplit=1)[0].strip()
+    text = re.split(r"<(?:\w+:)?(?:function_calls|invoke)\b", out, maxsplit=1)[0].strip()
     return text, calls
 
 
 def parse(out: str) -> tuple[str, list]:
-    if "<invoke name=" in out and not out.strip().startswith("{"):
-        return _invokes(out)
+    if _INVOKE.search(out):                  # Claude's own markup anywhere in the reply wins over a JSON guess
+        text, calls = _invokes(out)
+        if calls:
+            return text, calls
     s = out.strip()
     s = re.sub(r"^```(?:json)?\s*|\s*```$", "", s)
     i, j = s.find("{"), s.rfind("}")
