@@ -561,7 +561,7 @@ def guard(ctx, allowed, root: str | None = None, blocked: list | None = None) ->
 # skip the request routing, cannot carry data out in a name lookup or open a connection to another host.
 LAUNCH_ARGS = ["--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE localhost , EXCLUDE 127.0.0.1 , EXCLUDE [::1]",
                # no speculative preconnects or DNS prefetch: not even an empty connection to another local port
-               "--disable-features=NetworkPrediction", "--dns-prefetch-disable"]
+               "--disable-features=NetworkPrediction,LoadingPredictor,NavigationPredictor", "--dns-prefetch-disable"]
 
 
 def launch_browser(pw):
