@@ -135,6 +135,10 @@ RULES: list[tuple] = [
     # LibreOffice session (meshpool_harness/lo_session.py, lo_worker.py) drives the converter through them
     ("Python macros", "{P}/*.pyi"), ("Python macros", "{P}/__pycache__"), ("Python macros", "{P}/pythonloader.*"),
     ("Python macros", "{P}/wizards"), ("Python macros", "{exe:pythonw}"),
+    # modules of LibreOffice's Python that the session worker never imports and that need system libraries a bare
+    # Linux may lack (libcrypt.so.2, libuuid.so.1): lo_deps_check.py would report them missing
+    ("Python macros", "{P}/python-core-*/lib/lib-dynload/_crypt*"),
+    ("Python macros", "{P}/python-core-*/lib/lib-dynload/_uuid*"),
     # programs that are not the converter: other module launchers, updater, tools
     ("other programs", "{exe:updater}"), ("other programs", "{exe:update_service}"),
     ("other programs", "{exe:mar}"), ("other programs", "{exe:odbcconfig}"), ("other programs", "{exe:quickstart}"),
