@@ -52,6 +52,8 @@ def _browser_procs() -> list:
             continue
         if p.status() == psutil.STATUS_ZOMBIE:
             continue
+        if "oosplash" in name or "soffice" in name or "libreoffice" in name:
+            continue                 # an office session another test left open runs --headless too: not a browser
         if "chrom" in name or "headless" in name or "run-driver" in name or "playwright" in name:
             out.append(p)
     return out
