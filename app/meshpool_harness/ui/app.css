@@ -990,7 +990,7 @@ details .keyrow input{flex:1;min-width:0;padding:8px 12px;border:1px solid var(-
 @media (max-width:640px){.rows2 li:has(.stact){flex-wrap:wrap}.rows2 li .stact{margin-left:0}}
 
 /* ---------- previews: the viewer pane, the cards under a reply, the Preview button on code ---------- */
-.pvp{grid-column:3;width:max(360px,min(clamp(480px,46vw,920px),calc(100vw - var(--sw,0px) - 640px)));border-left:1px solid var(--line-2);background:var(--bg);display:flex;flex-direction:column;min-width:0;min-height:0;position:relative;outline:none}
+.pvp{grid-column:3;width:min(clamp(480px,46vw,920px),max(calc(100vw - var(--sw,0px) - 672px),460px));border-left:1px solid var(--line-2);background:var(--bg);display:flex;flex-direction:column;min-width:0;min-height:0;position:relative;outline:none}
 .app.pvopen>.panel{display:none}
 .pvp:not([hidden]){animation:mp-fade var(--t-menu) var(--ease) both}
 .pv-bar{display:flex;align-items:center;gap:8px;padding:8px 12px 8px 16px;border-bottom:1px solid var(--line-2);background:var(--surface);min-height:48px}

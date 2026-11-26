@@ -1683,10 +1683,9 @@ function markRetried(d) {
 // check that was run again, is a normal part of the work and is not counted (round 2: "3 steps, 1 had a problem").
 const PROBLEM_RX = /\b(could not|couldn't|can't|cannot|unable|didn't work|did not work|not able to|wasn't able|failed|went wrong|problem|error)\b/i;
 function groupFails(g) {
-  if (!g.dataset.done) return 0;
   const bad = $$(".tool", g).map(t => !!$(".st.bad", t));
   let tail = 0; for (let i = bad.length - 1; i >= 0 && bad[i]; i--) tail++;
-  if (tail) return tail;
+  if (tail || !g.dataset.done) return tail;       // the step the work ends on failed: it is counted at once
   let reply = "", n = g.nextElementSibling;
   while (n && !n.classList.contains("work") && !n.classList.contains("msg-user")) { if (n.classList.contains("msg-ai")) reply += " " + n.textContent; n = n.nextElementSibling; }
   return PROBLEM_RX.test(reply) ? bad.filter(Boolean).length : 0;
@@ -2262,12 +2261,12 @@ function setupPanelResize() {
 // The room the chat would have with the sidebar kept and the side panel (or the preview) open: the sidebar folds only
 // when that drops under about 640px, not at a fixed window width (priya018). The panel widths are the CSS ones
 // (app.css .panel, .pvp), worked out for the sidebar being open so the answer does not flip when it folds.
-const CHAT_ROOM_MIN = 640;
+const CHAT_ROOM_MIN = 672;      // a 640px text column and its 16px gutters: the chat never gets a narrower column than that
 function chatRoomWithSide() {
   const vw = innerWidth, side = 288, pv = typeof PVX !== "undefined" && PVX.open;
   let w = 0;
   if (vw > 980) {
-    if (pv) w = Math.max(360, Math.min(Math.min(920, Math.max(480, vw * 0.46)), vw - side - CHAT_ROOM_MIN));     // the same 640px the chat keeps beside Progress
+    if (pv) w = Math.min(Math.min(920, Math.max(480, vw * 0.46)), Math.max(vw - side - CHAT_ROOM_MIN, 460));     // the same room the chat keeps beside Progress
     else { const pw = Number(store("pw")) || 460; w = vw < 1440 ? Math.min(pw, Math.max(340, vw * 0.32)) : pw; }
   }
   return vw - side - w;

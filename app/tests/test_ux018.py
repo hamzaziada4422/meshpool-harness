@@ -681,6 +681,7 @@ def test_the_router_note_is_kept_out_of_the_chat_in_plain_words(page):
     assert RC.plain_reason("data words in a Code chat") == "chosen for data"
     assert RC.plain_reason("docs words (1)") == "chosen for documents"
     _fake_chat(page)
+    page.evaluate("() => { S.cur.view.code_mode = true; S.cur.view.kind = 'code'; }")      # Chat mode shows no engine names (round 2)
     # meshpool's own agent is no longer announced (0.0.18 design pass): Auto's pick of another agent is, as here
     got = page.evaluate("""() => { applyEv({type: 'status', using: true, text: 'Using Codex', auto: {reason: 'Best benchmark quality for a data task (csv)'}, i: 0});
         const n = document.querySelector('#col .note.using'); return [n.textContent, (n.querySelector('[title]') || {}).title || '']; }""")
@@ -741,6 +742,8 @@ def test_the_rule_field_lines_up_with_its_buttons(page):
     """UX-32: in Settings > Permissions the new-rule field was an unstyled box shorter than its Allow and Deny buttons
     and only as wide as its placeholder. It is as tall as the buttons now and fills the row."""
     page.evaluate("() => openSettings('permissions')")              # its own page since the approvals work (18d6de94)
+    page.wait_for_selector(".advrules summary", timeout=10000)
+    page.click(".advrules summary")      # the rules sit behind "Advanced rules" (round 2)
     page.wait_for_selector("#ruleText", timeout=10000)
     got = page.evaluate("""() => { const r = e => document.querySelector(e).getBoundingClientRect(); const i = r('#ruleText'), a = r('#ruleAdd'), row = document.querySelector('#ruleText').parentElement.getBoundingClientRect();
         return {ih: Math.round(i.height), ah: Math.round(a.height), dt: Math.abs(Math.round(i.top - a.top)), share: i.width / row.width}; }""")
@@ -755,6 +758,8 @@ def test_the_permissions_tab_draws_without_an_error_and_add_a_folder_works(page)
     not the rules), so the code after it never ran: "Add a folder" had no click handler and a second, empty rules box
     was added. It draws cleanly now, with one rules box and a working button."""
     page.evaluate("() => openSettings('permissions')")              # its own page since the approvals work (18d6de94)
+    page.wait_for_selector(".advrules summary", timeout=10000)
+    page.click(".advrules summary")
     page.wait_for_selector("#ruleText", timeout=10000)
     page.wait_for_timeout(400)
     got = page.evaluate("() => ({boxes: document.querySelectorAll('#rulesBox').length, add: typeof (document.querySelector('#addP') || {}).onclick})")
@@ -871,7 +876,7 @@ def test_a_long_file_name_on_a_card_ends_in_an_ellipsis(page):
     got = page.evaluate("""() => { const b = document.createElement('div'); b.className = 'pvcards';
         b.innerHTML = `<button class="pvcard"><span class="pvth"></span><span class="pvcm"><b>Q3_Quarterly_Review_final_version_for_the_board.pptx</b><small>Deck · .pptx</small></span></button>`;
         document.querySelector('#col').appendChild(b); const n = b.querySelector('.pvcm b'), card = b.querySelector('.pvcard').getBoundingClientRect(), r = n.getBoundingClientRect();
-        const out = {inside: r.right <= card.right + 0.5, ell: getComputedStyle(n).textOverflow, cut: n.scrollWidth > n.clientWidth}; b.remove(); return out; }""")
+        const out = {inside: r.right <= card.right + 0.5, ell: getComputedStyle(n).textOverflow, cut: n.scrollWidth > n.clientWidth || n.scrollHeight > n.clientHeight + 1}; b.remove(); return out; }""")
     assert got["inside"] and got["ell"] == "ellipsis" and got["cut"], got
 
 

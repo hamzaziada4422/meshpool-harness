@@ -46,6 +46,8 @@ Rules:
 - severity: "blocker" means I cannot do what I came to do. "major" means I can, but it is confusing, broken or wrong. "minor" means it is rough or unfinished but does not stop me.
 - "pass" is true only when you can do the job and there is no blocker or major problem.
 - Judge only what the request asked for in this turn. A problem is something that stops the request from being met. If you notice something else, such as wording or design in a file the request did not ask to change, it is not a problem. Put it in "also_noticed" as one short line, or leave that empty.
+- For a request to change something (add a column, extend a chart, fix a typo), a problem is only something about what the request changed or asked for, or real breakage: an error value, a file that does not open, data lost, content running off the page. Colours, fills, print setup, column widths, fonts, alignment and other style or layout the request did not touch are never problems: put one of them in "also_noticed".
+- If you cannot see pictures, do not describe how it looks ("###", "no bars", "blank chart", "overlapping"). Say only what the measurements and the text show.
 - When the request is to convert, export, read, summarize or answer a question about an existing file, the file's own content is not yours to judge. Judge only whether the result is what was asked: it opens, it is complete, and it matches the source. Never list the source's wording, titles, numbers or design as a problem.
 - When nothing needs changing, "problems" is [] and "pass" is true. Do not list complaints next to a pass.
 - Answer with one JSON object and nothing else."""
@@ -57,7 +59,7 @@ actions: up to %d things you want to see tried, that the pictures and the log do
 Examples: click the "Order now" button; fill the email field with "x" and submit it; open the menu at phone width. "submit" on its own fills the form with sample values and sends it. Use [] when you have seen enough. meshpool tries each one on a fresh copy of the page, in the same browser, and tells you what happened. You get this one chance.""" % MAX_ACTIONS)
 
 VERDICT_ASK = """Reply with this JSON object:
-{"persona": "%s", "can_do_the_job": true | false, "problems": [{"what": "<short>", "where": "<where>", "severity": "blocker" | "major" | "minor"}], "pass": true | false, "also_noticed": "<one short line about something outside the request, or empty>"}
+{"persona": "%s", "can_do_the_job": true | false, "problems": [{"what": "<short>", "where": "<where>", "severity": "blocker" | "major" | "minor", "in_request": true | false}], "pass": true | false, "also_noticed": "<one short line about something outside the request, or empty>"}
 Use [] for problems when there are none. "problems" holds only what the request asked for and did not get. Anything else goes in "also_noticed", never in "problems"."""
 
 DOC_NOTE = ("This is a file, not a page: you see its first pages as pictures and the text on them. You cannot click "
@@ -228,6 +230,53 @@ def _also_line(x) -> str:
 
 
 _OWN_CHECK = re.compile(r"\bscripted\b|\bby label\b|\bselector\b|\b(?:check|checker|script|test|step)\b.{0,60}\b(?:could not|couldn'?t|can'?t|cannot|did not|didn'?t|unable to|failed to)\b.{0,30}\b(?:find|locate|match|click|read|see)\b", re.I)
+
+
+_BREAKAGE = re.compile(r"\b(?:errors?|exceptions?|corrupt\w*|cannot open|can't open|won't open|does not open|doesn't open|unopenable|"
+                       r"data loss|lost data|missing data|deleted|wiped|overwritten|off the (?:page|slide|edge|screen)|"
+                       r"outside the (?:page|slide)|crash\w*|broken|fails?|failed)\b|#(?:REF|DIV|VALUE|NAME|N/A)", re.I)
+_STYLE = re.compile(r"\b(?:colou?rs?|fills?|shading|print(?:ing)?|landscape|portrait|page setup|paper|margins?|column widths?|"
+                    r"widen|fonts?|typeface|alignment|align(?:ed)?|spacing|padding|gridlines?|borders?|gradient|bold|italic|"
+                    r"formatting)\b", re.I)
+_VISUAL = re.compile(r"###|\bno bars?\b|\bblank (?:chart|page|slide|area)\b|\bempty (?:chart|plot)\b|"
+                     r"\bbars? (?:are|is) (?:missing|absent)\b|\b(?:chart|page|slide) (?:is|looks|appears) (?:empty|blank)\b|"
+                     r"\b(?:looks?|appears?|seems?) (?:blank|empty|cut|truncated|squashed|overlapping)\b|\boverlap\w*\b|"
+                     r"\btruncated\b|\bnot visible\b|\bcut off\b", re.I)
+_HEDGE = re.compile(r"\b(?:looks?|appears?|seems?|may|might|possibly|perhaps|probably|unclear|not sure|could be|"
+                    r"hard to tell)\b", re.I)
+
+
+def hedged(p: dict) -> bool:
+    """A problem the reviewer only guessed at ("the typo looks swapped"): not evidence that anything is wrong."""
+    return bool(_HEDGE.search(str(p.get("what") or "")))
+
+
+def _confirmed(p: dict, lines: list) -> bool:
+    txt = f"{p.get('what', '')} {p.get('where', '')}"
+    w = _words(txt)
+    return any(("###" in txt and "###" in ln) or (w and len(w & _words(ln)) / len(w) >= 0.4) for ln in lines or [])
+
+
+def scope_filter(v: dict, request: str, blind: bool, finding_lines: list) -> dict:
+    """The verdict held to what the builder should hear. A reviewer that saw no pictures makes no visual claim unless the
+    measurements show it. For a request to change something, style and layout the request did not touch (fills, print
+    setup, column widths) are not problems: the first becomes the one "also noticed" offer. Real breakage always stays."""
+    scope = request_scope(request)
+    keep, moved = [], []
+    for p in v["problems"]:
+        txt = f"{p['what']} {p['where']}"
+        if blind and _VISUAL.search(txt) and not _confirmed(p, finding_lines):
+            continue
+        if scope == "change" and _STYLE.search(txt) and not _BREAKAGE.search(txt) and p["severity"] != "blocker":
+            moved.append(p["what"])
+            continue
+        keep.append(p)
+    if len(keep) == len(v["problems"]):
+        return v
+    out = dict(v, problems=keep, also=v.get("also") or _also_line(moved))
+    out["pass"] = out["pass"] or not any(p["severity"] in ("blocker", "major") for p in keep)
+    out["can_do_the_job"] = out["can_do_the_job"] or not any(p["severity"] == "blocker" for p in keep)
+    return settle(out)
 
 
 def apply_choices_to_verdict(v: dict, request: str) -> dict:
@@ -813,6 +862,7 @@ def review(agent, turn: dict, kind: str, target: dict, res: dict, request: str, 
             if announce:
                 announce(persona)
         v = apply_choices_to_verdict(v, request)
+        v = scope_filter(v, request, blind, finding_lines)
         v["actions"] = acts
         return v
     except Exception as e:  # noqa: BLE001 - a reviewer that fails never breaks the turn (Stop and the budget pass through)
@@ -1024,10 +1074,17 @@ def _things(n: int) -> str:
 def _also_offer(st: dict) -> str:
     """"I also noticed <one thing outside the request>, want me to fix it?" for the user, or "". It is never sent to the
     builder."""
-    for v in reversed(st.get("evals") or []):
+    evals = st.get("evals") or []
+    if not evals:
+        return ""
+    known = [p for v in evals for p in v["problems"]]
+    for v in reversed(evals):
         t = _also_line(v.get("also"))
         if not t:
             continue
+        w = _words(t)
+        if w and any(len(w & _words(p["what"] + " " + p["where"])) / len(w) >= 0.4 for p in known):
+            continue                                            # the builder was told about it: not news
         t = t[:1].lower() + t[1:] if t[:2] != t[:2].upper() else t
         if len(t) > 110:
             t = t[:110].rsplit(" ", 1)[0]
@@ -1050,18 +1107,23 @@ def summary_line(kind: str, st: dict, extra: list | None = None, note: str = "")
     first, last = evals[0], evals[-1]
     known = [p for p in first["problems"] if not unsure(p)]
     seen_last = [p for p in last["problems"] if not unsure(p)]
+    solid = [p for p in seen_last if not hedged(p)]            # what the last verdict states, not guesses
+    shaky = not last.get("pass") and len(solid) != len(last["problems"])    # not a pass, and it held a guess or "could not confirm"
     changed = False
     if len(evals) > 1:
         fixed = [p for p in known if not any(_same(p, q) for q in seen_last)]
-        left = seen_last
+        left = solid
     elif st.get("changed"):                       # fixed after this verdict, then no reviewer saw it again
         fixed, left, changed = known, [], True
     else:
-        fixed, left = [], seen_last
-    left_items = _items(left, 1) if left else []
+        fixed, left = [], solid
+    whole = lambda t: len(t.split()) >= 3                       # "section 3" says nothing: not printed
+    left_items = [t for t in _items(left, 2) if whole(t)] if left else []
     measured = [x for x in (extra or []) if not any(_words(x) & _words(q) for q in left_items)]
-    n_open = len(left) + len(measured)
-    open_items = left_items or _items(measured, 1)
+    open_items = left_items or [t for t in _items(measured, 1) if whole(t)]
+    if left and not left_items:
+        shaky = True                                            # open, but nothing worth saying about it
+    n_open = len(open_items)
     head = f"Checked as {persona}" if persona else "Checked"
     listed = _items(fixed, 2)
     tail = (": " + "; ".join(listed)) if listed else ""
@@ -1069,13 +1131,19 @@ def summary_line(kind: str, st: dict, extra: list | None = None, note: str = "")
         body = f"changed {_things(len(fixed))} after the check, not looked at again{tail}" if fixed else "found nothing to fix"
     elif fixed:
         body = f"fixed {_things(len(fixed))}{tail}"
+    elif n_open:
+        body = "fixed nothing"
+    elif shaky:
+        body = ""                                               # unsure or contradictory: no claims at all
     else:
-        body = "fixed nothing" if n_open else "found nothing to fix"
-    parts = [f"{head}: {body}."]
+        body = "found nothing to fix"
+    if not body:
+        parts = [f"Checked it as {persona}." if persona else "Checked it."]
+    else:
+        parts = [f"{head}: {body}."]
     if n_open:
-        what = (open_items[0] + (f" (and {n_open - 1} more)" if n_open > 1 else "")) if open_items else _things(n_open)
-        parts.append(f"Still open: {what}.")
-    elif fixed and not changed:
+        parts.append("Still open: " + "; ".join(open_items) + ".")
+    elif fixed and not changed and not shaky:
         parts.append("Nothing left open.")
     if note:
         parts.append(note)

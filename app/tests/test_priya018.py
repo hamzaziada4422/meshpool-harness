@@ -438,7 +438,7 @@ def test_the_code_sessions_group_is_only_for_code_chats(page):
 def test_saved_rules_begin_with_a_plain_sentence(page):
     page.evaluate("""() => { const b = document.createElement('div'); b.id = 'rulesBoxT'; document.body.appendChild(b);
         drawRules(b, {allow: [], ask: [], deny: [], folders: [], path: '/x/permissions.json'}); }""")
-    got = page.evaluate("() => [...document.querySelectorAll('#rulesBoxT > p')].map(p => p.textContent)")
+    got = page.evaluate("() => [...document.querySelectorAll('#rulesBoxT p')].map(p => p.textContent)")
     assert got[0].startswith("These are the things you told meshpool to always allow") and "bash:git push*" in got[1], got
 
 

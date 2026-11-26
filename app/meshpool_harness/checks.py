@@ -384,9 +384,11 @@ def merge_line(look: str, checks: str) -> str:
     that the file opens: all good." The persona is left out when it adds nothing ("someone opening this file"). "" when the
     look line is not in the shape this reads (the two lines then stay as they are)."""
     m = _LOOK_RX.fullmatch(str(look or "").strip())
-    if not m or not str(checks or "").strip():
+    bare = re.fullmatch(r"Checked it(?: as (?P<who>.+?))?\.", str(look or "").strip())     # the look made no claim
+    if not (m or bare) or not str(checks or "").strip():
         return ""
-    who, body = (m.group("who") or "").strip(), m.group("body").strip()
+    who = ((m or bare).group("who") or "").strip()
+    body = m.group("body").strip() if m else ""
     sents = [x.strip() for x in re.split(r"(?<=\.)\s+(?=[A-Z])", checks.strip()) if x.strip()]
     what = ""
     rest = []
@@ -400,7 +402,7 @@ def merge_line(look: str, checks: str) -> str:
         head += (", and " if what.startswith(("that ", "the ")) else ", ") + what
     first = body.rstrip(".")
     verdict = "all good" if first.lower() == "found nothing to fix" and not rest else first
-    return " ".join([f"{head}: {verdict}."] + rest)
+    return " ".join([f"{head}: {verdict}." if verdict else f"{head}."] + rest)
 
 
 def final_line(run_id: str) -> str:

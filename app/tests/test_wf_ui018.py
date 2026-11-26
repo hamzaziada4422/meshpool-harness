@@ -202,7 +202,7 @@ def test_file_cards_keep_their_names_inside_and_their_thumbnails_after_a_rebuild
         $('#col').appendChild(off);                         // and swapped in a moment later
         for (let i = 0; i < 40 && !off.querySelector('.pvth img'); i++) await new Promise(r => setTimeout(r, 100));
         const card = off.querySelector('.pvcard'), b = card.querySelector('.pvcm b'), cr = card.getBoundingClientRect(), br = b.getBoundingClientRect();
-        return {thumb: !!card.querySelector('.pvth img'), clipped: b.scrollWidth > b.clientWidth,
+        return {thumb: !!card.querySelector('.pvth img'), clipped: b.scrollHeight > b.clientHeight + 1 || b.textContent.includes('\u2026'),
                 inside: br.right <= cr.right - 8, ellipsis: getComputedStyle(b).textOverflow,
                 thumbLeft: card.querySelector('.pvth').getBoundingClientRect().left >= cr.left - 1,
                 dl: off.querySelectorAll('[data-pvdl]').length};

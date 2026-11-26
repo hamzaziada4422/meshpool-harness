@@ -432,7 +432,7 @@ def test_use_the_other_agent_instead_sends_the_last_message_again(app, page):
     posts = []
     page.route(re.compile(r".*/api/agent/[^/]+/harness$"), lambda r: (posts.append(("harness", r.request.post_data)), r.fulfill(json={"harness": {"id": "meshpool-code", "name": "meshpool Code"}})))
     page.route(re.compile(r".*/api/agent/[^/]+/send$"), lambda r: (posts.append(("send", r.request.post_data)), r.fulfill(json={"sent": {}})))
-    page.evaluate("""() => { S.cur.view.harness = {id: 'codex', name: 'Codex'}; applyEv({type: 'user', text: 'Tidy the budget sheet', i: 0});
+    page.evaluate("""() => { S.cur.view.code_mode = true; S.cur.view.kind = 'code'; S.cur.view.harness = {id: 'codex', name: 'Codex'}; applyEv({type: 'user', text: 'Tidy the budget sheet', i: 0});
         applyEv({type: 'status', using: true, text: 'Using Codex', back: {harness: 'meshpool-code', name: 'meshpool Code'}, i: 1}); }""")
     page.click("[data-back]")
     page.wait_for_function("() => true")

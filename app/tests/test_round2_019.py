@@ -502,3 +502,65 @@ def test_one_click_on_progress_shows_it_while_a_preview_is_open(app):
             assert pg.errors == [], pg.errors
         finally:
             pg.browser_.close()
+
+
+# ------------------------------------------------------------------------------------------------------ item 13, 14
+def _vd(problems, ok=False, also=""):
+    return {"persona": "a board member", "can_do_the_job": ok, "pass": ok, "also": also,
+            "problems": [{"what": w, "where": "", "severity": s} for w, s in problems]}
+
+
+def test_the_checked_line_claims_only_what_the_last_verdict_states():
+    from meshpool_harness.agent import lookreview as LR
+    # a guess about a typo that was fixed, and a bare "section 3": no claims at all
+    probs = [("the typo 'teh' looks swapped for 'the'", "major"), ("section 3", "minor"), ("the totals may be off", "minor")]
+    st = {"persona": "a board member", "evals": [_vd(probs), _vd(probs)]}
+    assert LR.summary_line("doc", st) == "Checked it as a board member.", LR.summary_line("doc", st)
+    # a named problem is still open: said whole, and with no "(and N more)"
+    solid = [("the Q4 total shows an error", "blocker"), ("the chart has no title", "major"), ("a third problem here", "minor")]
+    st = {"persona": "a board member", "evals": [_vd(solid), _vd(solid)]}
+    line = LR.summary_line("doc", st)
+    assert "(and" not in line and "Still open: the Q4 total shows an error; the chart has no title." in line, line
+
+
+def test_no_also_noticed_offer_for_what_was_fixed():
+    from meshpool_harness.agent import lookreview as LR
+    first = _vd([("the chart is repeated on page 2", "major"), ("a missing title on page 1", "major")])
+    last = _vd([], ok=True, also="the chart is repeated on page 2 with no new content")
+    st = {"persona": "a board member", "evals": [first, last]}
+    line = LR.summary_line("doc", st)
+    assert "I also noticed" not in line, line
+    last = _vd([], ok=True, also="the footer font differs from the body")
+    assert "I also noticed the footer font differs from the body" in LR.summary_line("doc", {"persona": "a board member", "evals": [first, last]})
+
+
+def test_a_bare_look_line_merges_with_the_checks_line():
+    from meshpool_harness import checks as K
+    assert K.merge_line("Checked it as a board member.", "Checked that the file opens cleanly.") == \
+        "Checked it the way a board member would, and that the file opens.", K.merge_line("Checked it as a board member.", "Checked that the file opens cleanly.")
+
+
+REQ = "add a Q4 column and extend the chart to include it"
+CHANGE = [("the chart fill colours do not match the theme", "minor"), ("no landscape print setup", "minor"),
+          ("column widths are too narrow, showing ### in the Q4 column", "major"), ("the Q4 total formula shows #REF!", "major")]
+
+
+def test_a_change_request_is_not_held_to_style_it_did_not_ask_for():
+    from meshpool_harness.agent import lookreview as LR
+    v = LR.normalize_verdict({"persona": "a finance person", "problems": [{"what": w, "where": "", "severity": s} for w, s in CHANGE],
+                              "pass": False}, REQ, "doc", "a finance person")
+    got = LR.scope_filter(v, REQ, False, [])                     # with pictures: style goes to one offer, breakage stays
+    assert [p["what"] for p in got["problems"]] == ["the Q4 total formula shows #REF!"], got
+    assert got["also"] and "column widths" in got["also"], got
+
+
+def test_a_reviewer_without_pictures_makes_no_visual_claims_unless_measured():
+    from meshpool_harness.agent import lookreview as LR
+    probs = [("the chart shows no bars", "major"), ("the Q4 column shows ###", "major"), ("the Q4 total formula shows #REF!", "major")]
+    v = LR.normalize_verdict({"persona": "a finance person", "problems": [{"what": w, "where": "", "severity": s} for w, s in probs],
+                              "pass": False}, REQ, "doc", "a finance person")
+    got = LR.scope_filter(v, REQ, True, [])
+    assert [p["what"] for p in got["problems"]] == ["the Q4 total formula shows #REF!"], got
+    kept = LR.scope_filter(v, REQ, True, ["Sheet1!E2: shows ### (column too narrow for the value)"])
+    assert "the Q4 column shows ###" in [p["what"] for p in kept["problems"]], kept
+    assert "never problems" in LR.SYSTEM and "cannot see pictures" in LR.SYSTEM
