@@ -30,11 +30,16 @@ HOSTS = ("Excel", "PowerPoint", "Word")
 
 _LOCK = threading.Lock()
 _PAIRS: dict = {}           # pairing id -> {"code", "host", "t", "state": "pending" | "allowed" | "denied", "token"}
-_SESSIONS: dict = {}        # session token -> {"host", "t"}
+_SESSIONS: dict = {}        # session token -> {"host", "t", "chats": the chat ids this panel started}
 
 
 class TooMany(RuntimeError):
     pass
+
+
+def _same(a, b) -> bool:
+    """compare_digest on bytes: on str it raises for non-ASCII text, and a pairing id or token header can carry it."""
+    return secrets.compare_digest(str(a or "").encode("utf-8"), str(b or "").encode("utf-8"))
 
 
 def _prune(now: float) -> None:
@@ -71,7 +76,7 @@ def check(pid: str) -> dict:
         _prune(now)
         rec = None
         for k in _PAIRS:                       # compare every id in constant time
-            if secrets.compare_digest(k, str(pid or "")):
+            if _same(k, pid):
                 rec = _PAIRS[k]
                 pid = k
         if rec is None:
@@ -100,24 +105,46 @@ def decide(code: str, allow: bool) -> bool:
     with _LOCK:
         _prune(now)
         for r in _PAIRS.values():
-            if r["state"] == "pending" and secrets.compare_digest(r["code"], code):
+            if r["state"] == "pending" and _same(r["code"], code):
                 if not allow:
                     r["state"] = "denied"
                     return True
                 tok = secrets.token_urlsafe(32)
                 while len(_SESSIONS) >= MAX_SESSIONS:
                     del _SESSIONS[min(_SESSIONS, key=lambda k: _SESSIONS[k]["t"])]
-                _SESSIONS[tok] = {"host": r["host"], "t": now}
+                _SESSIONS[tok] = {"host": r["host"], "t": now, "chats": set()}
                 r["state"], r["token"] = "allowed", tok
                 return True
     return False
 
 
-def session_ok(token: str | None) -> bool:
+def session_of(token: str | None) -> str:
+    """The connected panel's session token that matches, or "" (compared in constant time)."""
     if not token:
-        return False
+        return ""
     with _LOCK:
-        return any(secrets.compare_digest(k, token) for k in _SESSIONS)
+        hit = ""
+        for k in _SESSIONS:
+            if _same(k, token):
+                hit = k
+        return hit
+
+
+def session_ok(token: str | None) -> bool:
+    return bool(session_of(token))
+
+
+def add_chat(session: str, chat: str) -> None:
+    """A chat this panel started: only this panel's later calls may reach it."""
+    with _LOCK:
+        if session in _SESSIONS:
+            _SESSIONS[session]["chats"].add(str(chat))
+
+
+def owns(session: str, chat: str) -> bool:
+    """Whether this panel started the chat. A panel disconnected (forget, a newer panel pushed it out) owns none."""
+    with _LOCK:
+        return bool(session) and str(chat) in (_SESSIONS.get(session) or {}).get("chats", ())
 
 
 def sessions() -> int:

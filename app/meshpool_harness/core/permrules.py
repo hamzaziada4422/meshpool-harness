@@ -27,6 +27,13 @@ _EXEC_VERBS = {"uv": {"run"}, "poetry": {"run"}, "pipenv": {"run"}, "pdm": {"run
                "yarn": {"exec", "dlx", "node"}, "bun": {"x"}, "pipx": {"run"}, "dotnet": {"exec"}}
 _EXEC_PROGS = frozenset({"npx", "bunx", "uvx", "pnpx"})
 _NO_GRANT_VERBS = {"docker": {"run", "exec"}, "kubectl": {"run", "exec", "debug"}}
+# Two-word commands whose second word is the real verb: a grant names all three words ("docker compose ps"), else
+# "Allow docker compose" covered `docker compose exec web sh -c ...` (security review, 0.0.18). "exec" verbs run the
+# program that follows (`uv tool run` is uvx); "no" verbs run a command in a container: never granted.
+_NESTED = {("uv", "tool"): {"exec": {"run"}, "no": set()},
+           ("docker", "compose"): {"exec": set(), "no": {"run", "exec"}},
+           ("docker", "container"): {"exec": set(), "no": {"run", "exec", "start", "attach"}},
+           ("docker", "image"): {"exec": set(), "no": set()}}
 _OKREDIR = re.compile(r"\d?>\s*/dev/null|\d?>&\d|&>\s*/dev/null")
 
 
@@ -232,6 +239,18 @@ def grant_patterns(cmd: str) -> list[str]:
     if prog in _NO_GRANT:
         return []
     pos = [a for a in rest if not a.startswith("-")]
+    if pos and (prog, pos[0]) in _NESTED:
+        rule = _NESTED[(prog, pos[0])]
+        if len(pos) < 2 or rest[:2] != pos[:2]:
+            return []                     # no verb, or an option before it (docker compose -f x run ...): not judged
+        verb, inner = pos[1], rest[2:]
+        if verb in rule["no"]:
+            return []
+        if verb in rule["exec"]:
+            if not inner or inner[0].startswith("-"):
+                return []
+            return [f"{prog} {pos[0]} {verb} " + p for p in grant_patterns(shlex.join(inner))]
+        return [f"{prog} {pos[0]} {verb}"]
     if prog in _EXEC_PROGS or (pos and pos[0] in _EXEC_VERBS.get(prog, ())):
         head = [prog] if prog in _EXEC_PROGS else [prog, pos[0]]
         inner = rest if prog in _EXEC_PROGS else rest[1:]
