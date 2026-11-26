@@ -1991,7 +1991,7 @@ def _resume_access(term, s, mode: str | None, model: str | None) -> None:
     before = getattr(s, "mode", None) or getattr(s.agent, "mode", None)
     want = mode or C.permission_mode()
     if want != before:
-        s.set_mode(want)
+        s.set_mode(want, save=False)              # for this run only: the chat keeps the mode it was saved with
     if want == "auto" and not mode:
         term.p(st.amber("  Full access is on: it is your default access mode in Settings."))
     elif before == "auto" and want != "auto":

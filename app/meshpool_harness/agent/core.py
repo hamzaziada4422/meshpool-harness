@@ -732,9 +732,10 @@ def _plain_command_title(script: str) -> str:
     return f"Run {first}{on}?" if first else "Run this command?"
 
 
-def _unknown_model_text(bare: str, prov: str = "key") -> str:
+def _unknown_model_text(bare: str, prov: str = "key", msg: str = "", key: str = "") -> str:
     """OM-04: the error for a model named with --model that the endpoint does not serve, with the closest names it
-    does serve (one read of the endpoint's model list, made only now that the call failed)."""
+    does serve (one read of the endpoint's model list, made only now that the call failed). When the endpoint says
+    key_model_access_denied the model exists but this key may not use it: say that, with the endpoint's own words."""
     import difflib
     ids: list = []
     try:
@@ -747,10 +748,17 @@ def _unknown_model_text(bare: str, prov: str = "key") -> str:
             ids = [i.split(":", 1)[1] if i.startswith("chatgpt:") else i for i in ids]
     except Exception:  # noqa: BLE001 - the list is a help, never a second failure
         ids = []
-    ids = list(dict.fromkeys(ids))
+    ids = [i for i in dict.fromkeys(ids) if i != bare]       # the name asked for is never offered back as a close one
     close = difflib.get_close_matches(bare, ids, n=5, cutoff=0.4) or \
         [i for i in ids if bare.lower().split("-")[0] in i.lower()][:5]
-    text = f"The endpoint does not serve the model {bare}."
+    if "key_model_access_denied" in (msg or ""):
+        from meshpool_harness.core import errtext as ET
+        text = f"Your key is not allowed to use the model {bare}."
+        said = ET.said(ET.parse(msg)[1], key)[:200].strip()
+        if said:
+            text += f" The endpoint said: {said}"
+    else:
+        text = f"The endpoint does not serve the model {bare}."
     if close:
         text += " Close names it does serve: " + ", ".join(close) + "."
     return text + " Pick one with --model, or run `meshpool models` to see them all."
@@ -5063,7 +5071,7 @@ class Agent:
                     if getattr(self, "model_named", False):
                         # OM-04: a model the user named on the command line (--model) is not swapped for another one
                         # without a word: the run stops and says which names the endpoint does serve.
-                        raise RuntimeError(_unknown_model_text(body["model"], prov))
+                        raise RuntimeError(_unknown_model_text(body["model"], prov, msg, key))
                     # A chat from weeks ago on a model the endpoint has dropped: continue on today's default for
                     # its provider, once per call. Otherwise say so at once; retrying the same model cannot help.
                     C.load_into_env(override=True)

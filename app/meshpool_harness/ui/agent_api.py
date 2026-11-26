@@ -2215,9 +2215,11 @@ class Session:
         for p in pend:
             p["ev"].set()
 
-    def set_mode(self, mode: str):
+    def set_mode(self, mode: str, save: bool = True):
+        """Change the access mode. save=False is for this run only: the chat's stored mode stays as it was."""
         self.agent.mode = self.mode = C.normalize_mode(mode, "ask")
-        write_meta(self.id, mode=self.mode)          # restored on resume: an Ask chat stays Ask
+        if save:
+            write_meta(self.id, mode=self.mode)      # restored on resume: an Ask chat stays Ask
         if hasattr(self.agent, "apply_mode"):
             try:
                 self.agent.apply_mode()
