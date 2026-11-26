@@ -21,6 +21,7 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
   - A refused key is no longer sent again until retries run out, and part of a key can no longer show in an error message.
   - A reopened chat keeps each turn's steps in one group, and Stop no longer marks steps as failed.
   - On Windows, the letter à typed in the terminal is no longer lost.
+  - A question meshpool asks in the Office panel can be answered there again.
 
 **New in 0.0.17**
 - **Less CPU.** Measured before and after on the same machine:

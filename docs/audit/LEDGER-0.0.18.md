@@ -16,7 +16,8 @@ fix once to see the test fail again. Rows from the 0.0.17 ledger were not counte
 | Command line and setup (CL) | 13 | 13 | 0 |
 | Lead (LD) | 8 | 7 | 0 |
 | Later pass (LP, LQ) | 12 | 12 | 3 |
-| all | 107 | 106 | 5 |
+| Release check (RC) | 1 | 1 | 0 |
+| all | 108 | 107 | 5 |
 
 "Still open" counts what the "Found, not fixed" section lists today: one question for the owner and four known limits.
 What the first pass found but left was fixed in the later pass.
@@ -173,6 +174,12 @@ tests that slept a fixed time now wait for an event).
 | LQ-03 | Each Session panel refresh ran 8 git processes: 40 for 5 refreshes, now 5. An edit still shows on the next refresh. |
 | LQ-04 | The update status was polled every minute while the tab was hidden: 5 requests in 5 hidden minutes, now 0. |
 | LQ-05 | An insight card whose id held a quote never showed. |
+
+## Release check (app/tests/test_work_office_c171.py, testkit/office_panel.js)
+
+| ID | What was wrong |
+|---|---|
+| RC-01 | Office panel chats were caught by the Codex office route (the panel's preamble names Excel), and the Work route had no ask_user tool: a question asked in the panel failed with "unknown tool". Panel chats now stay on the Work route with ask_user. Found by the live release check; office_panel.js passes 22 of 22. |
 
 ## Found, not fixed
 
