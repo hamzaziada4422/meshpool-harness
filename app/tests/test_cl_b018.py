@@ -298,6 +298,28 @@ def test_settings_flag_reads_json_with_a_bom(tmp_path):
     assert cli._settings_file(f) == {"MH_MODEL": "acme/m1"}
 
 
+# ---- CL-13: unknown options were dropped without a word, and a cron task could not be made from the command line --
+def test_schedule_add_takes_a_cron_expression(monkeypatch):
+    from meshpool_harness import assistant as AS
+    from meshpool_harness import cli_app
+    seen = []
+    monkeypatch.setattr(AS, "api_action", lambda b: seen.append(b) or {})
+    assert cli_app.main(["schedule", "add", "--name", "Standup", "--prompt", "Sum up", "--when", "cron",
+                         "--cron", "30 8 * * 1-5"]) == 0
+    assert seen[0]["cron"] == "30 8 * * 1-5" and seen[0]["when"] == "cron"
+
+
+def test_a_mistyped_option_is_an_error_not_ignored(monkeypatch, capsys):
+    from meshpool_harness import assistant as AS
+    from meshpool_harness import cli_app
+    seen = []
+    monkeypatch.setattr(AS, "api_action", lambda b: seen.append(b) or {})
+    assert cli_app.main(["schedule", "add", "--name", "N", "--prompt", "P", "--folderr", "/tmp/x"]) == 1
+    assert "Unknown option --folderr" in capsys.readouterr().err
+    assert seen == []                                       # nothing was saved with the folder missing
+    assert cli_app._split(["add", "--not a flag, a note"]) == (["add", "--not a flag, a note"], {})   # text is text
+
+
 def test_chatgpt_relay_answers_a_json_list_with_400(tmp_path, monkeypatch):
     import http.client
     from meshpool_harness.core import chatgpt_relay as CR
