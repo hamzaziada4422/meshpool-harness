@@ -179,14 +179,32 @@ _SOFFICE = re.compile(r"(?:^|[\s;&|(/])(?:soffice|libreoffice|soffice\.bin)\b[^;
                       r"[^;&|]*?(?:^|\s)['\"]?([^\s'\";&|]+\.\w{2,5})['\"]?(?=\s*(?:$|[;&|)]|2>|>|--))", re.I)
 
 
+_HELPERS = {"cd", "mkdir", "ls", "echo", "cp", "timeout", "soffice", "libreoffice", "soffice.bin", "pdfinfo", "export",
+            "true", "env"}
+
+
 def plain_command_title(cmd: str) -> str:
     """A command's approval card title in plain words, for the kinds people meet in office work, else "". The raw
     command goes in the card's Details fold."""
     c = str(cmd or "")
     m = _SOFFICE.search(c)
+    # never milder than the command: only when every other step is a harmless helper (cd, mkdir, ls, echo, a copy
+    # of the input, pdfinfo); "soffice ...; rm -rf x" keeps the ordinary command card
+    for step in re.split(r"&&|\|\||[;|\n]", c):
+        words = [w for w in step.split() if not re.match(r"[A-Za-z_]\w*=", w)]
+        if words and os.path.basename(words[0]) not in _HELPERS and not re.match(r"\d*>|2>&1", words[0]):
+            return ""
+        if words and words[0] == "cp" and not words[-1].startswith(("/tmp/", "$TMPDIR", "${TMPDIR")):
+            return ""                                  # a copy over a file of the user's is not a conversion
+        if re.search(r"(?<![2&])>{1,2}\s*(?!&1|/dev/null|/tmp/)\S", step):
+            return ""                                  # a redirect that writes somewhere
     if m:
         fmt = m.group(1).split(":")[0]
-        return f"Convert {os.path.basename(m.group(2))} to {fmt.upper()}"
+        name = os.path.basename(m.group(2))
+        cp = re.search(r"\bcp\s+(?:-\w+\s+)*['\"]?([^\s'\"]+)['\"]?\s+['\"]?([^\s'\";&|]+)", c)
+        if cp and os.path.basename(cp.group(2)) == name:
+            name = os.path.basename(cp.group(1))      # a scratch copy of the user's file: name the user's file
+        return f"Convert {name} to {fmt.upper()}"
     return ""
 
 

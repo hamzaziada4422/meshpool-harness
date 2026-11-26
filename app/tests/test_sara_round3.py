@@ -217,9 +217,19 @@ def test_a_raw_soffice_permission_card_reads_in_plain_words(fake):
     a = make(mode="ask")
     assert a.send("SOFFICE please") == "asked-done"
     card = a.asked[0]
-    assert card["title"] == "Convert Board_Update_Q3.pptx to PDF"
-    plain, _, more = card["detail"].partition("\n\nDetails:\n")
-    assert "soffice" in more and "soffice" not in plain and "{" not in plain
+    assert card["kind"] == "bash" and card["title"] == "Convert Board_Update_Q3.pptx to PDF"
+    # a command card like the built-in agent's: the detail is the command alone (it goes in the Details fold), no
+    # JSON of the request; core.approval_view gives the card its plain line
+    assert card["detail"].startswith("cd /tmp/lout") and "{" not in card["detail"] and '"command"' not in card["detail"]
+    from meshpool_harness.agent.core import approval_view, _plain_command_title
+    assert approval_view(card["kind"], card["title"], card["detail"]) == {"sum": "Convert Board_Update_Q3.pptx to PDF"}
+    # the built-in agent's card for the same command (its title is "Run this command?") says the same
+    assert approval_view("bash", "Run this command?", card["detail"])["sum"] == "Convert Board_Update_Q3.pptx to PDF"
+    assert _plain_command_title("soffice --convert-to pdf x.pptx; rm -rf ~/Documents") != "Convert x.pptx to PDF?"
+    # the page draws that plain line and folds the command under Details
+    js = (UI / "app.js").read_text(encoding="utf-8")
+    pa = js[js.index("function plainApproval("):]
+    assert "ev.sum" in pa[:400] and "<summary>Details</summary>" in pa[:600]
 
 
 def test_soffice_cannot_run_inside_codex_s_sandbox_but_meshpool_s_converter_can(tmp_path):

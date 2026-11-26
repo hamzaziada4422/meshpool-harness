@@ -684,16 +684,16 @@ class ACPAgent:
         detail = _diff_of(tc.get("content")) or _text_of(tc.get("content")) or \
             (json.dumps(raw, indent=1, ensure_ascii=False)[:3000] if raw else "")
         from meshpool_harness import office_guard as OG
-        plain = OG.plain_command_title(cmd) if tc.get("kind") == "execute" else ""
         if held:
-            plain = f"Change {held}? It is open in Office right now"
-        if plain:
-            # Sara: the card's title was the raw soffice command and its body a JSON blob. Plain words on the card,
-            # the exact command in the Details fold (the page splits the body at "Details:").
-            lines = ["If Office saves its own copy later, this change is lost."] if held else \
-                ["meshpool runs this command for the agent."]
-            detail = "\n".join(lines) + "\n\nDetails:\n" + (cmd or detail)[:3000]
-            title = plain
+            # a file open in Office: an office card, its plain lines and the exact command under "Details"
+            title = f"Change {held}? It is open in Office right now"
+            detail = "If Office saves its own copy later, this change is lost.\n\nDetails:\n" + (cmd or detail)[:3000]
+        elif tc.get("kind") == "execute" and cmd:
+            # Sara: the card's title was the raw soffice command and its body a JSON blob of rawInput. The card is a
+            # command card like the built-in agent's: the plain line comes from core.approval_view (the title when it
+            # is plain words, "Convert Board_Update_Q3.pptx to PDF"), the command alone sits in its Details fold.
+            title = OG.plain_command_title(cmd) or title
+            detail = cmd[:3000]
         kind = "edit" if (tc.get("kind") == "edit" or _diff_of(tc.get("content"))) else \
             ("bash" if tc.get("kind") == "execute" else "mcp")
         choice, _note = self.approve(kind, title, detail,

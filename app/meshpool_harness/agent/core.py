@@ -832,6 +832,10 @@ def _plain_command_title(script: str) -> str:
     Never milder than the command (review, 0.0.18): "Read" only when every step only reads, a write, delete or the
     network is named as such, and a chain says how many steps it has."""
     s = str(script or "")
+    from meshpool_harness.office_guard import plain_command_title as _office_title
+    conv = _office_title(s)                           # Sara: "Convert Board_Update_Q3.pptx to PDF", not the soffice line
+    if conv:
+        return conv + "?"
     hd = _heredoc_title(s)                            # a heredoc's lines are text for a program, never steps
     if hd:
         return hd
