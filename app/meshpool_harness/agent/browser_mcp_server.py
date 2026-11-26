@@ -91,6 +91,9 @@ def _home() -> Path:
     return Path(os.environ.get("MESHPOOL_HOME") or Path.home() / ".meshpool")
 
 
+RENDER_IDLE_S = float(os.environ.get("MH_RENDER_IDLE_S", "120") or 120)   # the shared renderer's idle close
+
+
 class ProfileLock:
     """An exclusive, OS-level lock on a file next to the profile folder: gone when its holder dies, so never stale."""
 
@@ -144,11 +147,36 @@ class Browser:
         self.notice = ""                    # said once, in the next page description (a last-resort browser was used)
         self.popup_note = ""                # said once: the page opened a new tab and the agent followed it
         self.lock = None                    # the profile folder's lock (one browser per profile)
+        self.render = None                  # the headless renderer that view_output, ui_audit and ui_smoke share
         threading.Thread(target=self._loop, daemon=True).start()
+
+    def render_browser(self, launch):
+        """The headless renderer, started on first use and kept for the next call: each view_output, ui_audit and
+        ui_smoke started and closed a Chromium of its own before (about a second of CPU and a dozen processes)."""
+        b = self.render
+        try:
+            if b is not None and b.is_connected():
+                return b
+        except Exception:  # noqa: BLE001
+            pass
+        self.render = launch()
+        return self.render
+
+    def _close_render(self):
+        b, self.render = self.render, None
+        if b is not None:
+            try:
+                b.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _loop(self):
         while True:
-            fn, box, done, skip = self.q.get()
+            try:                                    # an unused renderer is closed after RENDER_IDLE_S, on this thread
+                fn, box, done, skip = self.q.get(timeout=RENDER_IDLE_S if self.render is not None else None)
+            except queue.Empty:
+                self._close_render()
+                continue
             if skip.is_set():                       # the client gave up (Stop, timeout) before its turn: never run it
                 box["e"] = ToolFailed("cancelled before it ran")
                 done.set()
@@ -670,10 +698,30 @@ def _outputs_dir(sub: str) -> Path:
     return out
 
 
+class _Kept:
+    """The shared renderer as view, ui_audit and ui_smoke see it: their close() closes the contexts they opened and
+    leaves the browser running for the next call (Browser.render_browser)."""
+
+    def __init__(self, browser):
+        self._b = browser
+
+    def __getattr__(self, name):
+        return getattr(self._b, name)
+
+    def close(self):
+        for c in list(self._b.contexts):
+            try:
+                c.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def _launcher():
-    """A separate headless Chromium for audits and renders (fresh viewports, never the user's window)."""
+    """A separate headless Chromium for audits and renders (fresh viewports, never the user's window), shared by
+    every call on the browser thread and closed after RENDER_IDLE_S unused."""
     from meshpool_harness import ui_audit as UA
-    return UA.launcher(B.pw)
+    launch = UA.launcher(B.pw)
+    return lambda: _Kept(B.render_browser(launch))
 
 
 def _images(shots, limit: int = 4) -> list:

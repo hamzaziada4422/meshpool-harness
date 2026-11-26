@@ -138,20 +138,29 @@ def test_a_long_streamed_line_is_measured_at_its_end_only(monkeypatch):
     from testkit import cli_v2_shots as S
     t, out, clk = S.make_terminal()
     t.emit({"type": "model_start"})
-    counted = [0]
-    real_cw = R.cw
-    monkeypatch.setattr(R, "cw", lambda ch: counted.__setitem__(0, counted[0] + 1) or real_cw(ch))
-    word = "pool’s “routes” 価格\t"                        # non-ASCII and wide characters: the slow path
-    per_token = []
-    for i in range(600):                                   # one paragraph, no line break: about 12,000 characters
-        before = counted[0]
-        t.emit({"type": "text_delta", "text": word})
-        per_token.append(counted[0] - before)
-        if i in (5, 50, 599):
-            assert t._turn_live()[0][0] == R.clip(_old_tail(t._partial, t.width), t.width - 1)   # same line as before
-    assert max(per_token[-50:]) <= 2 * max(per_token[:50]) + 50  # flat, not growing with the line (was O(n) per token)
-    assert max(per_token) < 10 * t.width
-    t.emit({"type": "turn_end"})
+    try:
+        counted = [0]
+        real_cw = R.cw
+        me = threading.get_ident()                         # the spinner's tick thread redraws too: count this thread only
+
+        def cw(ch):
+            if threading.get_ident() == me:
+                counted[0] += 1
+            return real_cw(ch)
+        monkeypatch.setattr(R, "cw", cw)
+        word = "pool’s “routes” 価格\t"                    # non-ASCII and wide characters: the slow path
+        per_token = []
+        for i in range(600):                               # one paragraph, no line break: about 12,000 characters
+            before = counted[0]
+            t.emit({"type": "text_delta", "text": word})
+            per_token.append(counted[0] - before)
+            if i in (5, 50, 599):
+                assert t._turn_live()[0][0] == R.clip(_old_tail(t._partial, t.width), t.width - 1)   # same line
+        assert max(per_token[-50:]) <= 2 * max(per_token[:50]) + 50  # flat, not growing with the line (was O(n))
+        assert max(per_token) < 10 * t.width
+    finally:
+        t.emit({"type": "turn_end"})                       # ends the tick thread even when an assert fails
+        t._turn = False
 
 
 def test_vlen_fast_path_matches_per_character_widths():

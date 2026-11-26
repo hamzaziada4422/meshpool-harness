@@ -145,12 +145,19 @@ def plan(messages, tools):
             return ("tool", sc, {})
         return ("text", "Computer use: " + (done[-1]["content"][:300] if done else "no computer tool"))
     if "read the pdf" in u:
+        if "exec_command" in names and not names & {"read", "read_file"}:
+            # Codex 0.171 replica (every code chat since 0.0.16): no document reader, so its one command tool reads it
+            if step == 0:
+                return ("tool", "exec_command", {"cmd": "python3 -c \"import re; d=open('report.pdf','rb').read(); "
+                                                        "print('Pages:', len(re.findall(rb'/Type\\s*/Page\\b', d)))\""})
+            return ("text", "Read: " + done[-1]["content"][-120:].replace("\n", " "))
         if step == 0:
             return ("tool", "read_file" if "read_file" in names else "read", {"path": "report.pdf"})
-        if step == 1:
-            rd = next((n for n in names if n.endswith("read_document")), None)
-            if rd:
-                return ("tool", rd, {"path": "model.pbix"})
+        rd = next((n for n in names if n.endswith("read_document")), None)
+        if rd and step <= 3 and not any("Page" in m["content"] or "page" in m["content"] for m in done[1:]):
+            return ("tool", rd, {"path": "model.pbix" if step == 1 else "report.pdf"})
+        if step <= 2 and "tool_search" in names and not rd:      # Pi since 0.0.16: office tools load on request
+            return ("tool", "tool_search", {"query": "read_document"})
         return ("text", "Read: " + " || ".join(m["content"][:120].replace("\n", " ") for m in done))
     if "show python code" in u:                           # a fenced code block (copy button, colours in the app)
         return ("text", "Here it is:\n\n```python\ndef add(a, b):\n    return a + b  # sum\n```\n\nThat is all.")

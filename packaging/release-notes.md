@@ -6,6 +6,7 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
   - A reply streaming into a long chat uses about a third of the CPU it did, and reasoning about a sixth. The page no longer asks for git status on every streamed piece, and a code block is coloured when it settles, not on every word.
   - The Session panel checks git every 15 seconds when idle instead of every 4, and not at all while the window is hidden.
   - A deck starts LibreOffice once instead of three times, and a workbook twice instead of five times.
+  - Looking at a web page or a table (view_output, ui_audit, ui_smoke) reuses one hidden browser instead of starting a new one for every look. It closes after two minutes unused. A second look takes about 0.5 s instead of 1.3 s.
   - The skills list, the git safety check and program versions are kept instead of being worked out again on every step, so a ten-step turn starts about half as many processes.
   - In the terminal, typing no longer runs git, and your status line command runs when its input changes.
 - **Bugs fixed, each with a test.** docs/audit/LEDGER-0.0.17.md lists 602 bugs from three audits (the 0.0.16 workstream audit, a platform-wide audit and this release's own review), with the status of each and the test that checks it. 598 have a test. Among the fixes new in this release:

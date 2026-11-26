@@ -364,3 +364,56 @@ def test_ten_step_turn_runs_only_its_own_commands_the_second_time(tmp_path, monk
     assert len(bash) == 5
     assert len(others) == 2 and all("check-ignore" in c for c in others), others   # was 15: versions, config, ...
     assert parses == []                                  # was ~5000 SKILL.md reads and parses for one turn
+
+
+# ---------------------------------------------------------------- one headless renderer for view_output, ui_audit, ui_smoke
+def test_renders_share_one_headless_browser_and_it_closes_when_idle(monkeypatch):
+    from meshpool_harness import ui_audit as UA
+    from meshpool_harness.agent import browser_mcp_server as BM
+
+    class Ctx:
+        def __init__(self, owner):
+            self.owner = owner
+
+        def close(self):
+            self.owner.contexts.remove(self)
+
+    class FakeBrowser:
+        def __init__(self):
+            self.contexts, self.closed = [], False
+
+        def is_connected(self):
+            return not self.closed
+
+        def new_context(self, **kw):
+            c = Ctx(self)
+            self.contexts.append(c)
+            return c
+
+        def close(self):
+            self.closed = True
+
+    started = []
+
+    def launch():
+        started.append(FakeBrowser())
+        return started[-1]
+    monkeypatch.setattr(BM, "RENDER_IDLE_S", 0.3)
+    monkeypatch.setattr(BM, "B", BM.Browser())
+    monkeypatch.setattr(UA, "launcher", lambda pw: launch)
+
+    def one_render():                                   # what view.py, ui_audit and ui_smoke do with launch()
+        b = BM._launcher()()
+        b.new_context()
+        b.close()
+        return b
+    for _ in range(3):
+        BM.B.run(one_render)
+    assert len(started) == 1                           # was one Chromium per call
+    assert not started[0].closed and started[0].contexts == []   # each call's contexts are closed, the browser kept
+    deadline = time.time() + 5
+    while not started[0].closed and time.time() < deadline:
+        time.sleep(0.05)
+    assert started[0].closed and BM.B.render is None    # closed on the browser thread after the idle time
+    BM.B.run(one_render)
+    assert len(started) == 2                           # and started again on the next call
