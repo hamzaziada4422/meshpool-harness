@@ -76,7 +76,10 @@ def test_cached_values_show_in_the_cell_format_with_the_formula_beside(proj):
     assert s["rows"][6][1:4] == ["3.1%", "(1,234.50)", "2026"]
 
 
-def test_a_formula_never_calculated_still_shows_the_formula(proj):
+def test_a_formula_never_calculated_still_shows_the_formula(proj, monkeypatch):
+    """Without LibreOffice to calculate it (the preview computes it otherwise: test_rr_xlsx_values.py)."""
+    from meshpool_harness import xl_values
+    monkeypatch.setattr(xl_values, "values", lambda *a, **k: None)
     budget(proj / "b.xlsx")
     s = P.meta(str(proj), "b.xlsx")["sheets"][0]
     assert s["rows"][5][:2] == ["Total", "=SUM(B4:B5)"]

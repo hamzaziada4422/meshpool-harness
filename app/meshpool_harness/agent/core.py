@@ -2091,6 +2091,22 @@ def _recalc_formulas(path, tmp: str, forms: dict | None = None, timeout: float =
         return None
 
 
+def _cache_formula_values(root, since: float) -> int:
+    """Workbooks written or changed this turn whose formulas have no stored result (openpyxl writes none) get the
+    results written in, calculated once by the kept LibreOffice: Quick Look, phones and mail show numbers, not blanks.
+    Formulas and formatting stay as they are. Never stops a turn."""
+    n = 0
+    try:
+        from meshpool_harness import xl_values
+        for f in _recent_office(root, since, ".xlsx")[:6]:
+            if f.name.startswith("~$"):
+                continue
+            n += xl_values.fill(f)
+    except Exception:  # noqa: BLE001
+        pass
+    return n
+
+
 def _formula_result_miss(asked: str, root, since: float) -> str:
     """Workbooks written this turn, recalculated through LibreOffice: a formula the turn wrote or changed that comes
     out as an Excel error, or (when the request says its formula is wrong) a changed formula whose result is the same
@@ -3392,6 +3408,8 @@ class Agent:
                         if rep:
                             self.messages.append({"role": "user", "content": "[Meshpool] " + rep})
                             continue
+                    if os.environ.get("MH_CACHE_FORMULAS", "1") != "0":     # any route that wrote a workbook; a no-op when none needs it
+                        _cache_formula_values(self.root, g.get("t0", 0))
                     if self._office_direct() and not g.get("office_check_nudged") \
                             and os.environ.get("MH_OFFICE_FINISH_CHECK", "1") != "0":
                         # SpreadsheetBench (38f57ffb), sb-374-31: the agent's own assert failed, it printed the rows

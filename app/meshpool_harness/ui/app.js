@@ -400,7 +400,7 @@ function threadMenu(e, id) {
   const t = S.threads.find(x => x.id === id) || (S.cur?.id === id ? {id, ...S.cur.view} : {});
   const inPj = t.project_id && S.pj.find(p => p.id === t.project_id);
   const projects = [
-    ...S.pj.map(p => ({label: p.name, icon: ICON.folder, checked: p.id === t.project_id ? true : undefined, fn: () => p.id === t.project_id || moveChat(id, p.id)})),
+    ...S.pj.map(p => ({label: p.name, icon: ICON.folder, checked: p.id === t.project_id && t.project_linked !== false ? true : undefined, fn: () => (p.id === t.project_id && t.project_linked !== false) || moveChat(id, p.id)})),
     ...(S.pj.length ? [{sep: true}] : []),
     {label: "New project…", icon: ICON.plus, fn: async () => { const pid = await newProjectFlow({stay: true}); if (pid) moveChat(id, pid); }},
     ...(inPj ? [{label: "Remove from project", icon: ICON.x, fn: () => moveChat(id, "")}] : []),
@@ -421,7 +421,7 @@ async function confirmDelete(id) {
 async function moveChat(id, pid) {
   const t = S.threads.find(x => x.id === id), prev = t?.project_id || "";
   try { await post(`/api/threads/${id}`, {action: "move", project_id: pid}); } catch (e) { return toast(e.message); }
-  if (t) t.project_id = pid;
+  if (t) { t.project_id = pid; t.project_linked = !!pid; }
   if (S.cur?.id === id && S.cur.view) S.cur.view.project_id = pid;
   await loadThreads(); await loadPj(); renderTop();
   const name = S.pj.find(p => p.id === pid)?.name;
@@ -1948,7 +1948,10 @@ function fillInput(text, opts = {}) {
   const inp = $("#input"); if (!inp || !text) return;
   const sp = splitAtt(text);
   text = sp.text;
-  const refs = sp.files, where = sp.where;
+  const norm = x => String(x).replace(/^\.\//, "");
+  const gone = new Set((opts.removed || []).map(norm));            // copies Undo or Rewind just deleted: no chip, a note instead
+  const refs = sp.files.filter(r => !gone.has(norm(r))), where = sp.where;
+  const lost = sp.files.filter(r => gone.has(norm(r))).map(r => r.split("/").pop());
   const draft = inp.value, ours = S.filled != null && draft === S.filled;
   if (ours) S.attachments = S.attachments.filter(a => !a.filled);
   if (!draft.trim() || ours) inp.value = text;
@@ -1961,6 +1964,7 @@ function fillInput(text, opts = {}) {
   if (!opts.back) { inp.focus(); return; }
   if (document.activeElement === inp) inp.blur();
   toast("Your message is back in the box as a draft. Edit it, then send it again if you want to.", 6000);
+  if (lost.length) toast(lost.length === 1 ? `${lost[0]} was removed with the undo. Attach it again if you need it.` : `${lost.join(", ")} were removed with the undo. Attach them again if you need them.`, 8000);
 }
 async function undoTurn(n) {
   if (!await ask({title: "Undo this reply?", text: "Files meshpool changed go back to how they were before it, and the conversation goes back to that point. Replies after it are undone too.", ok: "Undo changes", danger: true})) return;
@@ -1968,7 +1972,7 @@ async function undoTurn(n) {
   const ue = threadLog().find(e => e.type === "user" && (t.message_index != null && e.mi === t.message_index)) ||
     threadLog().find(e => e.type === "user" && t.event_index != null && e.i === t.event_index);
   const asked = ue?.text || "";
-  try { const root = curRoot(); const r = await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); if (asked) fillInput(asked, {back: true}); diffTurnGone(n); renderBranch(true); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel(); afterUndo(root, r.undone); }
+  try { const root = curRoot(); const r = await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); if (asked) fillInput(asked, {back: true, removed: r.undone?.deleted}); diffTurnGone(n); renderBranch(true); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel(); afterUndo(root, r.undone); }
   catch (e) { toast(e.message); }
 }
 // OM-05: Undo and Rewind take the reply out of the chat (a rewind, by design), so the Changes tab showing that reply
@@ -2000,7 +2004,7 @@ async function rewindFork(kind, el) {
     if (!a) return;
     const r = await post(`/api/agent/${cur.id}/rewind`, {event_index: ei, files: a.checked, since: 1e9});
     if (r.forked) { await loadThreads(); openThread(r.forked); toast("This agent cannot go back in place, so the conversation up to there is a new chat.", 5000); return; }
-    if (r.text) fillInput(r.text, {back: true});
+    if (r.text) fillInput(r.text, {back: true, removed: r.undo?.deleted});
     if (a.checked) diffTurnGone(null);
     renderBranch(true); clearTimeout(cur.pollT); resetChat(cur); poll(); if (S.panel === "diff") renderPanel();
     afterUndo(cur.view?.workdir || curRoot(), r.undo);

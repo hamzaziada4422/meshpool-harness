@@ -262,6 +262,15 @@ def _sections(fmt: str) -> list[str]:
 _DATEISH = re.compile(r"[yYmMdDhHsS]")
 
 
+def _group(digits: str) -> str:
+    """Thousands separators on a digit string that may have leading zeros."""
+    parts = []
+    while digits:
+        parts.append(digits[-3:])
+        digits = digits[:-3]
+    return ",".join(reversed(parts))
+
+
 def _number(v, fmt) -> str:
     """A number as the cell's number format shows it: digit groups, decimals, percent, currency text, a negative or
     zero section. The preview showed 412000 for a cell Excel shows as 412,000. Formats it does not cover (dates,
@@ -278,9 +287,12 @@ def _number(v, fmt) -> str:
         sec = secs[0]
         if v < 0:
             sign, v = "-", -v
-    pre, num, post, i = "", "", "", 0
+    pre, num, post, i, gen = "", "", "", 0, False
     while i < len(sec):                                  # literal text before and after one run of digit placeholders
         ch = sec[i]
+        if sec[i:i + 7].lower() == "general" and not num and not gen:
+            gen, i = True, i + 7                         # General inside a longer format is the plain number, not the word
+            continue
         if ch == '"':
             j = sec.find('"', i + 1)
             j = len(sec) if j < 0 else j
@@ -306,10 +318,12 @@ def _number(v, fmt) -> str:
             return _cell(v if not sign else -v)
         else:
             lit, i = ch, i + 1
-        if num:
+        if num or gen:
             post += lit
         else:
             pre += lit
+    if gen:
+        return sign + pre + _cell(v) + post
     if not num:
         return pre + post if pre or post else _cell(v if not sign else -v)
     if "%" in pre + post:
@@ -324,6 +338,13 @@ def _number(v, fmt) -> str:
         a, _, b = text.partition(".")
         b = b[:need] + b[need:].rstrip("0")
         text = a + ("." + b if b else "")
+    zeros = whole.count("0")
+    if zeros:                                            # 00000 keeps leading zeros: 02139 stays 02139
+        a, dot, b = text.partition(".")
+        digits = a.replace(",", "").zfill(zeros)
+        if "," in whole:
+            digits = _group(digits)
+        text = digits + dot + b
     if "0" not in whole:
         a, dot, b = text.partition(".")
         if a in ("0", ""):
@@ -342,6 +363,11 @@ def _xlsx_sheets(p: Path) -> list[dict]:
     wf = openpyxl.load_workbook(p, read_only=True, data_only=False)     # F-24: formulas with no cached value show as text
     out = []
     try:
+        try:
+            from meshpool_harness import xl_values
+            calc = xl_values.values(p) or {}           # formulas with no stored result (openpyxl): computed once per file version
+        except Exception:  # noqa: BLE001
+            calc = {}
         for ws in wb.worksheets[:MAX_SHEETS]:
             rows, cols, more, forms = [], 0, False, {}
             try:
@@ -357,11 +383,17 @@ def _xlsx_sheets(p: Path) -> list[dict]:
                 cells = []
                 for j, (c, f) in enumerate(zip(row, frow)):
                     v = getattr(c, "value", None)
-                    f = f if isinstance(f, str) else getattr(f, "text", None)        # an array formula
-                    if isinstance(f, str) and f and not f.startswith("="):
-                        f = "=" + f
+                    if not isinstance(f, str):
+                        f = getattr(f, "text", None)                                  # an array formula
+                        if isinstance(f, str) and f and not f.startswith("="):
+                            f = "=" + f
+                    elif getattr(c, "data_type", None) != "f" and not f.startswith("="):
+                        f = None                                                      # a text label, not a formula
                     if v is None and f and f.startswith("="):
-                        cells.append(f)
+                        from openpyxl.utils import get_column_letter
+                        v = calc.get((ws.title, f"{get_column_letter(j + 1)}{i + 1}"))
+                    if v is None and f and f.startswith("="):
+                        cells.append(f)                  # never calculated and cannot be here: the formula itself
                         continue
                     if f and f.startswith("="):
                         forms[f"{i}:{j}"] = f[:2000]
