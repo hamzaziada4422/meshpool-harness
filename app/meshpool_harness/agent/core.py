@@ -1502,6 +1502,28 @@ def _piped_check_hides_status(cmd: str) -> bool:
     return any(_TEST_RUN.search(s) for s in stages[:-1])
 
 
+_GIT_LOOK = re.compile(_GIT_PRE + r"(?:status|diff|log|show|branch|rev-parse|ls-files|blame|describe|remote|tag)\b")
+_STASH_PUSH = re.compile(_GIT_PRE + r"stash(?:\s+(?:push|save)\b.*|(?:\s+-[-\w]+(?:\s+-[-\w]+)*)?\s*)$")
+_STASH_BACK = re.compile(_GIT_PRE + r"stash\s+(?:pop|apply)\b")
+
+
+def _leaves_tree_as_it_was(cmd: str) -> bool:
+    """A command whose only effect on the files is a round trip, or none: git status, diff and log, a test run, and
+    a `git stash` that its own `git stash pop` puts back. It is not an edit, so a passing test run before it is still
+    the check of the files as they are (Omar: a stash round trip after the tests made the receipt say "nothing was run
+    after the last change, so it is not verified"). A stash with no pop in the same command is a change."""
+    pushes = backs = 0
+    for seg in PR._segments(str(cmd or "")):
+        seg = re.sub(r"^cd\s+(\"[^\"]*\"|'[^']*'|\S+)\s*&&\s*", "", seg).strip()
+        if _STASH_BACK.match(seg):
+            backs += 1
+        elif _STASH_PUSH.match(seg):
+            pushes += 1
+        elif not (_GIT_LOOK.match(seg) or _TEST_RUN.search(seg) or T.read_only(seg)):
+            return False
+    return pushes == backs
+
+
 def _check_line(cmd: str, shown: str, code: int) -> str:
     """The receipt's verdict on the last command after the last change: never "passed" when the exit status could
     not show a failure (a check piped into another command without pipefail)."""
@@ -7048,7 +7070,7 @@ class Agent:
                 ok = T.exec_exit_code(out) == 0
                 after = self._tree_sig() if before is not None else None
                 self._sig_post = (id(c), after)
-                if before is not None and after != before:
+                if before is not None and after != before and not _leaves_tree_as_it_was(args.get("cmd")):
                     self.ws.edits += 1                 # a heredoc write is an edit: the loop guards see the progress
             else:
                 out = getattr(self.ws, name)(**args)
