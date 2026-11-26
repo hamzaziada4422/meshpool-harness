@@ -73,15 +73,22 @@ def _host(base: str) -> str:
 
 def provider_cap(base: str) -> int:
     """How many model calls an endpoint takes at once when MH_MAX_INFLIGHT is not set: the Meshpool gateway 16, the
-    known cloud APIs 32, a local server 2, anything else 8."""
+    known cloud APIs 32, a local server 6 (three or four meshpool windows and their sub-agents at once), anything
+    else 8."""
     host = _host(base)
     if host == "meshpool.ai" or host.endswith(".meshpool.ai"):
         return 16
     if host in _CLOUD_HOSTS:
         return 32
     if host in _LOCAL_HOSTS:
-        return 2
+        return 6
     return 8
+
+
+def wait_line(n: int, m: int) -> str:
+    """What a chat says while the model's call slots are all taken (Omar, 0.0.19: three meshpool processes at once
+    printed "Waiting for a free slot... (MH_MAX_INFLIGHT)", which names a setting nobody knows)."""
+    return f"Waiting: other meshpool chats are using the model right now ({max(n, 0)} of {max(m, 1)})."
 
 
 def default_slots_dir() -> str:
@@ -101,6 +108,7 @@ class _Slots:
     def __init__(self, name: str):
         self.dir = os.environ.get("MH_SLOTS_DIR") or default_slots_dir()
         self.name = name
+        self.held = 0                                # how many slots other processes held at the last pass
 
     def _try(self, i: int):
         path = os.path.join(self.dir, f"{self.name}-{i}.lock")
@@ -125,6 +133,7 @@ class _Slots:
             return None                              # no shared folder: the in-process gate still holds
         told = False
         while True:
+            self.held = 0
             for i in range(n() if callable(n) else n):         # the setting as it is now, on every pass
                 try:
                     f = self._try(i)
@@ -132,6 +141,7 @@ class _Slots:
                     return None
                 if f:
                     return f
+                self.held += 1
             if not told:
                 told = True
                 waiting()
@@ -208,8 +218,7 @@ class Gate:
             check_stop()
             if not emit and not st["warned"] and time.time() - t0 > 2:
                 st["warned"] = True
-                print(f"[Meshpool] waiting for a free model-call slot ({self.inflight} running, limit "
-                      f"{self.limit})", file=sys.stderr, flush=True)
+                print("[Meshpool] " + wait_line(self.inflight, self.limit), file=sys.stderr, flush=True)
 
         with self.cond:
             counted = False
@@ -221,9 +230,7 @@ class Gate:
                         if emit:
                             emit({"type": "status", "text": "Waiting for another chat's model call to finish (the "
                                                             "endpoint is recovering, so calls go one at a time)."
-                                                            if self.degraded else
-                                                            f"Waiting for a free slot: {self.inflight} model calls "
-                                                            "are already running on this key (MH_MAX_INFLIGHT)."})
+                                                            if self.degraded else wait_line(self.inflight, self.limit)})
                         announce()
                     self.cond.wait(0.25)
                     self.cond.release()
@@ -244,8 +251,7 @@ class Gate:
                 with self.cond:
                     self.waiting += 1
                 if emit:
-                    emit({"type": "status", "text": "Waiting for a free slot: sub-agents or another Meshpool window "
-                                                    "are using this key's model calls (MH_MAX_INFLIGHT)."})
+                    emit({"type": "status", "text": wait_line(self.slots.held, self.limit)})
                 announce()
             try:
                 slot = self.slots.take(lambda: self.limit, tick, wait_shared)

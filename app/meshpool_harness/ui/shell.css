@@ -409,6 +409,8 @@
 .ptabs .pstrip.fr{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 24px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 24px),transparent)}
 .ptabs .pstrip.fl{-webkit-mask-image:linear-gradient(270deg,#000 calc(100% - 24px),transparent);mask-image:linear-gradient(270deg,#000 calc(100% - 24px),transparent)}
 .ptabs .pstrip.fl.fr{-webkit-mask-image:linear-gradient(90deg,transparent,#000 24px,#000 calc(100% - 24px),transparent);mask-image:linear-gradient(90deg,transparent,#000 24px,#000 calc(100% - 24px),transparent)}
+.ptabs .pnav{flex:none;width:24px;height:28px;padding:0;display:grid;place-items:center;color:var(--ink-2)}.ptabs .pnav[hidden]{display:none}
+.ptabs .pnav svg{width:14px;height:14px}.ptabs #pnavl svg{transform:scaleX(-1)}
 .pbar select{text-overflow:ellipsis}
 .pbody{background:var(--bg)}
 .col:has(>.gal){max-width:none;padding:0}
