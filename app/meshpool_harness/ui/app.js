@@ -665,7 +665,6 @@ async function sendNow(interrupt) {
   clearTimeout(S.suggT); if ($("#sugg")) $("#sugg").hidden = true;
   inp.value = ""; inp.style.height = "auto";
   // Doherty threshold: answer the press at once, before the server does
-  const sb = $("#sendBtn"); if (sb) { sb.classList.remove("go"); void sb.offsetWidth; sb.classList.add("go"); }
   S.sendHold = Date.now() + 2500; setWorking("Sending"); scrollConv(true);
   let created = null; const draft0 = {project: S.draft.project, pid: S.draft.pid, incognito: !!S.draft.incognito};
   try {
@@ -2360,7 +2359,7 @@ function spHTML(d, pr) {
       <div class="row spbr"><select id="spBr" aria-label="Switch branch">${br.branches.map(b => `<option ${b === br.name ? "selected" : ""}>${esc(b)}</option>`).join("")}</select></div>
       <div class="row spbr"><input id="spNew" placeholder="New branch name" aria-label="New branch name"><button class="btn" id="spCreate">Create</button></div>` : ""}`;
   const cls = cx.percent >= 90 ? "bad" : cx.percent >= 70 ? "warn" : "";
-  const ctxHTML = `<div class="spctx"><div class="spbar ${cls}" role="progressbar" aria-valuenow="${cx.percent}" aria-valuemin="0" aria-valuemax="100" aria-label="Context used"><i style="width:${cx.percent}%"></i></div>
+  const ctxHTML = `<div class="spctx"><div class="spbar ${cls}" role="progressbar" aria-valuenow="${cx.percent}" aria-valuemin="0" aria-valuemax="100" aria-label="Context used"><i style="transform:scaleX(${Math.max(0, Math.min(100, Number(cx.percent) || 0)) / 100})"></i></div>
     <div class="spnum"><b>${cx.percent}%</b><span>${spTok(cx.used)} of ${spTok(cx.size)} tokens${/estimate/.test(cx.source) ? " (window estimated)" : ""}</span></div></div>`;
   const cRows = cn.servers.map(c => `<li><span class="cidot ${c.status === "connected" ? (c.used ? "ok" : "") : c.error || c.status === "error" ? "bad" : "run"}"></span><span class="cn">${esc(c.name)}</span><span class="cs">${c.used ? `used ${c.used}×` : c.status === "connected" ? `${c.tools} tools` : esc(c.status)}</span></li>`).join("");
   const outs = d.outputs;

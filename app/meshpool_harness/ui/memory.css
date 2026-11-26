@@ -9,7 +9,7 @@
 .mem-portrait small{color:var(--ink-3)}
 .mem-sent{border:0;background:none;padding:2px;margin:0;font:inherit;color:inherit;text-align:left;border-radius:4px;cursor:pointer}
 .mem-sent:hover,.mem-sent.on{background:color-mix(in srgb,var(--pool) 16%,transparent)}
-.mem-portrait.sk{display:flex;flex-direction:column;gap:8px}.mem-portrait.sk span{height:14px;border-radius:6px;background:var(--hover);animation:memsk 1.2s ease-in-out infinite alternate}
+.mem-portrait.sk{display:flex;flex-direction:column;gap:8px}.mem-portrait.sk span{height:14px;border-radius:6px;background:var(--hover);animation:memsk 1.2s var(--ease) infinite alternate}
 .mem-portrait.sk span:nth-child(2){width:80%}.mem-portrait.sk span:nth-child(3){width:55%}
 @keyframes memsk{from{opacity:.5}to{opacity:1}}
 .mem-tray,.mem-conf{border:1px solid var(--line);background:var(--surface);border-radius:var(--r-l);padding:16px 20px;display:flex;flex-direction:column;gap:8px}
@@ -44,7 +44,7 @@
 .mem-scope{border:1px solid var(--line);border-radius:var(--r-s);padding:0 8px;height:20px;font-size:var(--fs-xs)}
 .mem-kind{font-weight:500}.mem-kind.k-learned{color:var(--ink-2)}.mem-kind.k-noticed{color:var(--ink-3)}
 .mem-src{color:var(--ink-3)}
-.mem-acts{display:flex;gap:2px;opacity:0;transition:opacity var(--t-hover) ease;flex:none}
+.mem-acts{display:flex;gap:2px;opacity:0;transition:opacity var(--t-hover) var(--ease);flex:none}
 .mem-row:hover .mem-acts,.mem-row:focus-within .mem-acts{opacity:1}
 .mem-health{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;color:var(--ink-3);font-size:var(--fs-xs);margin-top:8px}
 .mem-health .bar{width:120px;height:4px;border-radius:2px;background:var(--line-2);overflow:hidden;display:inline-block}
@@ -102,7 +102,7 @@
 
 /* a suggestion: one quiet line above the composer */
 .composer-wrap{position:relative}
-.nudge010{position:relative;margin:0 auto 4px;width:min(640px,100%);display:flex;align-items:center;gap:8px;padding:8px 8px 8px 16px;border:1px solid var(--line);background:var(--surface);border-radius:var(--r-l);box-shadow:var(--shadow);font-size:var(--fs-s);z-index:20;animation:nudgein .18s ease-out}
+.nudge010{position:relative;margin:0 auto 4px;width:min(640px,100%);display:flex;align-items:center;gap:8px;padding:8px 8px 8px 16px;border:1px solid var(--line);background:var(--surface);border-radius:var(--r-l);box-shadow:var(--shadow);font-size:var(--fs-s);z-index:20;animation:nudgein var(--t-menu) var(--ease)}
 .nudge010 .n-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)}
 .nudge010 .n-t b{color:var(--ink);font-weight:500}.nudge010 .n-b{color:var(--ink-3)}
 .nudge010 .btn.sm{height:28px;padding:0 12px;border-radius:var(--r-m);flex:none;min-height:0}
@@ -114,14 +114,14 @@
 .cg{display:flex;align-items:center;gap:2px;margin:4px 0 0;padding-right:2px;border-radius:var(--r-s)}
 .cghd{flex:1;min-width:0;display:flex;align-items:center;gap:8px;border:0;background:none;padding:4px 8px;border-radius:var(--r-s);color:var(--ink-2);font:inherit;font-size:var(--fs-s);font-weight:500;cursor:pointer;text-align:left}
 .cghd:hover{background:var(--hover);color:var(--ink)}
-.cghd .chev{display:inline-grid;transition:transform var(--t-hover) ease;color:var(--ink-3)}.cghd .chev svg{width:16px;height:16px}
+.cghd .chev{display:inline-grid;transition:transform var(--t-hover) var(--ease);color:var(--ink-3)}.cghd .chev svg{width:16px;height:16px}
 .cg.shut .cghd .chev{transform:rotate(-90deg)}
 .cgn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .cghd .cnt{font-weight:400;color:var(--ink-3);font-size:var(--fs-xs)}
 .cgdot{width:7px;height:7px;border-radius:50%;flex:none;margin-left:auto;background:var(--pool)}.cgdot.wait{background:var(--warn)}
-.cgdot.run{animation:cgpulse 1.4s ease-in-out infinite}
+.cgdot.run{animation:cgpulse 2s var(--ease) infinite}
 @keyframes cgpulse{50%{opacity:.35}}
-.cgnew{opacity:0;transition:opacity var(--t-hover) ease}.cg:hover .cgnew,.cgnew:focus-visible{opacity:1}
+.cgnew{opacity:0;transition:opacity var(--t-hover) var(--ease)}.cg:hover .cgnew,.cgnew:focus-visible{opacity:1}
 .cgl2{margin-left:8px}
 .cgl{padding:8px 12px 2px;font-size:var(--fs-xs);color:var(--ink-3);font-weight:500}
 .cwait{display:flex;align-items:center;gap:8px;width:100%;margin:2px 0 4px;border:1px solid color-mix(in srgb,var(--warn) 45%,var(--line));background:color-mix(in srgb,var(--warn) 8%,transparent);color:var(--ink);border-radius:var(--r-m);padding:8px 12px;font-size:var(--fs-s);cursor:pointer}
@@ -145,7 +145,7 @@
 .mem-srcchip{min-height:24px}
 
 /* reply actions */
-.racts010{display:inline-flex;gap:2px;margin-left:4px;opacity:.55;transition:opacity var(--t-hover) ease}
+.racts010{display:inline-flex;gap:2px;margin-left:4px;opacity:.55;transition:opacity var(--t-hover) var(--ease)}
 .turnfoot:hover .racts010,.racts010:focus-within{opacity:1}
 .racts010 .iconbtn{min-width:28px;min-height:28px}.racts010 .iconbtn.on{color:var(--pool-text)}
 

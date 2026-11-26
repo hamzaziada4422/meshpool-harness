@@ -33,10 +33,8 @@
   --display:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;   /* display text is Plex Sans 500, no tracking under 40px */
   --body:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;
   --mono:"IBM Plex Mono",ui-monospace,Consolas,"SFMono-Regular",monospace;
-  --ease:cubic-bezier(.16,1,.3,1);       /* slow out: quick start, gentle landing (things arriving) */
-  --ease-in:cubic-bezier(.5,0,.75,0);    /* slow in: things leaving accelerate away */
-  --spring:cubic-bezier(.34,1.56,.64,1); /* follow-through: a small overshoot that settles */
-  --t-press:70ms; --t-hover:100ms; --t-fast:120ms; --t-menu:150ms; --t-side:200ms; --t-med:180ms; --t-slow:200ms;   /* one-off motion stays between 120 and 200 ms */
+  --ease:cubic-bezier(.22,1,.36,1);      /* the one easing curve, for everything that moves or fades */
+  --t-press:120ms; --t-hover:120ms; --t-fast:120ms; --t-menu:160ms; --t-side:200ms; --t-med:200ms; --t-slow:200ms;   /* 120 hover and press, 160 menus, 200 panels */
   color-scheme:light;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
@@ -78,13 +76,13 @@ code,pre,kbd{font-family:var(--mono)}
 b,strong,th,h1,h2,h3,h4,h5,h6{font-weight:600}   /* never the 700 a browser gives by default: the type has 400, 500 and 600 */
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 [hidden]{display:none!important}
-@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important}}
 
 /* ---------- shell ---------- */
 .app{display:grid;grid-template-columns:var(--sw,264px) minmax(0,1fr) auto;grid-template-rows:100vh;height:100vh;overflow:hidden;position:relative}
 .app>.side{grid-column:1}.app>.main{grid-column:2}.app>.panel{grid-column:3}
 .app.noside,.app.autoside{--sw:0px}
-.app.noside .side,.app.autoside .side{visibility:hidden;border-right-color:transparent;transition:visibility 0s var(--t-med),border-color var(--t-med)}
+.app.noside .side,.app.autoside .side{visibility:hidden;border-right-color:transparent;transition:visibility 0s var(--t-med),border-color var(--t-med) var(--ease)}
 
 
 /* ---------- sidebar ---------- */
@@ -121,8 +119,8 @@ b,strong,th,h1,h2,h3,h4,h5,h6{font-weight:600}   /* never the 700 a browser give
 .th .tt{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .th .tt small.tf{display:block;font-size:var(--fs-xs);color:var(--ink-3);line-height:1.2}
 .dot{width:6px;height:6px;border-radius:50%;flex:none;background:transparent}
-.dot.run{background:var(--pool);animation:mp-breathe 1.6s ease-in-out infinite}
-.dot.done{background:var(--pool);animation:mp-lightup var(--t-med) ease-out both}
+.dot.run{background:var(--pool);animation:mp-breathe 2s var(--ease) infinite alternate}
+.dot.done{background:var(--pool);animation:mp-fade var(--t-menu) var(--ease) both}
 .dot.wait{background:var(--warn)}
 .empty-side{color:var(--ink-3);font-size:var(--fs-s);padding:8px}
 .updbar{display:flex;align-items:center;gap:8px;margin:8px 8px 0;padding:8px 12px;border:1px solid var(--line);border-radius:var(--r-m);background:var(--surface);color:var(--ink);font-weight:500;font-size:var(--fs-s);text-align:left;cursor:pointer}
@@ -183,7 +181,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .work>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:8px;padding:4px 8px 4px 4px;margin-left:-4px;border-radius:var(--r-s);font-size:var(--fs-s);color:var(--ink-3)}
 .work>summary::-webkit-details-marker{display:none}
 .work>summary:hover{color:var(--ink);background:var(--hover)}
-.work>summary .chev{transition:transform .12s}
+.work>summary .chev{transition:transform var(--t-fast) var(--ease)}
 .work[open]>summary .chev{transform:rotate(90deg)}
 .work .rows{border-left:1px solid var(--line);margin:2px 0 4px 8px;padding:2px 0}
 .tool{font-size:var(--fs-s);color:var(--ink-3)}   /* tool activity reads as quiet metadata, not content */
@@ -242,24 +240,24 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .jumpdown[hidden]{display:none}
 
 .qcard{border:1px solid var(--line);background:var(--surface);border-radius:var(--r-l);padding:16px 16px 12px;margin:16px 0;box-shadow:var(--shadow-s,0 1px 2px rgba(0,0,0,.04))}
-.qcard.done .qin{animation:mp-fade var(--t-med) ease-out both}
+.qcard.done .qin{animation:mp-fade var(--t-menu) var(--ease) both}
 .qcard .qq{border:0;margin:0 0 16px;padding:0;min-width:0}
 .qcard legend{padding:0;margin:0 0 8px;display:flex;flex-direction:column;gap:4px;float:none;width:100%}
 .qcard .qchip{font-size:var(--fs-xs);font-weight:500;letter-spacing:.02em;color:var(--ink-3);text-transform:none}
 .qcard .qtext{font-size:var(--fs-m);font-weight:500;color:var(--ink);line-height:1.45}
 .qcard .qhint{font-size:var(--fs-xs);color:var(--ink-3)}
 .qopts{display:flex;flex-direction:column;gap:8px}
-.qopt{display:flex;align-items:center;gap:12px;width:100%;text-align:left;border:1px solid var(--line);background:var(--bg);border-radius:var(--r-m);padding:12px;color:var(--ink);cursor:pointer;font:inherit;min-height:44px;transition:background-color .15s ease-out,border-color .15s ease-out}
+.qopt{display:flex;align-items:center;gap:12px;width:100%;text-align:left;border:1px solid var(--line);background:var(--bg);border-radius:var(--r-m);padding:12px;color:var(--ink);cursor:pointer;font:inherit;min-height:44px;transition:background-color var(--t-hover) var(--ease),border-color var(--t-hover) var(--ease)}
 .qopt:hover{background:var(--hover)}
 .qopt[aria-checked="true"]{border-color:var(--pool);background:var(--pool-soft)}
 .qopt:focus-visible,.qopt:focus-within{outline:2px solid var(--focus);outline-offset:1px}
-.qopt .qk{flex:none;width:24px;height:24px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-size:var(--fs-xs);font-weight:500;color:var(--ink-3);background:var(--fill);transition:background-color .15s ease-out,color .15s ease-out}
+.qopt .qk{flex:none;width:24px;height:24px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-size:var(--fs-xs);font-weight:500;color:var(--ink-3);background:var(--fill);transition:background-color var(--t-hover) var(--ease),color var(--t-hover) var(--ease)}
 .qopt[aria-checked="true"] .qk{background:var(--pool);color:#fff}
 .qopt .qbody{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
 .qopt .ql{font-weight:500;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
 .qopt .qrec{font-size:var(--fs-xs);font-weight:400;color:var(--ink-3)}
 .qopt .qd{font-size:var(--fs-s);color:var(--ink-2)}
-.qopt .qck{flex:none;color:var(--pool-text);opacity:0;transition:opacity .15s ease-out}
+.qopt .qck{flex:none;color:var(--pool-text);opacity:0;transition:opacity var(--t-hover) var(--ease)}
 .qopt[aria-checked="true"] .qck{opacity:1}
 .qother input{width:100%;border:0;background:transparent;color:var(--ink);font:inherit;padding:2px 0;outline:0}
 .qother input::placeholder{color:var(--ink-3)}
@@ -291,7 +289,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 
 /* ---------- composer ---------- */
 .composer-wrap{flex:none;padding:0 24px 12px}
-.composer{max-width:var(--colw,760px);margin:0 auto;border:1px solid var(--line);background:var(--surface);border-radius:var(--r-l);box-shadow:var(--shadow);position:relative;transition:border-color .12s ease}
+.composer{max-width:var(--colw,760px);margin:0 auto;border:1px solid var(--line);background:var(--surface);border-radius:var(--r-l);box-shadow:var(--shadow);position:relative;transition:border-color var(--t-hover) var(--ease)}
 .composer:focus-within{border-color:var(--line-3)}
 .composer.drag{border-color:var(--pool);background:var(--pool-soft)}
 .app.planning .composer{border-color:var(--pool)}
@@ -401,16 +399,16 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .chip.ci{gap:8px}
 .cidot{width:8px;height:8px;border-radius:50%;background:var(--ink-3);flex:none;display:inline-block}
 .chip.ci.passing .cidot,.cidot.ok{background:var(--add)} .chip.ci.failing .cidot,.cidot.bad{background:var(--del)}
-.chip.ci.running .cidot,.cidot.run{background:var(--warn);animation:pulse 1.2s ease-in-out infinite}
+.chip.ci.running .cidot,.cidot.run{background:var(--warn);animation:pulse 2s var(--ease) infinite}
 .chg summary{cursor:pointer;list-style:none;display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}.chg summary::-webkit-details-marker{display:none}
 .chg ul{max-height:320px;overflow:auto}.chg li .cn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .chg .badge{min-width:68px;text-align:center;flex:none}.chg .dir{color:var(--ink-3);font-size:var(--fs-xs)}.nw{white-space:nowrap}.zero{color:var(--ink-3)}
-.chg summary::before{content:"";width:6px;height:6px;border-right:1.5px solid var(--ink-3);border-bottom:1.5px solid var(--ink-3);transform:rotate(-45deg);transition:transform .15s ease;margin-right:4px;flex:none;align-self:center}
+.chg summary::before{content:"";width:6px;height:6px;border-right:1.5px solid var(--ink-3);border-bottom:1.5px solid var(--ink-3);transform:rotate(-45deg);transition:transform var(--t-fast) var(--ease);margin-right:4px;flex:none;align-self:center}
 .chg[open] summary::before{transform:rotate(45deg)}
 .goalturn{display:flex;align-items:center;gap:8px;color:var(--ink-3);font-size:var(--fs-s);margin:8px 0}
 #pframe{background:var(--surface)}
 .sugg{max-width:var(--colw,760px);margin:0 auto 4px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.schip{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);border-radius:var(--r-m);padding:4px 12px;font-size:var(--fs-s);min-height:32px;transition:border-color .12s ease,color .12s ease,transform .12s ease}
+.schip{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);border-radius:var(--r-m);padding:4px 12px;font-size:var(--fs-s);min-height:32px;transition:background-color var(--t-hover) var(--ease),border-color var(--t-hover) var(--ease),color var(--t-hover) var(--ease)}
 .schip:hover{border-color:var(--line-3);background:var(--hover);color:var(--ink)}.schip svg{flex:none}
 .sugg .sx{margin-left:auto;opacity:.6}.sugg .sx:hover{opacity:1}
 .goalh{color:var(--ink-2)}.goalh b{font-weight:600;color:var(--ink)}.goalh .linkbtn{font-size:inherit}
@@ -461,7 +459,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .badge.modified{background:var(--fill);color:var(--ink-2)}
 .pnote.err{color:var(--del)}.wtlist{margin:4px 0 0 16px;font-family:var(--mono);font-size:var(--fs-xs)}
 .ucode{font-family:var(--mono);font-size:var(--fs-l);letter-spacing:.08em;background:var(--fill);padding:2px 8px;border-radius:var(--r-s)}
-.spin{width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
+.spin{width:16px;height:16px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
 .clip2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 
 /* ---------- settings ---------- */
@@ -475,7 +473,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .mnav button[aria-selected="true"]{background:var(--sel);color:var(--ink)}
 .mnav .sp{flex:1}
 .mbody{overflow:auto;padding:24px 32px 32px;position:relative}
-.mbody.loading{opacity:.55;transition:opacity .12s ease}
+.mbody.loading{opacity:.55;transition:opacity var(--t-fast) var(--ease)}
 .mbody h3{font:600 var(--fs-xl)/1.25 var(--body);margin:0 0 4px;padding-right:40px}
 .mbody .lead{color:var(--ink-2);margin:0 0 24px;max-width:62ch}
 .iconbtn.mclose,.mclose{position:absolute;top:16px;right:16px}
@@ -502,8 +500,8 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .rows2 .tg code{font-size:var(--fs-xs);color:var(--ink-3)}
 .switch{position:relative;width:32px;height:18px;flex:none;margin-top:2px}
 .switch input{opacity:0;width:0;height:0}
-.switch span{position:absolute;inset:0;background:var(--line-3);border-radius:999px;cursor:pointer;transition:background .15s}
-.switch span::after{content:"";position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:transform .15s}
+.switch span{position:absolute;inset:0;background:var(--line-3);border-radius:999px;cursor:pointer;transition:background-color var(--t-fast) var(--ease)}
+.switch span::after{content:"";position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:transform var(--t-fast) var(--ease)}
 .switch input:checked+span{background:var(--pool-btn)}
 .switch input:checked+span::after{transform:translateX(14px)}
 .switch input:focus-visible+span{outline:2px solid var(--focus);outline-offset:2px}
@@ -568,7 +566,7 @@ table.t td.n,table.t th:not(:first-child){text-align:right}
 #onbPerm,#onbSetup{max-width:640px}
 .onb-h{font-size:var(--fs-s);font-weight:600;color:var(--ink);margin:16px 0 8px}
 .onb-steps{display:flex;align-items:center;gap:8px;margin:-16px 0 24px}
-.onb-steps span{width:20px;height:3px;border-radius:3px;background:var(--line);transition:background-color .2s ease}
+.onb-steps span{width:20px;height:3px;border-radius:3px;background:var(--line);transition:background-color var(--t-side) var(--ease)}
 .onb-steps span.on{background:var(--pool)}
 .onb-steps small{margin-left:4px;color:var(--ink-3);font-size:var(--fs-xs)}
 /* The step's button closes the card, in the flow: kept sticky, it covered the key field at 1024x700 and the last
@@ -613,41 +611,30 @@ table.t td.n,table.t th:not(:first-child){text-align:right}
 
 /* ---------- motion: short, calm, never moves the layout (opacity and transform only) ---------- */
 @keyframes mp-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-@keyframes mp-pop{0%{opacity:0;transform:scale(.94) translateY(-4px)}70%{opacity:1;transform:scale(1.01)}100%{transform:none}}
+@keyframes mp-pop{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
 @keyframes mp-fade{from{opacity:0}to{opacity:1}}
-@keyframes mp-rise{from{opacity:0;transform:translateY(12px) scale(.98)}to{opacity:1;transform:none}}
-@keyframes mp-toast{0%{opacity:0;transform:translate(14px,10px) rotate(1.5deg)}60%{opacity:1;transform:translate(-2px,-1px) rotate(-.3deg)}100%{transform:none}}
-@keyframes mp-out{to{opacity:0;transform:translateY(6px) scale(.97)}}
-@keyframes mp-breathe{0%,100%{opacity:.25}50%{opacity:1}}
-@keyframes mp-lightup{0%{opacity:0;transform:scale(.4)}60%{opacity:1;transform:scale(1.25)}100%{transform:scale(1)}}
-@keyframes mp-launch{0%{transform:scale(1.1,.86)}45%{transform:translateY(-3px) scale(.94,1.08)}100%{transform:none}}
-@keyframes mp-stage{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--warn) 50%,transparent)}100%{box-shadow:0 0 0 12px transparent}}
+@keyframes mp-rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes mp-out{to{opacity:0;transform:translateY(4px)}}
+@keyframes mp-breathe{from{opacity:.35}to{opacity:1}}
 @keyframes pulse{50%{opacity:.35}}
 @keyframes spin{to{transform:rotate(360deg)}}
-/* Motion: used only where it explains what happened.
-   Anticipation: a press dips before it acts. Squash and stretch: the send button squashes on press and stretches as
-   it lets go. Follow-through and slow in/slow out: arrivals land on --ease or --spring, exits leave on --ease-in.
-   Arcs: toasts travel on a slight curve. Staging: a new approval card pulses once to draw the eye, then rests.
-   Secondary action: the status dot breathes while the agent works. Solid drawing: cards lift with a layered shadow.
-   Snappy timing: 70-260 ms. Reduced-motion users get none of it (rule above). */
+/* Motion explains what happened and nothing else. One easing (--ease); 120 ms for hover and press, 160 ms for menus
+   and fades, 200 ms for panels. A hover changes colour, a press scales to .98, a menu fades and rises 4px, a panel
+   slides in once (its contents do not animate again). Nothing overshoots, bounces, lifts or pulses for attention;
+   loops are kept for live work only (the running dot fades in and out over 2 s, spinners turn) and only animate
+   opacity or a rotation. Reduced-motion users get none of it (rule above). */
 .col>.enter{animation:mp-in var(--t-med) var(--ease) both}
-.col>.msg-user.enter{animation:mp-rise var(--t-slow) var(--spring) both}
-.pop{animation:mp-pop var(--t-med) var(--spring) both;transform-origin:top left}
-.scrim{animation:mp-fade .14s ease-out both}
-.scrim>.modal,.scrim>.dlg{animation:mp-rise var(--t-med) var(--ease) both}
-.toast{animation:mp-toast var(--t-slow) var(--ease) both}
-.toast.out{animation:mp-out var(--t-fast) var(--ease-in) forwards}
-.panel:not([hidden])>*{animation:mp-fade .16s ease-out both}
+.pop{animation:mp-pop var(--t-menu) var(--ease) both;transform-origin:top left}
+.scrim{animation:mp-fade var(--t-menu) var(--ease) both}
+.scrim>.modal,.scrim>.dlg{animation:mp-rise var(--t-side) var(--ease) both}
+.toast{animation:mp-menu var(--t-menu) var(--ease) both}
+.toast.out{animation:mp-out var(--t-fast) var(--ease) forwards}
 /* the side panel slides in from the right edge (transform only) instead of appearing at once */
 .panel:not([hidden]){animation:mp-panel-in var(--t-side) var(--ease) both}
 @keyframes mp-panel-in{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}
 .onb-card{animation:mp-in var(--t-med) var(--ease) both}
-.appr:not(.done){animation:mp-stage .9s var(--ease) both}
-.th,.tbtn,.pill,.btn,.bigbtn,.iconbtn,.send,.side-foot button,.newbtn,.scopeopt,.updbar,.chip,.search,.starters button,.opt,.qopt,.ptabs button,.mnav button{transition:background-color var(--t-fast) ease,color var(--t-fast) ease,border-color var(--t-fast) ease,box-shadow var(--t-med) var(--ease),transform var(--t-med) var(--spring),filter var(--t-fast) ease}
-.btn:active,.bigbtn:active,.pill:active,.newbtn:active,.iconbtn:active,.opt:active,.qopt:active,.starters button:active,.chip:active{transform:scale(.96);transition-duration:var(--t-press)}
-.send:active{transform:scale(1.1,.86);transition-duration:var(--t-press)}
-.send.go{animation:mp-launch var(--t-slow) var(--spring)}
-.starters button:hover,.newbtn:hover,.qopt:hover{transform:translateY(-1px);box-shadow:var(--shadow)}
+.th,.tbtn,.pill,.btn,.bigbtn,.iconbtn,.send,.side-foot button,.newbtn,.scopeopt,.updbar,.chip,.search,.starters button,.opt,.qopt,.ptabs button,.mnav button{transition:background-color var(--t-hover) var(--ease),color var(--t-hover) var(--ease),border-color var(--t-hover) var(--ease),box-shadow var(--t-hover) var(--ease),transform var(--t-press) var(--ease)}
+.btn:active,.bigbtn:active,.pill:active,.newbtn:active,.iconbtn:active,.opt:active,.qopt:active,.starters button:active,.chip:active,.send:active{transform:scale(.98)}
 /* Fitts's law: nothing clickable is a tiny target. Small icon buttons keep their look but get a 32 px hit area. */
 .iconbtn{position:relative;min-width:28px;min-height:28px}
 .iconbtn::after{content:"";position:absolute;inset:-4px}
@@ -792,7 +779,7 @@ details .keyrow input{flex:1;min-width:0;padding:8px 12px;border:1px solid var(-
 .spsec>summary{list-style:none;display:flex;align-items:center;gap:8px;padding:12px 2px;cursor:pointer;font-size:var(--fs-s);color:var(--ink)}
 .spsec>summary::-webkit-details-marker{display:none}
 .spsec>summary b{font-weight:600}
-.spsec .chev{display:inline-flex;transition:transform .12s;transform:rotate(-90deg);color:var(--ink-3)}
+.spsec .chev{display:inline-flex;transition:transform var(--t-fast) var(--ease);transform:rotate(-90deg);color:var(--ink-3)}
 .spsec[open]>summary .chev{transform:none}
 .spc{margin-left:auto;font-size:var(--fs-xs);color:var(--ink-3);white-space:nowrap;font-variant-numeric:tabular-nums}
 .outs .spc{margin-left:8px;flex:none}
@@ -809,7 +796,7 @@ details .keyrow input{flex:1;min-width:0;padding:8px 12px;border:1px solid var(-
 .spbr{display:flex;gap:8px}
 .spbr select,.spbr input{flex:1;min-width:0;border:1px solid var(--line-3);border-radius:var(--r-s);padding:4px 8px;background:var(--surface);color:var(--ink);font-size:var(--fs-s)}
 .spbar{height:8px;border-radius:999px;background:var(--line-2);overflow:hidden}
-.spbar i{display:block;height:100%;background:var(--pool-btn);border-radius:999px;transition:width .3s}
+.spbar i{display:block;height:100%;width:100%;background:var(--pool-btn);transform-origin:left center;transition:transform var(--t-side) var(--ease)}   /* scaleX, never width */
 .spbar.warn i{background:var(--warn)}.spbar.bad i{background:var(--del)}
 .spnum{display:flex;gap:8px;align-items:baseline;margin-top:4px;font-size:var(--fs-xs);color:var(--ink-3)}
 .spnum b{font-size:var(--fs-m,15px);color:var(--ink);font-weight:600}
@@ -838,12 +825,12 @@ details .keyrow input{flex:1;min-width:0;padding:8px 12px;border:1px solid var(-
 
 /* ---------- steady transcript (phase 0): nothing moves except what is being read ---------- */
 .conv{overflow-anchor:auto}
-.col{transition:opacity .16s ease-out}
+.col{transition:opacity var(--t-menu) var(--ease)}
 .col.loading{opacity:.55;transition-delay:.12s}
 .mdh{display:flow-root}
 .msg-ai.rv{overflow:hidden}
 /* entrances in the transcript fade only: no travel, no overshoot */
-.col>.enter,.col>.msg-user.enter{animation:mp-fade .16s ease-out both}
+.col>.enter,.col>.msg-user.enter{animation:mp-fade var(--t-menu) var(--ease) both}
 .hintline{display:flex;align-items:center;justify-content:space-between;gap:12px;text-align:left}
 .hintline .hl-status{flex:0 0 min(420px,62%);min-width:0;display:flex;align-items:center}
 .hintline .working .el{min-width:3.4ch}
@@ -874,17 +861,17 @@ details .keyrow input{flex:1;min-width:0;padding:8px 12px;border:1px solid var(-
 .sec .sechd{display:inline-flex;align-items:center;gap:4px;border:0;background:none;padding:2px 4px 2px 0;border-radius:var(--r-s);font:inherit;font-weight:500;color:var(--ink-3);cursor:pointer}
 .sec .sechd:hover{color:var(--ink)}
 .sec .sechd.static{cursor:default;padding-left:8px}.sec .sechd.static:hover{color:var(--ink-3)}
-.sec .sechd .chev{display:inline-grid;transition:transform var(--t-fast) ease}
+.sec .sechd .chev{display:inline-grid;transition:transform var(--t-fast) var(--ease)}
 .sec .sechd[aria-expanded="false"] .chev{transform:rotate(-90deg)}
 .sec .cnt,.pjmain h2 .cnt,.card .cnt{font-size:var(--fs-xs);font-weight:400;color:var(--ink-3);background:none;padding:0;margin-left:4px;font-variant-numeric:tabular-nums}
-.sec .iconbtn{opacity:0;transition:opacity var(--t-fast) ease}
+.sec .iconbtn{opacity:0;transition:opacity var(--t-fast) var(--ease)}
 .sec:hover .iconbtn,.sec .iconbtn:focus-visible{opacity:1}
 .threads{padding:0 0 4px 0}
 .th{min-height:32px;outline-offset:-2px}
 .th .pi{display:inline-grid;color:var(--ink-3);flex:none}
 .th.pr .tt{font-weight:500}
 .th .end{flex:none;position:relative;width:40px;height:24px}
-.th .end .tm,.th .end .more{position:absolute;right:0;top:50%;transform:translateY(-50%);transition:opacity var(--t-fast) ease}
+.th .end .tm,.th .end .more{position:absolute;right:0;top:50%;transform:translateY(-50%);transition:opacity var(--t-fast) var(--ease)}
 .th .end .more{opacity:0;pointer-events:none;display:inline-grid}
 .th:hover .end .tm,.th:focus-within .end .tm,.th.on .end .tm{opacity:0}
 .th:hover .end .more,.th:focus-within .end .more,.th.on .end .more,.th .end .more:focus-visible{opacity:1;pointer-events:auto}
@@ -899,12 +886,12 @@ details .keyrow input{flex:1;min-width:0;padding:8px 12px;border:1px solid var(-
 @media (hover:none){.th .end .tm{opacity:0}.th .end .more{opacity:1;pointer-events:auto}}
 
 /* tooltips */
-.tip{position:fixed;z-index:90;pointer-events:none;background:var(--ink);color:var(--bg);font-size:var(--fs-xs);line-height:1.3;padding:4px 8px;border-radius:var(--r-s);display:flex;align-items:center;gap:8px;white-space:nowrap;max-width:min(320px,calc(100vw - 16px));opacity:0;transition:opacity var(--t-fast) ease-out;box-shadow:var(--shadow)}
+.tip{position:fixed;z-index:90;pointer-events:none;background:var(--ink);color:var(--bg);font-size:var(--fs-xs);line-height:1.3;padding:4px 8px;border-radius:var(--r-s);display:flex;align-items:center;gap:8px;white-space:nowrap;max-width:min(320px,calc(100vw - 16px));opacity:0;transition:opacity var(--t-fast) var(--ease);box-shadow:var(--shadow)}
 .tip.on{opacity:1}
 .tip kbd{font:inherit;font-size:var(--fs-xs);opacity:.7;border:1px solid color-mix(in srgb,var(--bg) 35%,transparent);border-radius:4px;padding:0 4px}
 
 /* menus */
-.ctx{padding:4px;min-width:200px;max-width:min(320px,calc(100vw - 16px));max-height:min(420px,70vh);overflow:auto;animation:mp-pop var(--t-med) var(--ease) both;transform-origin:top left}
+.ctx{padding:4px;min-width:200px;max-width:min(320px,calc(100vw - 16px));max-height:min(420px,70vh);overflow:auto;animation:mp-pop var(--t-menu) var(--ease) both;transform-origin:top left}
 .ctx .mi{display:flex;align-items:center;gap:8px;width:100%;text-align:left;border:0;background:none;border-radius:var(--r-s);padding:8px;font-size:var(--fs-s);color:var(--ink);cursor:pointer}
 .ctx .mi:hover,.ctx .mi:focus{background:var(--hover);outline:none}
 .ctx .mi:focus-visible{box-shadow:inset 0 0 0 2px var(--focus)}
@@ -923,8 +910,8 @@ details .keyrow input{flex:1;min-width:0;padding:8px 12px;border:1px solid var(-
 .pill.on{background:none;color:var(--pool-text)}
 .pill.icon svg{width:16px;height:16px}
 .opt[role="menuitemradio"],.opt[role="menuitemcheckbox"]{align-items:flex-start}
-.sw{width:30px;height:18px;border-radius:999px;background:var(--line-3);position:relative;flex:none;margin-top:2px;transition:background var(--t-fast) ease}
-.sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform var(--t-med) var(--ease)}
+.sw{width:30px;height:18px;border-radius:999px;background:var(--line-3);position:relative;flex:none;margin-top:2px;transition:background-color var(--t-fast) var(--ease)}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform var(--t-fast) var(--ease)}
 .sw.on{background:var(--pool-btn)}.sw.on::after{transform:translateX(12px)}
 #panelBtn svg{transform:scaleX(-1)}
 .topbar .crumb{color:var(--ink-3);margin:0 -2px}
@@ -984,7 +971,7 @@ details .keyrow input{flex:1;min-width:0;padding:8px 12px;border:1px solid var(-
 .mmain .mbody{flex:1;min-height:0;overflow:auto}
 .subtabs{display:flex;gap:2px;padding:12px 24px 0;border-bottom:1px solid var(--line);flex:none;overflow-x:auto}
 .subtabs[hidden]{display:none}
-.subtabs button{border:0;background:none;padding:8px 12px 12px;color:var(--ink-3);font-size:var(--fs-s);font-weight:500;white-space:nowrap;border-bottom:2px solid transparent;margin-bottom:0;transition:color var(--t-fast) ease,border-color var(--t-fast) ease}
+.subtabs button{border:0;background:none;padding:8px 12px 12px;color:var(--ink-3);font-size:var(--fs-s);font-weight:500;white-space:nowrap;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease)}
 .subtabs button:hover{color:var(--ink)}
 .subtabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink)}
 .th .end .tm{pointer-events:none}
@@ -1000,7 +987,7 @@ details .keyrow input{flex:1;min-width:0;padding:8px 12px;border:1px solid var(-
 /* ---------- previews: the viewer pane, the cards under a reply, the Preview button on code ---------- */
 .pvp{grid-column:3;width:max(360px,min(clamp(480px,46vw,920px),calc(100vw - var(--sw,0px) - 560px)));border-left:1px solid var(--line-2);background:var(--bg);display:flex;flex-direction:column;min-width:0;min-height:0;position:relative;outline:none}
 .app.pvopen>.panel{display:none}
-.pvp:not([hidden]){animation:mp-fade .16s ease-out both}
+.pvp:not([hidden]){animation:mp-fade var(--t-menu) var(--ease) both}
 .pv-bar{display:flex;align-items:center;gap:8px;padding:8px 12px 8px 16px;border-bottom:1px solid var(--line-2);background:var(--surface);min-height:48px}
 .pv-bar .sp{flex:1}
 .pv-ic{color:var(--ink-3);display:inline-grid}.pv-ic svg{width:16px;height:16px}
@@ -1017,10 +1004,9 @@ details .keyrow input{flex:1;min-width:0;padding:8px 12px;border:1px solid var(-
 .pv-tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink)}
 .pv-stage{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 .pv-note{overflow-wrap:anywhere;margin:auto;padding:24px;color:var(--ink-3);font-size:var(--fs-s);display:flex;gap:8px;align-items:center;text-align:center;max-width:420px}
-.pv-spin{width:14px;height:14px;border:2px solid var(--line-3);border-top-color:var(--ink-3);border-radius:50%;animation:pvspin .8s linear infinite;flex:none}
-@keyframes pvspin{to{transform:rotate(360deg)}}
+.pv-spin{width:16px;height:16px;border:2px solid var(--line-3);border-top-color:var(--ink-3);border-radius:50%;animation:spin .8s linear infinite;flex:none}
 .pv-pagewrap{flex:1;min-height:0;overflow:auto;padding:16px;display:flex;justify-content:center;align-items:flex-start;background:var(--fill)}
-.pv-pg{max-width:100%;height:auto;background:#fff;border:1px solid var(--line);border-radius:2px;box-shadow:var(--shadow-s);transition:opacity var(--t-fast);min-height:120px;min-width:200px}
+.pv-pg{max-width:100%;height:auto;background:#fff;border:1px solid var(--line);border-radius:2px;box-shadow:var(--shadow-s);transition:opacity var(--t-fast) var(--ease);min-height:120px;min-width:200px}
 .pv-pg.loading{opacity:.45}
 .pv-more{padding:8px 16px;font-size:var(--fs-xs);color:var(--ink-3);border-top:1px solid var(--line-2);background:var(--surface)}
 .pv-strip{display:flex;align-items:center;gap:4px;padding:8px 12px;border-top:1px solid var(--line-2);background:var(--surface)}
@@ -1060,11 +1046,11 @@ details .keyrow input{flex:1;min-width:0;padding:8px 12px;border:1px solid var(-
 
 /* cards under a reply */
 .pvcards{display:flex;flex-wrap:wrap;gap:8px;margin:-12px 0 16px}
-.pvcard{display:flex;align-items:stretch;gap:0;text-align:left;border:1px solid var(--line);background:var(--surface);border-radius:var(--r-m);padding:0;overflow:hidden;width:240px;max-width:100%;color:var(--ink);transition:background var(--t-hover),border-color var(--t-hover)}
+.pvcard{display:flex;align-items:stretch;gap:0;text-align:left;border:1px solid var(--line);background:var(--surface);border-radius:var(--r-m);padding:0;overflow:hidden;width:240px;max-width:100%;color:var(--ink);transition:background-color var(--t-hover) var(--ease),border-color var(--t-hover) var(--ease)}
 .pvcard:hover{background:var(--hover);border-color:var(--line-3)}
 .pvth{flex:none;width:72px;height:54px;background:var(--fill);border-right:1px solid var(--line-2);display:grid;place-items:center;overflow:hidden;color:var(--ink-3)}
 .pvth img{width:100%;height:100%;object-fit:cover;object-position:top;background:#fff}
-.pvth.wait{animation:pvpulse 1.4s ease-in-out infinite}
+.pvth.wait{animation:pvpulse 2s var(--ease) infinite}
 @keyframes pvpulse{50%{opacity:.55}}
 .pvi svg{width:24px;height:24px}
 .pvth.page{display:flex;align-items:flex-start;justify-content:center;padding:8px 12px 0}
@@ -1113,7 +1099,7 @@ details .keyrow input{flex:1;min-width:0;padding:8px 12px;border:1px solid var(-
 .fsr{display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;border:0;background:none;color:var(--ink);padding:4px 12px;text-align:left;font:inherit;cursor:pointer;white-space:nowrap;min-height:28px}
 .fsr:hover{background:var(--hover)}.fsr.on{background:var(--sel)}
 .fsr svg{width:16px;height:16px;color:var(--ink-3);flex:none}
-.fsc{width:16px;display:inline-grid;flex:none}.fsc svg{width:16px;height:16px;transform:rotate(-90deg);transition:transform var(--t-fast)}.fsr.open .fsc svg{transform:none}
+.fsc{width:16px;display:inline-grid;flex:none}.fsc svg{width:16px;height:16px;transform:rotate(-90deg);transition:transform var(--t-fast) var(--ease)}.fsr.open .fsc svg{transform:none}
 .fshd{list-style:none;padding:8px 12px 2px;color:var(--ink-3);font-size:var(--fs-xs)}.fsl{font-family:var(--mono)}
 .fsn{overflow:hidden;text-overflow:ellipsis;min-width:0}.fsd{color:var(--ink-3);font-size:var(--fs-xs);overflow:hidden;text-overflow:ellipsis;margin-left:4px}
 .fs-res .fsc{display:none}
