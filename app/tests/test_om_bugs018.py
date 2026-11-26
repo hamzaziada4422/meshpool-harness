@@ -300,7 +300,7 @@ def test_om09_a_resumed_chat_takes_the_mode_and_model_from_the_command_line(home
     assert rc == 0, cap.err
     meta = chats.read_meta(v["id"])
     assert meta["mode"] == "auto" and meta["model"] == "mock-slow"      # the mode is for this run only (see below)
-    assert "This chat was in full access. It resumes in ask before changes" in cap.err
+    assert "This chat was in full access. It resumes in Ask" in cap.err
     A.LIVE.clear()
     rc = T.main(str(proj), resume=True, auto=True, no_mcp=True, prompt="three", json_out="json")
     assert rc == 0 and chats.read_meta(v["id"])["mode"] == "auto"     # --auto asked for it: full access

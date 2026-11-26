@@ -186,8 +186,10 @@ const nudgeQ010 = [];
 // Tips are rare: never on a fresh page (before the first message), one at a time, and one that was dismissed is gone for
 // good. Dismissing or using one also drops the rest of the queue for this visit.
 const nudgeOff010 = () => store("nudge_off") || [];
+const isTip010 = c => c.type === "tip" || String(c.id || "").startsWith("tip-");
 function insightCard010(c) {
   if (!S.cur || nudgeOff010().includes(String(c.id))) return;
+  if (isTip010(c) && capOn("tips") === false) return;          // Settings, "Show tips", is off
   if (nudgeQ010.some(x => x.id === c.id) || $(`.nudge010[data-id="${CSS.escape(String(c.id))}"]`)) return;
   nudgeQ010.push(c); nextNudge010();
 }
@@ -197,13 +199,19 @@ function nextNudge010() {
   const wrap = $(".composer-wrap"); if (!wrap) return;
   const c = nudgeQ010.shift();
   const el = document.createElement("div"); el.className = "nudge010"; el.dataset.id = c.id; el.setAttribute("role", "status");
-  el.innerHTML = `<span class="n-t" title="${esc(c.body || "")}"><b>${esc(c.title)}</b> <span class="n-b">${esc(c.body || "")}</span></span><button class="btn primary sm" data-ic="accepted">${esc(c.action?.label || "Do it")}</button><button class="iconbtn" data-ic="more" aria-label="More" aria-haspopup="menu">${ICON.more}</button><button class="iconbtn" data-ic="dismissed" aria-label="Dismiss">${ICON.x}</button>`;
+  el.innerHTML = `<span class="n-t" title="${esc(c.body || "")}"><b>${esc(c.title)}</b> <span class="n-b">${esc(c.body || "")}</span></span><button class="btn primary sm" data-ic="accepted">${esc(c.action?.label || "Do it")}</button>${isTip010(c) ? `<button class="linkbtn n-never" data-ic="never">Never show tips</button>` : ""}<button class="iconbtn" data-ic="more" aria-label="More" aria-haspopup="menu">${ICON.more}</button><button class="iconbtn" data-ic="dismissed" aria-label="Dismiss">${ICON.x}</button>`;
   wrap.insertBefore(el, $("#sugg", wrap) || $("#composer", wrap));   // in the flow above the box: it never covers the chat
   if (!c.local) post("/api/insights/act", {id: c.id, event: "shown"}).catch(() => {});
   const done = () => { el.remove(); nudgeQ010.length = 0; store("nudge_off", [...new Set([...nudgeOff010(), String(c.id)])].slice(-200)); };
   el.addEventListener("click", async e => {
     const b = e.target.closest("[data-ic]"); if (!b) return;
     const event = b.dataset.ic;
+    if (event === "never") {                // turns the Settings switch off: no tip card shows again, here or in the terminal
+      done();
+      try { const r = await post("/api/capabilities", {id: "tips", on: false}); if (r?.features) S.caps = r.features; } catch (err) { S.caps = (S.caps || []).map(f => f.id === "tips" ? Object.assign({}, f, {on: false}) : f); }
+      toast("Tips are off. You can turn them back on in Settings, under Features.", 7000);
+      return;
+    }
     if (event === "more") {
       return ctxMenu({type: "click", currentTarget: b}, [
         {label: "Why this?", fn: () => whyPop010(b, c)},

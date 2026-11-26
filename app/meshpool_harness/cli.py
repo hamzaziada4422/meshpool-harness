@@ -184,7 +184,7 @@ def _agent_parser():
     ap.add_argument("--auto", action="store_true", help="allow edits and commands without asking")
     ap.add_argument("--json", dest="json_out", action="store_true", help="with -p: print one JSON object (result, usage, session id) for scripts and CI")
     ap.add_argument("--output-format", choices=["text", "json", "stream-json"], help="with -p: text (default), json, or stream-json (one event per line as it happens)")
-    ap.add_argument("--permission-mode", type=lambda v: v if v == "plan" else (_config.normalize_mode(v, None) or v), choices=["ask", "edits", "auto", "plan"], help="ask (default), accept-edits (accept file changes), full-access (everything), plan (read only, then a plan). Old names (edits, auto, manual, supervised) still work")
+    ap.add_argument("--permission-mode", type=lambda v: v if v == "plan" else (_config.normalize_mode(v, None) or v), choices=["ask", "edits", "auto", "plan"], help="ask (Ask, the default), edits (Accept edits), auto (Full access), plan (read only, then a plan). Older names (accept-edits, full-access, manual, supervised) still work")
     ap.add_argument("--sandbox", action="store_true", help="run the agent's commands in the sandbox (on by default except in Full access): they can write only in the project and temporary folders")
     ap.add_argument("--no-network", dest="no_network", action="store_true", help="also cut the network for sandboxed commands")
     ap.add_argument("--append-system-prompt", help="extra instructions added to the agent's system prompt for this run")
