@@ -181,3 +181,30 @@ def test_runner_grants_name_the_program_they_run(first, later, want):
                                  "uv run", "kubectl exec pod -- ls"])
 def test_runner_wrapping_a_shell_gets_no_grant(cmd):
     assert PR.grant_patterns(cmd) == []
+
+
+def _shell_call(cmd):
+    import json
+    return {"id": "s", "function": {"name": "shell", "arguments": json.dumps({"command": ["bash", "-lc", cmd]})}}
+
+
+# AG-09: the "killed twice" loop guard counted any output with the words "timed out" or "Killed" (a passing test named
+# test_request_timed_out) and ignored file changes, so a fixed command was refused with "ran out of memory or time".
+def test_killed_twice_guard_needs_a_real_kill_and_no_change(env):
+    (env / "m.py").write_text("x = 1\n")
+    a = core.Agent(str(env), mode="auto", sessions_dir=str(env.parent / "s"))
+    runs = []
+    a._run_tool = lambda c, cut=False: runs.append(1) or f"[exit 0]\ntest_request_timed_out PASSED in {len(runs)}s"
+    g = {}
+    outs = [a._repeat_guard(_shell_call("pytest -q"), g) for _ in range(3)]
+    assert len(runs) == 3 and not any("killed twice" in o for o in outs)
+    b = core.Agent(str(env), mode="auto", sessions_dir=str(env.parent / "s2"))
+    runs2 = []
+    b._run_tool = lambda c, cut=False: runs2.append(1) or f"[exit 137]\nKilled after {len(runs2)}s"
+    g2 = {}
+    [b._repeat_guard(_shell_call("python3 big.py"), g2) for _ in range(2)]
+    (env / "m.py").write_text("x = 2  # smaller input now\n")      # the agent changed the code
+    out = b._repeat_guard(_shell_call("python3 big.py"), g2)
+    assert len(runs2) == 3 and "killed twice" not in out
+    out = [b._repeat_guard(_shell_call("python3 big.py"), g2) for _ in range(2)][-1]
+    assert len(runs2) == 4 and "killed twice" in out         # killed twice with no change since: refused

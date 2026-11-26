@@ -3899,7 +3899,8 @@ class Agent:
         sig = self._tree_sig() if sh else None
         if sh and sig is not None:
             bg = self.ws.__dict__.get("_bg") or {}
-            killed = [r for r in runs if r[0] == key and len(r) > 6 and r[6]]
+            # killed with no project file changed since: a changed input or fixed code may well run now
+            killed = [r for r in runs if r[0] == key and len(r) > 6 and r[6] and r[5] == sig]
             if len(killed) >= 2 and not any(e["p"].poll() is None for e in list((self.ws.__dict__.get("_bg") or {}).values())):
                 return ("[Meshpool] Not run: this command was killed twice already (exit 137 or 124: it ran out of memory "
                         "or time). Running it again will not change that. Use a smaller input, a shorter timeout, or "
@@ -3946,8 +3947,10 @@ class Agent:
                 wnote += "\n[Meshpool] Your checks keep giving the same result; change approach or answer."
             sig = sig2
         out = str(out) + wnote if wnote else out
-        oom = bool(re.search(r"\[exit (137|124)\]|\brc=(137|124)\b|exit(?:ed with)? code (137|124)\b|\bKilled\b|timed out",
-                             str(out)))
+        # a kill by memory or time: the exit code, bash's "1234 Killed" line or the tool's own timeout note; not the
+        # words "timed out" or "Killed" anywhere in a log (a passing test_request_timed_out)
+        oom = bool(re.search(r"\[exit (137|124)\]|\brc=(137|124)\b|exit(?:ed with)? code (137|124)\b|"
+                             r"(?m:^|\d\s+)Killed\b|\[timed out after \d+s\]", str(out)))
         runs.append((key, h, edits, failed, str(out)[:240], sig, oom))   # a failed call counts for the failure breaker; a read for the read breaker
         del runs[:-12]
         return out
