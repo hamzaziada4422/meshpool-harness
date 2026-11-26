@@ -337,7 +337,43 @@ def test_a_bad_reviewer_reply_falls_back_to_the_measured_findings(proj, tmp_path
     assert "separate reviewer" not in t
     assert "Checked: measured only" in final, final
     assert not any(e.get("persona") for e in ev if e["type"] == "status")
-    assert len(both.r_bodies) == 1                                              # it does not keep asking a reviewer that failed
+    assert len(both.r_bodies) == 2                                              # the call and one retry, then it stops asking
+
+
+# what the adapter's model sent in live run 1 when its own prompt said "no JSON": prose around the facts
+RECORDED_PROSE = ("**Persona:** A customer on her phone, looking at the bakery's menu and placing a pickup order.\n\n"
+                  "**Actions I want to see:** look at the Menu section at phone width.")
+
+
+def test_a_reply_only_the_retry_fixes_is_retried_once_in_a_fresh_context_and_counted(proj, tmp_path, monkeypatch):
+    p2 = "A customer on her phone, looking at the bakery's menu and placing a pickup order"
+    both, _ = two_rounds(monkeypatch, tmp_path, [RECORDED_PROSE, RECORDED_PLAN, RECORDED_VERDICT, verdict(persona=p2)])
+    a, ev = agent(proj)
+    final = a.send(ASK)
+    assert len(both.r_bodies) == 4                                              # prose, retry, verdict, verdict
+    retry = both.r_bodies[1]
+    assert [m["role"] for m in retry["messages"]] == ["system", "user"]         # still a fresh context
+    t = body_text(retry)
+    assert "Your reply was:\n" + RECORDED_PROSE in t and LR.RETRY_ASK in t and SECRET not in t
+    assert "That was not valid JSON. Reply with only the JSON object, nothing else." in t
+    assert "measured only" not in final and "[blocker] no confirmation is shown" in text_of(reviews(a)[0])
+    end = [e for e in ev if e["type"] == "turn_end"][-1]
+    assert end["turn"]["calls"] == len(both.b_bodies) + 4                       # the retry is in the receipt
+    assert a.last_look["reviewer"]["calls"] == 4
+
+
+def test_a_reply_the_retry_cannot_fix_falls_back_after_one_retry(proj, tmp_path, monkeypatch):
+    both, _ = two_rounds(monkeypatch, tmp_path, [RECORDED_PROSE, "still not json", "never asked"])
+    a, _ = agent(proj)
+    final = a.send(ASK)
+    assert len(both.r_bodies) == 2 and "Checked: measured only" in final
+
+
+def test_a_reply_the_tolerant_parser_reads_needs_no_retry(proj, tmp_path, monkeypatch):
+    both, _ = two_rounds(monkeypatch, tmp_path, [RECORDED_PLAN, RECORDED_VERDICT, verdict()])
+    a, _ = agent(proj)
+    a.send(ASK)
+    assert len(both.r_bodies) == 3
 
 
 def test_a_failing_reviewer_call_falls_back_too(proj, tmp_path, monkeypatch):

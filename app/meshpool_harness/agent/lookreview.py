@@ -628,6 +628,22 @@ def _call(agent, turn: dict, text: str, shots: list, stats: dict) -> str:
             stats[k] = stats.get(k, 0) + max(0, int(turn.get(k, 0)) - int(b[k]))
 
 
+RETRY_ASK = "That was not valid JSON. Reply with only the JSON object, nothing else."
+
+
+def _json_call(agent, turn: dict, text: str, shots: list, stats: dict, good, st: dict) -> dict | None:
+    """One reviewer call, read tolerantly. When the reply is not usable, one retry in a fresh context that shows the
+    reviewer its own reply and asks for only the JSON object. Both calls are counted. None when the retry fails too."""
+    reply = _call(agent, turn, text, shots, stats)
+    d = parse_json(reply)
+    if good(d):
+        return d
+    st["retries"] = st.get("retries", 0) + 1
+    again = _call(agent, turn, text + "\n\nYour reply was:\n" + str(reply)[:4000] + "\n\n" + RETRY_ASK, [], stats)
+    d = parse_json(again)
+    return d if good(d) else None
+
+
 def review(agent, turn: dict, kind: str, target: dict, res: dict, request: str, st: dict, *, blind: bool,
            finding_lines: list, hold: Hold | None = None, out_dir=None, tag: str = "r1", actions_fn=None,
            announce=None) -> dict | None:
@@ -640,7 +656,7 @@ def review(agent, turn: dict, kind: str, target: dict, res: dict, request: str, 
     try:
         if kind == "web" and not persona:
             text, shots = build_user("plan", kind, target, res, request, blind, finding_lines)
-            d = parse_json(_call(agent, turn, text, shots, stats))
+            d = _json_call(agent, turn, text, shots, stats, lambda d: isinstance(d, dict) and bool(clean_persona(d.get("persona"), request, kind)[0]), st)
             persona, replaced = clean_persona((d or {}).get("persona"), request, kind)
             if not persona:
                 st["why_not"] = "the reviewer did not name who would use it"
@@ -654,7 +670,7 @@ def review(agent, turn: dict, kind: str, target: dict, res: dict, request: str, 
                 acts = (actions_fn or default_actions)(hold, target, wanted, out_dir, tag) or []
                 st["action_results"] = acts
         text, shots = build_user("verdict", kind, target, res, request, blind, finding_lines, persona, acts)
-        d = parse_json(_call(agent, turn, text, shots, stats))
+        d = _json_call(agent, turn, text, shots, stats, lambda d: normalize_verdict(d, request, kind, persona) is not None, st)
         v = normalize_verdict(d, request, kind, persona)
         if v is None:
             st["why_not"] = "its answer could not be read"
