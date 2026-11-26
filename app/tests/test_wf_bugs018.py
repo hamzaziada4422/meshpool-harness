@@ -226,7 +226,7 @@ def test_undo_says_what_it_restored_and_keeps_the_backup_path_in_the_details():
                           "(monthly_revenue.png)."), msg
     assert "/tmp" not in msg and "checkpoints" not in msg
     assert "sales.csv" in msg and "Undo only covers this chat's folder" in msg
-    assert "checkpoints/undone/20261126-103934" in detail and "/home/lina/LinaData/sales.csv" in detail
+    assert "checkpoints" not in detail and "/tmp" not in detail and "/home" not in detail and "sales.csv" in detail   # round 2: nothing technical
     assert A.undo_message({})[0] == "Undone. No files in this chat's folder had changed."
 
 

@@ -219,9 +219,9 @@ def undo_message(r: dict) -> tuple[str, str]:
     det = list(notes)                        # why each file was kept: changed later, never stored, a link...
     det += [f"{p}: {CHANGED_AFTER}" for p in kept if not why[p]]
     if outside:
-        det.append("Changed outside this chat's folder, not restored: " + ", ".join(once(outside)))
-    if r.get("backup"):
-        det.append(f"Copies of the files Undo replaced are in {r['backup']}")
+        det.append("Changed outside this chat's folder, not restored: " + ", ".join(Path(x).name or x for x in once(outside)))
+    if r.get("backup"):                      # the folder of saved copies is not shown: nothing technical in the details
+        det.append("meshpool kept a copy of what Undo replaced, in case you change your mind.")
     return msg, "\n".join(det)
 
 

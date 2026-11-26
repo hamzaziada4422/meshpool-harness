@@ -268,7 +268,7 @@ def test_undo_shows_the_backup_path_only_in_details_and_puts_back_no_skill_chips
     page.evaluate("""() => applyEv({type: "status", i: 0, text: "Undone. Restored 1 file (deck.pptx).",
         detail: "Copies of the files Undo replaced are in /tmp/x/checkpoints/undone/20261126-104217"})""")
     note = page.inner_text("#col .note")
-    assert "/tmp" not in note.split("Details")[0] and page.query_selector("#col .note details"), note
+    assert "/tmp" not in note and "checkpoints" not in note, note      # round 2: not even in the details
     page.focus("#input")
     page.evaluate("() => fillInput('Change the title on slide 1 to: ViDA e-invoicing for your firm', {back: true})")
     page.wait_for_timeout(900)

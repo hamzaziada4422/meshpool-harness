@@ -35,6 +35,8 @@ function routeMenu(anchor) {
 // One cost format: "$0.42", and "<$0.01" for anything under a cent (never "$0.0005"). One duration format: "<1 s",
 // "42 s", "3 min 45 s", "1 h 5 min" (receipts.py writes the same).
 // "Summarized 12 earlier messages so the task can keep going." (agent/core.py) in the words of the chat.
+// A note's details hold nothing technical: a line that names a folder of saved copies (a checkpoint path) is left out.
+const plainDetail = t => String(t || "").split("\n").filter(l => !/[\/\\]checkpoints[\/\\]/.test(l)).join("\n").trim();
 const plainStatus = t => String(t || "").replace(/^Summarized \d+ earlier messages so the task can keep going( \(from the log only\))?\.$/, "Made room to keep going: the earlier steps are now a short summary.");
 function fmtCost(x) { x = Number(x) || 0; return x > 0 && x < 0.01 ? "<$0.01" : "$" + x.toFixed(2); }
 function fmtDur(s) {
@@ -560,11 +562,15 @@ function browseFolder(start, opts = {}) {
         const sep = r.path.includes("\\") ? "\\" : "/";
         const parts = r.path.split(/[\\/]/).filter(Boolean);
         let acc = r.path.startsWith("/") ? "" : "";
-        $("#fbCrumbs", sc).innerHTML = (r.path.startsWith("/") ? `<button data-c="/">/</button>` : "") + parts.map((p, k) => {
+        const crumbs = parts.map((p, k) => {
           acc = (k === 0 && !r.path.startsWith("/")) ? p + sep : acc + (acc.endsWith(sep) || acc === "" ? "" : sep) + p;
           const full = r.path.startsWith("/") ? "/" + parts.slice(0, k + 1).join("/") : acc;
-          return `<button data-c="${esc(full)}" class="${k === parts.length - 1 ? "here" : ""}">${esc(full === home ? "Home" : p)}</button>`;
-        }).join(`<span class="sep">›</span>`);
+          return {full, label: full === home ? "Home" : p, here: k === parts.length - 1};
+        });
+        // a long path shows its last three parts, with an ellipsis that goes up to the part before them
+        const shownC = crumbs.length > 3 ? crumbs.slice(-3) : crumbs, up = crumbs.length > 3 ? crumbs[crumbs.length - 4] : null;
+        $("#fbCrumbs", sc).innerHTML = (up ? `<button data-c="${esc(up.full)}" class="more" title="${esc(up.full)}" aria-label="Up to ${esc(up.label)}">…</button><span class="sep">›</span>` : r.path.startsWith("/") ? `<button data-c="/">/</button>` : "")
+          + shownC.map(c => `<button data-c="${esc(c.full)}" class="${c.here ? "here" : ""}">${esc(c.label)}</button>`).join(`<span class="sep">›</span>`);
         $$("#fbCrumbs [data-c]", sc).forEach(b => b.onclick = () => go(b.dataset.c));
         $("#fbCrumbs", sc).scrollLeft = $("#fbCrumbs", sc).scrollWidth;       // one row: a long path scrolls, it does not wrap
         $("#fbIn", sc).value = "";
@@ -1899,7 +1905,7 @@ function applyEvRaw(ev) {
         break; }
       if (ev.look) cur.activity = String(ev.text || "").replace(/\.+$/, "");   // the footer names the wait (agent/look.py)
       if (ev.look && ev.persona && cur.lookEl && cur.lookEl.isConnected) { cur.lookEl.textContent = ev.text; break; }   // the same note says who is checking it
-      { const nn = add(esc(plainStatus(ev.text)) + (ev.detail ? ` <details class="notedet"><summary>Details</summary><div>${esc(ev.detail).replace(/\n/g, "<br>")}</div></details>` : ""), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); if (ev.look) { endLook(cur, ""); cur.lookEl = nn; nn.dataset.look = "1"; } else if (/^Starting the office tools/.test(ev.text || "")) { cur.officeEl?.remove(); cur.officeEl = nn; } } break; }
+      { const nn = add(esc(plainStatus(ev.text)) + (plainDetail(ev.detail) ? ` <details class="notedet"><summary>Details</summary><div>${esc(plainDetail(ev.detail)).replace(/\n/g, "<br>")}</div></details>` : ""), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); if (ev.look) { endLook(cur, ""); cur.lookEl = nn; nn.dataset.look = "1"; } else if (/^Starting the office tools/.test(ev.text || "")) { cur.officeEl?.remove(); cur.officeEl = nn; } } break; }
     case "gate": {                                      // all model slots busy: say so while it waits, drop the line once it runs
       if (cur.gateEl && !cur.gateEl.isConnected) cur.gateEl = null;
       if (ev.state === "waiting") {

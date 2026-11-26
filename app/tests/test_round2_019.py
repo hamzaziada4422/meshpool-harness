@@ -406,3 +406,37 @@ def test_search_shows_a_snippet_and_no_developer_key_hints_for_chat_users(app, p
     page.wait_for_selector(".srch-keys")
     assert "Compose" in page.inner_text(".srch-keys")
     assert page.errors == [], page.errors
+
+
+# ------------------------------------------------------------------------------------------------------ item 10
+def test_undo_details_hold_nothing_technical():
+    from meshpool_harness.ui import agent_api as A
+    msg, detail = A.undo_message({"restored": ["a.xlsx"], "outside": ["/home/maya/Documents/other/sales.csv"],
+                                  "backup": "/tmp/x/sessions/s1/checkpoints/undone/20261126-103934"})
+    assert "checkpoints" not in detail and "/tmp" not in detail and "/home" not in detail and "undone/" not in detail, detail
+    assert "sales.csv" in detail and "kept a copy" in detail, detail
+
+
+def test_the_page_drops_a_checkpoint_path_from_undo_details_even_in_a_saved_chat(app, page):
+    _chat(page, app["work"], None, "undo detail")
+    _fake_chat(page, page.evaluate("() => S.cur.id"))
+    page.evaluate("""() => applyEv({type: "status", i: 0, text: "Undone. Restored 1 file (deck.pptx).",
+        detail: "Copies of the files Undo replaced are in /tmp/x/checkpoints/undone/20261126-104217\\nA second line stays."})""")
+    html = page.evaluate("() => document.querySelector('#col .note').textContent")
+    assert "checkpoints" not in html and "/tmp" not in html and "A second line stays." in html, html
+
+
+def test_the_folder_picker_shows_the_last_three_parts_with_an_ellipsis(app, page):
+    deep = Path(app["work"]) / "Clients" / "Greenfield" / "Spring" / "Invoices"
+    deep.mkdir(parents=True, exist_ok=True)
+    page.evaluate("p => { window.__fb = browseFolder(p); }", str(deep))
+    page.wait_for_function("() => document.querySelector('#fbCrumbs .here')")
+    labels = page.evaluate("() => [...document.querySelectorAll('#fbCrumbs button')].map(b => b.textContent)")
+    assert labels == ["…", "Greenfield", "Spring", "Invoices"], labels
+    assert page.evaluate("() => document.querySelector('#fbCrumbs .more').title") == str(deep.parent.parent.parent)
+    page.click("#fbCrumbs .more")
+    page.wait_for_function("() => document.querySelector('#fbCrumbs .here').textContent === 'Clients'")
+    short = page.evaluate("() => [...document.querySelectorAll('#fbCrumbs button')].map(b => b.textContent)")
+    assert short[0] != "…" or len(short) == 4, short
+    page.keyboard.press("Escape")
+    assert page.errors == [], page.errors
