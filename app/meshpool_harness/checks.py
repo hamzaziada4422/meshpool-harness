@@ -380,9 +380,16 @@ _GENERIC_WHO = re.compile(r"^(?:someone|anyone|a (?:first-time )?(?:visitor|user
 
 # The reply ends unsure of its own result: a question back to the user, or words of doubt about the output. Sara: a
 # reply that asked "I can't see section 3's ..., want me to fix it?" sat over "Checked it ...: all good."
+# Priya, round 4: "I haven't opened it to confirm the summary formulas... My check of the workbook didn't finish." sat
+# over "Checked · all good": the doubt was in the first paragraph, and "opened" and "didn't finish" were not read.
 _DOUBT = re.compile(r"\b(?:can(?:'|’|no)?t|cannot|could ?not|couldn(?:'|’)t|unable to|did ?not|didn(?:'|’)t|"
-                    r"have ?not|haven(?:'|’)t)\s+(?:see|view|check|verify|confirm|open|test|look at|recalculate)\b|"
-                    r"\b(?:not sure|unsure|may be wrong|might be wrong|please check|double-check)\b", re.I)
+                    r"have ?not|haven(?:'|’)t|has ?not|hasn(?:'|’)t|was not able to|wasn(?:'|’)t able to)\s+"
+                    r"(?:yet\s+|been able to\s+|fully\s+)?(?:see|seen|view|viewed|check|checked|verify|verified|confirm|"
+                    r"confirmed|open|opened|test|tested|look at|looked at|recalculate|recalculated|finish|finished|"
+                    r"render|rendered|read it back|run the check)\b|"
+                    r"\b(?:not sure|unsure|may be wrong|might be wrong|please check|double-check|unchecked|unverified|"
+                    r"unseen|not (?:yet )?(?:checked|verified|looked at|seen|opened|tested|confirmed)|"
+                    r"(?:check|checks|review)\b[^.?!\n]{0,40}\b(?:did ?n(?:o|')t|never) (?:finish|run|complete))\b", re.I)
 
 
 def open_doubt(reply) -> bool:
@@ -394,7 +401,7 @@ def open_doubt(reply) -> bool:
     if not paras:
         return False
     last = paras[-1]
-    return last.rstrip("*_ )\"'").endswith("?") or bool(_DOUBT.search(last))
+    return last.rstrip("*_ )\"'").endswith("?") or bool(_DOUBT.search(last)) or bool(_DOUBT.search(paras[0]))
 
 
 def merge_line(look: str, checks: str, reply: str = "") -> str:
@@ -457,28 +464,44 @@ def footer(look: str, checks: dict | None = None, reply="") -> tuple[str, str]:
         return "", ""
     full = (merge_line(look, cline, reply=reply) if look and cline else "") or " ".join(x for x in (look, cline) if x)
     fixed = still = 0
-    low = look.lower()
+    named: list = []                                   # what is still open, by name (Maya, round 4: "1 to look at" said
+    low = look.lower()                                 # not what)
     m = re.search(r"\bfixed\s+(.+?)(?:\.\s|$|;\s*still open)", look, re.I | re.S)
     if m and not re.match(r"\s*nothing\b", m.group(1), re.I):
         fixed = _count(m.group(1).split(": ", 1)[0] if re.match(r"\s*\d+\s+things?\s*:", m.group(1)) else m.group(1))
     m = re.search(r"\bstill open:\s*(.+?)(?:\.\s|\.$|$)", look, re.I | re.S)
     if m:
         still += _count(m.group(1))
+        named.append(m.group(1))
     if re.search(r"\b(?:does|do) not open\b|\bis empty\b|\bare empty\b|could not (?:run|finish|open)|did not open", low):
         still = max(still, 1)
     m = re.search(r"\b(?:One thing to look at|Things to look at):\s*(.+?)(?:\.\s|\.$|$)", cline, re.S)
     if m:
         still += len([x for x in m.group(1).split("; ") if x.strip()]) if m.group(0).startswith("Things") else 1
+        named.append(m.group(1))
     bits = []
     if fixed:
         bits.append("fixed " + _plural(fixed, "thing"))
     if still:
-        bits.append(f"{still} to look at")
+        point = _brief(named[0]) if still == 1 and len(named) == 1 else ""
+        bits.append(f"{still} to look at" + (f": {point}" if point else ""))
     if not bits:
         if open_doubt(reply):
             return "Checked", full
         bits.append("all good")
     return "Checked · " + " · ".join(bits), full
+
+
+def _brief(point: str, limit: int = 60) -> str:
+    """One open point, short enough for the footer: "legend sits on top of the two most expensive bars"."""
+    t = re.sub(r"\s*\([^)]*\)", "", str(point or ""))          # "(where: ...)" stays in the fold
+    t = " ".join(t.split()).strip(" .;:,")
+    if re.match(r"(?:\d+|one|a|an|two|three|four|five)\s+(?:things?|problems?|issues?)\b", t, re.I):
+        return ""                                              # "Still open: 1 thing." names nothing
+    if len(t) <= limit:
+        return t
+    cut = t[:limit].rsplit(" ", 1)[0].rstrip(" ,;:")
+    return cut + "..."
 
 
 def final_line(run_id: str) -> str:

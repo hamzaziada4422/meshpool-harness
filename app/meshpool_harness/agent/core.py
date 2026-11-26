@@ -1472,6 +1472,13 @@ _ACT_VERB = (r"(?:check|read|run|re-?run|open|look|inspect|verify|confirm|review
 _ACT_PROMISE = re.compile(r"\b(?:I'll|I will|I'm going to|I am going to|let me|next,? I(?:'ll| will)|now I(?:'ll| will))"
                           r"\s+(?:(?:now|first|then|quickly|also|just|next|go ahead and|go and|start by)\s+){0,2}"
                           + _ACT_VERB + r"\b", re.I)
+# Lina, round 4: "The first attempt stopped on a header-styling error... I'm fixing that line and running it again."
+# ended the turn with no call, and Progress said Done. Work said to be under way now is a promise too.
+_ACT_DOING = re.compile(r"\b(?:I'm|I am)\s+(?:now\s+|just\s+|already\s+|currently\s+)?(?:checking|reading|re-?running|"
+                        r"running|opening|looking|fixing|updating|changing|editing|making|creating|writing|saving|"
+                        r"building|re-?building|trying|retrying|adding|moving|redoing|regenerating|rendering|applying|"
+                        r"testing|verifying|re-?checking|installing|starting|working on|correcting|patching|"
+                        r"generating|converting|exporting|re-?doing)\b", re.I)
 _ACT_OFFER = re.compile(r"\b(?:if you|would you|do you want|want me to|let me know|shall I|should I|once you|when you|"
                         r"if that|if needed|if it helps|happy to)\b", re.I)
 
@@ -1506,7 +1513,7 @@ def _announces_action(final: str) -> bool:
     for sent in sentences:
         if sent.rstrip().endswith("?") or _ACT_OFFER.search(sent):
             continue
-        if _ACT_PROMISE.search(sent):
+        if _ACT_PROMISE.search(sent) or _ACT_DOING.search(sent):
             return True
     return False
 
@@ -1525,6 +1532,31 @@ def _prose_before_call(text: str) -> str:
 
 
 ACT_NUDGE = "[Meshpool] You said you would do that. Do it now with the tools, or say why you can't."
+
+# Round 4 (Maya, Lina): follow-up turns ended on "the tool I use to edit your page wasn't available just now" and "none
+# of my file tools were available this turn", with no call, though the request offered 24 or 25 tools. The cause was
+# the test adapter, but a model can say it on its own too. Such a reply is sent back once, with the tools' names.
+_NO_TOOL = re.compile(
+    r"\b(?:tools?|commands?)\b[^.!?\n]{0,60}?\b(?:(?:is|are|was|were)(?:n't| not)|isn't|aren't|wasn't|weren't)\s+"
+    r"(?:(?:currently|really|actually|even)\s+)?(?:available|working|accessible|enabled|loaded|connected)\b"
+    r"|\b(?:tools?|commands?)\b[^.!?\n]{0,60}?\b(?:unavailable|not available|inaccessible|(?:would|could|did)(?:n't| not)"
+    r" run|(?:won't|will not|can't|cannot) run)\b"
+    r"|\b(?:none|neither) of my\b[^.!?\n]{0,30}\btools?\b"
+    r"|\bI (?:don't|do not|no longer) have (?:access to )?(?:the |my |any )?(?:\w+ ){0,2}tools?\b"
+    r"|\bI (?:can't|cannot|can not) run (?:commands|anything|code|tools)\b"
+    r"|\bI only have (?:a|one) tool\b|\bno tools? (?:is|are) available\b", re.I)
+
+
+def claims_no_tools(final: str) -> bool:
+    """True when a reply says its tools are unavailable ("The tool I need isn't available in this session")."""
+    return bool(_NO_TOOL.search(re.sub(r"[*_`]", "", str(final or ""))))
+
+
+def tools_nudge(names: list) -> str:
+    """The note that answers a "tool unavailable" reply: the tools offered, by name, and the job."""
+    names = list(dict.fromkeys(str(n) for n in names if n))
+    shown = ", ".join(names[:30]) + (f" and {len(names) - 30} more" if len(names) > 30 else "")
+    return f"[Meshpool] Your tools are available: {shown}. Use them to do the change."
 
 _DESTRUCTIVE = PR.DESTRUCTIVE                   # shared with re-check on edit (core/tools.py _recheckable)
 
@@ -3313,6 +3345,7 @@ class Agent:
     office_engines = False  # MH_OFFICE_DIRECT=1: a message asked for a new deck, report or model (engine tools shown)
     office_c171 = False  # MH_WORK_OFFICE_STYLE=c171: this Work chat's office job sends Codex 0.171's request
     office_revisions = False  # MH_OFFICE_DIRECT=1: a message asked for tracked changes or comments (edit_office_file shown)
+    chat_mode = False      # the web UI's Chat mode (not the Code tab): read_document is offered for office files
     usage_task = None      # the session may set one usage task before send() to share it across goal / resume turns
     usage_source = "chat"  # what this agent's own calls are called in the usage ledger ("subagent" for a sub-agent)
     _turn_no = 0           # counted up by each send(); turn-scoped guards read it before the first turn too
@@ -3684,7 +3717,12 @@ class Agent:
             def keep(name: str) -> bool:
                 n = name.replace("-", "_")
                 if n.startswith("mcp__meshpool_office__"):      # not on Codex's request for a Work office edit:
-                    return bool(getattr(self, "office_on", False)) and not getattr(self, "office_c171", False)
+                    if getattr(self, "office_c171", False):
+                        return False
+                    # Chat mode (Maya, round 4): the reader is always there, so a price list in the folder is read
+                    # with read_document, not with "cat; cp; unzip" behind an approval card
+                    return bool(getattr(self, "office_on", False)) or (
+                        bool(getattr(self, "chat_mode", False)) and n.endswith("__read_document"))
                 if n.startswith("mcp__meshpool_assistant__"):      # memory, schedules, chat search stay in Code chats
                     return not n.endswith("run_subtasks")
                 if name in own_browser:                          # Meshpool's own browser server: on request, as
@@ -3706,8 +3744,10 @@ class Agent:
             if self.office_engines:                                      # appended, never reordered
                 return head + T.schemas(["office_task"]) + [x for x in mcp if _engine_tool(x["function"]["name"])] \
                     + [x for x in mcp if is_dup(x)]
-            if getattr(self, "office_revisions", False):                 # tracked changes or comments: the editor
-                return head + [x for x in mcp if is_dup(x)]              # writes real Word revisions
+            if getattr(self, "office_revisions", False) or getattr(self, "chat_mode", False):
+                # tracked changes or comments: the editor writes real Word revisions. Chat mode (Lina, round 4): a
+                # change to a file the user has goes through the editor, which keeps it whole and shows a plain card
+                return head + [x for x in mcp if is_dup(x)]
             return head
         names = self._tool_names()
         if getattr(self, "lane", "task") == "chat" and not getattr(self, "_tools_full", False) \
@@ -3731,7 +3771,9 @@ class Agent:
                if not x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_web__")
                and not x["function"]["name"].endswith("run_subtasks")   # delegate_task instead
                and not (self.profile == "code" and not getattr(self, "office_on", False)   # about 3k tokens per call:
-                        and x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_office__"))]
+                        and x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_office__")
+                        and not (getattr(self, "chat_mode", False)                 # Chat mode keeps the reader
+                                 and x["function"]["name"].endswith("__read_document")))]
               if self.mcp else [])             # a Code chat gets the office tools once a message asks for a file
         out = (T.schemas(names) + self._lazy_apply(ms))[:128]    # no endpoint takes more than 128 tools
         defn = getattr(self, "_as_agent", None)
@@ -4268,6 +4310,11 @@ class Agent:
                   "after_plan": bool(getattr(self, "_prev_plan", False)), "grade_rounds": 0,
                   "trace0": len(getattr(self, "trace", []))})
         self._last_g, self._last_final = g, ""
+        try:      # the pictures of an earlier turn's look review are stale: they stay out of every later request
+            from meshpool_harness.agent import look as _LK      # (round 4: they rode on each follow-up turn)
+            _LK.drop_look_images(self.messages[:-1])
+        except Exception:  # noqa: BLE001
+            pass
         self._turn_no = getattr(self, "_turn_no", 0) + 1
         cx = self._codex()
         if cx:                                       # Codex's loop: no plan round, no reminders, no extra checks
@@ -4581,6 +4628,16 @@ class Agent:
                             self.emit({"type": "assistant", "text": done, "streamed": False, "has_tools": False})
                             final = done
                             break
+                    if (not self.plan and not tools_off and not self._pace_wrapped and not g.get("tools_nudged")
+                            and claims_no_tools(final)):
+                        try:
+                            offered = [t["function"]["name"] for t in self.tool_schemas()]
+                        except Exception:  # noqa: BLE001
+                            offered = []
+                        if offered:                     # once per turn: "the tool I need isn't available" with tools
+                            g["tools_nudged"] = len(self.messages)
+                            self.messages.append({"role": "user", "content": tools_nudge(offered)})
+                            continue
                     if (E2E and not self.plan and not cx and g.get("promise_n", 0) < 2 and not g.get("act_nudged")
                             and _stopped_early(_prose_before_call(final)) and self._tool_msgs_since(g["msg0"])):
                         g["promise_n"] = g.get("promise_n", 0) + 1   # E2E-AUTONOMY: a promise or a permission question
@@ -7263,6 +7320,62 @@ class Agent:
                 "workbook or model; describe the sheets, inputs and outputs in the request. To read or change a few "
                 "values in an existing workbook, openpyxl.load_workbook is fine.")
 
+    _OFFICE_FILE = re.compile(r"\.(?:xlsx|xlsm|xls|docx|doc|pptx|ppt)\b", re.I)
+    _OFFICE_READ = re.compile(r"\bunzip\b|\bzipfile\b|sharedStrings\.xml|word/document\.xml|ppt/slides/|xl/worksheets/|"
+                              r"\bload_workbook\b|\bDocument\(|\bPresentation\(|\bread_excel\b")
+    _OFFICE_OUT = re.compile(r"\.save\(|savefig|\bto_(?:excel|csv|html|json)\(|writestr|open\([^)]*['\"][wax]b?\+?['\"]|"
+                             r"\bcat\s*>|\btee\b|\bwrite_(?:text|bytes)\(|>\s*['\"]?[^\s|;&<>]+\.(?:png|pdf|xlsx|docx|"
+                             r"pptx|csv|html|json|txt|md)\b", re.I)
+
+    _OFFICE_LOAD = re.compile(r"\b(?:openpyxl\.)?load_workbook\(\s*([^,)]+)|\b(?:docx\.)?Document\(\s*([^,)]+)|"
+                              r"\b(?:pptx\.)?Presentation\(\s*([^,)]+)")
+    _OFFICE_SAVE = re.compile(r"\.save\(\s*([^,)]+)")
+
+    def _rewrites_office_file(self, text: str) -> bool:
+        """A script that opens an office file and saves it under the same name: an in-place edit by hand."""
+        def norm(x: str) -> str:
+            x = x.strip().strip("'\"")
+            return re.split(r"[\\/]", x)[-1]
+        loads = {norm(next(g for g in m.groups() if g)) for m in self._OFFICE_LOAD.finditer(text)}
+        loads.discard("")
+        return bool(loads & {norm(m.group(1)) for m in self._OFFICE_SAVE.finditer(text)})
+
+    def _offered_tool(self, suffix: str) -> str:
+        """The full name of an offered tool that ends with `suffix` ("" when none is offered)."""
+        try:
+            return next((t["function"]["name"] for t in self.tool_schemas() if t["function"]["name"].endswith(suffix)),
+                        "")
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _office_read_steer(self, name: str, args: dict) -> str:
+        """Chat mode with read_document offered: a command that only reads a Word, Excel or PowerPoint file (unzip and
+        cat its XML, or a script that loads it and prints) is not run; the reply points at read_document, which needs
+        no approval. Maya, round 4: "cat; cp; unzip" on her price list showed a "Run 5 steps" approval card. "" when
+        the call is fine."""
+        if not getattr(self, "chat_mode", False) or name not in ("exec_command", "bash", "bash_many", "shell"):
+            return ""
+        cmd = args.get("cmd") if name == "exec_command" else args.get("command")
+        text = " ".join(map(str, cmd)) if isinstance(cmd, list) else str(cmd or "")
+        text += " ".join(str(c) for c in args.get("commands") or [])
+        if self._rewrites_office_file(text):
+            editor = self._offered_tool("__edit_office_file")
+            if editor:                       # Lina, round 4: "freeze the top row" rewrote her workbook with a script
+                return (f"Not run: in this chat, a Word, Excel or PowerPoint file the user has is changed with "
+                        f"{editor}, not rewritten by a script. It keeps the file's formatting and formulas, and Undo "
+                        "can put it back. Excel: set_cell (a value or =formula), set_range, add_row, add_sheet, "
+                        "delete_rows, freeze_panes, set_column_width. Work out the values first with a read-only "
+                        "command if you need to, then make the change in one call.")
+            return ""
+        if not (self._OFFICE_FILE.search(text) and self._OFFICE_READ.search(text)) or self._OFFICE_OUT.search(text):
+            return ""
+        reader = self._offered_tool("__read_document")
+        if not reader:
+            return ""
+        return (f"Not run: in this chat, Word, Excel and PowerPoint files are read with {reader}, which needs no "
+                "approval. Call it with the file's path (for a workbook, `sheet` picks one sheet). Use a command only "
+                "to compute or change something.")
+
     def _mcp_destructive(self, name: str) -> bool:
         """A connected app's tool its server marks destructiveHint: it asks first in every mode, unless
         MH_MCP_DESTRUCTIVE_ASK=0."""
@@ -7732,7 +7845,8 @@ class Agent:
         try:
             if bad:
                 raise bad
-            steer = self._engine_only(name, args)
+            steer = self._engine_only(name, args) or (self._office_read_steer(name, args) if isinstance(args, dict)
+                                                      else "")
             allowed, note = (False, "") if steer else self._permit(name, args)
             if cp_ctx and allowed and not steer:
                 cp_ctx.__enter__()

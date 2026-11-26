@@ -494,8 +494,8 @@ def test_desktop_app_log_does_not_carry_the_launch_key(monkeypatch, tmp_path, ca
     itself, so its log gets the address without the key."""
     port, stop = _serve_quietly(monkeypatch, tmp_path, desktop=True)
     try:
-        out = _printed(capfd, "to stop Meshpool")           # the banner's last line: everything before it is in
-        assert "Meshpool is running" in out
+        out = _printed(capfd, "to stop meshpool")           # the banner's last line: everything before it is in
+        assert "meshpool is running" in out
         assert S.LAUNCH_KEY not in out
         st, body, _ = _get(port, "/")                     # what the log shows opens no token
         assert st == 403 and S.TOKEN.encode() not in body
