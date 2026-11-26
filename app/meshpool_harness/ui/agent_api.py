@@ -268,15 +268,50 @@ _FILLER = re.compile(r"^(?:please|pls|can you|could you|would you|i want you to|
                      re.I)
 
 
+_GREETING = re.compile(r"^(?:hi|hello|hey|hiya|howdy|hallo|hej|hola|greetings|good\s+(?:morning|afternoon|evening|day))"
+                       r"(?:\s+(?:there|all|team|everyone|again)|\s+(?-i:[A-Z])[\w-]*(?=\s*[,!.]))?\s*[,.!?:;-]*\s*", re.I)
+_FILEISH = re.compile(r"\.[A-Za-z0-9]{1,5}$")
+
+
+def _path_name(tok: str) -> str:
+    """The file (or last folder) name of a path token, for a title: "/home/dan/Reports/q3.pdf" -> "q3.pdf"."""
+    parts = [x for x in re.split(r"[/\\]+", tok) if x and not re.fullmatch(r"[A-Za-z]:|~|\.{1,2}", x)]
+    return parts[-1] if parts else tok
+
+
+def _paths_to_names(t: str) -> str:
+    """Paths in t replaced by their file names, whole: quoted ones (which may hold spaces) and bare tokens that start
+    at a root (/, ~/, ./, C:\\) with two or more parts, or that end in a file name. A single "/word" stays: it is a
+    command, removed later."""
+    t = re.sub(r"[\"'`]([^\"'`]*[/\\][^\"'`]*)[\"'`]", lambda m: _path_name(m.group(1)), t)
+
+    def one(m):
+        tok, tail = re.match(r"(.*?)([.,;:!?)\]]*)$", m.group(0)).groups()
+        rooted = re.match(r"(?:~|\.{1,2}|[A-Za-z]:)?[/\\]", tok)
+        several = len([x for x in re.split(r"[/\\]+", tok) if x]) >= 2
+        if _FILEISH.search(tok) or (rooted and (several or tok[:1] not in "/\\")):
+            return _path_name(tok) + tail
+        return m.group(0)
+    return re.sub(r"(?<!\S)[^\s]*[/\\][^\s]*", one, t)
+
+
 def nice_title(text: str) -> str:
     """A short thread title from the first message: the first sentence, without greetings, skill names, links,
-    or the hidden notes Meshpool adds, capitalised and cut at a word under 48 characters."""
+    or the hidden notes Meshpool adds, capitalised and cut at a word under 48 characters. A path is never cut: it
+    becomes its file name."""
     t = str(text or "").split("\n\n\u200b")[0].replace("\u200b", "").strip()   # notes start with this separator
     if not t or t in ("New thread", "New chat", "Session"):
         return "New chat" if t in ("", "New thread") else t
-    t = t.splitlines()[0]
+    lines = [x.strip() for x in t.splitlines() if x.strip()]
+    t = lines[0]
+    g = _GREETING.match(t)
+    if g and g.end() == len(t) and len(lines) > 1:        # "Hi!" on a line of its own, the request below it
+        t = lines[1]
+    elif g and len(t[g.end():].split()) >= 2:              # "Hi! The file ..." -> "The file ..."
+        t = t[g.end():]
     t = re.sub(r"https?://\S+", "", t)
-    t = re.sub(r"(?<!\w)[$/][\w-]+", "", t)
+    t = _paths_to_names(t)
+    t = re.sub(r"(?<!\S)[$/][\w-]+(?![\w/\\.-])", "", t)
     t = re.split(r"(?<=[.!?])\s", t)[0].strip(" .!?:;,-")
     full = t
     for _ in range(3):
@@ -287,8 +322,16 @@ def nice_title(text: str) -> str:
     if not t:
         return "New chat"
     if len(t) > 48:
-        cut = t[:48].rsplit(" ", 1)[0]
-        t = (cut if len(cut) > 20 else t[:48]).rstrip(" ,;:") + "…"
+        words, cut = t.split(" "), ""
+        for w in words:
+            if len(cut) + len(w) + bool(cut) > 48:
+                break
+            cut += " " * bool(cut) + w
+        if len(cut) <= 20:                             # one long word after a short start
+            w = words[len(cut.split(" ")) if cut else 0]
+            cut = (cut + " " + w).strip() if _FILEISH.search(w.rstrip(".,;:!?")) and len(cut) + len(w) < 72 \
+                else t[:48]                            # a file name is kept whole
+        t = cut.rstrip(" ,;:") + ("…" if cut != t else "")
     return t[0].upper() + t[1:]
 
 

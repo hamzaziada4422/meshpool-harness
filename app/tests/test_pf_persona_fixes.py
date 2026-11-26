@@ -77,3 +77,38 @@ def test_pf02_no_lock_still_edits_in_place(project):
                                   in_place=True)
     assert not err and msg.startswith("Changed"), msg
     assert "4,500" in _text(memo)
+
+
+# ---------- PF-03: chat titles cut a path in the middle and stopped at "Hi" -----------------------------------------
+
+@pytest.mark.parametrize("first, title", [
+    ("Summarise the PDF at /home/daniel/Reports/q3.pdf", "Summarise the PDF at q3.pdf"),
+    ("Hi! The file budget.xlsx has errors, fix them", "The file budget.xlsx has errors, fix them"),
+    ("Hi!\nPlease tidy ~/Documents/notes.md", "Tidy notes.md"),
+    ("Hello, can you read C:\\Users\\dan\\Docs\\memo.docx", "Read memo.docx"),
+    ('Hey Sam, what is in "/home/d/My Reports/q 3.pdf"?', "What is in q 3.pdf"),
+    ("Summarise /home/daniel/Reports/2024/Quarterly-financial-statements-final.pdf please",
+     "Summarise Quarterly-financial-statements-final.pdf…"),
+    ("hi there", "Hi there"),
+    ("/plan build a thing", "Build a thing"),
+    ("Compare this and/or that", "Compare this and/or that"),
+])
+def test_pf03_titles_keep_paths_whole_and_skip_greetings(first, title):
+    from meshpool_harness.ui.agent_api import nice_title
+    assert nice_title(first) == title
+
+
+def test_pf03_agent_title_does_not_cut_a_path_at_80_characters(tmp_path):
+    from meshpool_harness.agent.core import Agent
+    from meshpool_harness.ui.agent_api import nice_title
+    from test_agent_robustness import _script
+    msg = "Summarise the PDF at /home/daniel/Reports/2024/Board/Finance/Quarterly/statements/final-version.pdf"
+    a = Agent(str(tmp_path), mode="auto")
+    _script(a, [{"role": "assistant", "content": "Done."}])
+    a.send(msg)
+    assert a.title == msg
+    assert nice_title(a.title) == "Summarise the PDF at final-version.pdf"
+    b = Agent(str(tmp_path), mode="auto")
+    _script(b, [{"role": "assistant", "content": "Done."}])
+    b.send("Hi!\nThe file budget.xlsx has errors")
+    assert nice_title(b.title) == "The file budget.xlsx has errors"
