@@ -840,6 +840,26 @@ class ACPAgent:
         self._flush_text()
         return reply
 
+    SANDBOX_NOTE = ("\n\n​LibreOffice (soffice) cannot run inside your command sandbox here: it needs a local "
+                    "socket the sandbox blocks, so it exits 1 even on a text file. Do not try it or work around it. To "
+                    "make a PDF of an office file, or pictures of its pages to check the layout, call the meshpool-office "
+                    "tool convert_document (to \"pdf\", or \"png\" for page pictures); it runs outside the sandbox. "
+                    "Then look at the pictures with view_image.")
+
+    def _sandbox_note(self) -> str:
+        """Daniel and Sara, round 3: in Codex's sandbox (Ask and Accept edits) `soffice --convert-to` always failed, so
+        the model said "LibreOffice would not convert in this environment" and asked the user to check the layout, or
+        spent 9 steps and asked to run it outside the sandbox. Once per session of a chat with the office tools, the
+        engine is told how to convert and render instead (meshpool-office convert_document runs outside it)."""
+        modes = self.manifest.get("no_soffice_in") or []
+        if self.mode not in modes or not self.office_on or not self.manifest.get("office", True):
+            return ""
+        key = (self.acp_session, self.mode)
+        if getattr(self, "_sandbox_noted", None) == key:
+            return ""
+        self._sandbox_noted = key
+        return self.SANDBOX_NOTE
+
     def _open_file_guard(self, text: str) -> str:
         """Before an outside engine works on a message that changes an office file open in Excel, Word or PowerPoint
         (its lock file is next to it): ask first, as meshpool's own agent does. The engine writes files itself, in its
@@ -1132,6 +1152,7 @@ class ACPAgent:
             self._ensure_session_tracked()
             if self._stop:                               # Stop pressed while the harness was starting
                 raise ACPStopped("stopped")
+            body += self._sandbox_note()
             self._before = self._descendants()           # Stop then ends only what this turn starts
             if getattr(self, "_carry", False):
                 self._carry = False

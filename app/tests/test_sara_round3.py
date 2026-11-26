@@ -232,6 +232,28 @@ def test_a_raw_soffice_permission_card_reads_in_plain_words(fake):
     assert "ev.sum" in pa[:400] and "<summary>Details</summary>" in pa[:600]
 
 
+def test_codex_is_told_to_convert_and_render_with_meshpool_s_office_tools(fake):
+    """Daniel, round 3: "LibreOffice would not convert in this environment", so he was asked to check the layout
+    himself. In the modes where Codex sandboxes its commands, a chat with the office tools tells it once how to make a
+    PDF or page pictures: meshpool-office convert_document, which runs outside the sandbox."""
+    from meshpool_harness import harnesses as HR
+    assert HR.CODEX["no_soffice_in"] == ["ask", "edits"]
+    make, calls, proj = fake
+    a = make(mode="ask")
+    a.manifest.update(office=True, no_soffice_in=["ask", "edits"])
+    a.office_on = True
+    a.send("make the board deck and check its layout")
+    a.send("now fix slide 3")
+    sent = [c["params"]["prompt"][0]["text"] for c in calls("session/prompt")]
+    assert "convert_document" in sent[0] and "cannot run inside your command sandbox" in sent[0]
+    assert "convert_document" not in sent[1]                 # once per session
+    b = make(mode="auto")                                    # Full access: Codex runs commands without its sandbox
+    b.manifest.update(office=True, no_soffice_in=["ask", "edits"])
+    b.office_on = True
+    b.send("make the board deck")
+    assert "convert_document" not in calls("session/prompt")[-1]["params"]["prompt"][0]["text"]
+
+
 def test_soffice_cannot_run_inside_codex_s_sandbox_but_meshpool_s_converter_can(tmp_path):
     """The cause, where Codex is installed: its workspace-write sandbox refuses the local socket LibreOffice opens
     at start, so the conversion exits 1 even for a text file. meshpool's own converter makes it."""
