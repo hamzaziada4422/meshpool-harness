@@ -227,7 +227,7 @@ def test_connection(values: dict | None = None, fresh: bool = False) -> dict:
         why = (PS._net_error(err, base) if err else _not_reply(PV.host(base), PS._not_reply_msg(data)) if st == 200
                else PS.explain(st, data, base=base, model=model, version=ver))
         return {"ok": False, "detail": why[:400], "model": model, "seconds": secs, "endpoint": base,
-                "status": 0 if err else st}
+                "status": 0 if err else st, "missing_model": bool(not err and EP.missing_model(st, data, model))}
     txt = ""
     if isinstance(data, dict):
         try:
@@ -261,8 +261,8 @@ def onboard(body: dict) -> dict:
         if model:
             vals["MH_MODEL"] = model
         r, used = test_connection(vals, fresh=True), cand
-        if r.get("ok") or r.get("status") != 404:
-            break
+        if r.get("ok") or r.get("status") != 404 or r.get("missing_model"):
+            break                         # a 404 that names a missing model came from the right address
     if not r.get("ok"):
         return {"ok": False, "detail": r.get("detail") or "The check failed.", "endpoint": used}
     vals = {"MESHPOOL_API_KEY": key, "MESHPOOL_BASE_URL": used if which == "custom" else "",   # default: no saved address
@@ -1058,6 +1058,9 @@ class Handler(BaseHTTPRequestHandler):
                 from meshpool_harness import harness_router as HRT
                 b = self._json()
                 return self._send(200, HRT.route(b.get("text", ""), b.get("kind", "cowork")))
+            if u.path == "/api/harness-login/stop":   # the user left the ChatGPT choice, or onboarding is done
+                HR.stop_login()
+                return self._send(200, {"ok": True})
             if u.path == "/api/harness-login":
                 from meshpool_harness import harnesses as HRS
                 b = self._json()
@@ -1555,6 +1558,10 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     threading.Thread(target=A.probe_mcp, daemon=True).start()
     office = _start_office()
     ON_QUIT.append(HR.stop_login)                   # an unfinished ChatGPT sign-in does not outlive the app
+    try:
+        HR.reap_stale_login()                       # nor one a meshpool that was killed left running
+    except Exception:  # noqa: BLE001
+        pass
     threading.Thread(target=A.recover_worktrees, daemon=True).start()   # copies a crash or a deleted chat left
     if desktop:                                     # background update checks and downloads; install on quit
         try:

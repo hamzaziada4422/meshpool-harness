@@ -230,7 +230,7 @@ function pvSheets(m) {
   tabs.hidden = sheets.length < 2;
   if (sheets.length > 1) {
     tabs.innerHTML = "";
-    sheets.forEach((s, i) => { const b = document.createElement("button"); b.setAttribute("role", "tab"); b.setAttribute("aria-selected", String(i === PVX.sheet)); b.textContent = s.name; b.title = s.name; b.onclick = () => { PVX.sheet = i; pvSheets(m); }; tabs.appendChild(b); });
+    sheets.forEach((s, i) => { const b = document.createElement("button"); b.setAttribute("role", "tab"); b.setAttribute("aria-selected", String(i === PVX.sheet)); b.textContent = s.hidden ? `${s.name} (hidden)` : s.name; b.title = s.hidden ? `${s.name}: a hidden sheet` : s.name; if (s.hidden) b.classList.add("pv-hid"); b.onclick = () => { PVX.sheet = i; pvSheets(m); }; tabs.appendChild(b); });
   }
   const s = sheets[Math.min(PVX.sheet, sheets.length - 1)];
   st.innerHTML = "";
@@ -238,8 +238,10 @@ function pvSheets(m) {
   const key = PVX.path + "#" + PVX.sheet;
   if (!PVX.view || PVX.view.key !== key) PVX.view = {key, col: -1, dir: 0, q: ""};
   const V = PVX.view;
-  const isNum = v => v !== "" && /^-?[\d,]*\.?\d+%?$/.test(String(v).trim());
-  const num = v => parseFloat(String(v).replace(/[,%]/g, ""));
+  // numbers as the cell's format shows them: 1,234  -1,234.50  (1,234)  $1,234  3.1%
+  const isNum = v => v !== "" && /^\(?-?[$\u20ac\u00a3\u00a5]?-?[\d,]*\.?\d+%?\)?$/.test(String(v).trim());
+  const num = v => { const t = String(v).trim(), n = parseFloat(t.replace(/[^\d.-]/g, "")); return /^\(.*\)$/.test(t) ? -n : n; };
+  const fx = s.formulas || {};
   // a first row of labels stays on top when sorting or filtering
   const headRow = s.rows.length > 1 && s.rows[0].some(v => v !== "") && s.rows[0].every(v => v === "" || !isNum(v));
   const bar = document.createElement("div"); bar.className = "pv-tools";
@@ -279,7 +281,9 @@ function pvSheets(m) {
       const r = s.rows[ri];
       const tr = document.createElement("tr"); if (headRow && ri === 0) tr.className = "hd";
       const rn = document.createElement("th"); rn.className = "rn"; rn.textContent = ri + 1; tr.appendChild(rn);
-      r.forEach(v => { const td = document.createElement("td"); td.textContent = v; if (isNum(v)) td.className = "num"; tr.appendChild(td); });
+      r.forEach((v, ci) => { const td = document.createElement("td"); td.textContent = v; if (isNum(v)) td.className = "num";
+        const f = fx[ri + ":" + ci]; if (f) { td.title = f; td.classList.add("fx"); } else if (String(v).length > 12) td.title = v;
+        tr.appendChild(td); });
       tb.appendChild(tr);
     });
     const shown = idx.length - (headRow ? 1 : 0), all = s.rows.length - (headRow ? 1 : 0);
@@ -289,8 +293,41 @@ function pvSheets(m) {
   q.oninput = () => { clearTimeout(qt); qt = setTimeout(() => { V.q = q.value; draw(); }, 120); };
   draw();
   t.appendChild(tb); wrap.appendChild(t); st.appendChild(bar); st.appendChild(wrap);
+  pvFitCols(wrap, t, s.cols);
   const notes = [s.more ? `Showing the first ${s.rows.length} rows.` : "", s.wide ? "Showing the first 50 columns." : ""].filter(Boolean).join(" ");
   if (notes) st.insertAdjacentHTML("beforeend", `<div class="pv-more">${esc(notes)} Use Open to see the rest.</div>`);
+}
+
+// Columns narrowed so a sheet fits the pane: a long title in A1 made column A 300 px wide, and at 1024 or 1366 px only
+// column B showed. The widest columns give way first, none below 72 px; a sheet that still does not fit scrolls sideways.
+// Cut text ends in an ellipsis and shows in full on hover. Measured once per sheet; a resize of the pane fits it again.
+function pvFitCols(wrap, t, cols) {
+  if (!cols) return;
+  const ths = [...t.querySelectorAll("thead th")];
+  const nat = ths.slice(1).map(th => th.getBoundingClientRect().width), rn = ths[0]?.getBoundingClientRect().width || 0;
+  if (!nat.length || nat.some(w => !w)) return;
+  const fit = () => {
+    const room = wrap.clientWidth - rn - 1;
+    if (room <= 0) return;
+    let cap = Math.max(...nat);
+    if (nat.reduce((a, w) => a + w, 0) > room) {
+      const ws = [...nat].sort((a, b) => a - b);
+      let left = room, n = ws.length;
+      cap = 72;
+      for (const w of ws) { if (w * n <= left) { left -= w; n--; } else { cap = Math.max(72, Math.floor(left / n)); break; } }
+    }
+    let cg = t.querySelector("colgroup");
+    if (!cg) { cg = document.createElement("colgroup"); t.prepend(cg); }
+    cg.replaceChildren(...[rn, ...nat.map(w => Math.min(w, cap))].map(w => { const c = document.createElement("col"); c.style.width = Math.ceil(w) + "px"; return c; }));
+    const total = Math.ceil(rn) + nat.reduce((a, w) => a + Math.ceil(Math.min(w, cap)), 0);
+    t.style.tableLayout = "fixed"; t.style.width = total + "px";
+  };
+  fit();
+  if (typeof ResizeObserver === "function") {
+    let last = wrap.clientWidth;
+    const ro = new ResizeObserver(() => { if (!wrap.isConnected) return ro.disconnect(); if (wrap.clientWidth !== last) { last = wrap.clientWidth; fit(); } });
+    ro.observe(wrap);
+  }
 }
 
 // ---- cards under a reply

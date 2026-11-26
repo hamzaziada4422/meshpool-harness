@@ -18,6 +18,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -240,34 +241,147 @@ def _cell(v) -> str:
     return str(v)
 
 
+def _sections(fmt: str) -> list[str]:
+    """A number format split at the ';' that are not inside quotes or after a backslash."""
+    out, cur, q, esc = [], "", False, False
+    for ch in fmt:
+        if esc:
+            cur, esc = cur + ch, False
+        elif ch == "\\":
+            cur, esc = cur + ch, True
+        elif ch == '"':
+            cur, q = cur + ch, not q
+        elif ch == ";" and not q:
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    return out + [cur]
+
+
+_DATEISH = re.compile(r"[yYmMdDhHsS]")
+
+
+def _number(v, fmt) -> str:
+    """A number as the cell's number format shows it: digit groups, decimals, percent, currency text, a negative or
+    zero section. The preview showed 412000 for a cell Excel shows as 412,000. Formats it does not cover (dates,
+    fractions, scientific) and General keep the plain text."""
+    if not fmt or isinstance(v, bool) or not isinstance(v, (int, float)) or fmt in ("General", "@"):
+        return _cell(v)
+    secs = _sections(str(fmt))
+    sign = ""
+    if v < 0 and len(secs) >= 2 and secs[1].strip():
+        sec, v = secs[1], -v
+    elif v == 0 and len(secs) >= 3:
+        sec = secs[2]
+    else:
+        sec = secs[0]
+        if v < 0:
+            sign, v = "-", -v
+    pre, num, post, i = "", "", "", 0
+    while i < len(sec):                                  # literal text before and after one run of digit placeholders
+        ch = sec[i]
+        if ch == '"':
+            j = sec.find('"', i + 1)
+            j = len(sec) if j < 0 else j
+            lit, i = sec[i + 1:j], j + 1
+        elif ch == "\\" and i + 1 < len(sec):
+            lit, i = sec[i + 1], i + 2
+        elif ch == "[":
+            j = sec.find("]", i)
+            j = len(sec) if j < 0 else j
+            inner, i = sec[i + 1:j], j + 1
+            lit = inner[1:].split("-", 1)[0] if inner.startswith("$") else ""     # [$EUR-407] is a currency, [Red] is not
+        elif ch in "_*":
+            lit, i = "", i + 2                           # padding and fill characters
+        elif ch in "0#?.,":
+            if num and post:                             # a second run of placeholders: not a format this covers
+                return _cell(v if not sign else -v)
+            num += ch
+            i += 1
+            continue
+        elif ch in "eE" and num:
+            return _cell(v if not sign else -v)
+        elif _DATEISH.match(ch) or ch == "/":
+            return _cell(v if not sign else -v)
+        else:
+            lit, i = ch, i + 1
+        if num:
+            post += lit
+        else:
+            pre += lit
+    if not num:
+        return pre + post if pre or post else _cell(v if not sign else -v)
+    if "%" in pre + post:
+        v = v * 100
+    body = num.rstrip(",")
+    v = v / (1000 ** (len(num) - len(body)))             # trailing commas scale by thousands
+    whole, _, frac = body.partition(".")
+    need = frac.count("0")
+    places = sum(frac.count(c) for c in "0#?")
+    text = f"{v:,.{places}f}" if "," in whole else f"{v:.{places}f}"
+    if places > need:                                    # optional decimals (#, ?) drop trailing zeros
+        a, _, b = text.partition(".")
+        b = b[:need] + b[need:].rstrip("0")
+        text = a + ("." + b if b else "")
+    if "0" not in whole:
+        a, dot, b = text.partition(".")
+        if a in ("0", ""):
+            text = (dot + b) if b else ""
+    if sign and text.strip("0.,") == "":
+        sign = ""                                        # -0.001 shown as 0, not -0
+    return sign + pre + text + post
+
+
 def _xlsx_sheets(p: Path) -> list[dict]:
+    """Each sheet's rows as text, as Excel shows them: the cached value of a formula (the formula itself when the file
+    was never calculated), numbers in the cell's number format. A sheet also lists its formulas by "row:col" for
+    the cells that show a value (the page shows them on hover) and says when it is hidden."""
     import openpyxl
     wb = openpyxl.load_workbook(p, read_only=True, data_only=True)
     wf = openpyxl.load_workbook(p, read_only=True, data_only=False)     # F-24: formulas with no cached value show as text
     out = []
     try:
         for ws in wb.worksheets[:MAX_SHEETS]:
-            rows, cols, more = [], 0, False
+            rows, cols, more, forms = [], 0, False, {}
             try:
                 frows = wf[ws.title].iter_rows(max_col=MAX_COLS, values_only=True)
             except Exception:  # noqa: BLE001
                 frows = iter(())
-            for i, row in enumerate(ws.iter_rows(max_col=MAX_COLS, values_only=True)):
+            for i, row in enumerate(ws.iter_rows(max_col=MAX_COLS)):
                 if i >= MAX_ROWS:
                     more = True
                     break
-                frow = next(frows, ())
-                row = [f if v is None and isinstance(f, str) and f.startswith("=") else v
-                       for v, f in zip(row, tuple(frow) + (None,) * (len(row) - len(frow)))]
-                cells = [_cell(v) for v in row]
+                frow = tuple(next(frows, ()))
+                frow += (None,) * (len(row) - len(frow))
+                cells = []
+                for j, (c, f) in enumerate(zip(row, frow)):
+                    v = getattr(c, "value", None)
+                    f = f if isinstance(f, str) else getattr(f, "text", None)        # an array formula
+                    if isinstance(f, str) and f and not f.startswith("="):
+                        f = "=" + f
+                    if v is None and f and f.startswith("="):
+                        cells.append(f)
+                        continue
+                    if f and f.startswith("="):
+                        forms[f"{i}:{j}"] = f[:2000]
+                    try:
+                        cells.append(_number(v, getattr(c, "number_format", None)))
+                    except (ValueError, TypeError, OverflowError):
+                        cells.append(_cell(v))
                 while cells and cells[-1] == "":
                     cells.pop()
                 cols = max(cols, len(cells))
                 rows.append(cells)
             while rows and not rows[-1]:
                 rows.pop()
-            out.append({"name": ws.title, "rows": [r + [""] * (cols - len(r)) for r in rows], "cols": cols, "more": more,
-                        "wide": (ws.max_column or 0) > MAX_COLS})
+            sheet = {"name": ws.title, "rows": [r + [""] * (cols - len(r)) for r in rows], "cols": cols, "more": more,
+                     "wide": (ws.max_column or 0) > MAX_COLS}
+            if forms:
+                sheet["formulas"] = {k: v for k, v in forms.items() if int(k.split(":")[0]) < len(rows)}
+            if getattr(ws, "sheet_state", "visible") != "visible":
+                sheet["hidden"] = True
+            out.append(sheet)
         extra = len(wb.worksheets) - MAX_SHEETS
     finally:
         wb.close()

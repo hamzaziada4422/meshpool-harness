@@ -572,9 +572,9 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                     n = _replace_in_paragraphs(_docx_paragraphs(doc), o.get("find", ""), o.get("replace", ""))
                     (done if n else errors).append(f"replace_text {o.get('find', '')[:30]!r}: {n} place(s)" if n else f"text not found: {o.get('find', '')[:40]!r}")
                 elif op in ("tracked_replace", "tracked_delete", "tracked_insert_after"):
-                    n = 0                                   # every place, like replace_text (insert_after: the first)
+                    n, mine = 0, set()                      # every place, like replace_text (insert_after: the first)
                     while n < 1000 and _tracked(_docx_paragraphs(doc), op, o.get("find", ""),
-                                                o.get("replace", o.get("text", "")), o.get("author") or "Meshpool"):
+                                                o.get("replace", o.get("text", "")), o.get("author") or "Meshpool", mine):
                         n += 1
                         if op == "tracked_insert_after":
                             break
@@ -711,61 +711,129 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
 _REV_ID = [0]
 
 
-def _tracked(paragraphs, op: str, find: str, new: str, author: str) -> bool:
-    """A real Word revision (w:del and w:ins) inside one run, so Word shows it as a tracked change to accept or reject."""
+def _tracked(paragraphs, op: str, find: str, new: str, author: str, mine: set | None = None) -> bool:
+    """A real Word revision (w:del and w:ins), so Word shows it as a tracked change to accept or reject. The text may
+    lie in plain runs and in runs of an earlier insertion (w:ins), across several runs: a policy with tracked changes
+    already in it failed step after step ("not found inside one piece of formatted text"), as only plain runs were
+    searched. Text inside an earlier insertion is deleted inside that insertion (w:ins > w:del, as Word writes it), so
+    the earlier revision stays as it was; deleted text (w:del) is never matched. `mine`: insertions this edit made,
+    which later rounds of the same edit skip."""
     import copy
     import datetime as _dt
 
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
+    from docx.text.run import Run
     if not find:
         return False
+    mine = mine if mine is not None else set()
     stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     _REV_ID[0] += 10                                 # unique revision ids across calls in the same millisecond
-    rid = (int(_dt.datetime.now().timestamp() * 1000) % 100000000) + _REV_ID[0]
+    rid = [(int(_dt.datetime.now().timestamp() * 1000) % 100000000) + _REV_ID[0]]
+    R, INS, DEL = qn("w:r"), qn("w:ins"), qn("w:del")
+    QUIET = {qn("w:proofErr"), qn("w:bookmarkStart"), qn("w:bookmarkEnd"), qn("w:commentRangeStart"),
+             qn("w:commentRangeEnd"), qn("w:pPr")}
+
+    def next_id():
+        rid[0] += 1
+        return str(rid[0])
+
+    def run_like(base, text, deleted=False):
+        el = copy.deepcopy(base)
+        for ch in list(el):
+            if ch.tag != qn("w:rPr"):
+                el.remove(ch)
+        t = OxmlElement("w:delText" if deleted else "w:t")
+        t.set(qn("xml:space"), "preserve")
+        t.text = text
+        el.append(t)
+        return el
+
+    def wrap(tag, child):
+        w = OxmlElement(tag)
+        w.set(qn("w:id"), next_id())
+        w.set(qn("w:author"), author)
+        w.set(qn("w:date"), stamp)
+        w.append(child)
+        return w
+
+    def groups(p):
+        """Runs that read as one stretch of text: plain runs and runs of earlier insertions, in order. Deleted text
+        and bookmarks are skipped; anything else (a hyperlink, a field, an insertion this edit made) ends a stretch."""
+        out, cur = [], []
+
+        def walk(container, box):
+            nonlocal cur
+            for ch in container:
+                if ch.tag == R:
+                    cur.append((ch, box))
+                elif ch.tag == INS and box is None and ch not in mine:
+                    walk(ch, ch)
+                elif ch.tag == DEL or ch.tag in QUIET:
+                    continue
+                elif cur:
+                    out.append(cur)
+                    cur = []
+        walk(p, None)
+        if cur:
+            out.append(cur)
+        return out
+
     for pp in paragraphs:
-        for r in pp.runs:
-            if find not in r.text:
+        for segs in groups(pp._p):
+            texts = [Run(r, pp).text for r, _ in segs]
+            whole = "".join(texts)
+            if find not in whole:
                 continue
-            i = r.text.index(find)
-            before, after = r.text[:i], r.text[i + len(find):]
-            base = r._r
-
-            def run_like(text, deleted=False):
-                el = copy.deepcopy(base)
-                for ch in list(el):
-                    if ch.tag != qn("w:rPr"):
-                        el.remove(ch)
-                t = OxmlElement("w:delText" if deleted else "w:t")
-                t.set(qn("xml:space"), "preserve")
-                t.text = text
-                el.append(t)
-                return el
-
-            def wrap(tag, child, n):
-                w = OxmlElement(tag)
-                w.set(qn("w:id"), str(rid + n))
-                w.set(qn("w:author"), author)
-                w.set(qn("w:date"), stamp)
-                w.append(child)
-                return w
-            pieces = []
-            if before:
-                pieces.append(run_like(before))
-            if op == "tracked_insert_after":
-                pieces.append(run_like(find))
-                pieces.append(wrap("w:ins", run_like(new), 1))
-            else:
-                pieces.append(wrap("w:del", run_like(find, deleted=True), 1))
-                if op == "tracked_replace":
-                    pieces.append(wrap("w:ins", run_like(new), 2))
-            if after:
-                pieces.append(run_like(after))
-            parent = base.getparent()
-            at = parent.index(base)
-            parent.remove(base)
-            for k, el in enumerate(pieces):
-                parent.insert(at + k, el)
+            s = whole.index(find)
+            e = s + len(find)
+            pos, hit = 0, []
+            for (r, box), t in zip(segs, texts):
+                a, b = max(s, pos), min(e, pos + len(t))
+                if a < b:
+                    hit.append((r, box, t, a - pos, b - pos))
+                pos += len(t)
+            if not hit:
+                continue
+            first, last = hit[0][0], hit[-1][0]
+            after_el = None                          # where the new text goes: after the last matched piece
+            for r, box, t, a, b in hit:
+                before, mid, rest = t[:a], t[a:b], t[b:]
+                pieces = []
+                if before:
+                    pieces.append(run_like(r, before))
+                if op == "tracked_insert_after":
+                    pieces.append(run_like(r, mid))
+                else:
+                    pieces.append(wrap("w:del", run_like(r, mid, deleted=True)))
+                end = pieces[-1]
+                if rest:
+                    pieces.append(run_like(r, rest))
+                parent = r.getparent()
+                at = parent.index(r)
+                parent.remove(r)
+                for k, el in enumerate(pieces):
+                    parent.insert(at + k, el)
+                if r is last:
+                    after_el = end
+            if op in ("tracked_replace", "tracked_insert_after") and new:
+                ins = wrap("w:ins", run_like(first if op == "tracked_replace" else last, new))
+                mine.add(ins)
+                box = after_el.getparent()
+                if box.tag == INS:                   # inside an earlier insertion: split it, ours goes between
+                    k = box.index(after_el)
+                    tail = list(box)[k + 1:]
+                    box.addnext(ins)
+                    if tail:
+                        twin = copy.deepcopy(box)
+                        for ch in list(twin):
+                            twin.remove(ch)
+                        twin.set(qn("w:id"), next_id())
+                        for ch in tail:
+                            twin.append(ch)
+                        ins.addnext(twin)
+                else:
+                    after_el.addnext(ins)
             return True
     return False
 

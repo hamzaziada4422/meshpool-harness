@@ -100,6 +100,18 @@ function appearancePage(b, close) {
 /* ---------- Models and providers > Connection ---------- */
 // Base URL and key -> Test connection -> the endpoint's models -> pick the default -> Save. Logins already on this
 // computer come first. The key is never shown: a saved one reads "•••• 1234" with a Change link.
+// Plan and billing: what this computer runs on. The key field holds any provider's key, so "A Meshpool key is saved"
+// was shown to someone using another provider's key or a ChatGPT plan.
+function billingText(key) {
+  const prov = S.settings?.provider || "meshpool";
+  if (prov === "chatgpt") return "Meshpool runs on your ChatGPT subscription, so its usage is billed on your ChatGPT plan by OpenAI. A Meshpool account is only needed for a Meshpool key.";
+  if (prov === "custom") {
+    let host = "";
+    try { host = new URL((S.settings?.fields || []).find(f => f.key === "MESHPOOL_BASE_URL")?.value || "").host; } catch (e) { host = ""; }
+    return `Meshpool runs on your own API key${host ? " for " + host : ""}, so its usage is billed by that provider, not by Meshpool. A Meshpool account is only needed for a Meshpool key.`;
+  }
+  return key.set ? "A Meshpool key is saved on this computer. Open your account to add credit, see invoices or create another key." : "No Meshpool key is saved yet. Open your account to get one.";
+}
 async function providerPage(b, close) {
   b.innerHTML = `${close}<h3>Models and providers</h3><p class="lead">Connect Meshpool to a model endpoint: yours, or a login you already have on this computer.</p><div class="pnote">Loading…</div>`;
   let cur, lg;
@@ -355,7 +367,7 @@ const PV_host = u => { try { return new URL(u).host; } catch (e) { return String
       const key = (S.settings?.fields || []).find(f => f.key === "MESHPOOL_API_KEY") || {};
       b.innerHTML = `${close}<h3>Plan and billing</h3><p class="lead">Plans, payment methods, invoices and keys are managed on your Meshpool account. Meshpool does not handle payments in the app.</p>
         <div class="card" style="max-width:480px"><div class="chd"><span class="ci">${ICON.globe}</span><h3>Meshpool account</h3></div>
-          <p class="muted">${key.set ? "A Meshpool key is saved on this computer." : "No Meshpool key is saved yet."} ${key.set ? "Open your account to add credit, see invoices or create another key." : "Open your account to get one."}</p>
+          <p class="muted" id="bWhat">${esc(billingText(key))}</p>
           <div class="row"><button class="btn primary" id="bOpen">Open your account</button><button class="btn" id="bUsage">See usage</button></div></div>`;
       $("#bOpen").onclick = () => openExternal(sp.billing_url || "https://meshpool.ai");
       $("#bUsage").onclick = () => renderSection("usage");
