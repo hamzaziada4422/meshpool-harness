@@ -346,7 +346,7 @@ document.addEventListener("click", async e => {
   const b = e.target.closest('[data-ma="edit"]'); if (!b || !S.cur) return;
   const msgs = $$(".msg-user").filter(m => $(".macts", m)), mine = b.closest(".msg-user"), idx = msgs.indexOf(mine) + 1;
   const ei = mine && mine.dataset.ei !== undefined && mine.dataset.ei !== "" ? +mine.dataset.ei : NaN;
-  const text = $(".b", mine)?.innerText.replace(/^Plan mode\n?/, "").trim() || "";
+  const text = userText(mine);                    // as sent: without the tag and the names of attached pictures
   e.stopImmediatePropagation();
   const fill = () => fillInput(text);             // a draft in the box is kept: the message goes after it
   if (S.cur.busy || idx < 1 || isNaN(ei)) { fill(); return toast("Edit it and send to ask again.", 3500); }

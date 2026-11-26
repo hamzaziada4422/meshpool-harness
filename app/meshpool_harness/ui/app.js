@@ -46,8 +46,16 @@ function linkFiles(html) {
   const root = String(curRoot() || "").replace(/[\\/]+$/, ""); if (!root) return html;
   const rx = new RegExp(esc(root).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[\\\\/]([^\\n<\"'`)]+?\\.(?:docx|doc|xlsx|xls|pptx|ppt|odt|odp|ods|pdf|csv|tsv|md|html|htm|txt|png|jpe?g|gif|webp|svg|py|js|ts|json)(?![\\w]))", "g");
   const img = /\.(png|jpe?g|gif|webp)$/i, tok = encodeURIComponent((window.MP && MP.token) || "");
-  return html.replace(rx, (m, rel) => `<button class="flink" data-open="${rel}" title="Preview ${rel}">${ICON.files}${rel}</button>` +
-    (img.test(rel) && tok ? `<button class="flink rimgb" data-open="${rel}" title="Open ${rel}"><img class="rimg" loading="lazy" alt="${rel}" src="/raw?t=${tok}&root=${encodeURIComponent(root)}&path=${encodeURIComponent(rel.replace(/&amp;/g, "&"))}" onerror="this.parentNode.remove()"></button>` : ""));   // a picture the reply names is shown in the reply
+  const link = (m, rel) => `<button class="flink" data-open="${rel}" title="Preview ${rel}">${ICON.files}${rel}</button>` +
+    (img.test(rel) && tok ? `<button class="flink rimgb" data-open="${rel}" title="Open ${rel}"><img class="rimg" loading="lazy" alt="${rel}" src="/raw?t=${tok}&root=${encodeURIComponent(root)}&path=${encodeURIComponent(rel.replace(/&amp;/g, "&"))}" onerror="this.parentNode.remove()"></button>` : "");   // a picture the reply names is shown in the reply
+  // Only in text between tags, and not in a link's text: a path inside an attribute (a link's address, a diagram's
+  // source in data-mermaid) got a button's markup put into it, which cut the attribute short and spilled the rest of
+  // the tag onto the page as text.
+  let inA = 0;
+  return html.split(/(<[^>]*>)/).map((part, i) => {
+    if (i % 2) { if (/^<a[\s>]/i.test(part)) inA++; else if (/^<\/a>/i.test(part)) inA = Math.max(0, inA - 1); return part; }
+    return inA ? part : part.replace(rx, link);
+  }).join("");
 }
 // Windows: PowerShell, Command Prompt or Git Bash for commands you type; Mac and Linux: your login shell.
 function termShellPicker() {
@@ -445,6 +453,8 @@ function browseFolder(start) {
     const key = e => {
       if (e.key === "Escape") { e.stopPropagation(); done(""); return; }
       if (e.target.id === "fbIn") { if (e.key === "Enter") { e.preventDefault(); go(e.target.value.trim()); } return; }
+      // Enter on Cancel or "Use this folder" is that button's own click; the list's keys work only in the list.
+      if (!e.target.closest?.("#fbList")) return;
       if (e.key === "ArrowDown") { e.preventDefault(); mark(act + 1); }
       else if (e.key === "ArrowUp") { e.preventDefault(); mark(act - 1); }
       else if (e.key === "Enter" && act >= 0) { e.preventDefault(); go(items()[act].dataset.p); }
@@ -482,7 +492,7 @@ function browseFolder(start) {
 /* ================================== composer ================================== */
 function setupComposer() {
   const inp = $("#input");
-  inp.addEventListener("input", () => { try { sessionStorage.setItem("mp_draft_" + (S.cur?.id || "new"), inp.value); } catch (e) {} });
+  inp.addEventListener("input", () => { try { sessionStorage.setItem(draftKey(), inp.value); } catch (e) {} });
   inp.addEventListener("input", () => { clearTimeout(S.suggT); S.suggT = setTimeout(suggestNow, 450); });
   inp.addEventListener("input", () => { fitInput(inp); menuFromInput(); const ib = $("#intrBtn"); if (ib && !S.stopping) ib.disabled = !inp.value.trim() && !S.attachments.length; });
   inp.addEventListener("keydown", e => {
@@ -567,7 +577,7 @@ async function stopNow() {
   wait();
 }
 async function sendNow(interrupt) {
-  try { sessionStorage.removeItem("mp_draft_" + (S.cur?.id || "new")); } catch (e) {}
+  try { sessionStorage.removeItem(draftKey()); } catch (e) {}
   const inp = $("#input"); let text = inp.value.trim(); const typed = text;
   if (!text && !S.attachments.length) return;
   S.recall = null; rememberSent(typed);
@@ -919,8 +929,12 @@ function modelPop(anchor) {
   $("#mManage").onclick = () => { closePop(); openSettings("general"); };
 }
 /* ================================== threads ================================== */
+// One key per place the box belongs to: a chat, a project's page, or the new-chat home. Saving and restoring used two
+// different rules, so a draft typed on a project's page was saved as the new-chat draft: it showed up in New chat and
+// was gone from the project.
+function draftKey() { return "mp_draft_" + (S.cur?.id || (S.view === "project" && S.pjId ? "pj_" + S.pjId : "new")); }
 function restoreDraft() {
-  let v = ""; try { v = sessionStorage.getItem("mp_draft_" + (S.cur?.id || (S.view === "project" ? "pj_" + S.pjId : "new"))) || ""; } catch (e) {}
+  let v = ""; try { v = sessionStorage.getItem(draftKey()) || ""; } catch (e) {}
   const inp = $("#input"); if (inp && v && !inp.value) { inp.value = v; inp.dispatchEvent(new Event("input")); }
 }
 // A new chat. Without an argument: a plain chat that needs no folder. With a folder path (old scripts): a chat in that
@@ -1390,9 +1404,12 @@ function stepSummary(name, ev) {
   catch (e) { return ""; }
 }
 const TOOL_LABEL = {bash: "Ran", read_file: "Read", write_file: "Wrote", edit: "Edited", grep: "Searched", glob: "Listed", fetch_url: "Fetched", web_search: "Searched the web", web_research: "Researched", mcp__meshpool_web__web_search: "Searched the web", mcp__meshpool_web__web_fetch: "Read", mcp__meshpool_web__web_research: "Researched", mcp__meshpool_assistant__memory_save: "Saved to memory", mcp__meshpool_assistant__run_subtasks: "Ran sub-agents", run_subtasks: "Ran sub-agents", delegate_task: "Handed off to sub-agents", mcp__meshpool_assistant__schedule_task: "Scheduled", todo_write: "Updated the plan", use_skill: "Loaded skill", office_task: "Office"};
+// A reopened chat is built in a detached column (cur.stage), where isConnected is false for every node: a check on it
+// started a new "1 step" group for each step and left each group spinning. inCol asks the column being built instead.
+const inCol = n => !!n && (n.isConnected || !!S.cur?.stage?.contains(n));
 function workGroup() {
   const cur = S.cur;
-  if (cur.group && cur.group.isConnected && cur.group === colEl().lastElementChild) return cur.group;
+  if (cur.group && cur.group === colEl().lastElementChild) return cur.group;
   const d = document.createElement("details"); d.className = "work"; d.open = !!S.steps; d.dataset.n = "0";
   d.innerHTML = `<summary><span class="chev">${ICON.chevR}</span><span class="gdots" aria-hidden="true"><i></i><i></i><i></i></span><span class="wl">Working</span><span class="gel"></span></summary><div class="rows"></div>`;
   d._t0 = Date.now();
@@ -1403,7 +1420,7 @@ function bumpGroup(g, done) {
   $(".wl", g).textContent = `${n} step${n === 1 ? "" : "s"}${fails ? `, ${fails} failed` : ""}`;
   if (done) { g.dataset.done = "1"; g.open = !!S.steps || !!$(".appr:not(.done)", g); const el = $(".gel", g); if (el) el.textContent = ""; $(".gdots", g)?.remove(); }
 }
-function closeGroup() { const g = S.cur.group; if (g && g.isConnected) bumpGroup(g, true); S.cur.group = null; }
+function closeGroup() { const g = S.cur.group; if (inCol(g)) bumpGroup(g, true); S.cur.group = null; }
 const GOAL_NEXT = "Continue working toward the goal.";
 const RESUME_NEXT = "Continue where you left off.";
 const stripGoal = t => String(t || "").replace(/\n*^\W*GOAL:\s*(DONE|CONTINUE)\b.*$/gim, "").trimEnd();
@@ -1437,7 +1454,7 @@ function applyEvRaw(ev) {
       if (String(ev.text).trim() === GOAL_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Continuing toward the goal</span>`, "goalturn"); break; }
       if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span> <button class="linkbtn" data-takeback title="Take it back before the agent reads it">Take back</button><br><span class="stx">${esc(ev.text)}</span></div>`, "msg-user steer"); $("#queuedChip")?.remove(); break; }
       closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; cur.tpaths = []; cur.lastAi = null; cur.lastText = "";
-      { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button><button class="iconbtn" data-ma="rewind" data-tip="Rewind to here" data-tip-pos="below" aria-label="Rewind to here">${ICON.undo}</button><button class="iconbtn" data-ma="fork" data-tip="Fork from here" data-tip-pos="below" aria-label="Fork from here">${ICON.branch}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.ei = ev.i; cur.turnEi = ev.i; cur.lastFoot = null; }
+      { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button><button class="iconbtn" data-ma="rewind" data-tip="Rewind to here" data-tip-pos="below" aria-label="Rewind to here">${ICON.undo}</button><button class="iconbtn" data-ma="fork" data-tip="Fork from here" data-tip-pos="below" aria-label="Fork from here">${ICON.branch}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.ei = ev.i; mu._text = String(ev.text ?? ""); cur.turnEi = ev.i; cur.lastFoot = null; }
       break; }
     case "text_delta":
       if (!cur.live) { closeGroup(); cur.live = add("", "msg-ai"); cur.liveText = ""; mdRoot(cur.live); if (!cur.stage) easeStart(cur.live); }
@@ -1474,16 +1491,19 @@ function applyEvRaw(ev) {
       d.dataset.done = "1"; $("pre.live", d)?.remove(); if (d.dataset.autoOpen) { d.open = false; delete d.dataset.autoOpen; }
       // A step the user stopped, or one Plan mode blocked, did not fail: label it for what happened.
       const out = String(ev.output || ""), stopped = ev.stopped || /not run: stopped by the user|^\[exit 130\]|stopped by the user|sub-agents were stopped by stop/i.test(out);
+      // The agent closes a step it never finished when the turn ends (a Stop, or a harness that did not report the end):
+      // that step did not fail, and must not count as failed in the group's "1 failed".
+      const unfinished = !ev.ok && /^Not finished: the turn ended\.?$/.test(out.trim());
       const planned = !ev.ok && (/plan mode/i.test(out) || (cur.view?.plan && ["write", "edit", "write_file", "bash", "bash_many", "delete", "move"].includes(d.dataset.name)));
-      const st = $(".st", d); st.className = "st " + (ev.ok || stopped || planned || ev.denied ? "" : "bad");
-      st.textContent = ev.denied ? "not run" : ev.ok ? "" : stopped ? "stopped" : planned ? "not allowed in Plan mode" : "failed";
+      const st = $(".st", d); st.className = "st " + (ev.ok || stopped || unfinished || planned || ev.denied ? "" : "bad");
+      st.textContent = ev.denied ? "not run" : ev.ok ? "" : stopped ? "stopped" : unfinished ? "not finished" : planned ? "not allowed in Plan mode" : "failed";
       const nm = d.dataset.name || "";
       $(".tn", d).textContent = ev.ok ? (TOOL_DONE[nm] || TOOL_LABEL[nm] || (d.dataset.mcp ? "Used " : "") + nm.replace(/_/g, " ")) : (TOOL_BASE[nm] || TOOL_LABEL[nm] || nm.replace(/_/g, " "));
       if (ev.output && !$("pre", d)) d.insertAdjacentHTML("beforeend", `<pre>${esc(ev.output)}</pre>`);
       const g = d.closest(".work"); if (g) bumpGroup(g);
       break; }
     case "approval": {
-      const gKeep = cur.group && cur.group.isConnected && cur.group === col.lastElementChild ? cur.group : null;
+      const gKeep = cur.group && cur.group === col.lastElementChild ? cur.group : null;
       for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st) { st.textContent = "Needs your approval"; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_BASE[nm] || TOOL_LABEL[nm] || nm; } }
       closeGroup();
       const OPT = {allow_once: "Allow", allow_always: "Allow for this chat", reject_once: "Deny", reject_always: "Always deny"};
@@ -1521,7 +1541,7 @@ function applyEvRaw(ev) {
     case "subagent": {      // delegate_task progress: one row per sub-agent, live (agent/delegate.py)
       cur.subs = cur.subs || {};
       let box = cur.subs[ev.delegation];
-      if (!box || !box.isConnected) box = document.getElementById("sub-" + ev.delegation);
+      if (!inCol(box)) box = cardEl("sub-" + ev.delegation);
       if (!box) { closeGroup(); box = add(`<b>Sub-agents</b><ol></ol>`, "planbox"); box.id = "sub-" + ev.delegation; }   // the chat's Stop stops them
       cur.subs[ev.delegation] = box;
       let li = box.querySelector(`[data-sid="${CSS.escape(String(ev.sid || ""))}"]`);
@@ -1706,6 +1726,15 @@ async function drawRules(box, r) {
 }
 // Put a message back into the box (Undo, Rewind, Edit) without losing what is typed there: a draft stays first, the
 // message goes after it, unless the draft already is that message.
+// The text of one of your messages as you sent it. The bubble's text also holds the "Plan mode" tag and the names of
+// the pictures sent with it, so Copy and Edit put "describe this photo.png" in place of "describe this".
+function userText(mu) {
+  if (!mu) return "";
+  if (typeof mu._text === "string") return mu._text.trim();
+  const b = $(".b", mu); if (!b) return "";
+  const c = b.cloneNode(true); c.querySelectorAll(".att, .tag").forEach(x => x.remove());
+  return (c.textContent || "").trim();
+}
 function fillInput(text) {
   const inp = $("#input"); if (!inp || !text) return;
   const draft = inp.value;
@@ -1763,9 +1792,14 @@ function fitPanel() {
   const want = (!!S.panel || (typeof PVX !== "undefined" && PVX.open)) && innerWidth < 1180 && innerWidth > 760 && !S.keepSide;   // only where both cannot fit
   if ($("#app").classList.contains("autoside") !== want) { $("#app").classList.toggle("autoside", want); renderTop(); }
 }
+// Each drawing of the side panel gets a number. A tab that loads its data (Git and CI, Changes) checks it after the
+// wait: when another tab or chat was drawn meanwhile, its late answer is dropped instead of drawn over that tab.
+const panelGen = body => (body._gen || 0);
+const panelStale = (body, gen) => !body.isConnected || panelGen(body) !== gen;
 function renderPanel() {
   const p = $("#panel");
   clearTimeout(S.spT);
+  { const pb = $("#pbody"); if (pb) pb._gen = panelGen(pb) + 1; }
   if (S.panel && !panelSet().includes(S.panel)) { S.panel = panelSet()[0]; store("panel", S.panel); }
   fitPanel(); if (S.panel !== "browser") brwStop();
   if (!S.panel) { p.hidden = true; return; }
@@ -1783,7 +1817,9 @@ function renderPanel() {
 function threadLog() { return S.cur?.log || []; }
 function progressSteps() {
   const log = threadLog();
-  const lastUser = log.map(e => e.type).lastIndexOf("user");
+  // The turn starts at the last message that started one: a message added while it works (steer) does not, so the
+  // steps before it stay in the list.
+  let lastUser = -1; for (let i = log.length - 1; i >= 0; i--) if (log[i].type === "user" && !log[i].steer) { lastUser = i; break; }
   const turn = log.slice(Math.max(0, lastUser));
   const plan = [...turn].reverse().find(e => e.type === "plan");
   if (plan && (plan.entries || []).length) return {kind: "plan", items: plan.entries.map((e, i) => ({key: "p" + i, text: e.content, status: e.status}))};
@@ -1792,8 +1828,8 @@ function progressSteps() {
   for (const e of turn) {
     if (e.type === "tool_start") { const nm = e.mcp ? String(e.name || "").split("__").slice(2).join("__") : e.name; const sm = stepSummary(nm, e); tools[e.id] = {name: nm, sm, text: `${TOOL_RUN[nm] || e.label || nm}${sm ? " " + sm : ""}`, status: "in_progress"}; }
     if (e.type === "tool_end" && tools[e.id] && e.ok) tools[e.id].text = `${TOOL_DONE[tools[e.id].name] || TOOL_LABEL[tools[e.id].name] || tools[e.id].name}${tools[e.id].sm ? " " + tools[e.id].sm : ""}`;
-    if (e.type === "tool_end" && tools[e.id]) tools[e.id].status = tools[e.id].status === "stopped" ? "stopped" : e.ok ? "completed" : "failed";
-    if (e.type === "user") turnIds = [];
+    if (e.type === "tool_end" && tools[e.id]) tools[e.id].status = tools[e.id].status === "stopped" ? "stopped" : e.ok ? "completed" : /^Not finished: the turn ended/.test(String(e.output || "")) ? "stopped" : "failed";
+    if (e.type === "user" && !e.steer) turnIds = [];
     if (e.type === "tool_start") turnIds.push(e.id);
     if (e.type === "interrupted") for (const id of turnIds) { const t = tools[id]; if (t && (t.status === "in_progress" || t.status === "failed")) { t.status = "stopped"; t.text = `${TOOL_LABEL[t.name] || t.name}${t.sm ? " " + t.sm : ""} (stopped)`; } }
     if (e.type === "turn_end") for (const t of Object.values(tools)) if (t.status === "in_progress") t.status = "completed";
@@ -1886,15 +1922,17 @@ async function panelDiff(body) {
   $("#dref").onclick = renderPanel;
   $("#dsplit").onclick = () => { store("diffSplit", store("diffSplit") === "1" ? "0" : "1"); renderPanel(); };
   $("#dundo")?.addEventListener("click", () => undoTurn(+sel));
+  const gen = panelGen(body);
   try {
     const d = await api(`/api/agent/${S.cur.id}/diff${sel ? "?turn=" + sel : ""}`);
+    if (panelStale(body, gen)) return;
     if (!d.files.length) { $("#dbody").innerHTML = `<div class="pnote">${esc(d.note || S.cur.view?.checkpoints_note || (sel ? "This reply didn't change any files." : "This chat hasn't changed any files yet. Other changes in this folder are under Git and CI."))}</div>`; return; }
     const add = d.files.reduce((a, f) => a + (f.add || 0), 0), del = d.files.reduce((a, f) => a + (f.del || 0), 0);
     $("#dbody").innerHTML = `<div class="pnote" style="padding:8px 12px">${d.files.length} file${d.files.length === 1 ? "" : "s"} · <span style="color:var(--add)">+${add}</span> <span style="color:var(--del)">−${del}</span></div>
       <ul class="flist">${d.files.map((f, i) => `<li data-i="${i}"><span class="badge ${f.status}">${f.status[0].toUpperCase()}</span><span class="p">${esc(String(f.path).replace(/^"|"$/g, ""))}</span><span class="a">+${f.add || 0}</span><span class="r">−${f.del || 0}</span></li>`).join("")}</ul>
       ${store("diffSplit") === "1" ? `<div class="sbs-wrap" id="patch">${splitHTML(d.patch)}</div>` : `<pre class="patch" id="patch">${patchHTML(d.patch)}</pre>`}`;
     $$("#dbody .flist li").forEach(li => li.onclick = () => { const f = d.files[+li.dataset.i]; const el = $(`#patch [data-file="${CSS.escape(f.path)}"]`); el?.scrollIntoView({block: "start"}); });
-  } catch (e) { $("#dbody").innerHTML = `<div class="pnote">${esc(e.message)}</div>`; }
+  } catch (e) { if (!panelStale(body, gen)) $("#dbody").innerHTML = `<div class="pnote">${esc(e.message)}</div>`; }
 }
 /* The same patch with old and new next to each other: removed lines on the left, added on the right, paired in
    order within each run of changes; unchanged lines on both sides. */
@@ -1945,35 +1983,52 @@ async function panelFiles(body) {
 }
 function panelTerm(body) {
   const root = curRoot(); if (!root) { body.innerHTML = `<div class="pnote">Choose a project folder first.</div>`; return; }
-  S.term = S.term && S.term.root === root ? S.term : {root, html: "", hist: [], hi: 0, id: null};
-  body.innerHTML = `<pre class="term-out" id="tout">${S.term.html || `<span class="rc">Commands run in ${esc(shortPath(root))}</span>\n`}</pre><div class="term-in">${termShellPicker()}<input id="tin" placeholder="Run a command" spellcheck="false" autocomplete="off"><button class="btn" id="tstop" hidden>Stop</button></div>`;
+  S.term = S.term && S.term.root === root ? S.term : {root, html: "", hist: [], hi: 0, id: null, running: false};
+  body.innerHTML = `<pre class="term-out" id="tout">${S.term.html || `<span class="rc">Commands run in ${esc(shortPath(root))}</span>\n`}</pre><div class="term-in">${termShellPicker()}<input id="tin" placeholder="Run a command" spellcheck="false" autocomplete="off"><button class="btn" id="tstop" ${S.term.running ? "" : "hidden"}>Stop</button></div>`;
   const out = $("#tout"), inp = $("#tin"); out.scrollTop = out.scrollHeight; inp.focus();
-  const save = () => { S.term.html = out.innerHTML; };
+  const term = S.term, save = () => { term.html = out.innerHTML; };
+  // A command's output goes to the terminal on screen now (the panel may have been closed and opened again since it
+  // started, which made a new #tout), or into the saved text while the Terminal tab is not shown. Writing to the
+  // element the command started in lost everything printed after a tab switch, and hid its Stop button.
+  const shown = () => { const o = $("#tout"); return S.term === term && S.panel === "term" && o ? o : null; };
+  const put = html => { const o = shown(); if (o) { o.insertAdjacentHTML("beforeend", html); o.scrollTop = o.scrollHeight; term.html = o.innerHTML; } else term.html += html; };
   inp.onkeydown = async e => {
     if (e.key === "ArrowUp") { e.preventDefault(); if (S.term.hist.length) { S.term.hi = Math.max(0, S.term.hi - 1); inp.value = S.term.hist[S.term.hi] || ""; } return; }
     if (e.key === "ArrowDown") { e.preventDefault(); S.term.hi = Math.min(S.term.hist.length, S.term.hi + 1); inp.value = S.term.hist[S.term.hi] || ""; return; }
     if (e.key !== "Enter") return;
     const cmd = inp.value.trim(); if (!cmd) return;
     if (cmd === "clear") { out.innerHTML = ""; inp.value = ""; save(); return; }
-    S.term.hist.push(cmd); S.term.hi = S.term.hist.length; inp.value = "";
-    out.insertAdjacentHTML("beforeend", `<span class="cmd">$ ${esc(cmd)}</span>\n`);
+    term.hist.push(cmd); term.hi = term.hist.length; inp.value = "";
+    put(`<span class="cmd">$ ${esc(cmd)}</span>\n`);
+    const stopBtn = v => { const b = shown() && $("#tstop"); if (b) b.hidden = !v; };
     try {
-      const t = await post("/api/term", {root, command: cmd, shell: store("term_shell") || S.settings?.shells?.default || ""}); S.term.id = t.id; $("#tstop").hidden = false;
-      let since = 0;
+      const t = await post("/api/term", {root, command: cmd, shell: store("term_shell") || S.settings?.shells?.default || ""}); term.id = t.id; term.running = true; stopBtn(true);
+      let since = 0, fails = 0;
       const tick = async () => {
-        const r = await api(`/api/term/${t.id}?since=${since}`); since = r.next;
-        if (r.lines.length) { out.insertAdjacentText("beforeend", r.lines.join("")); out.scrollTop = out.scrollHeight; }
-        if (r.running) setTimeout(tick, 250); else { out.insertAdjacentHTML("beforeend", r.rc ? `<span class="rc">[exit ${r.rc}]</span>\n` : ""); $("#tstop") && ($("#tstop").hidden = true); save(); }
+        let r;
+        try { r = await api(`/api/term/${t.id}?since=${since}`); fails = 0; }
+        catch (err) {                            // a lost request must not leave Stop up and the output frozen for good
+          if (++fails < 4) { setTimeout(tick, 1000 * fails); return; }
+          term.running = false; stopBtn(false); put(`<span class="rc">${esc(err.message)}</span>\n`); return;
+        }
+        since = r.next;
+        if (r.lines.length) put(esc(r.lines.join("")));
+        // Four times a second while its output is on screen. A long command (a dev server) with the panel closed or
+        // the window hidden is read every 2 s instead, so it does not keep the app and the server busy.
+        if (r.running) setTimeout(tick, shown() && !document.hidden ? 250 : 2000);
+        else { term.running = false; put(r.rc ? `<span class="rc">[exit ${r.rc}]</span>\n` : ""); stopBtn(false); }
       };
       tick();
-    } catch (err) { out.insertAdjacentText("beforeend", err.message + "\n"); save(); }
+    } catch (err) { put(esc(err.message) + "\n"); }
   };
-  $("#tstop").onclick = () => S.term.id && post(`/api/term/${S.term.id}/stop`).catch(() => {});
+  $("#tstop").onclick = () => term.id && post(`/api/term/${term.id}/stop`).catch(() => {});
 }
 async function panelGit(body) {
   const root = curRoot(); if (!root) { body.innerHTML = `<div class="pnote">Choose a project folder first.</div>`; return; }
   body.innerHTML = `<div class="pnote">Loading...</div>`;
-  let g; try { g = await api("/api/git?root=" + encodeURIComponent(root)); } catch (e) { body.innerHTML = `<div class="pnote">${esc(e.message)}</div>`; return; }
+  const gen = panelGen(body);
+  let g; try { g = await api("/api/git?root=" + encodeURIComponent(root)); } catch (e) { if (!panelStale(body, gen)) body.innerHTML = `<div class="pnote">${esc(e.message)}</div>`; return; }
+  if (panelStale(body, gen)) return;
   if (!g.git) { body.innerHTML = `<div class="pnote">Git is not installed on this computer.${isMac ? " Open Terminal and run <code>xcode-select --install</code>, then come back." : ""}</div>`; return; }
   if (!g.repo) { body.innerHTML = `<div class="gitbox"><div class="stat">This folder is not a Git repository.</div><div class="row"><button class="btn primary" id="ginit">Start a Git repository here</button></div></div>`; $("#ginit").onclick = () => gitAct({action: "init"}); return; }
   body.innerHTML = `<div class="gitbox">
@@ -2260,8 +2315,9 @@ async function renderSection(sec) {
       $("#sml").innerHTML = M.models.filter(m => !q || m.id.toLowerCase().includes(q)).map(m => `<li><span class="tg"><b title="${esc(m.id)}">${esc(modelLabel(m.id, M.models))}</b><small>${esc(m.provider)}${m.context ? ` · ${fmt(m.context)} context` : ""}${(m.caps || []).length ? " · " + m.caps.join(", ") : ""}</small></span>
         ${m.id === M.default ? `<span class="badge modified">Default</span>` : `<button class="btn" data-def="${esc(m.id)}">Make default</button>`}
         <button class="iconbtn" data-fav="${esc(m.id)}" title="Favorite" style="color:${M.favorites.includes(m.id) ? "var(--warn)" : "var(--ink-3)"}">${ICON.star}</button></li>`).join("") || `<li class="pnote">No models.</li>`;
-      $$("[data-def]", b).forEach(x => x.onclick = async () => { S.models = await post("/api/models/default", {id: x.dataset.def}); Object.assign(M, S.models); draw(); renderBar(); });
-      $$("[data-fav]", b).forEach(x => x.onclick = async () => { S.models = await post("/api/models/favorite", {id: x.dataset.fav, on: !M.favorites.includes(x.dataset.fav)}); Object.assign(M, S.models); draw(); });
+      // A refused change says why; it used to end in an unhandled promise rejection and nothing on screen.
+      $$("[data-def]", b).forEach(x => x.onclick = async () => { try { S.models = await post("/api/models/default", {id: x.dataset.def}); } catch (e) { return toast(e.message, 6000); } Object.assign(M, S.models); draw(); renderBar(); });
+      $$("[data-fav]", b).forEach(x => x.onclick = async () => { try { S.models = await post("/api/models/favorite", {id: x.dataset.fav, on: !M.favorites.includes(x.dataset.fav)}); } catch (e) { return toast(e.message, 6000); } Object.assign(M, S.models); draw(); });
     };
     $("#smq").oninput = draw; $("#smr").onclick = async () => { await loadModels(true); Object.assign(M, S.models); renderSection("models"); }; draw();
   } else if (sec === "personal") {
@@ -3060,7 +3116,7 @@ async function restartApp(bootBefore) {
   shell();
   document.addEventListener("click", e => {          // the buttons that appear on hover under a message of yours
     const ma = e.target.closest("[data-ma]"); if (!ma || !ma.closest(".msg-user")) return;   // the MCP library's Add button also has data-ma
-    const text = $(".b", ma.closest(".msg-user"))?.innerText.replace(/^Plan mode\n?/, "").trim() || "";
+    const text = userText(ma.closest(".msg-user"));
     if (ma.dataset.ma === "copy") navigator.clipboard.writeText(text).then(() => toast("Copied"), () => toast("Could not copy."));
     else if (ma.dataset.ma === "rewind" || ma.dataset.ma === "fork") rewindFork(ma.dataset.ma, ma.closest(".msg-user"));
     else { const i = $("#input"); i.value = text; i.focus(); i.dispatchEvent(new Event("input")); toast("Edit it and send to ask again.", 3500); }
