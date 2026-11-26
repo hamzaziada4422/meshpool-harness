@@ -3576,10 +3576,10 @@ function permStep(host) {
     try {
       const r = await post("/api/permissions", body || {});
       const rows = r.rows.filter(x => x.id !== "automation");
-      $("#oPerms", card).innerHTML = rows.map(x => `<li><span class="tg"><b>${esc(x.name)}</b><small>${esc(x.why)}</small></span>${x.ok ? `<span class="badge added">Allowed</span>` : mac || x.id === "notifications" ? `<button class="btn" data-p="${esc(x.id)}">${x.id === "disk" ? "Open settings" : "Allow"}</button>` : `<span class="badge">Not found</span>`}</li>`).join("") || `<li class="pnote">${esc(r.note)}</li>`;
+      $("#oPerms", card).innerHTML = rows.map(x => `<li><span class="tg"><b>${esc(x.name)}</b><small>${esc(x.why)}</small></span>${x.ok ? `<span class="badge added">Allowed</span>` : mac || x.id === "notifications" ? `<button class="btn" data-p="${esc(x.id)}">${x.id === "disk" ? "Open settings" : "Allow"}</button>` : `<span class="badge">Not found</span>`}</li>`).join("") || (r.note ? `<li class="pnote">${esc(r.note)}</li>` : "");
       $$("[data-p]", card).forEach(x => x.onclick = () => draw({id: x.dataset.p}));
       const needs = rows.some(x => !x.ok && (mac || x.id === "notifications"));
-      $("#oAll", card).hidden = !needs; $("#oPermH", card).hidden = !rows.length;
+      $("#oAll", card).hidden = !needs; $("#oPermH", card).hidden = !rows.length && !r.note;
       $("#oDone", card).className = needs ? "btn" : "bigbtn";
     } catch (e) { /* the step still works without the list */ }
   };

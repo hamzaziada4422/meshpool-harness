@@ -761,8 +761,9 @@ def permissions() -> dict:
                         "without it they use the Windows command prompt."}]
         note = ("Windows does not need extra permissions: agents run commands and control apps as you. "
                 "Windows may ask to allow network access the first time a tool listens on a port.")
-    else:
-        note = ""
+    else:                                       # Linux: no permission prompts (release review: the note was empty)
+        note = ("Linux does not need extra permissions: agents run commands and open files as you, in the folders "
+                "you allow.")
     return {"platform": sys.platform, "rows": rows, "note": note}
 
 

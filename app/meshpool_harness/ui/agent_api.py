@@ -113,7 +113,7 @@ RESUME_TRIES = 5
 
 _KEEP = {"user", "assistant", "offer", "tool_end", "interrupted", "error", "turn_end", "approval", "approval_done",
          "checkpoint", "status", "plan", "check", "checks_line", "task_receipt", "insight", "review", "retry_ok",
-         "review_round"}
+         "review_round", "steps_retried"}
 # A step's files, for "a later step redid it" (Session._mark_retried_steps): names with an extension in its summary.
 _STEP_FILE = re.compile(r"[\w][\w ()+-]*\.(?:xlsx|xlsm|xls|csv|tsv|docx|doc|pptx|ppt|pdf|md|txt|html?|json|png|jpe?g|"
                         r"svg|py|js|ts)\b", re.I)
