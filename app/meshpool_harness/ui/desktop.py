@@ -660,15 +660,39 @@ def _mac_folders(request: bool) -> bool | None:
     return ok
 
 
+def _mac_notify(title: str, body: str) -> bool:
+    """Post a macOS notification in Meshpool's own name: from Meshpool.app's process (the launcher runs Python inside
+    the app, so the main bundle is Meshpool.app) through Foundation's notification centre. False when this process is
+    not Meshpool.app (a source checkout, the terminal app, a helper process): nothing is shown then.
+
+    It used to run `osascript -e 'display notification ...'`. macOS files those under the scripting app, not Meshpool,
+    so every "Done: ..." with the reply text arrived as another app's notification (users saw TextEdit or Script
+    Editor), clicking it opened that app, and Meshpool's own notification setting could not turn them off."""
+    try:
+        from Foundation import NSBundle, NSUserNotification, NSUserNotificationCenter
+    except Exception:  # noqa: BLE001 - no PyObjC: not the packaged app
+        return False
+    from meshpool_harness.autoupdate import MAC_BUNDLE_ID
+    bundle = NSBundle.mainBundle()
+    if not bundle or str(bundle.bundleIdentifier() or "") != MAC_BUNDLE_ID:
+        return False
+    center = NSUserNotificationCenter.defaultUserNotificationCenter()
+    if center is None:
+        return False
+    n = NSUserNotification.alloc().init()
+    n.setTitle_(title)
+    if body:
+        n.setInformativeText_(body)
+    center.deliverNotification_(n)
+    return True
+
+
 def notify(title: str, body: str = "") -> None:
-    """A desktop notification (best effort; never raises)."""
+    """A desktop notification (best effort; never raises). macOS: only in Meshpool.app's own name (_mac_notify)."""
     title, body = (title or "Meshpool")[:120], (body or "")[:240]
     try:
         if sys.platform == "darwin":
-            def q(x):
-                return '"' + x.replace("\\", "\\\\").replace('"', '\\"') + '"'
-            subprocess.Popen(["osascript", "-e", f"display notification {q(body)} with title {q(title)}"],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            _mac_notify(title, body)
         elif os.name == "nt":
             ps = ("[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null;"
                   "$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);"

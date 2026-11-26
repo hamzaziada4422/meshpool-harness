@@ -85,7 +85,7 @@ def test_C_21_install_ps1_app_switch():
 
 # ---- C-23 (already fixed): every third-party import in app/ is declared ----------------------------------------------
 # Imports that may be missing on purpose: each must only ever be imported lazily (in a function or a try block).
-OPTIONAL = {"AppKit", "Quartz", "mss", "webview", "fastembed", "pbixray", "rapidocr", "pymupdf", "defusedxml",
+OPTIONAL = {"AppKit", "Foundation", "Quartz", "mss", "webview", "fastembed", "pbixray", "rapidocr", "pymupdf", "defusedxml",
             "certifi", "eval", "ddgs", "pillow_heif", "onnxruntime"}
 DIST = {"PIL": "pillow", "docx": "python-docx", "pptx": "python-pptx", "yaml": "pyyaml", "pdfminer": "pdfminer.six",
         "cairosvg": "cairosvg", "lxml": "lxml", "openpyxl": "openpyxl", "pandas": "pandas", "playwright": "playwright",
