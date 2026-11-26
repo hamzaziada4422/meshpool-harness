@@ -111,6 +111,8 @@ def test_C_23_requirements_cover_imports():
         for p in (APP / d).rglob("*.py"):
             if p.name == "build_bundles.py":                  # a build-time tool, not shipped code
                 continue
+            if p.name == "lo_worker.py":                      # runs in LibreOffice's own Python (uno), not meshpool's
+                continue
             try:
                 tree = ast.parse(p.read_text(encoding="utf-8"))
             except (SyntaxError, UnicodeDecodeError):
