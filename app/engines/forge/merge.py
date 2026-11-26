@@ -38,9 +38,12 @@ def append(target: str, source: str, out: str) -> int:
     f = min(dst.slide_width / src.slide_width, dst.slide_height / src.slide_height)
     dx = (dst.slide_width - src.slide_width * f) / 2
     dy = (dst.slide_height - src.slide_height * f) / 2
-    added = 0
-    for s in src.slides:
-        new = dst.slides.add_slide(_layout(dst, s.slide_layout.name))
+    added, base = 0, len(dst.slides)
+    olds = list(src.slides)
+    news = [dst.slides.add_slide(_layout(dst, s.slide_layout.name)) for s in olds]   # first, so links can find them
+    as_new = {id(s.part): n.part for s, n in zip(olds, news)}
+    copied: dict = {}                                            # a part two slides share is copied once
+    for s, new in zip(olds, news):
         for ph in list(new.placeholders):                        # the layout's empty placeholders: not on the copy
             ph._element.getparent().remove(ph._element)
         ids = {}
@@ -54,8 +57,11 @@ def append(target: str, source: str, out: str) -> int:
                 ids[rel.rId] = rid
             elif rel.reltype == RT.CHART:
                 ids[rel.rId] = new.part.relate_to(_copy_chart(rel.target_part, pkg, pin, f), RT.CHART)
-            else:                                                # anything else: carried over as it is
-                ids[rel.rId] = new.part.relate_to(rel.target_part, rel.reltype)
+            elif rel.reltype == RT.SLIDE:                        # a link to another slide: to that slide's copy
+                if id(rel.target_part) in as_new:
+                    ids[rel.rId] = new.part.relate_to(as_new[id(rel.target_part)], RT.SLIDE)
+            else:                                                # media, tags, SmartArt, ...: copied under fresh names
+                ids[rel.rId] = _copy_part(rel.target_part, new.part, rel.reltype, pkg, copied)
         tree = new.shapes._spTree
         for el in s.shapes._spTree.iterchildren():
             if el.tag.endswith("}nvGrpSpPr") or el.tag.endswith("}grpSpPr"):
@@ -64,7 +70,7 @@ def append(target: str, source: str, out: str) -> int:
             _inherit(el, s)                                      # before it stops being a placeholder
             if abs(f - 1) > 0.002:
                 _scale(el, f, dx, dy)
-            _renumber(el, len(dst.slides))
+            _renumber(el, base + added + 1)
             pin(el)
             _unplaceholder(el)
             for node in el.iter():
@@ -263,6 +269,37 @@ def _copy_chart(part, pkg, pin, f: float = 1.0):
         if rid != rel.rId:
             _fix_rid(new, rid, rel.rId)
     return new
+
+
+# Parts of the source deck's frame: never copied along with a slide's media, tags or SmartArt.
+_FRAME = (RT.SLIDE, RT.SLIDE_LAYOUT, RT.SLIDE_MASTER, RT.NOTES_SLIDE, RT.NOTES_MASTER, RT.HANDOUT_MASTER, RT.THEME,
+          RT.OFFICE_DOCUMENT)
+
+
+def _copy_part(part, owner, reltype: str, pkg, copied: dict) -> str:
+    """Relate `owner` to a copy of the source deck's `part` (and the parts it relates to) under fresh names in pkg,
+    and return the new relationship id. The source part itself would keep its name, and the target deck may already
+    have a part of that name (ppt/tags/tag1.xml, ppt/media/media1.mp4): both were written under it."""
+    from pptx.opc.packuri import PackURI
+    if id(part) in copied:
+        return owner.relate_to(copied[id(part)], reltype)
+    name = str(part.partname)
+    folder, file = name.rsplit("/", 1)
+    stem, dot, ext = file.rpartition(".") if "." in file else (file, "", "")
+    template = f"{folder}/{re.sub(r'[0-9]+$', '', stem).replace('%', '')}%d{dot}{ext}"
+    new = Part.load(PackURI(pkg.next_partname(template)), part.content_type, pkg, part.blob)
+    copied[id(part)] = new
+    rid = owner.relate_to(new, reltype)                          # in the package now: the next fresh name skips it
+    for rel in list(part.rels.values()):
+        if rel.is_external:
+            got = new.relate_to(rel.target_ref, rel.reltype, is_external=True)
+        elif rel.reltype in _FRAME:
+            continue
+        else:
+            got = _copy_part(rel.target_part, new, rel.reltype, pkg, copied)
+        if got != rel.rId:
+            _fix_rid(new, got, rel.rId)
+    return rid
 
 
 def _fix_rid(part, got: str, want: str):

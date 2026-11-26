@@ -141,3 +141,71 @@ def test_lq01_an_excel_edit_never_drops_parts_openpyxl_cannot_keep_from_the_user
     msg3, err3 = edit_office_file(str(clean), [{"op": "set_cell", "sheet": "S", "cell": "C1", "value": 7}], in_place=True)
     assert not err3 and msg3.startswith("Changed"), msg3
     assert openpyxl.load_workbook(clean)["S"]["C1"].value == 7
+
+
+_PNG = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+                     "1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082")
+
+
+def _deck_with_tag_and_movie(path, word, slides=1):
+    """A deck whose first slide has a text box with a tag part (ppt/tags/tag1.xml) and a movie (ppt/media/media1.mp4),
+    the names every such deck uses; with slides=2, the text box also links to the second slide."""
+    from lxml import etree
+    from pptx import Presentation
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    from pptx.opc.package import Part
+    from pptx.opc.packuri import PackURI
+    from pptx.util import Inches
+    prs = Presentation()
+    s = prs.slides.add_slide(prs.slide_layouts[6])
+    tb = s.shapes.add_textbox(Inches(1), Inches(1), Inches(3), Inches(1))
+    tb.text_frame.text = word
+    tag = Part.load(PackURI("/ppt/tags/tag1.xml"), "application/vnd.openxmlformats-officedocument.presentationml.tags+xml",
+                    prs.part.package, ('<p:tagLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
+                                       f'<p:tag name="OWNER" val="{word}"/></p:tagLst>').encode())
+    rid = s.part.relate_to(tag, RT.TAGS)
+    tb._element.nvSpPr.nvPr.append(etree.fromstring(
+        '<p:custDataLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+        f'xmlns:r="{_R}"><p:tags r:id="{rid}"/></p:custDataLst>'))
+    s.shapes.add_movie(io.BytesIO(word.encode() * 50), Inches(1), Inches(3), Inches(2), Inches(2),
+                       poster_frame_image=io.BytesIO(_PNG), mime_type="video/mp4")
+    if slides == 2:
+        last = prs.slides.add_slide(prs.slide_layouts[6])
+        last.shapes.add_textbox(Inches(1), Inches(1), Inches(3), Inches(1)).text_frame.text = word + " end"
+        tb.click_action.target_slide = last
+    prs.save(path)
+    return str(path)
+
+
+def test_lq02_merged_slides_copy_tags_media_and_slide_links_under_fresh_names(tmp_path):
+    """LQ-02: engines/forge/merge.py related the source deck's own tag, media and linked-slide parts to the new
+    slides. They kept their names, so ppt/tags/tag1.xml and ppt/media/media1.mp4 were written twice (the target's
+    slide then read the source's tag), and a link to another slide pulled in the source's slide, layout and master."""
+    import warnings
+    from pptx import Presentation
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    from engines.forge import merge
+    target = _deck_with_tag_and_movie(tmp_path / "target.pptx", "target")
+    source = _deck_with_tag_and_movie(tmp_path / "source.pptx", "source", slides=2)
+    out = str(tmp_path / "out.pptx")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert merge.append(target, source, out) == 2
+    assert not [w for w in caught if "Duplicate name" in str(w.message)], [str(w.message) for w in caught]
+    with zipfile.ZipFile(out) as z:
+        names = z.namelist()
+        assert len(names) == len(set(names)), sorted(n for n in names if names.count(n) > 1)
+        assert sum(n.startswith("ppt/slideLayouts/slideLayout") and n.endswith(".xml") for n in names) == 11
+    prs = Presentation(out)
+    assert len(prs.slides) == 3
+
+    def owner(slide):
+        tag = next(r.target_part for r in slide.part.rels.values() if r.reltype == RT.TAGS)
+        return tag.blob.decode().split('val="')[1].split('"')[0]
+
+    def movie(slide):
+        return next(r.target_part.blob for r in slide.part.rels.values() if r.reltype == RT.MEDIA)
+    assert owner(prs.slides[0]) == "target" and owner(prs.slides[1]) == "source"
+    assert movie(prs.slides[0]).startswith(b"target") and movie(prs.slides[1]).startswith(b"source")
+    link = next(r.target_part for r in prs.slides[1].part.rels.values() if r.reltype == RT.SLIDE)
+    assert link is prs.slides[2].part                 # the copy of the slide it linked to, in this deck
