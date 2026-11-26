@@ -641,7 +641,9 @@ async function sendNow(interrupt) {
     }
     const cur = S.cur;                              // before any wait: the user may open another chat meanwhile
     for (const a of atts.filter(a => a.pasted)) text += `\n\n[${a.name}]\n\`\`\`\n${a.text}\n\`\`\``;   // a long paste
-    const files = atts.filter(a => !a.image && !a.pasted).map(a => ({name: a.name, data: a.data}));   // saved by the server, in the chat's own folder
+    const refs = atts.filter(a => a.ref);         // files already in the folder (a message put back by Undo): named as before
+    if (refs.length) text = (text ? text + "\n\n" : "") + `Attached files (${refs[0].where || "in this chat's folder"}): ${refs.map(a => a.path).join(", ")}`;
+    const files = atts.filter(a => !a.image && !a.pasted && !a.ref).map(a => ({name: a.name, data: a.data}));   // saved by the server, in the chat's own folder
     const images = atts.filter(a => a.image).map(a => ({name: a.name, mime: a.mime, data: a.data}));
     const wasStopping = S.stopping;               // Stop is still finishing: stopNow's wait loop owns the flag
     if (interrupt) { S.stopping = true; renderBar(); }
@@ -1771,11 +1773,24 @@ function userText(mu) {
   const c = b.cloneNode(true); c.querySelectorAll(".att, .tag").forEach(x => x.remove());
   return (c.textContent || "").trim();
 }
+// A message put back in the box (Undo, Rewind, Edit). The line the server adds for files sent with it ("Attached files
+// (in this chat's folder): a.xlsx") is not the user's words: it is taken out and the files come back as chips, named
+// again in the same words when the message is sent (they are still in the folder). A box that holds only what the last
+// fill put there is replaced, not added to: undoing two replies in a row ran both messages together.
+const ATT_LINE = /\n*Attached files \((in [^)\n]*)\): ([^\n]*)\s*$/;
 function fillInput(text) {
   const inp = $("#input"); if (!inp || !text) return;
-  const draft = inp.value;
-  if (!draft.trim()) inp.value = text;
-  else if (draft.trim() !== String(text).trim()) inp.value = draft.replace(/\s+$/, "") + "\n\n" + text;
+  text = String(text);
+  let refs = [], where = "";
+  const m = text.match(ATT_LINE);
+  if (m) { where = m[1]; refs = m[2].split(", ").map(x => x.trim()).filter(Boolean); text = text.slice(0, m.index).replace(/\s+$/, ""); }
+  const draft = inp.value, ours = S.filled != null && draft === S.filled;
+  if (ours) S.attachments = S.attachments.filter(a => !a.filled);
+  if (!draft.trim() || ours) inp.value = text;
+  else if (text.trim() && draft.trim() !== text.trim()) inp.value = draft.replace(/\s+$/, "") + "\n\n" + text;
+  for (const r of refs) if (!S.attachments.some(a => a.ref && a.path === r)) S.attachments.push({name: r.split("/").pop(), path: r, ref: true, where, filled: true});
+  if (refs.length || ours) renderAttach();
+  S.filled = inp.value;
   inp.dispatchEvent(new Event("input")); inp.focus();
 }
 async function undoTurn(n) {
