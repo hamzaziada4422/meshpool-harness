@@ -3003,10 +3003,14 @@ async function updStatus() {
   renderUpdBar(); if ($("#updMore") && !S.updBusy) updatePanel(curUpd());
   const r = S.ust?.last_result;
   if (r) toast(r.message || (r.ok ? "Meshpool was updated." : "The update did not finish."), r.ok ? 5000 : 12000);
-  clearTimeout(S.ustT);
-  S.ustT = setTimeout(updStatus, ["downloading", "verifying", "staging", "checking", "installing"].includes(S.ust?.state) ? 3000 : 60000);
+  clearTimeout(S.ustT); S.ustT = 0;
+  // Not while the tab is hidden: the poll stops there, and coming back to the tab starts it again at once.
+  const next = () => { S.ustT = 0; if (document.hidden) S.ustOff = true; else updStatus(); };
+  if (document.hidden) S.ustOff = true;
+  else S.ustT = setTimeout(next, ["downloading", "verifying", "staging", "checking", "installing"].includes(S.ust?.state) ? 3000 : 60000);
   return S.ust;
 }
+document.addEventListener("visibilitychange", () => { if (!document.hidden && S.ustOff) { S.ustOff = false; updStatus(); } });
 function updPct(s) { return s && s.total ? Math.min(99, Math.floor(100 * s.done / s.total)) : 0; }
 /* The release to talk about: the last check, or the one the updater's own state names. */
 function curUpd() {
