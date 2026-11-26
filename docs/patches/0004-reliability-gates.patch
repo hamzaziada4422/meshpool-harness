@@ -1,0 +1,353 @@
+From 41d02fb43a5ee6aa70cfe1b7926974fc1a3f0745 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 13:40:10 +0000
+Subject: [PATCH] Reliability gates (off by default): logprob confidence gate
+ before the answer; escalate to a stronger model instead of looping
+
+A. MH_CONFIDENCE_GATE=1: when a turn that made or changed files is about to answer, one extra request on the
+   same cached prompt asks whether the saved work meets every explicit term of the request; P(yes) is read from
+   the first token's logprobs (max_tokens 1). Below MH_CONFIDENCE_MIN (0.6) the agent is sent back once to check
+   the request term by term. Once per request; chat-completions endpoints only; never raises.
+B. MH_ESCALATE_MODEL=<model>: when the failed-calls or no-progress detector fires, the next MH_ESCALATE_CALLS
+   (2) calls of the turn use that model, then the chat's own model again. Once per turn.
+
+agent/reliability.py holds both; tests/test_reliability_gates.py (10 tests). Full suite: 4483 passed.
+Live check on llm.meshpool.ai (deepseek-v4.1-flash): P(yes) 0.93 for a correct answer, 0.00 for a wrong one,
+1 output token on ~100 prompt tokens.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: <redacted>
+---
+ app/meshpool_harness/agent/core.py        |  64 +++++++++++++
+ app/meshpool_harness/agent/reliability.py |  92 +++++++++++++++++++
+ app/tests/test_reliability_gates.py       | 105 ++++++++++++++++++++++
+ 3 files changed, 261 insertions(+)
+ create mode 100644 app/meshpool_harness/agent/reliability.py
+ create mode 100644 app/tests/test_reliability_gates.py
+
+diff --git a/app/meshpool_harness/agent/core.py b/app/meshpool_harness/agent/core.py
+index 7298beff..c4cfa845 100644
+--- a/app/meshpool_harness/agent/core.py
++++ b/app/meshpool_harness/agent/core.py
+@@ -1738,6 +1738,9 @@ class Agent:
+         return [n for n in names if n not in drop] if drop else names
+ 
+     def current_model(self) -> str:
++        esc = getattr(self, "_escalated_model", "")
++        if esc:                                # agent/reliability.py B: a stuck turn's next call or two
++            return esc
+         if self.model:
+             return self.model
+         fast = os.environ.get("MH_MODEL_FAST", "").strip()
+@@ -2216,10 +2219,17 @@ class Agent:
+                 if g.pop("hard_wrap", False):
+                     self._no_tools = True                 # stuck for good: best-effort answer instead of more calls
+                 tools_off = bool(getattr(self, "_no_tools", False))
++                if g.get("escalate_left", 0) > 0:
++                    from meshpool_harness.agent import reliability as _REL
++                    self._escalated_model = _REL.escalate_model()
++                    g["escalate_left"] -= 1
++                    g["escalated"] = g.get("escalated", 0) + 1
++                    self._trace_note("escalate", f"{self._escalated_model} ({g['escalate_left']} left)")
+                 try:
+                     msg, streamed = self._chat(turn)
+                 finally:
+                     self._no_tools = False
++                    self._escalated_model = ""
+                 native = bool(msg.get("tool_calls"))
+                 msg = self._text_tools(msg)             # a model without tool calling asks for tools in text (W-02)
+                 if not tools_off and not msg.get("tool_calls"):
+@@ -2399,6 +2409,8 @@ class Agent:
+                             "not ask permission for work you were given. If you are truly finished or truly blocked, "
+                             "say so plainly, without promising more.")})
+                         continue
++                    if self._confidence_gate(g, turn):   # agent/reliability.py A (MH_CONFIDENCE_GATE=1)
++                        continue
+                     again, final = self._grade_gate(g, turn, final)   # independent check of a big task (agent/grader.py)
+                     if again:
+                         continue
+@@ -3229,6 +3241,7 @@ class Agent:
+                     "Give your final answer: what you changed, what works, what does not and why.")
+         if not g.get("bnote_done") and (over(secs, "MH_TURN_SOFT_S", 180) or over(out, "MH_TURN_OUT_SOFT", 15000)):
+             g["bnote_done"] = True
++            self._arm_escalation(g)
+             return (f"This task has run {int(secs)} s and the last {np_} steps changed nothing. Converge now: pick the "
+                     "one check that decides whether the task is done, fix what it shows with a small patch, run it "
+                     "once more, and answer. Do not write new probe scripts.")
+@@ -3262,6 +3275,56 @@ class Agent:
+                     "fix it, run one check that asserts the requested behaviour, and finish.")
+         return ""
+ 
++    def _arm_escalation(self, g: dict) -> None:
++        """agent/reliability.py B: a stuck detector fired; with MH_ESCALATE_MODEL set (and not already that model), the
++        next MH_ESCALATE_CALLS calls of this turn go to it. At most once per turn."""
++        from meshpool_harness.agent import reliability as REL
++        m = REL.escalate_model()
++        if not m or g.get("escalate_armed") or getattr(self, "_is_grader", False) or self.plan:
++            return
++        if m == (self.model or os.environ.get("MH_MODEL") or DEFAULT_MODEL):
++            return
++        g["escalate_armed"] = True
++        g["escalate_left"] = REL.escalate_calls()
++
++    def _confidence_gate(self, g: dict, turn: dict) -> bool:
++        """agent/reliability.py A: True when the agent was sent back once to check the request's explicit terms. One
++        extra call per request at most; never raises, never blocks the answer."""
++        try:
++            from meshpool_harness.agent import reliability as REL
++            if (not REL.gate_on() or g.get("conf_done") or self.plan or getattr(self, "_is_grader", False)
++                    or getattr(self, "_delegate_depth", 0)):
++                return False
++            if not (self.ws.turn_files or self.ws.edits > g.get("edits0", 0)):
++                return False                       # nothing was made or changed: nothing to check
++            g["conf_done"] = True
++            from meshpool_harness import providers as PV
++            body = self._body()
++            prov, body["model"] = PV.split(body["model"])
++            if prov == "chatgpt" or self._caps(self.current_model()).wire == "responses" \
++                    or PV.wire_for(PV.endpoint(prov)[0]) == "anthropic":
++                return False                       # needs chat completions with logprobs
++            base, key = PV.endpoint(prov)
++            b = REL.gate_body(body)
++            resp, _ = self._post(base, key, b, False)
++            usage.record(b["model"], (resp or {}).get("usage"), base=base, source=self._src(),
++                         task=self._ensure_task(), request_chars=_context_size(b["messages"]), reply_chars=1)
++            u = (resp or {}).get("usage") or {}
++            for k_in, k_out in (("prompt_tokens", "in"), ("completion_tokens", "out")):
++                turn[k_out] = turn.get(k_out, 0) + int(u.get(k_in) or 0)
++            turn["calls"] = turn.get("calls", 0) + 1
++            p = REL.p_yes(resp or {})
++            self._trace_note("confidence", "none" if p is None else f"{p:.2f}")
++            g["confidence"] = p
++            if p is None or p >= REL.threshold():
++                return False
++            self.messages.append({"role": "user", "content": REL.RETRY_TEXT})
++            return True
++        except (Interrupted, KeyboardInterrupt, usage.BudgetExceeded):
++            raise
++        except Exception:  # noqa: BLE001 - the gate must never break the turn
++            return False
++
+     def _failure_escalation(self, g: dict) -> str:
+         """Distinct calls that all fail, with no file changed in between, are a loop the repeat guards cannot see. After
+         MH_FAILED_NUDGE failures in a row the model is told to stop and read the error; at twice that, again; at
+@@ -3283,6 +3346,7 @@ class Agent:
+         level = (2 * nudge if k >= 2 * nudge else nudge) if nudge > 0 else 0
+         if nudge > 0 and k >= nudge and g.get("fnote_at", 0) < level:
+             g["fnote_at"] = level
++            self._arm_escalation(g)
+             return ("Your last " + str(k) + " calls all failed and no file changed since. Stop varying the same "
+                     "attempt: read the last error message word for word and fix its cause. If a one-line python -c "
+                     "keeps failing, write the script to a file first. If an edit is rejected, read the file and patch "
+diff --git a/app/meshpool_harness/agent/reliability.py b/app/meshpool_harness/agent/reliability.py
+new file mode 100644
+index 00000000..77611824
+--- /dev/null
++++ b/app/meshpool_harness/agent/reliability.py
+@@ -0,0 +1,92 @@
++"""Reliability gates, off by default (measure before turning on).
++
++A. Confidence gate (MH_CONFIDENCE_GATE=1): when a turn that changed files is about to answer, one extra request to the
++   same model, on the same (cached) prompt plus one short question, asks whether the saved work meets every explicit
++   requirement of the request. It reads the answer from the first token's log-probabilities (P(yes) against P(no)),
++   with max_tokens 1, so it costs one cached prefill and one output token. Below MH_CONFIDENCE_MIN (default 0.6) the
++   agent is sent back once with the request's explicit terms to check. Basis: Kadavath et al. 2022 (P(True): checking
++   is easier than generating; self-evaluation is calibrated enough to filter). Release round 0.0.16: every office loss
++   was a finished-looking answer whose own last check, or the request's stated count/label/field, said otherwise.
++
++B. Escalation instead of looping (MH_ESCALATE_MODEL=<model>): when the existing stuck detectors fire (N failed calls
++   with no file changed, or a long run whose last steps changed nothing), the next MH_ESCALATE_CALLS (default 2)
++   model calls go to the stronger model, then the chat returns to its own model. Basis: cascades (FrugalGPT, RouteLLM):
++   pay for a strong model only where the cheap one is failing. Release round 0.0.16: the cost excess was single-run
++   tails of 40-90 calls where flash kept varying one failing approach.
++"""
++from __future__ import annotations
++
++import math
++import os
++
++GATE_PROMPT = (
++    "[Meshpool check] Answer with one word, yes or no. Compare the files you saved in this turn with the user's "
++    "request, term by term: every stated count, named field, label, range, format and file name, and every rule "
++    "applied to all the rows it matches. Does the saved work meet all of them?")
++
++RETRY_TEXT = (
++    "[Meshpool] Before you answer: re-read the user's request and list its explicit terms (counts, named fields, "
++    "labels, ranges, formats, file names, rules that apply to every matching row). Check each one against the saved "
++    "file, not against your plan. Fix and save anything that does not match, then answer. If every term is already "
++    "met, answer now and say so in one line.")
++
++
++def gate_on() -> bool:
++    return os.environ.get("MH_CONFIDENCE_GATE", "0") == "1"
++
++
++def threshold() -> float:
++    try:
++        return min(1.0, max(0.0, float(os.environ.get("MH_CONFIDENCE_MIN", "0.6"))))
++    except ValueError:
++        return 0.6
++
++
++def escalate_model() -> str:
++    return os.environ.get("MH_ESCALATE_MODEL", "").strip()
++
++
++def escalate_calls() -> int:
++    try:
++        return max(0, int(os.environ.get("MH_ESCALATE_CALLS", "2")))
++    except ValueError:
++        return 2
++
++
++def _norm(tok: str) -> str:
++    return "".join(ch for ch in str(tok or "").lower() if ch.isalpha())
++
++
++def p_yes(resp: dict) -> float | None:
++    """P(yes) / (P(yes) + P(no)) from the first generated token's top log-probabilities, or None when the reply carries
++    no log-probabilities or neither answer is among the top tokens (the gate then stays silent)."""
++    try:
++        first = resp["choices"][0]["logprobs"]["content"][0]
++    except (KeyError, IndexError, TypeError):
++        return None
++    cands = list(first.get("top_logprobs") or []) or [first]
++    yes = no = 0.0
++    for c in cands:
++        w = _norm(c.get("token", ""))
++        try:
++            p = math.exp(float(c.get("logprob")))
++        except (TypeError, ValueError):
++            continue
++        if w in ("yes", "y", "true"):
++            yes += p
++        elif w in ("no", "n", "false"):
++            no += p
++    if yes + no <= 0:
++        return None
++    return yes / (yes + no)
++
++
++def gate_body(body: dict) -> dict:
++    """The gate request: the turn's own prompt (cached prefix) plus the question, no tools, one output token."""
++    b = {k: v for k, v in body.items() if k not in ("tools", "tool_choice", "stream", "stream_options")}
++    b["messages"] = list(body.get("messages") or []) + [{"role": "user", "content": GATE_PROMPT}]
++    b["max_tokens"] = 1
++    b["temperature"] = 0
++    b["logprobs"] = True
++    b["top_logprobs"] = 5
++    return b
+diff --git a/app/tests/test_reliability_gates.py b/app/tests/test_reliability_gates.py
+new file mode 100644
+index 00000000..9bf57dc6
+--- /dev/null
++++ b/app/tests/test_reliability_gates.py
+@@ -0,0 +1,105 @@
++"""agent/reliability.py: the confidence gate (A) and escalation instead of looping (B). Both are off by default."""
++import math
++
++from meshpool_harness.agent import reliability as REL
++from meshpool_harness.agent.core import Agent
++
++
++def _lp(pairs):
++    return {"choices": [{"logprobs": {"content": [{"token": pairs[0][0], "logprob": pairs[0][1],
++                                                   "top_logprobs": [{"token": t, "logprob": lp} for t, lp in pairs]}]}}],
++            "usage": {"prompt_tokens": 1000, "completion_tokens": 1}}
++
++
++def test_p_yes_reads_top_logprobs():
++    assert abs(REL.p_yes(_lp([("Yes", math.log(0.9)), ("No", math.log(0.1))])) - 0.9) < 1e-9
++    assert abs(REL.p_yes(_lp([("no", math.log(0.7)), (" yes", math.log(0.3))])) - 0.3) < 1e-9
++    assert REL.p_yes(_lp([("Maybe", -0.1)])) is None
++    assert REL.p_yes({"choices": [{"message": {"content": "yes"}}]}) is None
++
++
++def test_gate_body_is_one_token_without_tools():
++    b = REL.gate_body({"model": "m", "messages": [{"role": "user", "content": "x"}], "tools": [1], "tool_choice": "auto",
++                       "stream": True, "max_tokens": 4096})
++    assert "tools" not in b and "tool_choice" not in b and "stream" not in b
++    assert b["max_tokens"] == 1 and b["logprobs"] is True and b["top_logprobs"] == 5
++    assert b["messages"][-1]["content"] == REL.GATE_PROMPT and len(b["messages"]) == 2
++
++
++def test_gates_are_off_by_default(monkeypatch):
++    for k in ("MH_CONFIDENCE_GATE", "MH_ESCALATE_MODEL"):
++        monkeypatch.delenv(k, raising=False)
++    assert not REL.gate_on() and REL.escalate_model() == ""
++
++
++def _agent(tmp_path, monkeypatch, p_yes):
++    a = Agent(str(tmp_path), mode="auto", profile="work")
++    sent = []
++    monkeypatch.setattr(a, "_body", lambda: {"model": "deepseek-v4.1-flash", "messages": [{"role": "user", "content": "q"}],
++                                             "tools": [], "max_tokens": 4096})
++    monkeypatch.setattr(a, "_post", lambda base, key, body, stream, tok=None: (
++        sent.append(body) or (_lp([("Yes", math.log(p_yes)), ("No", math.log(1 - p_yes))]), False)))
++    a.ws.turn_files = {"out.xlsx"}
++    return a, sent
++
++
++def test_low_confidence_sends_the_agent_back_once(tmp_path, monkeypatch):
++    monkeypatch.setenv("MH_CONFIDENCE_GATE", "1")
++    a, sent = _agent(tmp_path, monkeypatch, 0.2)
++    g, turn = {"edits0": 0}, {"in": 0, "out": 0, "calls": 0}
++    n = len(a.messages)
++    assert a._confidence_gate(g, turn) is True
++    assert a.messages[-1]["content"] == REL.RETRY_TEXT and len(a.messages) == n + 1
++    assert sent[0]["max_tokens"] == 1 and turn["calls"] == 1
++    assert a._confidence_gate(g, turn) is False and len(sent) == 1        # once per request
++
++
++def test_high_confidence_lets_the_answer_through(tmp_path, monkeypatch):
++    monkeypatch.setenv("MH_CONFIDENCE_GATE", "1")
++    a, sent = _agent(tmp_path, monkeypatch, 0.95)
++    assert a._confidence_gate({"edits0": 0}, {}) is False and len(sent) == 1
++
++
++def test_gate_skips_a_turn_that_made_nothing(tmp_path, monkeypatch):
++    monkeypatch.setenv("MH_CONFIDENCE_GATE", "1")
++    a, sent = _agent(tmp_path, monkeypatch, 0.1)
++    a.ws.turn_files = set()
++    assert a._confidence_gate({"edits0": a.ws.edits}, {}) is False and not sent
++
++
++def test_gate_off_makes_no_call(tmp_path, monkeypatch):
++    monkeypatch.delenv("MH_CONFIDENCE_GATE", raising=False)
++    a, sent = _agent(tmp_path, monkeypatch, 0.1)
++    assert a._confidence_gate({"edits0": 0}, {}) is False and not sent
++
++
++def test_escalation_arms_once_and_overrides_the_model(tmp_path, monkeypatch):
++    monkeypatch.setenv("MH_ESCALATE_MODEL", "kimi-k3")
++    monkeypatch.setenv("MH_ESCALATE_CALLS", "2")
++    a = Agent(str(tmp_path), mode="auto", profile="code")
++    g = {}
++    a._arm_escalation(g)
++    assert g["escalate_left"] == 2 and g["escalate_armed"]
++    g["escalate_left"] = 0
++    a._arm_escalation(g)
++    assert g["escalate_left"] == 0                                         # once per turn
++    a._escalated_model = "kimi-k3"
++    assert a.current_model() == "kimi-k3"
++    a._escalated_model = ""
++    assert a.current_model() != "kimi-k3"
++
++
++def test_failure_nudge_arms_escalation(tmp_path, monkeypatch):
++    monkeypatch.setenv("MH_ESCALATE_MODEL", "kimi-k3")
++    a = Agent(str(tmp_path), mode="auto", profile="code")
++    g = {"fseq": 4}
++    assert "Stop varying" in a._failure_escalation(g)
++    assert g.get("escalate_left") == 2
++
++
++def test_no_escalation_without_the_flag(tmp_path, monkeypatch):
++    monkeypatch.delenv("MH_ESCALATE_MODEL", raising=False)
++    a = Agent(str(tmp_path), mode="auto", profile="code")
++    g = {"fseq": 4}
++    a._failure_escalation(g)
++    assert "escalate_left" not in g
+-- 
+2.43.0
+

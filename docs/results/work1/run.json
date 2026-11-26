@@ -1,0 +1,50 @@
+{
+ "run": "work1",
+ "commit": "255e0154",
+ "meshpool_commit": "255e0154",
+ "codex": "codex-cli 0.171.0",
+ "model": "deepseek-v4.1-flash",
+ "gateway": "llm.meshpool.ai (one metering proxy for both arms)",
+ "price_table_usd_per_1M": {
+  "in": 0.15,
+  "cached": 0.003,
+  "out": 0.6
+ },
+ "suite": [
+  "dabench",
+  "v2_dev"
+ ],
+ "plan": "27 work tasks (dabench 24 + 3 v2_dev) x (wA MH_LEAN_WORK=1, wB flag off, codex) x reps 0,1",
+ "parallel": 3,
+ "timeout_s": 600,
+ "budget_cap_usd": 0.8,
+ "runs_per_arm": {
+  "wA": 54,
+  "codex": 54,
+  "wB": 54
+ },
+ "requests": 986,
+ "request_status_by_arm": {
+  "codex:200": 230,
+  "wA:200": 269,
+  "wA:404": 108,
+  "wB:200": 271,
+  "wB:404": 108
+ },
+ "results_written_at_utc": "2026-11-24T18:57:35Z",
+ "isolation": [
+  "private tmpfs /tmp and /root/work per run (mount namespace)",
+  "other worktrees, the task suites, hidden tests, the main checkout and session transcripts hidden by tmpfs",
+  "task JSON passed through a file deleted at start, never on a command line"
+ ],
+ "cost_formula": "usd = (prompt - cached) * in + cached * cached_price + completion * out, per request, summed per run",
+ "counting": {
+  "failed_requests": "a gateway error (e.g. 503) is a request with status != 200 and no tokens: it costs $0 but its seconds count in the run's time; the proxy retries upstream errors and records retries",
+  "budget_cap": "the driver stops scheduling new runs once the summed usd reaches the cap; runs already started finish; unstarted runs are missing for both arms of that task and the task is excluded from paired stats",
+  "timeouts": "a run past the timeout is killed and counted as failed (pass=false, why=timeout) with secs = the timeout"
+ },
+ "meshpool_env": {
+  "MH_CAPS": "{\"cache_hints\": true, \"cache\": \"auto\"}"
+ },
+ "step_cap": "200 (product cap) on Meshpool arms"
+}

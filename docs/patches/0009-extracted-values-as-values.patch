@@ -1,0 +1,35 @@
+From db824eaab4ed851af8b00b7bd3d9e0a2d42ac2e1 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 16:23:09 +0000
+Subject: [PATCH] Office direct: a value taken from another file goes in as the
+ value, not a formula that rebuilds it
+
+OfficeBench ob-2-23-0 (office_final6, 4 of 6): "put the total due in costs.xlsx" from an invoice PDF. The 2 failures
+wrote Subtotal, Sales tax and Shipping and a Total due of =ROUND(B2+B3+B4,2) or =SUM(B4:B6); openpyxl stores no
+result for it, so any reader but Excel (the checker, pandas, a preview) finds no 104.98. Codex wrote the number in
+6 of 6. Formulas stay the rule for calculations the user builds.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pf4xaMqQSJYs9jXfPpQcsK
+---
+ app/meshpool_harness/capabilities.py | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/app/meshpool_harness/capabilities.py b/app/meshpool_harness/capabilities.py
+index 15ca465d..def7dc05 100644
+--- a/app/meshpool_harness/capabilities.py
++++ b/app/meshpool_harness/capabilities.py
+@@ -124,7 +124,9 @@ EDIT_NOTE = (SEP + "[Meshpool] To change a file that exists, use edit_office_fil
+ EDIT_NOTE_DIRECT = (SEP + "[Meshpool] Change the existing file in place with openpyxl, python-docx or python-pptx, "
+                     "keeping its sheets, styles and formulas, and do exactly what was asked to every row or cell it "
+                     "applies to. Keep the years, dates and labels the request names as literal values in formulas: "
+-                    "never put TODAY(), NOW() or YEAR(TODAY()) in place of a year it states. "
++                    "never put TODAY(), NOW() or YEAR(TODAY()) in place of a year it states. A value the request "
++                    "asks you to take from another file (a PDF, a document, an email) goes in as the value itself, "
++                    "labelled as the request words it, not as a formula that rebuilds it. "
+                     "Check a formula change by reading the formula text; do not recalculate unless the "
+                     "request asks for computed values. For Word tracked changes or comments, use edit_office_file "
+                     "(tracked_replace, tracked_delete, tracked_insert_after, comments): it writes real revisions. "
+-- 
+2.43.0
+

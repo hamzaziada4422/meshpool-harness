@@ -1,0 +1,48 @@
+{
+ "run": "broad2",
+ "commit": "9d011d0e",
+ "meshpool_commit": "9d011d0e",
+ "codex": "codex-cli 0.171.0",
+ "model": "deepseek-v4.1-flash",
+ "gateway": "llm.meshpool.ai (one metering proxy for both arms)",
+ "price_table_usd_per_1M": {
+  "in": 0.15,
+  "cached": 0.003,
+  "out": 0.6
+ },
+ "suite": [
+  "swe_sympy"
+ ],
+ "plan": "swe_sympy (12) x (core, codex) x reps 0,1; one attempt each",
+ "parallel": 3,
+ "timeout_s": 900,
+ "budget_cap_usd": 1.0,
+ "runs_per_arm": {
+  "codex": 24,
+  "core": 24
+ },
+ "requests": 1247,
+ "request_status_by_arm": {
+  "codex:200": 523,
+  "codex:400": 1,
+  "core:200": 675,
+  "core:404": 48
+ },
+ "results_written_at_utc": "2026-11-24T18:47:58Z",
+ "isolation": [
+  "private tmpfs /tmp and /root/work per run (mount namespace)",
+  "other worktrees, the task suites, hidden tests, the main checkout and session transcripts hidden by tmpfs",
+  "task JSON passed through a file deleted at start, never on a command line"
+ ],
+ "cost_formula": "usd = (prompt - cached) * in + cached * cached_price + completion * out, per request, summed per run",
+ "counting": {
+  "failed_requests": "a gateway error (e.g. 503) is a request with status != 200 and no tokens: it costs $0 but its seconds count in the run's time; the proxy retries upstream errors and records retries",
+  "budget_cap": "the driver stops scheduling new runs once the summed usd reaches the cap; runs already started finish; unstarted runs are missing for both arms of that task and the task is excluded from paired stats",
+  "timeouts": "a run past the timeout is killed and counted as failed (pass=false, why=timeout) with secs = the timeout",
+  "step_cap": "Meshpool arms capped at 60 tool steps (as declared, identical to broad1); Codex has no step cap"
+ },
+ "meshpool_env": {
+  "MH_CAPS": "{\"cache_hints\": true, \"cache\": \"auto\"}"
+ },
+ "swe": "per-task shallow repositories holding only the issue's base commit"
+}

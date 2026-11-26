@@ -1,0 +1,69 @@
+From 0e6db41abeb22d31b1ea77d7832b5c29740dda78 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 16:55:41 +0000
+Subject: [PATCH] Office direct: the script whose assert failed, run again with
+ exit 0, clears the failed-check note
+
+sb9 sb-374-31 r4: fix.py held the asserts. It failed, was fixed, and `python3 fix.py && python3 -c ...` exited 0,
+but that command's text has no "assert" or "check", so the note fired and sent a finished job back.
+
+Replayed on the saved office sessions where the current rule fires: 3 on runs that failed (all kept) and 18 on runs
+that passed; the new rule drops 3 of those 18 and none of the 3.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pf4xaMqQSJYs9jXfPpQcsK
+---
+ app/meshpool_harness/agent/core.py    |  6 +++++-
+ app/tests/test_office_direct_notes.py | 22 ++++++++++++++++++++++
+ 2 files changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/app/meshpool_harness/agent/core.py b/app/meshpool_harness/agent/core.py
+index 5fef6861..291c9a69 100644
+--- a/app/meshpool_harness/agent/core.py
++++ b/app/meshpool_harness/agent/core.py
+@@ -2554,7 +2554,11 @@ class Agent:
+                         bad = [i for i, c in enumerate(cmds) if c.get("code") not in (0, None)
+                                and ("AssertionError" in str(c.get("tail", "")) or re.search(r"\bassert\b",
+                                                                                          str(c.get("cmd", ""))))]
+-                        if bad and not any(c.get("code") == 0 and checks(c) for c in cmds[bad[-1] + 1:]):
++                        # the script whose assert failed, run again with exit 0, is a passing check too (sb9
++                        # sb-374-31 r4: fix.py held the asserts; `python3 fix.py && ...` passed and the note still fired)
++                        scripts = set(re.findall(r"([\w.-]+\.py)\b", str(cmds[bad[-1]].get("cmd", "")))) if bad else set()
++                        reran = lambda c: any(x in str(c.get("cmd", "")) for x in scripts)  # noqa: E731
++                        if bad and not any(c.get("code") == 0 and (checks(c) or reran(c)) for c in cmds[bad[-1] + 1:]):
+                             g["office_check_nudged"] = True
+                             self.messages.append({"role": "user", "content": (
+                                 "[Meshpool] Your own check failed and no check has passed "
+diff --git a/app/tests/test_office_direct_notes.py b/app/tests/test_office_direct_notes.py
+index 5b1b8ab5..2418face 100644
+--- a/app/tests/test_office_direct_notes.py
++++ b/app/tests/test_office_direct_notes.py
+@@ -427,3 +427,25 @@ def test_review_only_meshpools_browser_server_is_gated(tmp_path):
+     m._names = {("browser", "browser_open"): "mcp__browser__browser_open",
+                 ("browser2", "browser_open"): "mcp__browser2__browser_open"}
+     assert m.builtin_tool_names("browser_mcp_server") == {"mcp__browser__browser_open"}
++
++
++def test_failed_check_note_cleared_by_rerunning_the_script_that_failed(tmp_path, monkeypatch):
++    """sb9 sb-374-31 r4: fix.py held the asserts; it failed, was fixed, and `python3 fix.py && ...` exited 0, yet the
++    note fired because that command's text has no "assert" or "check" in it."""
++    import json as _json
++    from meshpool_harness.agent.core import Agent
++    from meshpool_harness.hrouter import profiles as PROF
++    from meshpool_harness.hrouter.route import Route
++    monkeypatch.setenv("MH_LEAN_WORK", "1")
++    monkeypatch.setenv("MH_OFFICE_DIRECT", "1")
++    (tmp_path / "fix.py").write_text("assert 1 == 2\n")
++    a = Agent(str(tmp_path), mode="auto", profile="work", emit=lambda e: None)
++    a.set_route(Route(spec="data", family="data", base="work", profile="core", settings=PROF.settings("core")), "x")
++    sh = lambda cid, cmd: {"role": "assistant", "content": "", "tool_calls": [{"id": cid, "type": "function",  # noqa: E731
++                           "function": {"name": "shell", "arguments": _json.dumps({"command": ["bash", "-lc", cmd]})}}]}
++    replies = iter([sh("c1", "python3 fix.py"), sh("c2", "printf 'x = 1\\n' > fix.py"),
++                    sh("c3", "python3 fix.py && python3 -c 'print(1)'"), {"role": "assistant", "content": "Done."}])
++    a._post = lambda base, key, body, stream: ({"choices": [{"message": next(replies), "finish_reason": "stop"}],
++                                                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}, True)
++    assert a.send("Delete the blank rows above Code in data.xlsx") == "Done."
++    assert not any("Your own check failed" in str(m.get("content")) for m in a.messages)
+-- 
+2.43.0
+

@@ -1,0 +1,52 @@
+From c865a4a2dd4bad01891ce7d2247d2c47855201a1 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 17:31:57 +0000
+Subject: [PATCH] Release smoke test: the stand-in model uses exec_command, and
+ a chat whose tool call did not run fails the smoke
+
+v0.0.16 smoke passed with the reply "ERROR: unknown tool 'bash'. Available: exec_command": since code chats send
+only Codex's exec_command, testkit/mock_llm.py's hello path called a tool the chat no longer offers, and smoke.py only
+checked that some reply came back. The mock now writes and runs hello.py through exec_command when that is the only
+command tool, and smoke.py fails unless the reply carries the script's output. Checked against the shipped v0.0.16
+Linux build: the old mock now fails the smoke, the new one passes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pf4xaMqQSJYs9jXfPpQcsK
+---
+ packaging/smoke.py  | 2 ++
+ testkit/mock_llm.py | 6 ++++++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/packaging/smoke.py b/packaging/smoke.py
+index 3bb7d753..94c8ee96 100644
+--- a/packaging/smoke.py
++++ b/packaging/smoke.py
+@@ -194,6 +194,8 @@ def main():
+                 break
+         replies = [e.get("text", "") for e in v.get("events", []) if e.get("type") == "assistant" and e.get("text")]
+         errors = [e.get("text", "") for e in v.get("events", []) if e.get("type") == "error"]
++        if replies and ("unknown tool" in replies[-1] or "hello from meshpool" not in replies[-1]):
++            raise SystemExit(f"smoke: FAILED, the chat's tool call did not run: {replies[-1][:160]!r}")
+         if not replies or errors:
+             raise SystemExit(f"smoke: FAILED, the chat did not answer (state {v.get('state')}, errors {errors[:2]})")
+         step(f"chat answered: {replies[-1][:80]!r}")
+diff --git a/testkit/mock_llm.py b/testkit/mock_llm.py
+index 72ecd2e2..fac40374 100644
+--- a/testkit/mock_llm.py
++++ b/testkit/mock_llm.py
+@@ -134,6 +134,12 @@ def plan(messages, tools):
+                 return ("tool", rd, {"path": "model.pbix"})
+         return ("text", "Read: " + " || ".join(m["content"][:120].replace("\n", " ") for m in done))
+     if "hello" in u:
++        if "exec_command" in names and not names & {"apply_patch", "write_file", "write", "bash"}:
++            # Codex 0.171 replica (every code chat since 0.0.16): one command tool writes and runs the file
++            if step == 0:
++                return ("tool", "exec_command", {"cmd": "printf \"print('hello from meshpool')\\n\" > hello.py && "
++                                                        "(python3 hello.py || python hello.py)"})
++            return ("text", "I created **hello.py** and ran it. Output:\n```\n" + done[-1]["content"][-60:] + "\n```")
+         codex = "apply_patch" in names and "write_file" not in names      # Codex-style lane: apply_patch + shell
+         if step == 0:
+             if codex:
+-- 
+2.43.0
+

@@ -1,0 +1,185 @@
+From 5d30da16e4bcc74b96d32d3f5eae21c47fa59762 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 24 Nov 2026 23:31:39 +0000
+Subject: [PATCH] Office edits: accept the Excel ops models reach for
+ (set_formula, set_value, clear_cell, delete_rows, set_range, sheets, freeze
+ panes) and list them in the tool description
+
+office1-3 transcripts: 200+ failed edit_office_file calls on ops the tool did not have (set_formula 58, delete_rows 34,
+set_value 30, clear_cell 28, delete_sheet 10, replace 8), each a retry round trip. The description listed no Excel ops.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: <redacted>
+---
+ .../agent/office_mcp_server.py                | 70 ++++++++++++++++---
+ app/tests/test_edit_office_xlsx_ops.py        | 35 ++++++++++
+ 2 files changed, 96 insertions(+), 9 deletions(-)
+ create mode 100644 app/tests/test_edit_office_xlsx_ops.py
+
+diff --git a/app/meshpool_harness/agent/office_mcp_server.py b/app/meshpool_harness/agent/office_mcp_server.py
+index c84e96db..47092e6f 100644
+--- a/app/meshpool_harness/agent/office_mcp_server.py
++++ b/app/meshpool_harness/agent/office_mcp_server.py
+@@ -415,6 +415,13 @@ def read_document(path: str, sheet: str | None = None, pages: str | None = None,
+     return docread.extract(p, sheet=sheet, pages=pages, lang=language or "auto", ocr=ocr or "auto"), False
+ 
+ 
++XLSX_OPS = "set_cell, add_row, add_comment, clear_cell, set_range, delete_rows, add_sheet, delete_sheet, freeze_panes"
++# names models reach for (seen in office1-3 transcripts: set_formula 58x, delete_rows 34x, set_value 30x, clear_cell 28x)
++_XLSX_ALIASES = {"set_formula": "set_cell", "set_value": "set_cell", "write_cell": "set_cell", "delete_row": "delete_rows",
++                 "remove_rows": "delete_rows", "clear": "clear_cell", "clear_range": "clear_cell", "remove_sheet": "delete_sheet",
++                 "create_sheet": "add_sheet", "write_range": "set_range", "append_row": "add_row"}
++
++
+ def edit_office_file(path: str, operations: list, output: str | None = None, in_place: bool = False):
+     """Change an existing .docx, .xlsx or .pptx without rebuilding it: styles, formulas and layout stay. Works without
+     LibreOffice. By default the result is a copy '<name> (edited).<ext>'; in_place=true changes the file itself."""
+@@ -429,7 +436,8 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
+         return ("Give `operations`: a list of {op, ...} steps. Word: replace_text{find,replace}, "
+                 "tracked_replace{find,replace}, tracked_delete{find}, tracked_insert_after{find,text}, "
+                 "append_paragraph{text}, add_comment{find,text}. Excel: set_cell{sheet,cell,value or =formula}, "
+-                "add_row{values}, add_comment{sheet,cell,text}. PowerPoint: replace_text{find,replace}, "
++                "add_row{values}, add_comment{sheet,cell,text}, clear_cell{sheet,cell or range}, set_range{sheet,start,values[[...]]}, "
++                "delete_rows{sheet,row,count}, add_sheet{name}, delete_sheet{sheet}, freeze_panes{sheet,cell}. PowerPoint: replace_text{find,replace}, "
+                 "set_notes{slide,text}."), True
+     out = p if in_place else (_resolve(output) if output else _free(p.with_name(f"{p.stem} (edited){ext}")))
+     if out != p:
+@@ -440,7 +448,7 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
+             from docx import Document
+             doc = Document(str(out))
+             for o in operations:
+-                op = o.get("op")
++                op = {"replace": "replace_text", "find_replace": "replace_text"}.get(o.get("op"), o.get("op"))
+                 if op == "replace_text" and o.get("tracked") in (True, "true", "yes", 1):
+                     op = "tracked_replace"                  # replace_text{tracked: true} asks for a tracked change
+                 if op == "replace_text":
+@@ -480,9 +488,52 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
+                 except KeyError:
+                     errors.append(f"no sheet {o.get('sheet')!r}: sheets are {wb.sheetnames}")
+                     continue
++                op = _XLSX_ALIASES.get(op, op)
+                 if op == "set_cell":
+-                    ws[o["cell"]] = o.get("value")
++                    v = o.get("value", o.get("formula"))
++                    if isinstance(v, str) and o.get("formula") is not None and not v.startswith("="):
++                        v = "=" + v
++                    ws[o["cell"]] = v
+                     done.append(f"{ws.title}!{o['cell']} set")
++                elif op == "clear_cell":
++                    refs = o.get("cells") or [o.get("cell") or o.get("range")]
++                    for ref in refs:
++                        rows = ws[ref] if ":" in str(ref) else ((ws[ref],),)
++                        for row in rows:
++                            for cell in row:
++                                cell.value = None
++                    done.append(f"cleared {', '.join(map(str, refs))} on {ws.title}")
++                elif op == "set_range":
++                    start = openpyxl.utils.cell.coordinate_from_string(o.get("start") or o.get("cell") or str(o.get("range", "A1")).split(":")[0])
++                    c0, r0 = openpyxl.utils.column_index_from_string(start[0]), start[1]
++                    for i, vals in enumerate(o.get("values") or []):
++                        for j, v in enumerate(vals if isinstance(vals, list) else [vals]):
++                            ws.cell(row=r0 + i, column=c0 + j, value=v)
++                    done.append(f"{ws.title}: {len(o.get('values') or [])} row(s) written from {start[0]}{start[1]}")
++                elif op == "delete_rows":
++                    first = int(o.get("row") or o.get("start") or o.get("idx") or 0)
++                    n = int(o.get("count") or o.get("amount") or 1)
++                    if first < 1:
++                        errors.append("delete_rows needs row (1-based) and optional count")
++                        continue
++                    ws.delete_rows(first, n)
++                    done.append(f"deleted {n} row(s) from row {first} on {ws.title}")
++                elif op == "add_sheet":
++                    name = o.get("name") or o.get("title") or o.get("new_sheet")
++                    if not name or name in wb.sheetnames:
++                        errors.append(f"add_sheet needs a new name (sheets are {wb.sheetnames})")
++                        continue
++                    wb.create_sheet(name)
++                    done.append(f"added sheet {name!r}")
++                elif op == "delete_sheet":
++                    if len(wb.sheetnames) < 2:
++                        errors.append("cannot delete the only sheet")
++                        continue
++                    wb.remove(ws)
++                    done.append(f"deleted sheet {ws.title!r}")
++                elif op == "freeze_panes":
++                    ws.freeze_panes = o.get("cell") or "A2"
++                    done.append(f"froze panes at {ws.freeze_panes} on {ws.title}")
+                 elif op == "add_row":
+                     ws.append(o.get("values") or [])
+                     done.append(f"row added to {ws.title}")
+@@ -490,13 +541,13 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
+                     ws[o["cell"]].comment = Comment(o.get("text", ""), o.get("author") or "Meshpool")
+                     done.append(f"comment on {ws.title}!{o['cell']}")
+                 else:
+-                    errors.append(f"unknown op {op!r} (set_cell, add_row, add_comment)")
++                    errors.append(f"unknown op {op!r} ({XLSX_OPS})")
+             wb.save(str(out))
+         else:
+             from pptx import Presentation
+             prs = Presentation(str(out))
+             for o in operations:
+-                op = o.get("op")
++                op = {"replace": "replace_text", "find_replace": "replace_text"}.get(o.get("op"), o.get("op"))
+                 if op == "replace_text":
+                     paras = [pp for sl in prs.slides for sh in sl.shapes if sh.has_text_frame for pp in sh.text_frame.paragraphs]
+                     n = _replace_in_paragraphs(paras, o.get("find", ""), o.get("replace", ""))
+@@ -891,10 +942,11 @@ TOOLS = {
+                       "email, HTML or image file as text (OCR for scans). `sheet`, `pages` (\"1-3,7\"), `language`, "
+                       "`ocr` (auto, always, never) are optional.",
+                       {"path": S, "sheet": S, "pages": S, "language": S, "ocr": S}, ["path"]),
+-    "edit_office_file": (edit_office_file, "Change an existing .docx, .xlsx or .pptx without rebuilding it (formatting "
+-                         "and formulas stay). Saves '<name> (edited)' unless in_place=true. `operations`: list of "
+-                         "{op, ...}; ops are listed if one is missing. Word tracked changes: tracked_replace{find,replace} "
+-                         "(every place, formatting kept), tracked_delete{find}, tracked_insert_after{find,text}.",
++    "edit_office_file": (edit_office_file, "Change an existing .docx, .xlsx or .pptx; formatting and formulas stay. "
++                         "Saves '<name> (edited)' unless in_place=true. operations: [{op,...}]. Word: replace_text, "
++                         "tracked_replace{find,replace}, tracked_delete, tracked_insert_after, add_comment. Excel: "
++                         "set_cell{sheet,cell,value; =formula}, set_range{start,values}, clear_cell, add_row, "
++                         "delete_rows{row,count}, add_sheet, delete_sheet, freeze_panes.",
+                          {"path": S, "operations": {"type": "array", "items": {"type": "object"}}, "output": S,
+                           "in_place": {"type": "boolean"}}, ["path", "operations"]),
+     "make_pdf": (make_pdf, "Save Markdown as a PDF. Saved as `filename` in the project folder. Charts: a fenced "
+diff --git a/app/tests/test_edit_office_xlsx_ops.py b/app/tests/test_edit_office_xlsx_ops.py
+new file mode 100644
+index 00000000..80b3727c
+--- /dev/null
++++ b/app/tests/test_edit_office_xlsx_ops.py
+@@ -0,0 +1,35 @@
++import openpyxl
++from meshpool_harness.agent.office_mcp_server import edit_office_file
++
++
++def _book(tmp_path):
++    p = tmp_path / "b.xlsx"
++    wb = openpyxl.Workbook(); ws = wb.active; ws.title = "S"
++    for r in range(1, 6):
++        ws.append([r, r * 10])
++    wb.save(p)
++    return p
++
++
++def test_aliases_and_new_ops(tmp_path):
++    p = _book(tmp_path)
++    msg, err = edit_office_file(str(p), [
++        {"op": "set_formula", "sheet": "S", "cell": "C1", "formula": "SUM(A1:B1)"},
++        {"op": "set_value", "sheet": "S", "cell": "D1", "value": 7},
++        {"op": "clear_cell", "sheet": "S", "range": "B4:B5"},
++        {"op": "delete_rows", "sheet": "S", "row": 2, "count": 1},
++        {"op": "set_range", "sheet": "S", "start": "E1", "values": [[1, 2], [3, 4]]},
++        {"op": "add_sheet", "name": "T"},
++        {"op": "freeze_panes", "sheet": "S", "cell": "A2"},
++    ], in_place=True)
++    assert not err, msg
++    wb = openpyxl.load_workbook(p); ws = wb["S"]
++    assert ws["C1"].value == "=SUM(A1:B1)" and ws["D1"].value == 7
++    assert ws["A2"].value == 3                     # row 2 deleted
++    assert ws["B3"].value is None                  # old B4 cleared, shifted up
++    assert ws["F2"].value == 4 and "T" in wb.sheetnames and ws.freeze_panes == "A2"
++
++
++def test_unknown_op_lists_all(tmp_path):
++    msg, err = edit_office_file(str(_book(tmp_path)), [{"op": "bogus"}], in_place=True)
++    assert err and "delete_rows" in msg and "set_range" in msg
+-- 
+2.43.0
+

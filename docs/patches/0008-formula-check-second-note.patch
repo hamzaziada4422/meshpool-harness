@@ -1,0 +1,37 @@
+From 1092c774925c9cf0143840a95a726dbcda187c1c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 16:21:25 +0000
+Subject: [PATCH] Formula check: one second note when the recalculated result
+ is still the one the user called wrong
+
+sb8 (f70ea3ca, SpreadsheetBench 6 reps, 31/36): sb-56921 r1 got the note, recalculated, saw the same 511, wrote the
+same formulas back and answered "Now it's right" while its own hand calculation said 294. The check may now speak a
+second time, firmer, when the file still recalculates to the same result; it costs calls only on such a run.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pf4xaMqQSJYs9jXfPpQcsK
+---
+ app/meshpool_harness/agent/core.py | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/app/meshpool_harness/agent/core.py b/app/meshpool_harness/agent/core.py
+index c3d358ec..83d60cc7 100644
+--- a/app/meshpool_harness/agent/core.py
++++ b/app/meshpool_harness/agent/core.py
+@@ -2557,7 +2557,12 @@ class Agent:
+                                            ("offslide", lambda: _off_slide_miss(self.root, t0)),
+                                            ("unchanged", lambda: _unchanged_output_miss(ask, self.root, t0)),
+                                            ("volatile", lambda: _volatile_date_miss(ask, self.root, t0)),
+-                                           ("formula", lambda: _formula_result_miss(ask, self.root, t0))):
++                                           ("formula", lambda: _formula_result_miss(ask, self.root, t0)),
++                                           # sb8 sb-56921 r1: after the first note the agent recalculated, saw the
++                                           # same 511, wrote the same formulas and answered; one second, firmer note
++                                           ("formula2", lambda: "formula" in done and _formula_result_miss(
++                                               ask, self.root, t0).replace("The job is not done:", "Still not done "
++                                               "after your last change:", 1))):
+                             if key not in done:
+                                 miss = check()
+                                 if miss:
+-- 
+2.43.0
+
