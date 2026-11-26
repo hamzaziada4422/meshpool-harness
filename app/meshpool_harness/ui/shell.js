@@ -682,7 +682,14 @@ const PANELS = {cowork: ["session", "progress", "outputs", "browser"], code: ["s
 function curMode() { return S.cur?.view?.kind || "cowork"; }
 // A chat with its own private folder has no repository, so it gets the simple tabs; a chat in a real folder gets
 // the developer tabs when it is a code chat.
-function panelSet() { const v = S.cur?.view; return !v || v.scratch ? PANELS.cowork : v.worktree ? ["worktree", ...PANELS[curMode()]] : PANELS[curMode()]; }
+// Chat mode (a chat that was not started from the Code tab, even one in a folder) never gets the developer tabs
+// (Changes, Files, Terminal, Git and CI): it gets Session, Progress, Artifacts and Browser, in plain words.
+function chatMode() {
+  const v = S.cur?.view; if (!v) return S.mode !== "code";
+  const row = v.code_mode === undefined ? (S.threads || []).find(t => t.id === v.id) : null;     // an older view lacks the flag: the list has it
+  return !isCodeThread(row ? Object.assign({}, v, {code_mode: row.code_mode}) : v);
+}
+function panelSet() { const v = S.cur?.view; return !v || v.scratch || chatMode() ? PANELS.cowork : v.worktree ? ["worktree", ...PANELS[curMode()]] : PANELS[curMode()]; }
 function linkOf(pid) { return (S.pj.find(p => p.id === pid) || {}).link || null; }
 function curRoot() { return S.cur?.view?.workdir || S.draft.project || linkOf(S.draft.pid)?.path || ""; }
 

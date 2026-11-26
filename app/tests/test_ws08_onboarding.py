@@ -17,7 +17,8 @@ def test_onboarding_text_matches_the_app():
     assert "Start in Meshpool Projects" not in js
     assert "Start without a folder" in js
     # 0.0.18 design pass: the chosen card's text is no longer repeated under it; the line under it adds what is new
-    assert js.count("Each chat keeps its files in its own folder. Open it from the chat's Files panel.") == 1
+    assert js.count("Each chat keeps its files in its own private folder. You can open them from Progress, at the top of the chat.") == 1
+    assert "Open it from the chat's Files panel" not in js
     assert "Each chat keeps its files in its own folder; open it" not in js
     assert js.count('"Add your own folders any time from the sidebar."') == 2
     assert 'data-scope="later"' in js

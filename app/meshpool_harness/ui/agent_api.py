@@ -153,13 +153,31 @@ def undo_message(r: dict) -> tuple[str, str]:
     and every changed file it could not put back; the folder holding copies of what Undo replaced is only in the
     details (WF-07: a full checkpoints path filled the chat; WF-C: "Files are back to how they were" while a file
     outside the chat's folder still had the agent's change)."""
+    def once(xs):
+        """Each file once, whatever order it came in: the same path listed twice (a file kept and also reported as
+        outside, or a list that repeated itself) is one file ("Not restored: a, b, a, b")."""
+        seen, out = set(), []
+        for x in xs:
+            key = re.sub(r"^(\./)+", "", str(x).replace("\\", "/").strip())
+            if key and key not in seen:
+                seen.add(key)
+                out.append(key)
+        return out
+
+    def named(x):
+        """A file as people read it: its name, and the folder it is in when it is not at the top ("a.xlsx (in Prices)")."""
+        name = Path(x).name or x
+        folder = str(Path(x).parent).replace("\\", "/")
+        return name if folder in ("", ".") else f"{name} (in {folder})"
+
     def names(xs, n=4):
-        xs = [Path(str(x)).name or str(x) for x in xs]
+        xs = [named(x) for x in once(xs)]
         return ", ".join(xs[:n]) + (f" and {len(xs) - n} more" if len(xs) > n else "")
 
     def count(xs, word):
-        return f"{word} {len(xs)} file{'' if len(xs) == 1 else 's'} ({names(xs)})"
-    restored, deleted, kept, outside = (list(r.get(k) or []) for k in ("restored", "deleted", "kept", "outside"))
+        n = len(once(xs))
+        return f"{word} {n} file{'' if n == 1 else 's'} ({names(xs)})"
+    restored, deleted, kept, outside = (once(r.get(k) or []) for k in ("restored", "deleted", "kept", "outside"))
     done = [s for s in (count(restored, "Restored") if restored else "",
                         count(deleted, "removed" if restored else "Removed") if deleted else "") if s]
     if not done and r.get("conversation") is False and not kept and not outside:
@@ -188,7 +206,7 @@ def undo_message(r: dict) -> tuple[str, str]:
     det = list(notes)                        # why each file was kept: changed later, never stored, a link...
     det += [f"{p}: {CHANGED_AFTER}" for p in kept if not why[p]]
     if outside:
-        det.append("Changed outside this chat's folder, not restored: " + ", ".join(outside))
+        det.append("Changed outside this chat's folder, not restored: " + ", ".join(once(outside)))
     if r.get("backup"):
         det.append(f"Copies of the files Undo replaced are in {r['backup']}")
     return msg, "\n".join(det)
@@ -2260,6 +2278,7 @@ class Session:
                 "turn_started": getattr(self, "t_turn", None) if self.state in ("working", "waiting") else None,
                 "title": meta.get("title") or nice_title(a.title), "pinned": bool(meta.get("pinned")),
                 "project_id": _project_of(meta, self.workdir), "scratch": bool(meta.get("scratch")),
+                "code_mode": meta.get("code_mode"),       # False: a chat in a folder that was never started from the Code tab
                 "usage": a.usage, "context": getattr(a, "context", None), "kind": self.kind,
                 "harness": {k: self.harness.get(k) for k in ("id", "name", "type", "description", "models", "provider",
                                                              "providers", "runs_on")},
