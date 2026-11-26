@@ -163,10 +163,11 @@ def test_stream_frames_do_not_redraw_the_header(longchats):
     # a /api/git request) was redrawn on every frame: ~80 times a second while a reply streamed.
     page = longchats
     page.evaluate("() => { window.__rt = 0; const o = window.renderTop; window.renderTop = function () { window.__rt++; return o.apply(this, arguments); }; }")
-    page.evaluate("() => ingest(S.cur, Object.assign({}, S.cur.view, {state: 'working', events: [], total: S.cur.total}))")
-    r0 = page.evaluate("window.__rt")
-    page.evaluate(H.STREAM_FRAMES, 50)
-    n = page.evaluate("window.__rt") - r0
+    # One synchronous evaluate: ingest calls renderTop synchronously, and nothing else (the app's own poll of the live
+    # server, whose idle state differs from this fake 'working' one) can run between the frames. With separate
+    # evaluates a poll landed in a gap on a slow CI runner and counted 1 (tests run 104, Python 3.12).
+    n = page.evaluate("(k) => { ingest(S.cur, Object.assign({}, S.cur.view, {state: 'working', events: [], total: S.cur.total}));"
+                      " const r0 = window.__rt; (" + H.STREAM_FRAMES.strip() + ")(k); return window.__rt - r0; }", 50)
     print("HEADER redraws for 50 stream frames:", n)
     assert n == 0, n                              # was 50
 
