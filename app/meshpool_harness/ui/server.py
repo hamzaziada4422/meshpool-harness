@@ -253,6 +253,73 @@ def save_upload(name: str, data: bytes) -> dict:
     return {"path": str(p), "name": safe, "size": len(data)}
 
 
+def _upload_refs() -> list[Path] | None:
+    """Every path a saved company profile or project record names, resolved; None when one of those files cannot be
+    read, so nothing is removed on a guess."""
+    import contextlib
+    found: list[str] = []
+
+    def strings(v):
+        if isinstance(v, str):
+            found.append(v)
+        elif isinstance(v, dict):
+            for x in v.values():
+                strings(x)
+        elif isinstance(v, list):
+            for x in v:
+                strings(x)
+    files = [C.home() / "brand" / "profiles.json"]
+    from meshpool_harness import project_store as PS
+    with contextlib.suppress(OSError):
+        files += [d / "project.json" for d in PS.root().iterdir() if d.is_dir()]
+    for f in files:
+        try:
+            strings(json.loads(f.read_text(encoding="utf-8")))
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            return None
+    out = []
+    for s in found:
+        if "_uploads" in s:
+            with contextlib.suppress(OSError, ValueError):
+                out.append(Path(s).expanduser().resolve())
+    return out
+
+
+def prune_uploads(max_age_days: float = 30, now: float | None = None) -> list[str]:
+    """Remove upload folders (runs/_uploads/<id>) not changed for max_age_days that no saved company profile or
+    project points at. /api/upload wrote them and nothing ever removed them. Called at start-up. Returns the names
+    removed."""
+    import shutil
+    try:
+        dirs = [d for d in UPLOADS.iterdir() if d.is_dir()]
+    except OSError:
+        return []
+    cutoff = (now or time.time()) - max_age_days * 86400
+    old = []
+    for d in dirs:
+        try:
+            newest = max([d.stat().st_mtime] + [p.stat().st_mtime for p in d.rglob("*")])
+        except OSError:
+            continue
+        if newest < cutoff:
+            old.append(d)
+    if not old:
+        return []
+    refs = _upload_refs()
+    if refs is None:
+        return []
+    gone = []
+    for d in old:
+        rd = d.resolve()
+        if any(r == rd or rd in r.parents or r in rd.parents for r in refs):
+            continue
+        shutil.rmtree(d, ignore_errors=True)
+        gone.append(d.name)
+    return gone
+
+
 # ---------- HTTP ---------------------------------------------------------------------------------------------------
 
 def _disposition(kind: str, name: str) -> str:
@@ -1361,6 +1428,10 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     try:                                                       # OSS-36: old per-chat Codex folders
         from meshpool_harness.harnesses import prune_codex_homes
         prune_codex_homes()
+    except Exception:  # noqa: BLE001
+        pass
+    try:                                                       # uploads nothing points at any more
+        prune_uploads()
     except Exception:  # noqa: BLE001
         pass
     global DESKTOP

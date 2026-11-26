@@ -192,3 +192,42 @@ def test_lp04_providers_read_the_settings_file_once_while_unchanged(tmp_path, mo
         assert one_call()[:2] == ("https://two.example.test/v1/extra", "test-key-two")
     finally:
         _OPENS["path"] = None
+
+
+def test_lp05_old_uploads_nothing_points_at_are_removed(tmp_path, monkeypatch):
+    """LP-05: uploads older than 30 days are removed at start-up unless a company profile or project names them;
+    a damaged profile file keeps everything."""
+    import json
+
+    from meshpool_harness.ui import server as S
+    home = tmp_path / "home"
+    monkeypatch.setenv("MESHPOOL_HOME", str(home))
+    ups = tmp_path / "runs" / "_uploads"
+    monkeypatch.setattr(S, "UPLOADS", ups)
+    old = time.time() - 40 * 86400
+
+    def upload(name, age):
+        d = ups / name
+        d.mkdir(parents=True)
+        f = d / "deck.pptx"
+        f.write_bytes(b"x")
+        for p in (f, d):
+            os.utime(p, (age, age))
+        return f
+    stale = upload("aaaa0001", old)
+    kept_by_profile = upload("aaaa0002", old)
+    kept_by_project = upload("aaaa0003", old)
+    fresh = upload("aaaa0004", time.time() - 86400)
+    (home / "brand").mkdir(parents=True)
+    (home / "brand" / "profiles.json").write_text(json.dumps(
+        {"active": "p1", "profiles": {"p1": {"id": "p1", "logo": str(kept_by_profile)}}}))
+    pd = home / "projects" / "p_0123456789"
+    pd.mkdir(parents=True)
+    (pd / "project.json").write_text(json.dumps({"id": pd.name, "link": {"type": "folder",
+                                                                          "path": str(kept_by_project.parent)}}))
+    assert S.prune_uploads() == ["aaaa0001"]
+    assert not stale.exists() and kept_by_profile.exists() and kept_by_project.exists() and fresh.exists()
+
+    upload("aaaa0005", old)
+    (home / "brand" / "profiles.json").write_text("{not json")
+    assert S.prune_uploads() == []                       # cannot tell what the profiles name: keep everything
