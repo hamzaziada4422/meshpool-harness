@@ -235,3 +235,53 @@ def test_compaction_facts_cover_the_codex_style_tools():
     assert "src/app.py" in notes and "tests/test_app.py" in notes and "util.py" in notes
     assert "pytest -q (exit 1)" in notes and "Commands that failed" in notes
     assert "fix the parser" in notes
+
+
+# AG-11: @file imports in a subfolder's AGENTS.md and in path-scoped rules files followed paths outside the project
+# (PA-agent-17 fenced only the top-level instruction files), so a cloned repo could send ~/notes.md to the model.
+def test_nested_and_scoped_instruction_imports_stay_in_the_project(env):
+    from meshpool_harness.agent import extras as EX
+    outside = env.parent / "private"
+    outside.mkdir()
+    (outside / "secret.md").write_text("SECRET-NOTES", encoding="utf-8")
+    (env / ".git").mkdir()
+    (env / "pkg").mkdir()
+    (env / "pkg" / "local.md").write_text("LOCAL-OK", encoding="utf-8")
+    (env / "pkg" / "AGENTS.md").write_text(f"@{outside / 'secret.md'}\n@../private/secret.md\n@local.md\n",
+                                           encoding="utf-8")
+    (env / "pkg" / "a.py").write_text("x = 1\n")
+    nested = EX.nested_instructions(env, "pkg/a.py", set())
+    assert "LOCAL-OK" in nested and "SECRET-NOTES" not in nested
+    (env / ".cursor" / "rules").mkdir(parents=True)
+    (env / ".cursor" / "rules" / "py.mdc").write_text(
+        f"---\nglobs: *.py\n---\nUse tabs.\n@{outside / 'secret.md'}\n", encoding="utf-8")
+    scoped = EX.scoped_rules(env, "pkg/a.py", set())
+    assert "Use tabs." in scoped and "SECRET-NOTES" not in scoped
+
+
+# AG-12: a hook that timed out was killed without its children (subprocess.run kills the shell only), so the
+# program the hook started kept running after meshpool had given up on it.
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_hook_timeout_kills_the_whole_process_tree(env):
+    import json
+    import time
+    from meshpool_harness import config as C
+    from meshpool_harness.agent import extras as EX
+    pidf = env / "child.pid"
+    (C.home() / "hooks.json").write_text(json.dumps({"UserPromptSubmit": [
+        {"command": f"sleep 30 & echo $! > '{pidf}'; wait", "timeout": 1}]}), encoding="utf-8")
+    t0 = time.time()
+    r = EX.run_hooks_full(env, "UserPromptSubmit", {"prompt": "hi"})
+    assert r["blocked"] and time.time() - t0 < 10
+    pid = int(pidf.read_text().strip())
+    for _ in range(50):                               # the kill is immediate; give the kernel a moment to reap
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        if Path(f"/proc/{pid}/stat").exists() and Path(f"/proc/{pid}/stat").read_text().split()[2] == "Z":
+            break
+        time.sleep(0.1)
+    else:
+        os.kill(pid, 9)
+        pytest.fail("the hook's child process outlived the hook's timeout")
