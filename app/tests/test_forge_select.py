@@ -17,7 +17,7 @@ class _Grader:
 
 
 def test_best_of_keeps_the_best_graded_deck(tmp_path, monkeypatch):
-    monkeypatch.setattr("engines.forge.review.render_pngs", lambda p, width_px=1100: [])
+    monkeypatch.setattr("engines.forge.review.render_pngs", lambda p, out_dir=None, width_px=1100: [])
 
     def fake_build(brief, out_dir, client=None, task_id="", **kw):
         d = Path(out_dir)

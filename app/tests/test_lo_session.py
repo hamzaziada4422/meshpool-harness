@@ -167,10 +167,10 @@ def test_convert_document_never_borrows_the_users_libreoffice(tmp_path, monkeypa
     monkeypatch.setattr(LS, "convert", lambda *a, **k: None)
     seen = []
 
-    def run(cmd, **kw):
+    def run(cmd, timeout):
         seen.append(cmd)
         return subprocess.CompletedProcess(cmd, 1, "", "no")
-    monkeypatch.setattr(OM.subprocess, "run", run)
+    monkeypatch.setattr(OM, "_run_soffice", run)
     OM.convert_document(str(src), "pdf")
     assert seen and any(str(a).startswith("-env:UserInstallation=") for a in seen[0])
 

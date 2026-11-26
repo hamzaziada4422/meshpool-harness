@@ -26,6 +26,7 @@ import time
 from pathlib import Path
 
 from meshpool_harness import config as C
+from meshpool_harness.docread import ole_kind
 from meshpool_harness.ui import workbench as W
 
 MAX_PAGES = 60              # pages offered for one file
@@ -277,17 +278,11 @@ def _xlsx_sheets(p: Path) -> list[dict]:
 
 
 def _csv_sheet(p: Path) -> list[dict]:
-    raw = p.read_bytes()[:SHEET_MAX_BYTES]
-    try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = raw.decode("latin-1")
-    delim = "\t" if p.suffix.lower() == ".tsv" else ","
-    if p.suffix.lower() == ".csv":
-        try:
-            delim = csv.Sniffer().sniff(text[:8192], delimiters=",;\t|").delimiter
-        except csv.Error:
-            pass
+    from meshpool_harness.docread import decode_text, sniff_delimiter
+    with open(p, "rb") as fh:
+        raw = fh.read(SHEET_MAX_BYTES)
+    text = decode_text(raw, cut=len(raw) >= SHEET_MAX_BYTES)   # UTF-16 from Excel, Windows-1252 euro signs and quotes
+    delim = "\t" if p.suffix.lower() == ".tsv" else sniff_delimiter(text)
     try:                                          # a cell over 128 KB must not fail the whole preview
         csv.field_size_limit(max(csv.field_size_limit(), min(len(text) + 1, 2 ** 31 - 1)))
     except (OverflowError, ValueError):
@@ -318,7 +313,10 @@ def meta(root: str, rel: str) -> dict:
     if k == "office":
         if p.suffix.lower() in (".docx", ".docm", ".dotx", ".pptx", ".pptm", ".ppsx", ".potx"):
             import zipfile
-            if not zipfile.is_zipfile(p):               # B6: not even a package: say so before LibreOffice is asked
+            kind = "zip" if zipfile.is_zipfile(p) else ole_kind(p)     # an old binary file ("ole"): LibreOffice reads it
+            if kind == "encrypted":
+                raise ValueError("This file is password-protected, so it cannot be previewed here. Open it in its app.")
+            if not kind:                                # B6: not even a package: say so before LibreOffice is asked
                 raise ValueError(friendly_error(p, ValueError("not a package")))
         return base | {"kind": "pages"} | _office_state(p)
     if k == "sheet":
@@ -329,7 +327,11 @@ def meta(root: str, rel: str) -> dict:
                 return base | {"state": "ready", "sheets": _xlsx_sheets(p)}
             except Exception:  # noqa: BLE001 - a workbook openpyxl cannot read: let LibreOffice draw it
                 import zipfile
-                if not zipfile.is_zipfile(p):
+                kind = "zip" if zipfile.is_zipfile(p) else ole_kind(p)
+                if kind == "encrypted":
+                    raise ValueError("This workbook is password-protected, so it cannot be previewed here. Open it in "
+                                     "its app.") from None
+                if not kind:
                     raise ValueError("This workbook is damaged, so it cannot be previewed. Open it in its app.") from None
                 return base | {"kind": "pages"} | _office_state(p)
         return base | {"state": "ready", "sheets": _csv_sheet(p)}
@@ -377,7 +379,9 @@ def page_png(root: str, rel: str, page: int, width: int = MAX_WIDTH) -> bytes:
         raise ValueError("No such page.")
     d.mkdir(parents=True, exist_ok=True)
     data = _render(pdf, page, width)
-    tmp = f.with_suffix(".tmp")
+    # each request writes its own part file: two requests for one page (two tabs) shared one name, and the second
+    # move found nothing there and failed the page
+    tmp = f.with_name(f"{f.stem}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_bytes(data)
     tmp.replace(f)
     if k == "pdf":

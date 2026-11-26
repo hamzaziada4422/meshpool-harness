@@ -347,12 +347,12 @@ def test_convert_document_opens_a_pdf_as_text_for_word_and_refuses_what_cannot_w
     (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4")
     calls = []
 
-    def fake(cmd, **kw):
+    def fake(cmd, *a, **kw):
         calls.append(cmd)
         out = Path(cmd[cmd.index("--outdir") + 1])
         (out / (Path(cmd[-1]).stem + "." + cmd[cmd.index("--convert-to") + 1])).write_bytes(b"x")
         return subprocess.CompletedProcess(cmd, 0, "", "")
-    monkeypatch.setattr(subprocess, "run", fake)
+    monkeypatch.setattr(O, "_run_soffice", fake)        # the LibreOffice run (its own process group since OF-12)
     msg, err = O.convert_document(str(tmp_path / "a.pdf"), "docx")
     assert not err and "--infilter=writer_pdf_import" in calls[-1]
     msg, err = O.convert_document(str(tmp_path / "a.pdf"), "png")
