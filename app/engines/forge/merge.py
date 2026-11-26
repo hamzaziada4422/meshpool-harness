@@ -82,7 +82,8 @@ def append(target: str, source: str, out: str) -> int:
         if bg is not None:                                       # the slide's own background, if it has one
             new._element.cSld.insert(0, copy.deepcopy(bg))
         if s.has_notes_slide and s.notes_slide.notes_text_frame is not None:
-            new.notes_slide.notes_text_frame.text = s.notes_slide.notes_text_frame.text
+            from .notes import write as _write_notes          # presenter prose only (notes.py)
+            _write_notes(new, s.notes_slide.notes_text_frame.text)
         added += 1
     dst.save(out)
     return added

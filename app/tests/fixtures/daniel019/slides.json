@@ -1,0 +1,649 @@
+[
+ {
+  "id": "S0",
+  "node": "0",
+  "archetype": "cover",
+  "title": "Predictive maintenance: is now the time to start?",
+  "title_prov": [
+   "F5"
+  ],
+  "subtitle": "Leadership briefing for a mid-size packaging manufacturer, Ridgeway Advisory, based on the Northfield 2025 benchmark",
+  "date": "November 2026",
+  "footer": "Ridgeway Advisory | Confidential",
+  "source": {
+   "text": "Northfield Research, 'Predictive Maintenance in European Mid-Market Manufacturing, Industry Benchmark Report 2025' (survey of 412 plant managers, March to May 2025; economics modelled from 37 case studies)",
+   "prov": [
+    "F1"
+   ]
+  },
+  "footnotes": [],
+  "notes": "Purpose: help leadership decide today whether to start predictive maintenance. The answer is yes, but through one pilot line rather than a plant-wide launch. The evidence is the Northfield 2025 benchmark of 412 plant managers in Germany, Italy, Poland and the Netherlands, with a margin of error of plus or minus 4.8 points at 95% confidence. The deck covers where the market stands, the options, the economics and the plan.",
+  "section": "Cover",
+  "section_icon": "start"
+ },
+ {
+  "id": "S1",
+  "node": "1",
+  "archetype": "executive_summary",
+  "title": "Start now with one pilot line: it pays back in 19 months, not 31",
+  "title_prov": [
+   "F9"
+  ],
+  "points": [
+   {
+    "lead": "Peers have made it mainstream",
+    "bullets": [
+     {
+      "text": "Downtime falls by a median of 23%",
+      "prov": [
+       "F7"
+      ]
+     }
+    ],
+    "prov": [
+     "F6",
+     "F7"
+    ]
+   },
+   {
+    "lead": "A pilot line pays back fastest",
+    "bullets": [
+     {
+      "text": "71% succeed, against 44%",
+      "prov": [
+       "F9"
+      ]
+     }
+    ],
+    "prov": [
+     "F9"
+    ]
+   },
+   {
+    "lead": "A business case makes scaling 2.4 times likelier",
+    "bullets": [
+     {
+      "text": "58% cite unclear ROI",
+      "prov": [
+       "F9"
+      ]
+     }
+    ],
+    "prov": [
+     "F9"
+    ]
+   },
+   {
+    "lead": "Five steps, starting with one line",
+    "bullets": [
+     {
+      "text": "Retrofitting PLCs cuts integration cost about 40%",
+      "prov": [
+       "F10"
+      ]
+     }
+    ],
+    "prov": [
+     "F10"
+    ]
+   }
+  ],
+  "metrics": [
+   {
+    "value": "19 months",
+    "label": "Pilot payback, median",
+    "prov": [
+     "F9"
+    ]
+   },
+   {
+    "value": "47%",
+    "label": "Plants using it, 2025",
+    "prov": [
+     "F6"
+    ]
+   },
+   {
+    "value": "EUR 3.1m",
+    "label": "Net benefit, year 3^1",
+    "prov": [
+     "F8"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Northfield Research, Predictive Maintenance in European Mid-Market Manufacturing, Industry Benchmark Report 2025 (412 plant managers, March to May 2025)",
+   "prov": [
+    "F1"
+   ]
+  },
+  "footnotes": [
+   "1. Five plants, modelled from 37 case studies. Pilot cost for this company: [GAP: pilot cost, to be sized in the business case]."
+  ],
+  "tags": [
+   "Preliminary"
+  ],
+  "notes": "Our answer is to start now, with one pilot line. In 2025, 47% of mid-market plants use predictive maintenance, up from 18% in 2021 (53% have not started), and adopters cut unplanned downtime by a median 23%. A pilot-first approach pays back in a median 19 months with 71% success, against 31 months and 44% for a plant-wide launch. A vendor-managed service sits between them at 24 months and 63% success, but 38% of such adopters would not renew on current terms. A five-plant rollout costs EUR 3.4m and nets EUR 3.1m by year 3; these figures are modelled from 37 case studies. The pilot cost is not yet sized for this company, so the written business case must size it. Plants with a structured business case were 2.4 times more likely to scale beyond the pilot; unclear ROI is the top barrier at 58%, followed by legacy PLCs (programmable logic controllers) that cannot stream data at 52%. Retrofitting gateways to legacy PLCs rather than replacing them cuts integration cost by roughly 40%. The five next steps: start with one high-downtime line and a written business case; retrofit gateways to legacy PLCs rather than replace them; hire or train one reliability engineer per two plants; review vendor lock-in clauses before signing multi-year services; track unplanned downtime hours, maintenance cost per unit and mean time between failures from day one. The ask today, taken on the closing slide, is to approve one pilot line with a written business case.",
+  "section": "The answer",
+  "section_icon": "answer"
+ },
+ {
+  "id": "S2",
+  "node": "2",
+  "archetype": "grid",
+  "layout": "thirds",
+  "look": "minimal",
+  "title": "Predictive maintenance adoption has nearly tripled to 47% since 2021, leaving 53% of plants waiting",
+  "title_prov": [
+   "F6",
+   "S3C1"
+  ],
+  "calcs": [
+   {
+    "id": "S3C1",
+    "value": "2.6x",
+    "formula": "47 / 18",
+    "from": [
+     "F6"
+    ]
+   }
+  ],
+  "parts": [
+   {
+    "type": "chart",
+    "heading": "Adoption has risen about 7 points a year",
+    "chart": {
+     "kind": "column",
+     "categories": [
+      "2021",
+      "2025"
+     ],
+     "series": [
+      {
+       "name": "Mid-market plants using PdM, % of plants",
+       "values": [
+        18,
+        47
+       ]
+      }
+     ],
+     "unit": "%",
+     "decimals": 0,
+     "highlight_categories": [
+      "2025"
+     ],
+     "delta": {
+      "from": "2021",
+      "to": "2025",
+      "label": "about 7 points a year"
+     }
+    },
+    "prov": [
+     "F6"
+    ]
+   },
+   {
+    "type": "chart",
+    "heading": "Germany leads; Poland sits 16 points below average",
+    "chart": {
+     "kind": "bar",
+     "categories": [
+      "Germany",
+      "Netherlands",
+      "Italy",
+      "Poland"
+     ],
+     "series": [
+      {
+       "name": "PdM adoption 2025, % of plants",
+       "values": [
+        58,
+        51,
+        42,
+        31
+       ]
+      }
+     ],
+     "unit": "%",
+     "decimals": 0,
+     "target": 47,
+     "highlight_categories": [
+      "Germany"
+     ]
+    },
+    "prov": [
+     "F6"
+    ]
+   },
+   {
+    "type": "stats",
+    "heading": "Adopters gain, and most plants still wait",
+    "items": [
+     {
+      "value": "23%",
+      "label": "median cut in unplanned downtime within 24 months",
+      "prov": [
+       "F7"
+      ]
+     },
+     {
+      "value": "14%",
+      "label": "median cut in maintenance spend within 24 months",
+      "prov": [
+       "F7"
+      ]
+     },
+     {
+      "value": "53%",
+      "label": "of plants have not started",
+      "prov": [
+       "F6"
+      ]
+     }
+    ]
+   }
+  ],
+  "takeaway": {
+   "text": "Predictive maintenance has moved from early adopters to the mainstream, so **waiting is now the unusual position**."
+  },
+  "bullets": [
+   {
+    "text": "Sensor prices are down 35% since 2021",
+    "prov": [
+     "F7"
+    ]
+   },
+   {
+    "text": "Cloud analytics now come bundled with service contracts",
+    "prov": [
+     "F7"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Northfield Research 2025, mid-market plants (250 to 2,000 employees)",
+   "prov": [
+    "F6",
+    "F7"
+   ]
+  },
+  "footnotes": [
+   "Survey of 412 plant managers, margin of error plus or minus 4.8 points at 95% confidence; country margins are wider. Gains are medians across adopters; baseline and case mix are not stated."
+  ],
+  "notes": "Say aloud: adoption is 18% in 2021 and 47% in 2025, up 29 points, about 7 points a year. That is 2.6 times the 2021 level (C1), so 'nearly tripled' is the accurate wording, not 'tripled'. The storyline title said tripled; it is corrected here. 53% have not started (100 minus 47). Country order is fixed: Germany 58%, Netherlands 51%, Italy 42%, Poland 31%; the dashed line is the 47% average. Poland is 16 points below it. Country samples are smaller, so treat country gaps as indicative. Automotive suppliers and food processors adopt fastest; metal fabrication lags at 33%. Packaging is not named in the report, so no packaging-specific figure is claimed. The gains (23% less unplanned downtime, 14% less maintenance spend within 24 months) are medians across adopters who report them. Baseline and case mix are not stated, so they are not a forecast for our plant. The survey details in the footnote (412 plant managers, plus or minus 4.8 points, 95% confidence) come from the slide brief, not the fact list. Confirm them against the Northfield report before circulating.",
+  "section": "Where we stand",
+  "section_icon": "market"
+ },
+ {
+  "id": "S3",
+  "node": "3",
+  "archetype": "grid",
+  "title": "A single pilot line beats plant-wide and vendor-managed launches on payback and success",
+  "title_prov": [
+   "F9"
+  ],
+  "calcs": [
+   {
+    "id": "S4C1",
+    "value": "12 months",
+    "formula": "31 - 19",
+    "from": [
+     "F9"
+    ]
+   },
+   {
+    "id": "S4C2",
+    "value": "27 points",
+    "formula": "71 - 44",
+    "from": [
+     "F9"
+    ]
+   }
+  ],
+  "layout": "main_side",
+  "look": "boxed",
+  "parts": [
+   {
+    "type": "table",
+    "heading": "Survey median payback and success rate by launch approach",
+    "table": {
+     "columns": [
+      "Approach",
+      "Median payback (months)",
+      "Success rate",
+      "Main trade-off"
+     ],
+     "rows": [
+      [
+       "**Single pilot line, then scale** (Recommended)",
+       "19",
+       "71%",
+       "Surfaces data issues early"
+      ],
+      [
+       "Vendor-managed service",
+       "24",
+       "63%",
+       "Lock-in: 38% would not renew on current terms"
+      ],
+      [
+       "Plant-wide launch",
+       "31",
+       "44%",
+       "Data problems found late"
+      ]
+     ],
+     "highlight_rows": [
+      0
+     ],
+     "recommended_row": 0,
+     "recommended_label": "Recommended",
+     "delta": {
+      "from_row": 0,
+      "to_row": 2,
+      "label": "12 months faster, 27 points higher success",
+      "prov": [
+       "F9",
+       "S4C1",
+       "S4C2"
+      ]
+     },
+     "prov": [
+      "F9"
+     ]
+    },
+    "prov": [
+     "F9",
+     "S4C1",
+     "S4C2"
+    ]
+   },
+   {
+    "type": "callout",
+    "heading": "So what",
+    "bullets": [
+     {
+      "text": "**Pilot first** wins because it finds data problems before the main spending starts",
+      "prov": [
+       "F9"
+      ]
+     },
+     {
+      "text": "Pilot-first adopters pay back in **19 months** against 31 for plant-wide launches",
+      "prov": [
+       "F9",
+       "S4C1"
+      ]
+     },
+     {
+      "text": "Vendor service is a middle path, but **38%** of its adopters would not renew",
+      "prov": [
+       "F9"
+      ]
+     }
+    ],
+    "prov": [
+     "F9",
+     "S4C1"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Northfield Research, 2025 survey of predictive maintenance adopters",
+   "prov": [
+    "F9"
+   ]
+  },
+  "footnotes": [
+   "19 months is the survey median for pilot-first adopters, not a payback calculated for any one rollout. Groups may differ in plant size or maturity, so gaps show association, not cause. Doing nothing is not scored: the report gives no figures."
+  ],
+  "notes": "Payback and success rates come from the Northfield Research survey (F9). The 19 months is the median payback for adopters who started with one pilot line and then scaled. It is the same figure on every slide that uses it, and it must not be restated as the payback of a specific five-plant rollout; the plant-wide comparison is 31 months, 12 months slower. The pilot-first advantage is partly explained by early discovery of data issues. Caveat: the three groups may differ in plant size or maturity, so the 12-month and 27-point gaps show association, not proof of cause. The vendor-managed service sits in the middle on payback (24 months) and success (63%), but 38% of its adopters would not renew on current terms, a lock-in risk. Doing nothing is not scored because the report gives no figures for it. All figures (71%, 63%, 44%, 38%) are in F9.",
+  "section": "The options compared",
+  "section_icon": "choice"
+ },
+ {
+  "id": "S4",
+  "node": "4",
+  "archetype": "grid",
+  "title": "A five-plant rollout costs EUR 3.4m and nets EUR 3.1m by year 3",
+  "title_prov": [
+   "F8"
+  ],
+  "layout": "quarters",
+  "look": "editorial",
+  "tags": [
+   "Preliminary"
+  ],
+  "parts": [
+   {
+    "type": "chart",
+    "heading": "Sensors and software lead the cost (% of EUR 3.4m, three years)",
+    "chart": {
+     "kind": "bar",
+     "categories": [
+      "Sensors",
+      "Software",
+      "Integration",
+      "Training"
+     ],
+     "series": [
+      {
+       "name": "Share of cost",
+       "values": [
+        38,
+        27,
+        22,
+        13
+       ]
+      }
+     ],
+     "unit": "%",
+     "decimals": 0,
+     "highlight_categories": [
+      "Sensors"
+     ]
+    },
+    "prov": [
+     "F8"
+    ]
+   },
+   {
+    "type": "chart",
+    "heading": "Avoided downtime drives the payoff (% of benefit)",
+    "chart": {
+     "kind": "bar",
+     "categories": [
+      "Avoided downtime",
+      "Lower spare parts inventory",
+      "Energy savings"
+     ],
+     "series": [
+      {
+       "name": "Share of benefit",
+       "values": [
+        62,
+        21,
+        17
+       ]
+      }
+     ],
+     "unit": "%",
+     "decimals": 0,
+     "highlight_categories": [
+      "Avoided downtime"
+     ]
+    },
+    "prov": [
+     "F8"
+    ]
+   },
+   {
+    "type": "stats",
+    "heading": "Modelled for five plants, not for one pilot line",
+    "items": [
+     {
+      "value": "EUR 3.1m",
+      "label": "Cumulative net benefit by year 3",
+      "prov": [
+       "F8"
+      ]
+     },
+     {
+      "value": "EUR 3.4m",
+      "label": "Cost over three years",
+      "prov": [
+       "F8"
+      ]
+     },
+     {
+      "value": "1 year",
+      "label": "Time to positive net benefit",
+      "prov": [
+       "F8"
+      ]
+     }
+    ]
+   },
+   {
+    "type": "callout",
+    "heading": "Three barriers, two fixes",
+    "bullets": [
+     {
+      "text": "**Unclear ROI** 58%, **legacy PLCs** 52%, **poor data quality** 47%",
+      "prov": [
+       "F9"
+      ]
+     },
+     {
+      "text": "A structured business case makes scaling **2.4 times** more likely",
+      "prov": [
+       "F9"
+      ]
+     },
+     {
+      "text": "Retrofitting gateways cuts integration cost by roughly **40%**",
+      "prov": [
+       "F10"
+      ]
+     }
+    ],
+    "prov": [
+     "F9",
+     "F10"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Northfield Research 2025, predictive maintenance adoption report",
+   "prov": [
+    "F8",
+    "F9",
+    "F10",
+    "F25"
+   ]
+  },
+  "footnotes": [
+   "Modelled from 37 case studies; figures are for a typical five-plant rollout."
+  ],
+  "notes": "Say aloud: these economics are modelled from 37 case studies and cover five plants, not one line. The EUR 3.4m is not scaled down to a pilot, so the pilot business case must size cost and return for our line. The report gives no payback period for the modelled five-plant rollout, so none is shown here. The 19-month median payback belongs only to companies that began with a single pilot line (plant-wide launches take 31 months); it is covered on the approach comparison, not on this slide. The barrier shares (58%, 52%, 47%) come from the report's survey, and a structured business case makes scaling 2.4 times more likely. Gateway retrofits on legacy PLCs cut integration cost by roughly 40%. Per the report, 41% of plants lack in-house data engineers, which is a skills risk. The report gives no per-item EUR split of cost or benefit, so the charts show shares only. Cumulative net benefit of EUR 3.1m by year 3 is quoted as stated and not rebuilt from gross benefit.",
+  "section": "Why a pilot wins",
+  "section_icon": "economics"
+ },
+ {
+  "id": "S6",
+  "node": "5",
+  "archetype": "closing",
+  "title": "Approve one pilot line today and review the scale-up at a June 2027 gate",
+  "title_prov": [
+   "F11",
+   "F10"
+  ],
+  "decision": "Decision today: approve a single pilot line with a written business case. No plant-wide commitment is requested.",
+  "steps": [
+   {
+    "action": "Choose the pilot line and write the business case",
+    "detail": "Pick the high-downtime line. Plants with a structured business case were 2.4 times more likely to scale beyond the pilot. The pilot budget comes from this case.",
+    "milestones": [
+     "Business case written by 29 Jan 2027",
+     "KPI baselines set in the case"
+    ],
+    "owner": "COO with CFO",
+    "timing": "29 Jan 2027",
+    "prov": [
+     "F10",
+     "F9",
+     "F11"
+    ]
+   },
+   {
+    "action": "Retrofit gateways to legacy PLCs",
+    "detail": "Retrofitting rather than replacing cuts integration cost by roughly 40% and tackles the barrier that legacy PLCs cannot stream data.",
+    "milestones": [
+     "Retrofit scope agreed by 26 Feb 2027"
+    ],
+    "owner": "Head of Maintenance",
+    "timing": "26 Feb 2027",
+    "prov": [
+     "F10",
+     "F9"
+    ]
+   },
+   {
+    "action": "Hire or train a reliability engineer",
+    "detail": "One reliability engineer per two plants, so the pilot has in-house skills from the start.",
+    "milestones": [
+     "Engineer in place by 31 Mar 2027"
+    ],
+    "owner": "HR with COO",
+    "timing": "31 Mar 2027",
+    "prov": [
+     "F10"
+    ]
+   },
+   {
+    "action": "Review vendor lock-in clauses before signing",
+    "detail": "No multi-year service is signed until lock-in terms are reviewed. 38% of vendor-managed adopters would not renew on current terms.",
+    "milestones": [
+     "Review complete by 30 Apr 2027, before any contract is signed"
+    ],
+    "owner": "Procurement",
+    "timing": "30 Apr 2027",
+    "prov": [
+     "F10",
+     "F9"
+    ]
+   },
+   {
+    "action": "Track three KPIs from day one",
+    "detail": "Unplanned downtime hours, maintenance cost per unit and mean time between failures. All three feed the June gate.",
+    "milestones": [
+     "First monthly report by 31 May 2027",
+     "Report monthly after that"
+    ],
+    "owner": "Plant manager",
+    "timing": "First report 31 May 2027, then monthly",
+    "prov": [
+     "F10"
+    ]
+   }
+  ],
+  "gate": {
+   "date": "30 Jun 2027",
+   "text": "Leadership reviews pilot KPIs and the business case. Scale only if the case holds."
+  },
+  "source": {
+   "text": "Northfield Research, Predictive Maintenance in European Mid-Market Manufacturing, Industry Benchmark Report 2025 (412 plant managers; economics modelled from 37 case studies)",
+   "prov": [
+    "F1",
+    "F9",
+    "F10"
+   ]
+  },
+  "footnotes": [
+   "Owners and dates are proposed for confirmation today."
+  ],
+  "notes": "Today we ask for one decision: approve a single pilot line with a written business case. Owners and dates on this page are proposed, and we would like to confirm them in the room. No plant-wide commitment is requested, and the pilot budget will come from the written business case. The four one-off steps run in date order from January to April 2027: business case (which also sets the KPI baselines), gateway retrofit, reliability engineer, then the vendor lock-in review, which must finish before any multi-year contract is signed. KPI tracking is a recurring review, so it sits last and is timed from its first report on 31 May 2027, with monthly reports after that. On 30 June 2027 leadership reviews the pilot KPIs and the business case, and we scale only if the case holds.",
+  "section": "The plan",
+  "section_icon": "plan"
+ }
+]

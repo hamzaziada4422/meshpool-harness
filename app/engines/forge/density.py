@@ -11,7 +11,6 @@ nothing is lost and nothing is invented. Type scales per mode live here too (app
 from __future__ import annotations
 
 import copy
-import json
 import re
 
 MODES = ("present", "balanced", "read")
@@ -338,21 +337,21 @@ def condense(s: dict, mode: str) -> dict:
         if mode == "present" and all(p.get("type") in ("text", "callout", "quote", "stats") for p in parts):
             k = 4                                          # a grid of short cards may keep four
         for p in parts[k:]:
-            notes.add(f"{_plain(p.get('heading') or p.get('type'))}: " + json.dumps(
-                {x: y for x, y in p.items() if x not in ("type", "heading", "prov")}, ensure_ascii=False)[:400])
+            from .notes import prose                   # plain words, never the part's JSON (prov ids and all)
+            notes.add(prose(p)[:400])
         if mode == "present" and len(parts[:k]) >= 3:     # three or four parts: two bullets each
             lim = dict(lim, part_bullets=2)
         s["parts"] = [_part(p, lim, notes) for p in parts[:k]]
     fn = s.get("footnotes")
     if isinstance(fn, list) and len(fn) > lim["footnotes"]:
         for f in fn[lim["footnotes"]:]:
-            notes.add("Footnote: " + str(f))
+            notes.add(str(f))
         s["footnotes"] = fn[:lim["footnotes"]]
         s = _drop_markers(s, lim["footnotes"])
     _word_budget(s, mode, a, notes)
-    if notes.lines:
-        head = "Detail for the presenter (moved off the slide):"
-        s["notes"] = (str(s.get("notes") or "") + "\n" + head + "\n" + "\n".join("- " + x for x in notes.lines)).strip()
+    if notes.lines:                                    # plain presenter notes, no label (notes.py)
+        from .notes import moved
+        moved(s, notes.lines)
     return s
 
 

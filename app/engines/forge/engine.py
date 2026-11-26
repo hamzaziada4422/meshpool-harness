@@ -137,6 +137,35 @@ _WORDN = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven
           "ten": 10, "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5}
 
 
+def _forge_look(deck: str) -> dict | None:
+    """A deck this engine made carries its look in its theme: the added slides take those colours and fonts as they
+    are, and its footer line. Learning the look from the slides instead made the most used colour (navy) the accent,
+    and the added chart's bars came out navy, grey and pale amber (Daniel, 0.0.19)."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(deck) as z:
+            theme = next((z.read(n).decode("utf-8", "replace") for n in z.namelist()
+                          if re.match(r"ppt/theme/theme\d+\.xml$", n)), "")
+        if '<a:clrScheme name="Forge"' not in theme:
+            return None
+        from engines.forge.requested import _theme
+        cols, fonts = _theme(deck)
+        from pptx import Presentation
+        foot = None
+        for sl in list(Presentation(deck).slides)[1:]:
+            lab = next((sh.text_frame.text for sh in sl.shapes if sh.has_text_frame and sh.name == "Firm"), "")
+            lab = re.sub(r"\s*\d{1,3}\s*$", "", lab).strip()
+            if lab:
+                foot = lab
+                break
+    except Exception:  # noqa: BLE001 - an unreadable deck: the look is learned the usual way
+        return None
+    look = {"theme": {"palette": "navy", **cols, **({"fonts": fonts} if len(fonts) == 2 else {})}}
+    if foot:
+        look["brand"] = {"footer": foot, "footer_every": True}
+    return look
+
+
 def insert_position(task: str) -> int | None:
     """Where the new slides go in the user's deck (1-based place of the first new slide), or None to append:
     "after slide 4" -> 5, "before slide 7" / "as slide 7" / "at slide 7" / "in position 7" -> 7, "at the start" -> 1."""
@@ -166,7 +195,9 @@ def add_to_deck(task: str, deck: str, *, workdir: str, task_id: str, client=None
     n = min(max(slide_count(task) or 1, 1), 12)
     # A real brand (its own colours, fonts or logo) is followed; PowerPoint's stock Office theme is not a brand, and
     # copying it gave Calibri and stock colours: those decks get the forge design system instead.
-    look = {} if _plain_office(deck) else brand_from("same style as the attached deck", [deck])[0]
+    look = {} if _plain_office(deck) else (_forge_look(deck) or brand_from("same style as the attached deck", [deck])[0])
+    from engines.forge import requested as RQ               # colours, fonts, footer the request spells out win
+    look = RQ.merge(look, RQ.parse(task))
     res = build(_brief(task, workdir, files), workdir, n, client=client, task_id=task_id,
                 density=density_from(task, None, density), insert=True, **look)
     src = Path(deck)
@@ -189,7 +220,7 @@ def add_to_deck(task: str, deck: str, *, workdir: str, task_id: str, client=None
             "answer": (f"Added {added} slide{'s' if added != 1 else ''} to {src.name}"
                        + (f" at slide {at}" if at else "") + f" and saved it as {out.name} "
                        f"(the original is unchanged). They follow the deck's look and were checked after rendering"
-                       + (f"; {left} items are flagged in the speaker notes ([QA] lines)." if left else "."))}
+                       + (f"; {left} items are still flagged by the checks (listed in qa.json)." if left else "."))}
 
 
 def panel_sentence(panel: dict | None) -> str:
@@ -218,7 +249,7 @@ def panel_sentence(panel: dict | None) -> str:
     if panel.get("line"):
         out += f" Review panel after {n} round{'s' if n != 1 else ''}: {panel['line']}."
     if panel.get("status") == "revise" and (deck.get("final") or {}).get("open_issues"):
-        out += " Their open blocking and major issues are in the speaker notes as [REVIEW] lines."
+        out += " Their open blocking and major issues are listed in qa.json."
     return out
 
 
@@ -280,6 +311,8 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
         keep = {id(p) for p in sorted(fixed, key=lambda p: p.get("rank", 99))[:max(2, slides - 3)]}
         fixed = [p for p in fixed if id(p) in keep]               # the most useful pages, still in deck order
     look, prof = brand_from(task, attached)
+    from engines.forge import requested as RQ               # hex colours, fonts, footer text the request spells out
+    look = RQ.merge(look, RQ.parse(task))                   # go into the build, and its QA loop checks them (P28)
     iset = icon_set_from(task, options)
     if iset:                                                    # one icon set for the whole deck
         th = look.get("theme")
@@ -312,8 +345,8 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
                  + ("its slide master, " if look.get("template") else "") + "colours, fonts"
                  + (", logo" if (look.get("brand") or {}).get("logo") else "") + "), " if prof else "")
               + "checked after rendering. "
-              + (f"{left} items still flagged in the speaker notes ([QA] lines); rules failing: {', '.join(failing)}."
-                 if left or "P22" in failing else "All content checks passed."))
+              + (f"{left} items are still flagged by the checks (listed in qa.json); rules failing: "
+                 f"{', '.join(failing) or 'none'}." if left or failing else "All checks passed."))
     answer += design_sentence(res.get("design"))
     answer += panel_sentence(res.get("panel"))
     rv = res.get("review") or {}

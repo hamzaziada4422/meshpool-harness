@@ -59,6 +59,11 @@ class _Book(Workbook):
                 row = int(_re.sub(r"\D", "", ws.freeze_panes) or 1) - 1
                 if row >= 1:
                     ws.print_title_rows = f"1:{row}"
+        try:                                                      # File > Info: the user, not "openpyxl"
+            from engines.forge.docmeta import set_workbook
+            set_workbook(self)
+        except Exception:  # noqa: BLE001 - properties never fail a save
+            pass
         return super().save(filename)
 
 

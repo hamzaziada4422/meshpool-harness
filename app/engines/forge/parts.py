@@ -88,8 +88,8 @@ def _fewer(layout: str, k: int) -> str:
 
 # ------------------------------------------------------------------ helpers
 def _note(s, text):
-    if s is not None:
-        s["notes"] = (s.get("notes", "") + "\n[QA] " + text).strip()
+    from .notes import qa                       # a check remark: in the build's errors, never in the speaker notes
+    qa(s, text)
 
 
 def _plain(t) -> str:
