@@ -35,8 +35,8 @@ Meshpool runs on your own computer. It does research, writing, analysis, spreads
 
 | You stay in control | Pick the agent, or let Auto pick |
 |---|---|
-| <img src="docs/screenshots/chat.png" alt="An approval card: Meshpool asks before writing a file and shows the change"> | <img src="docs/screenshots/agents.png" alt="The agent picker: Meshpool Auto, Meshpool Code, Codex, Meshpool Work and more, each with what it does best"> |
-| Every change shows up as a diff you approve, or you let it run. Undo reverses any reply. | Each agent says what it does best. Meshpool Auto picks per task from the benchmarks. |
+| <img src="docs/screenshots/chat.png" alt="An approval card: meshpool asks before a step and shows the change"> | <img src="docs/screenshots/agents.png" alt="The agent picker: Meshpool Auto, Meshpool Code, Codex, Meshpool Work and more, each with what it does best"> |
+| Every change shows up as a diff. meshpool asks before risky steps, such as deleting files or using the internet, and does ordinary work in your folder on its own. Undo reverses any reply. | Each agent says what it does best. Meshpool Auto picks per task from the benchmarks. |
 
 ### Measured, not claimed
 
@@ -112,7 +112,7 @@ irm https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/insta
 - **Scheduled tasks and parallel sub-agents.**
 - **Isolated copies:** a Code chat, a terminal session (`meshpool -w`), sub-agents that edit at the same time and each scheduled run on a git folder can work in a copy of their own (a git worktree, or a plain copy without git), so they never edit your working copy. You review the diff, then merge or discard ([worktrees](docs/setup/worktrees.md)).
 - **meshpool in Excel, PowerPoint and Word** (new, not yet checked in real Office): a panel on the Home tab that answers about your selection and inserts the answer ([setup](docs/setup/office-add-in.md)).
-- **You stay in control:** Enter adds to the task, Interrupt redirects it, Esc stops, and Undo reverses any reply.
+- **You stay in control:** Enter adds to the task, Interrupt redirects it, Esc stops, and Undo reverses any reply. Settings, Permissions sets when meshpool asks you: only for risky actions (the default), before every command and change, or never.
 - **For scripts and your own setup:** one-shot runs with JSON output ([terminal](docs/setup/terminal.md)), [hooks](docs/setup/hooks.md), [skills](docs/setup/skills.md) and [sub-agents](docs/setup/sub-agents.md).
 
 ## For developers
