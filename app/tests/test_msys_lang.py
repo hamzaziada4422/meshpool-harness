@@ -28,10 +28,10 @@ def test_lang_is_set_from_the_windows_locale_only_when_no_locale_is_set():
 
 @pytest.mark.skipif(not shutil.which("bash"), reason="needs bash")
 def test_mingits_lang_sh_no_longer_runs_the_missing_locale_program():
-    bare = subprocess.run(["bash", "-c", LANG_SH], env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True)
+    bare = subprocess.run(["bash", "-c", LANG_SH], env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True, check=False)
     assert "locale-missing" in bare.stderr                      # what every command printed before
     env = C.msys_lang({"PATH": "/usr/bin:/bin"}, nt=True, locale_name=lambda: "en-US")
-    fixed = subprocess.run(["bash", "-c", LANG_SH + '; echo "$LANG"'], env=env, capture_output=True, text=True)
+    fixed = subprocess.run(["bash", "-c", LANG_SH + '; echo "$LANG"'], env=env, capture_output=True, text=True, check=False)
     assert fixed.stderr == "" and fixed.stdout.strip() == "en_US.UTF-8"
 
 
