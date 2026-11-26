@@ -68,8 +68,9 @@ def _as_args(v):
     return v if isinstance(v, dict) else None
 
 
-def _call_from_obj(o, names):
-    """Normalize one JSON object to (name, args dict) or None; None also when the name is not offered."""
+def _call_from_obj(o, names, need_args: bool = False):
+    """Normalize one JSON object to (name, args dict) or None; None also when the name is not offered, and with
+    need_args when it has no arguments key (a JSON object with a "name" is not a call by itself)."""
     if not isinstance(o, dict):
         return None
     if o.get("type") == "function" and isinstance(o.get("function"), dict):
@@ -91,12 +92,15 @@ def _call_from_obj(o, names):
         if k in o:
             args = _as_args(o[k])
             break
+    else:
+        if need_args:
+            return None
     if args is None:
         return None
     return name, args
 
 
-def _calls_from_value(v, names):
+def _calls_from_value(v, names, need_args: bool = False):
     """List of (name, args) for a JSON value that is a call, a list of calls or {"tool_calls": [...]}; None if any
     element is not an acceptable call."""
     if isinstance(v, dict) and isinstance(v.get("tool_calls"), list):
@@ -106,7 +110,7 @@ def _calls_from_value(v, names):
         return None
     out = []
     for it in items:
-        c = _call_from_obj(it, names)
+        c = _call_from_obj(it, names, need_args)
         if c is None:
             return None
         out.append(c)
@@ -311,7 +315,7 @@ def _tagged_blocks(text: str, names):
     return calls, spans
 
 
-def _whole_json(text: str, names):
+def _whole_json(text: str, names, need_args: bool = False):
     s = text.strip()
     fm = re.fullmatch(r"```[A-Za-z]*\s*\n?(.*?)\n?\s*```", s, re.S)
     if fm:
@@ -322,27 +326,56 @@ def _whole_json(text: str, names):
         v = json.loads(s, strict=False)
     except ValueError:
         return None
-    return _calls_from_value(v, names)
+    return _calls_from_value(v, names, need_args)
 
 
 _LONE_TAG = re.compile(r"(?:\A|\n)[ \t]*</?[A-Za-z_][\w:.-]*/?>[ \t]*\Z")
 
 
-def _trailing_json(text: str, names):
+_JSON_START = re.compile(r"(?:\A|\n)[ \t]*(?:```[A-Za-z]*[ \t]*\n[ \t]*)?(?=[\[{])")
+_WS_END = re.compile(r"\s*\Z")
+# What a JSON object or array starts with: "{" then a key or "}", "[" then a value or "]". A line "{ thinking" or
+# "[link](url)" is not tried at all.
+_JSON_HEAD = re.compile(r"\{\s*[\"}]|\[\s*[\[{\"\]\d\-tfn]")
+# Values that do not read, tried before giving up: each failed read costs time in proportion to its offset (the error
+# counts the lines before it), so 2 MB of '{"a' lines would be quadratic.
+_FAILED_TRIES = 64
+
+
+def _trailing_json(text: str, names, need_args: bool = False):
     """(calls, prose) when the text ends with a JSON call after some words ("I'll commit only those files." then
     {"tool_calls": [{"name": "exec_command", "arguments": {...}}]}): the words stay as narration, the call runs. The
     object must name an offered tool and end the text (a closing code fence may follow). Persona run, Omar 0.0.19: the
-    reply was the raw call, and no commit was made."""
+    reply was the raw call, and no commit was made.
+
+    Linear in the text: a value that reads but ends before the text does is skipped whole, and so is a broken one up
+    to where it breaks (2 MB of JSON lines took 5 s when every line was read to the end of the text)."""
     t = text.rstrip()
     fm = re.search(r"\n?```\s*\Z", t)
     if fm:
         t = t[:fm.start()].rstrip()
-    for m in re.finditer(r"(?:\A|\n)[ \t]*(?:```[A-Za-z]*[ \t]*\n[ \t]*)?(?=[\[{])", t):
+    end, skip, failed = len(t), 0, 0
+    dec = json.JSONDecoder(strict=False)
+    for m in _JSON_START.finditer(t):
         i = m.end()
-        d = _decode_at(t, i)
-        if not d or t[d[1]:].strip():
+        if i < skip or not _JSON_HEAD.match(t, i):     # inside a value already read, or not a JSON start
             continue
-        got = _calls_from_value(d[0], names)
+        try:
+            v, e = dec.raw_decode(t, i)
+        except ValueError as err:
+            failed += 1
+            if failed > _FAILED_TRIES:
+                return None
+            pos = getattr(err, "pos", None)
+            if isinstance(pos, int) and pos < end:      # a broken value: what starts inside it ends by the break
+                skip = pos
+            continue                                    # cut off at the end: a value nested in it may end the text
+        except RecursionError:
+            return None
+        if e < end and not _WS_END.match(t, e):
+            skip = e
+            continue
+        got = _calls_from_value(v, names, need_args)
         if got:
             prose = t[:m.start()].rstrip()
             prose = _LONE_TAG.sub("", prose).rstrip()         # a stray tag the model put before the call
@@ -393,15 +426,18 @@ def recover(msg: dict, tool_names) -> bool:
 
 def _strip_json_call(text: str) -> str:
     """The text without a JSON tool call that ends it or is all of it (any tool name: the tools are off here, so
-    nothing may run). Words before it stay."""
+    nothing may run). Words before it stay. Only a call's shape counts (a name and its arguments), and JSON in a code
+    fence is left alone: it is an example the user asked for, not a call."""
     any_name = _AnyNames()
     t = text.rstrip()
     if not t or "tool_calls" not in t and '"arguments"' not in t and '"parameters"' not in t:
         return text
-    got = _whole_json(t, any_name)
+    if "```" in t:
+        return text
+    got = _whole_json(t, any_name, need_args=True)
     if got:
         return ""
-    tj = _trailing_json(t, any_name)
+    tj = _trailing_json(t, any_name, need_args=True)
     return tj[1] if tj else text
 
 
