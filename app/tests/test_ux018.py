@@ -874,7 +874,7 @@ def test_a_long_file_name_on_a_card_ends_in_an_ellipsis(page):
     """UX-39: a file card under a reply cut a long name at its edge with no ellipsis (the name box grew to the text's
     width inside a card that hides overflow). The name now fits the card and ends in an ellipsis."""
     got = page.evaluate("""() => { const b = document.createElement('div'); b.className = 'pvcards';
-        b.innerHTML = `<button class="pvcard"><span class="pvth"></span><span class="pvcm"><b>Q3_Quarterly_Review_final_version_for_the_board.pptx</b><small>Deck · .pptx</small></span></button>`;
+        b.innerHTML = `<button class="pvcard"><span class="pvth"></span><span class="pvcm"><b>Q3_Quarterly_Review_final_version_for_the_board_of_directors_meeting_in_april.pptx</b><small>Deck · .pptx</small></span></button>`;
         document.querySelector('#col').appendChild(b); const n = b.querySelector('.pvcm b'), card = b.querySelector('.pvcard').getBoundingClientRect(), r = n.getBoundingClientRect();
         const out = {inside: r.right <= card.right + 0.5, ell: getComputedStyle(n).textOverflow, cut: n.scrollWidth > n.clientWidth || n.scrollHeight > n.clientHeight + 1}; b.remove(); return out; }""")
     assert got["inside"] and got["ell"] == "ellipsis" and got["cut"], got
