@@ -68,6 +68,7 @@ COMMANDS = [
     ("schedule", "[list|run ID|enable ID|disable ID|delete ID]", "scheduled tasks"),
     ("settings", "[KEY [VALUE]]", "show or change a setting"),
     ("checks", "", "what the checks found on the last piece of work"),
+    ("tips", "[on|off]", "show or hide tips and the example prompt (Settings, Show tips)"),
     ("worktree", "[list|diff ID|merge ID|discard ID]", "isolated copies of this folder"),
     ("doctor", "", "find problems in settings, hooks, rules, MCP servers, skills and sub-agents"),
     ("agents", "", "saved sub-agents (agents/*.md)"),
@@ -161,7 +162,7 @@ def _tilde(path: str) -> str:
 
 # events that may arrive between a final answer and the review round that replaces it (print mode holds the answer)
 _HOLD_THROUGH = ("model_wait", "assistant", "review_round", "status", "usage", "model_start", "model_end", "text_delta", "thought",
-                 "stream_reset")
+                 "stream_reset", "reply_trim")
 
 class Terminal:
     """Draws the session. `emit` takes the agent's events; `approve` and `ask_questions` take its questions.
@@ -559,6 +560,11 @@ class Terminal:
             # -p: the "Checked:" line goes to stderr, so a script that reads the answer from stdout gets the answer
             # alone (the JSON result has it as "checked")
             self._write(str(ev.get("text") or "") + "\n", self.info)
+        elif t == "reply_trim":
+            # the answer without its trailing promise (core._without_trailing_promise): -p swaps the held text; what a
+            # terminal already streamed stays on screen
+            if self.print_mode and getattr(self, "_held", None) is not None:
+                self._held = str(ev.get("text") or "")
         elif t == "assistant" and self.print_mode and not ev.get("has_tools"):
             if ev.get("append") and getattr(self, "_held", None) is not None:
                 self._held += "\n\n" + str(ev.get("text") or "")      # the Checked line joins the answer it ends
@@ -602,7 +608,7 @@ class Terminal:
         elif t == "receipt":
             self._flush_text()
             lines = [ln for ln in str(ev.get("text", "")).splitlines() if ln.strip()]
-            self.scroll([""] + ["  " + st.dim(R.clip(ln, self.width - 4)) for ln in lines])
+            self.scroll([""] + ["  " + R.receipt_line(ln, st, self.width - 4) for ln in lines])
         elif t == "checks_line":
             self._flush_text()
             tx = str(ev.get("text", ""))
@@ -1629,6 +1635,18 @@ class Session(SharedCommands):
         w = max(len(x) for x in labels) + 3
         rows = [""] + ["  " + st.cmd(lab) + " " * (w - len(lab)) + st.dim(d) for lab, (_, _, d) in zip(labels, COMMANDS)]
         t.scroll(rows + [""] + ["  " + st.dim(x) for x in HELP_TIPS])
+
+    def cmd_tips(self, arg):
+        """/tips off and /tips on save the "Show tips" setting (MH_TIPS); /tips alone says which it is."""
+        t, st = self.term, self.term.st
+        want = arg.strip().lower()
+        if want not in ("", "on", "off"):
+            return t.p(st.amber("  Use /tips on or /tips off."))
+        if want:
+            val = "1" if want == "on" else "0"
+            C.update(lambda cur: {"MH_TIPS": val})
+            os.environ["MH_TIPS"] = val               # this run too: an environment value would win over the file
+        t.p(st.dim("  Tips are " + ("on." if C.tips_on() else "off. /tips on brings them back.")))
 
     def cmd_clear(self, arg):
         if self.s is not None:

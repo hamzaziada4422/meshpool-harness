@@ -84,7 +84,7 @@ OFFICE_MCP = "mcp__meshpool_office__"
 PATH_KEYS = ("path", "paths", "file", "files", "file_path", "filename", "to", "deck")
 
 
-def _mcp_paths_outside(root, args) -> bool:
+def _mcp_paths_outside(root, args, chat=None) -> bool:
     """An MCP tool given a file path outside the project (its servers resolve them the same way: ~ and relative to
     the project); the files the user attached are fine."""
     from meshpool_harness import config as C
@@ -94,21 +94,21 @@ def _mcp_paths_outside(root, args) -> bool:
         vals += [x for x in (v if isinstance(v, list) else [v]) if isinstance(x, str) and x.strip()]
     if not vals:
         return False
-    uploads = _uploads()
-    return _paths_outside(root, vals, uploads)
+    return _paths_outside(root, vals, _uploads(chat))
 
 
-def _uploads():
+def _uploads(chat=None) -> list:
+    """This chat's attached-file folders (config.upload_roots): never another chat's."""
     from meshpool_harness import config as C
     try:
-        return (C.runs_dir() / "_uploads").resolve()
+        return C.upload_roots(chat)
     except Exception:  # noqa: BLE001
-        return None
+        return []
 
 
 def _paths_outside(root, vals, uploads) -> bool:
     """Any of these paths outside the project; the files the user attached are fine."""
-    return any(_files_outside(root, {"files": [v]}) and not _under(v, uploads, root) for v in vals)
+    return any(_files_outside(root, {"files": [v]}) and not any(_under(v, b, root) for b in uploads or ()) for v in vals)
 
 
 def _abs(f, root):
@@ -408,8 +408,8 @@ class Delegation:
                 if name == "read_file" and _skill_file(args.get("path"), root):
                     return True, ""                      # a skill's own files: use_skill already shows SKILL.md
                 if (self._outside(name, args) and not web) or \
-                        (name == "office_task" and _paths_outside(root, args.get("files") or [], _uploads())) or \
-                        (name.replace("-", "_").startswith(OFFICE_MCP) and _mcp_paths_outside(root, args)):
+                        (name == "office_task" and _paths_outside(root, args.get("files") or [], _uploads(getattr(top, "id", None)))) or \
+                        (name.replace("-", "_").startswith(OFFICE_MCP) and _mcp_paths_outside(root, args, getattr(top, "id", None))):
                     return False, ("sub-agents only read inside the project; ask the user to attach the file")
                 if name in ("write_file", "edit"):
                     rec["pending_path"] = args.get("path")
@@ -444,7 +444,7 @@ class Delegation:
 
         def grep_in_project(pattern, path=".", glob=None, **opts):   # a symlink must not carry a read outside the project
             # the places a sub-agent may read: the project, its own folder (full tool outputs), attached files
-            return grep(pattern, path, glob, inside_only=[a.root, a.dir] + ([_uploads()] if _uploads() else []), **opts)
+            return grep(pattern, path, glob, inside_only=[a.root, a.dir] + _uploads(getattr(top, "id", None)), **opts)
         a.ws.grep = grep_in_project
         glob = a.ws.glob
 

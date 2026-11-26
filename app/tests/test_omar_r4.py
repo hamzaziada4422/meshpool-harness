@@ -1,0 +1,274 @@
+"""Omar, round 4: the receipt names the last test run after the last edit, not the last command."""
+from types import SimpleNamespace
+
+import pytest
+
+from meshpool_harness.agent import core
+
+PYTEST_OK = "..............\n14 passed in 0.3s\n"
+PYTEST_2F = ("FAILED tests/test_a.py::test_one - assert 1 == 2\nFAILED tests/test_a.py::test_two - boom\n"
+             "2 failed, 14 passed in 0.5s\n")
+
+
+def _receipt(tmp_path, cmds, edits=1, edits0=0):
+    f = tmp_path / "ops.py"
+    f.write_text("x = 1\n")
+    ws = SimpleNamespace(turn_files={str(f)}, turn_new={str(f)}, edits=edits, turn_edits0=edits0, turn_cmd0=0,
+                         commands=cmds)
+    agent = SimpleNamespace(ws=ws, root=str(tmp_path), _turn_line_stats=lambda: {"ops.py": "+1 -0"})
+    return core.Agent.receipt(agent)
+
+
+def _cmd(cmd, code, tail, after_edit=1):
+    return {"cmd": cmd, "code": code, "kind": "bash", "after_edit": after_edit, "tail": tail}
+
+
+@pytest.mark.parametrize("ro", ["git diff --stat", "git status --short", "cat ops.py", "cat tests/test_a.py | head -5"])
+def test_a_read_only_command_after_the_tests_is_not_the_check(tmp_path, ro):
+    text = _receipt(tmp_path, [_cmd("python -m pytest -q", 0, PYTEST_OK), _cmd(ro, 0, "")])
+    assert "Verified: pytest, 14 passed" in text
+    assert ro not in text
+
+
+def test_the_last_test_run_wins_over_an_earlier_one(tmp_path):
+    text = _receipt(tmp_path, [_cmd("pytest -q", 1, PYTEST_2F), _cmd("pytest -q", 0, PYTEST_OK), _cmd("git diff", 0, "")])
+    assert "Verified: pytest, 14 passed" in text and "failed" not in text
+
+
+@pytest.mark.parametrize("runner,tail,want", [
+    ("npm test", "Tests: 3 passed, 3 total\n", "Verified: npm test, 3 passed"),
+    ("go test ./...", "ok  \tpkg\t0.1s\n", None),
+    ("python -m unittest", "Ran 6 tests in 0.1s\n\nOK\n", "Verified: unittest, 6 passed"),
+])
+def test_other_runners_count_too(tmp_path, runner, tail, want):
+    text = _receipt(tmp_path, [_cmd(runner, 0, tail), _cmd("git log --oneline -3", 0, "abc x")])
+    assert "git log" not in text
+    if want:
+        assert want in text
+    else:
+        assert f"`{runner}` passed" in text
+
+
+def test_failures_that_were_there_before_the_first_edit_do_not_make_it_not_verified(tmp_path):
+    before = _cmd("pytest -q", 1, PYTEST_2F, after_edit=0)
+    after = _cmd("pytest -q", 1, PYTEST_2F, after_edit=1)
+    text = _receipt(tmp_path, [before, after, _cmd("git diff --stat", 0, "")])
+    assert "Verified: pytest, 14 passed (2 failures were there before this change)" in text
+    assert "Not verified" not in text
+
+
+def test_a_new_failure_is_still_not_verified(tmp_path):
+    before = _cmd("pytest -q", 1, "FAILED tests/test_a.py::test_one - x\n1 failed, 15 passed in 1s\n", after_edit=0)
+    after = _cmd("pytest -q", 1, PYTEST_2F, after_edit=1)
+    text = _receipt(tmp_path, [before, after])
+    assert "Not verified: pytest, 2 failed, 14 passed" in text
+
+
+def test_without_the_earlier_ids_it_says_the_counts_and_not_not_verified(tmp_path):
+    text = _receipt(tmp_path, [_cmd("pytest -q", 1, PYTEST_2F)])
+    assert "pytest: 2 failed, 14 passed" in text
+    assert "Not verified" not in text
+
+
+def test_one_error_is_an_error(tmp_path):
+    assert core._test_summary("pytest -q", "5 passed, 1 error in 0.2s") == "pytest, 1 error, 5 passed"
+    assert core._test_summary("pytest -q", "5 passed, 2 errors in 0.2s") == "pytest, 2 errors, 5 passed"
+    assert "Verified" not in core._check_line("pytest -q", "pytest -q", 0, "5 passed, 1 error in 0.2s")
+
+
+@pytest.mark.parametrize("cmd", ["pytest -q | tail -3", "pytest -q || true"])
+def test_a_piped_or_ignored_test_run_without_a_clean_summary_is_not_verified(cmd):
+    line = core._check_line(cmd, cmd, 0, "")
+    assert line.startswith("Not verified:") and "Verified:" not in line.replace("Not verified:", "")
+    assert core._check_line(cmd, cmd, 0, PYTEST_OK).startswith("Verified: pytest, 14 passed")
+
+
+# ---------------------------------------------------------------------------------------------- item 2
+import json  # noqa: E402
+
+
+def _scripted_agent(root, replies, mode="edits"):
+    a = core.Agent(str(root), mode=mode, approve=None, emit=lambda e: None)
+    seq = list(replies)
+
+    def fake(base, key, body, stream):
+        msg = seq.pop(0)
+        return {"choices": [{"message": msg, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5}}, bool(msg.get("content"))
+    a._post = fake
+    return a
+
+
+def _tool_call(name, args, cid="c1"):
+    return {"role": "assistant", "content": "", "tool_calls": [
+        {"id": cid, "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}]}
+
+
+@pytest.fixture
+def _quiet(tmp_path, monkeypatch):
+    monkeypatch.setattr(core, "SESSIONS", tmp_path / "_sessions")
+    monkeypatch.setenv("MESHPOOL_API_KEY", "k")
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("MH_SANDBOX", "off")
+
+
+def test_a_denied_write_command_in_p_tells_the_model_to_use_apply_patch(tmp_path, _quiet):
+    root = tmp_path / "proj"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "x.py").write_text("a = 1\n")
+    a = _scripted_agent(root, [
+        _tool_call("bash", {"command": "cat >> tests/x.py <<'EOF'\nb = 2\nEOF\npython -m pytest -q"}),
+        _tool_call("edit", {"path": "tests/x.py", "old": "a = 1\n", "new": "a = 1\nb = 2\n"}, "c2"),
+        {"role": "assistant", "content": "done"}])
+    a.send("add a test")
+    outs = [m["content"] for m in a.messages if m["role"] == "tool"]
+    assert "The user denied this action" in outs[0]
+    assert "Make the same change with edit" in outs[0]
+    assert (root / "tests" / "x.py").read_text() == "a = 1\nb = 2\n"        # the model finished with the patch
+
+
+def test_a_denied_command_that_writes_nothing_gets_no_edit_tool_hint(tmp_path, _quiet):
+    root = tmp_path / "proj"
+    root.mkdir()
+    a = _scripted_agent(root, [_tool_call("bash", {"command": "make install"}), {"role": "assistant", "content": "ok"}])
+    a.send("go")
+    outs = [m["content"] for m in a.messages if m["role"] == "tool"]
+    assert "The user denied this action" in outs[0] and "same change" not in outs[0]
+
+
+# ---------------------------------------------------------------------------------------------- item 3
+import io  # noqa: E402
+
+from meshpool_harness.agent import tui as TUI  # noqa: E402
+
+RECEIPT = ("**Changed:** ledgerly/money.py (+3 -2)  \n"
+           "**Checked:** Verified: pytest, 14 passed (1 command after the last change)")
+
+
+def test_p_output_shows_the_receipt_without_asterisks():
+    out, err = io.StringIO(), io.StringIO()
+    t = TUI.Terminal(print_mode=True, out=out, err=err)
+    t.emit({"type": "receipt", "text": RECEIPT})
+    text = out.getvalue() + err.getvalue()
+    assert "*" not in text
+    assert "Changed: ledgerly/money.py (+3 -2)" in text
+    assert "Checked: Verified: pytest, 14 passed" in text
+
+
+def test_the_terminal_ui_shows_bold_labels_not_asterisks(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    from meshpool_harness.agent.tui_render import Style, receipt_line
+    line = receipt_line("**Checked:** Verified: pytest, 14 passed", Style(256), 80)
+    assert "*" not in line
+    assert "\x1b[1mChecked:" in line                       # terminal bold on the label
+    assert receipt_line("**Checked:** ok", Style(0), 80) == "Checked: ok"
+
+
+# ---------------------------------------------------------------------------------------------- item 4
+import sys  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from testkit import cli_v2_shots as SH  # noqa: E402
+
+
+@pytest.fixture
+def _cfg(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "meshpool.config"))
+    monkeypatch.delenv("MH_TIPS", raising=False)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+
+
+def _idle_screen(t, out):
+    return "\n".join(SH.idle(t, out).lines())
+
+
+def test_tips_off_hides_the_try_placeholder_in_the_terminal_ui(_cfg, monkeypatch):
+    t, out, _ = SH.make_terminal()
+    t.startup()
+    assert 'Try "' in _idle_screen(t, out)
+    monkeypatch.setenv("MH_TIPS", "0")
+    t2, out2, _ = SH.make_terminal()
+    t2.startup()
+    assert 'Try "' not in _idle_screen(t2, out2)
+
+
+def test_tips_off_command_saves_the_setting_and_hides_the_placeholder(_cfg, tmp_path):
+    from types import SimpleNamespace
+
+    from meshpool_harness import config as C
+    t, out, _ = SH.make_terminal()
+    sess = SimpleNamespace(term=t)
+    TUI.Session.cmd_tips(sess, "off")
+    assert C.tips_on() is False
+    assert "MH_TIPS=0" in (tmp_path / "meshpool.config").read_text()
+    t.startup()
+    assert 'Try "' not in _idle_screen(t, out)
+    TUI.Session.cmd_tips(sess, "on")
+    assert C.tips_on() is True
+    t2, out2, _ = SH.make_terminal()
+    t2.startup()
+    assert 'Try "' in _idle_screen(t2, out2)
+
+
+def test_tips_is_listed_in_help_and_in_the_slash_menu(_cfg):
+    assert any(c[0] == "tips" for c in TUI.COMMANDS)
+    t, out, _ = SH.make_terminal(width=100)
+    from types import SimpleNamespace
+    TUI.Session.cmd_help(SimpleNamespace(term=t), "")
+    assert "/tips [on|off]" in out.getvalue()
+
+
+# ---------------------------------------------------------------------------------------------- item 5
+ANSWER = "The commit did not go through. Git could not sign it, and the signing service refused the connection."
+PROMISE = "I'll retry the commit as before, with signing left on, in case the signing service is back up."
+
+
+def _turn_with_final(tmp_path, final):
+    root = tmp_path / "proj"
+    root.mkdir(exist_ok=True)
+    seen = []
+    a = _scripted_agent(root, [_tool_call("bash", {"command": "ls"}),
+                               *[{"role": "assistant", "content": final}] * 4], mode="auto")   # the nudge may fire twice
+    a.emit = seen.append
+    return a, a.send("commit the changelog"), seen
+
+
+def test_a_final_reply_ending_in_a_promise_is_shown_without_that_paragraph(tmp_path, _quiet):
+    a, reply, seen = _turn_with_final(tmp_path, ANSWER + "\n\n" + PROMISE)
+    assert reply == ANSWER
+    assert PROMISE not in [m["content"] for m in a.messages if m["role"] == "assistant" and m.get("content")][-1]
+    assert any(e.get("type") == "reply_trim" and e["text"] == ANSWER for e in seen)
+    assert PROMISE in (a.ws.run_dir / "turn.log").read_text()               # kept in the log
+
+
+def test_a_reply_that_is_only_a_question_or_a_plain_answer_is_left_alone(tmp_path, _quiet):
+    ask = ANSWER + "\n\nShall I retry the commit with signing off?"
+    _, reply, seen = _turn_with_final(tmp_path, ask)
+    assert reply == ask and not any(e.get("type") == "reply_trim" for e in seen)
+
+
+def test_print_mode_writes_the_trimmed_answer(tmp_path):
+    out, err = io.StringIO(), io.StringIO()
+    t = TUI.Terminal(print_mode=True, out=out, err=err)
+    t.emit({"type": "text_delta", "text": ANSWER + "\n\n" + PROMISE})
+    t.emit({"type": "assistant", "text": "", "streamed": True, "has_tools": False})
+    t.emit({"type": "reply_trim", "text": ANSWER})
+    t.flush_held()
+    assert out.getvalue().strip() == ANSWER
+
+
+# ---------------------------------------------------------------------------------------------- item 6
+def test_a_commit_trailer_keeps_the_word_claude_in_the_step_log():
+    from meshpool_harness.redact import redact
+    # "Co-Authored-By" holds "auth", which the key=value rule read as a secret name and hid the value after the colon
+    t = "git commit -m 'x' -m 'Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>'"
+    assert redact(t) == t
+    assert redact("Author: Alexander Smith\nAuthors: Alexander Smith") == "Author: Alexander Smith\nAuthors: Alexander Smith"
+
+
+@pytest.mark.parametrize("secret", ["AUTH_TOKEN=abcdef123456", "auth: abcdef123456", "Authorization=abcdef123456",
+                                    "x-auth-key: abcdef123456", "API_KEY=abcdef123456"])
+def test_real_secrets_are_still_hidden(secret):
+    from meshpool_harness.redact import HIDDEN, redact
+    assert HIDDEN in redact(secret) and "abcdef123456" not in redact(secret)

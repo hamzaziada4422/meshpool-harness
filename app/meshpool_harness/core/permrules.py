@@ -419,25 +419,45 @@ def _git_shelves_unasked_ok(cmd: str, root, cwd=None, touched=None) -> bool:
     `git stash pop` five times over his own hand edit with no card."""
     if "git" not in cmd:
         return True
+    here = Path(os.path.realpath(str(cwd or root)))
     for seg in _segments(cmd):
         w = _tokens(seg) or []
         while w and re.match(r"^[A-Za-z_]\w*=", w[0]):
             w = w[1:]
+        if w and w[0] in ("cd", "pushd"):               # release review: `cd sub && git restore u.txt` counts from sub
+            if len(w) != 2 or w[1] == "-" or any(ch in w[1] for ch in "*?[$`~"):
+                return False
+            here = Path(os.path.realpath(os.path.join(str(here), w[1])))
+            continue
         if len(w) < 2 or os.path.basename(w[0]) != "git":
             continue
-        i = 1
+        i, at = 1, here
         while i < len(w) and w[i].startswith("-"):                 # git -C dir, --no-pager
+            if w[i] == "-C" and i + 1 < len(w):
+                at = Path(os.path.realpath(os.path.join(str(at), w[i + 1])))
             i += 2 if w[i] in ("-C", "-c") else 1
         verb, rest = (w[i], w[i + 1:]) if i < len(w) else ("", [])
         if verb == "stash":
             sub = rest[0] if rest and not rest[0].startswith("-") else "push"
             if sub in ("push", "save") and _git_unmade_changes(
-                    root, cwd, touched, any(a in ("-u", "--include-untracked", "-a", "--all") for a in rest)):
+                    root, at, touched, any(a in ("-u", "--include-untracked", "-a", "--all") for a in rest)):
                 return False
         elif verb == "restore" and not (any(a in ("--staged", "-S") for a in rest)
                                         and not any(a in ("--worktree", "-W") for a in rest)):
             paths = [a for a in rest if not a.startswith("-")]
-            if paths and _git_dirty(root, cwd, paths) and not _only_touched(root, cwd, paths, touched):
+            if paths and _git_dirty(root, at, paths) and not _only_touched(root, at, paths, touched):
+                return False
+        elif verb == "switch" and any(a in ("-f", "--force", "--discard-changes") for a in rest):
+            return False                                           # throws away local changes
+        elif verb == "checkout":
+            if any(a in ("-f", "--force") for a in rest):
+                return False
+            if any(a in ("-b", "-B", "--orphan") for a in rest) and "--" not in rest:
+                continue                                           # a new branch: the work comes along
+            # `checkout [<ref>] [--] <paths>`: the words that name files here are what it overwrites
+            paths = rest[rest.index("--") + 1:] if "--" in rest else \
+                [a for a in rest if not a.startswith("-") and os.path.lexists(os.path.join(str(at), a))]
+            if paths and _git_dirty(root, at, paths) and not _only_touched(root, at, paths, touched):
                 return False
     return True
 
@@ -697,8 +717,51 @@ def commit_message_inert(cmd: str) -> str:
     in it expands or runs); it is the commit message and no more. Any other heredoc stays as it is."""
     if "<<" not in (cmd or "") or not re.search(_GIT + r"commit\b", cmd):
         return cmd
-    out = _MSG_SUBST.sub(lambda m: m.group(1) + '"message"', cmd)
-    return _MSG_FILE.sub(lambda m: m.group(1) + "\n", out)
+    out = _msg_subst(cmd)
+    return _MSG_FILE.sub(lambda m: m.group(1) + "\n", out) if _commit_flag(out, out.find("-F")) else out
+
+
+_MSG_HEAD = re.compile(r"""((?:-\w*m|--message)(?:\s+|=))"\$\(\s*cat\s*<<(-?)\s*(['"])(\w+)\3[ \t]*\n""")
+
+
+def _commit_flag(cmd: str, at: int) -> bool:
+    """The option at `at` belongs to a `git ... commit` in the same command of the chain (not `bash -cm ...` after it)."""
+    if at < 0:
+        return False
+    start = max(cmd.rfind(c, 0, at) for c in (";", "&", "|", "\n", "(")) + 1
+    return bool(re.match(r"\s*(?:[A-Za-z_]\w*=\S*\s+)*" + _GIT + r"commit\b", cmd[start:at]))
+
+
+def _msg_subst(cmd: str) -> str:
+    """`-m "$(cat <<'EOF'` ... the FIRST line that is exactly EOF (tabs before it only with <<-), then `)"` at once:
+    where bash ends the heredoc (release review, 0.0.18: a lazy match ran on to a later `EOF\n)"`, and the lines in
+    between, which bash runs as commands, were taken for the message). Anything else is left as it is, so the checks
+    that follow see it all."""
+    out, i = [], 0
+    while True:
+        m = _MSG_HEAD.search(cmd, i)
+        if not m:
+            break
+        delim, dash = m.group(4), m.group(2) == "-"
+        pos, end = m.end(), None
+        while pos <= len(cmd):
+            nl = cmd.find("\n", pos)
+            line = cmd[pos:] if nl < 0 else cmd[pos:nl]
+            if (line.lstrip("\t") if dash else line) == delim:
+                tail = re.match(r"\s*\)\"", cmd[(len(cmd) if nl < 0 else nl):])
+                if tail:
+                    end = (len(cmd) if nl < 0 else nl) + tail.end()
+                break                                  # bash ends the heredoc here, whatever follows
+            if nl < 0:
+                break
+            pos = nl + 1
+        if end is not None and _commit_flag(cmd, m.start()):
+            out.append(cmd[i:m.start()] + m.group(1) + '"message"')
+        else:
+            out.append(cmd[i:m.end()] if end is None else cmd[i:end])
+        i = m.end() if end is None else end
+    out.append(cmd[i:])
+    return "".join(out)
 
 
 def git_local_ok(cmd: str, root, cwd=None, chat_made=None) -> bool:
@@ -709,6 +772,8 @@ def git_local_ok(cmd: str, root, cwd=None, chat_made=None) -> bool:
     clean, rebase, filter-branch and git config still ask."""
     from meshpool_harness.core import tools as T
     cmd = commit_message_inert(cmd)
+    if not _git_shelves_unasked_ok(cmd, root, cwd, chat_made):
+        return False                          # it would shelve or throw away work the chat did not make
     if not cmd or not cmd.strip() or re.search(r"[$`\r\x00-\x08\x0b-\x1f]", cmd) or writes(cmd) or \
             GIT_ASK.search(cmd) or NETWORK.search(cmd) or DESTRUCTIVE.search(cmd):
         return False

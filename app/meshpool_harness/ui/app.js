@@ -1222,9 +1222,11 @@ function openThread(id, fresh, find) {
 }
 // A command's approval card for a person who does not read shell: one plain line, the file it writes shown under its name,
 // and the exact command (scratch paths and all) folded under "Details".
+// release review, 0.0.18: "in <folder>" only for a file that goes there; a temporary or outside place is named as such
 function plainApproval(ev, folder) {
   const f = ev.file;
-  const line = f ? `Save ${f.name} in ${folder}${f.run ? " and run it" : ""}` : String(ev.sum || "");
+  const where = !f ? "" : f.where === "outside" ? ` outside this folder (${f.path})` : f.where === "temp" ? " in a temporary folder" : ` in ${folder}`;
+  const line = f ? `Save ${f.name}${where}${f.run ? " and run it" : ""}` : String(ev.sum || "");
   return `<p class="apone">${esc(line)}</p>${f ? `<div class="apfile"><span class="apfn">${esc(f.name)}</span><pre>${esc(f.text)}</pre></div>` : ""}<details class="apdet"><summary>Details</summary><pre>${esc(ev.detail)}</pre></details>`;
 }
 function resetChat(cur) {                        // the history changed under us (undo, rewind): rebuild from the start
@@ -1872,7 +1874,8 @@ function applyEvRaw(ev) {
       closeGroup();
       const OPT = {allow_once: "Allow just this", allow_always: "Allow for this whole chat", reject_once: "Deny", reject_always: "Always deny"};
       // 0.0.19 wording, the same on every card: each answer says what it covers (the chat grant's reach is in its tip)
-      const fname = ev.folder_name || String(cur.view?.workdir || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "this folder";
+      const fname = ev.folder === false || cur.view?.scratch ? "this chat's folder"       // a no-folder chat: never its scratch id
+        : ev.folder_name || String(cur.view?.workdir || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "this folder";
       const opts = ev.options && ev.options.length ? ev.options.map(o => `<button class="btn ${o.kind === "allow_once" ? "primary" : String(o.kind).startsWith("reject") ? "danger" : ""}" data-d="${esc(o.id)}">${esc(OPT[o.kind] || o.label)}</button>`).join("")
         : `<button class="btn primary" data-d="yes">Allow just this</button>${ev.scope === "once" ? "" : `<button class="btn" data-d="always" title="For the rest of this chat: ${esc(ev.scope || (ev.kind === "edit" ? "all edits" : ev.kind === "bash" ? "all commands" : "this tool"))}">Allow for this whole chat</button>`}${ev.scope !== "once" && ev.folder !== false && ["edit", "bash", "mcp"].includes(ev.kind) ? `<button class="btn" data-d="save" title="Saves a rule for this folder in your own settings: this command and its subcommand with any arguments, file edits, or this tool. A test or build command that runs project code then runs whatever that code holds.">Always allow in ${esc(fname)}</button>` : ""}<button class="btn danger" data-d="no">Deny</button><input placeholder="Note for the agent (optional)" aria-label="Note for the agent">`;
       const title = String(ev.title || "").replace(/^(run a command|execute terminal|terminal)\s*:.*$/is, "Run this command?").replace(/^Approve edit:\s*(.+)$/i, "Change $1?");
