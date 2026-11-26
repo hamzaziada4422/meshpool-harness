@@ -334,6 +334,17 @@ def collapse(lines: list[str], limit: int) -> tuple[list[str], int]:
     return lines, 0
 
 
+def receipt_line(ln: str, st: Style, width: int) -> str:
+    """One line of the turn's receipt ("**Changed:** a.py (+1 -0)") for a terminal: no literal asterisks. The label is
+    bold when the terminal has color and plain text when it has not (-p to a file or a pipe); the rest is dim."""
+    m = re.match(r"\s*\*\*([^*]+?)\*\*\s*(.*)$", ln)
+    if not m:
+        return st.dim(clip(ln.replace("**", ""), width))
+    label, rest = m.group(1), m.group(2)
+    rest = clip(rest.replace("**", ""), max(10, width - len(label) - 1))
+    return st.bold(label) + " " + st.dim(rest)
+
+
 def guard(fn, st: Style, *a, **k):
     """OSS-12: a renderer that throws must not end the session: show a small placeholder instead."""
     try:

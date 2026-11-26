@@ -134,3 +134,31 @@ def test_a_denied_command_that_writes_nothing_gets_no_edit_tool_hint(tmp_path, _
     a.send("go")
     outs = [m["content"] for m in a.messages if m["role"] == "tool"]
     assert "The user denied this action" in outs[0] and "same change" not in outs[0]
+
+
+# ---------------------------------------------------------------------------------------------- item 3
+import io  # noqa: E402
+
+from meshpool_harness.agent import tui as TUI  # noqa: E402
+
+RECEIPT = ("**Changed:** ledgerly/money.py (+3 -2)  \n"
+           "**Checked:** Verified: pytest, 14 passed (1 command after the last change)")
+
+
+def test_p_output_shows_the_receipt_without_asterisks():
+    out, err = io.StringIO(), io.StringIO()
+    t = TUI.Terminal(print_mode=True, out=out, err=err)
+    t.emit({"type": "receipt", "text": RECEIPT})
+    text = out.getvalue() + err.getvalue()
+    assert "*" not in text
+    assert "Changed: ledgerly/money.py (+3 -2)" in text
+    assert "Checked: Verified: pytest, 14 passed" in text
+
+
+def test_the_terminal_ui_shows_bold_labels_not_asterisks(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    from meshpool_harness.agent.tui_render import Style, receipt_line
+    line = receipt_line("**Checked:** Verified: pytest, 14 passed", Style(256), 80)
+    assert "*" not in line
+    assert "\x1b[1mChecked:" in line                       # terminal bold on the label
+    assert receipt_line("**Checked:** ok", Style(0), 80) == "Checked: ok"

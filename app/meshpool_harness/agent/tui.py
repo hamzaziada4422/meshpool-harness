@@ -602,7 +602,7 @@ class Terminal:
         elif t == "receipt":
             self._flush_text()
             lines = [ln for ln in str(ev.get("text", "")).splitlines() if ln.strip()]
-            self.scroll([""] + ["  " + st.dim(R.clip(ln, self.width - 4)) for ln in lines])
+            self.scroll([""] + ["  " + R.receipt_line(ln, st, self.width - 4) for ln in lines])
         elif t == "checks_line":
             self._flush_text()
             tx = str(ev.get("text", ""))
