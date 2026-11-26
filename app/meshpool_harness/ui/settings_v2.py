@@ -67,9 +67,11 @@ CAPS = [
     {"id": "web", "name": "Web search", "desc": "Search the web, read pages and research across sources.", "kind": "server", "server": "meshpool-web"},
     {"id": "browser", "name": "Browser use", "desc": "Open pages, click, type and fill in forms for you.", "kind": "server", "server": "browser"},
     {"id": "subtasks", "name": "Sub-tasks", "desc": "Split big jobs into parts that run at the same time.", "kind": "env", "env": "MH_SUBAGENTS"},
-    {"id": "grader", "name": "Independent check on big tasks", "desc": "A separate reviewer checks big jobs before Meshpool tells you they are done.", "kind": "env", "env": "MH_GRADER"},
+    {"id": "look", "name": "Look at web pages it makes", "desc": "Before it says a web page, document or chart is done, meshpool opens it, checks it against your request and fixes what is wrong.", "kind": "env", "env": "MH_LOOK_REVIEW"},
+    {"id": "grader", "name": "Independent check on big tasks", "desc": "A separate reviewer checks big jobs before meshpool tells you they are done.", "kind": "env", "env": "MH_GRADER"},
+    {"id": "tips", "name": "Show tips", "desc": "Now and then meshpool suggests a feature you may not know. Off hides every tip, in the app and in the terminal.", "kind": "env", "env": "MH_TIPS"},
     {"id": "plan_first", "name": "Plan first", "desc": "New chats start with a plan and wait for your OK.", "kind": "profile", "advanced": True},
-    {"id": "computer", "name": "Computer use", "desc": "Let Meshpool see your screen and use the mouse and keyboard.", "kind": "server", "server": "computer-use", "advanced": True},
+    {"id": "computer", "name": "Computer use", "desc": "Let meshpool see your screen and use the mouse and keyboard.", "kind": "server", "server": "computer-use", "advanced": True},
 ]
 
 
@@ -116,8 +118,8 @@ def unavailable_reason(cid: str, row: dict | None = None) -> str:
     if cid == "browser":
         import importlib.util
         if importlib.util.find_spec("playwright") is None:
-            return ("Browser use needs the Playwright package, which is not installed with this copy of Meshpool. "
-                    "Reinstall Meshpool or run: pip install playwright")
+            return ("Browser use needs the Playwright package, which is not installed with this copy of meshpool. "
+                    "Reinstall meshpool or run: pip install playwright")
         bu = (row or {}).get("browser_use") or browser_use()
         cur = next((m for m in bu.get("modes") or [] if m["id"] == bu.get("mode")), None)
         if cur is not None and not cur.get("available"):
@@ -245,17 +247,23 @@ def usage_by_day(days: int = 30) -> list[dict]:
 
 # ---------- data ----------------------------------------------------------------------------------------------------------
 def data_info() -> dict:
+    """The data folder, its history size, and the counts the sidebar shows: "chats" are the Chats list and "code" the
+    Code sessions (an imported Claude Code session is one), so Settings never says "2 chats" next to a list of one.
+    "total" is everything "Delete all chats" removes."""
     from meshpool_harness.agent.core import SESSIONS
-    n = size = 0
+    from meshpool_harness.ui import agent_api as A
+    from meshpool_harness.ui.hub import is_code_session
+    size = 0
     for p in SESSIONS.glob("*/session.json") if SESSIONS.exists() else []:
         if p.parent.name.startswith("sub-"):
             continue
-        n += 1
         try:
             size += p.stat().st_size
         except OSError:
             pass
-    return {"folder": str(C.home()), "chats": n, "bytes": size}
+    rows = A.listing()
+    code = sum(1 for r in rows if is_code_session(r))
+    return {"folder": str(C.home()), "chats": len(rows) - code, "code": code, "total": len(rows), "bytes": size}
 
 
 def export_zip() -> bytes:

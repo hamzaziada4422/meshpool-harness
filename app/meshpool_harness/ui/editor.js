@@ -9,7 +9,9 @@ const EDX = {f: null, base: "", dirty: false, mode: "src", wrap: false, find: nu
 const edQ = (root, path) => `root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`;
 const edRevealLabel = () => /Mac/i.test(navigator.platform || "") ? "Show in Finder" : /Win/i.test(navigator.platform || "") ? "Show in File Explorer" : "Show in file manager";
 async function edFetch(method, url, body) {         // like api(), but keeps the status so a save conflict can be told apart
-  const r = await fetch(url, {method, headers: {"X-Meshpool-Token": MP.token, ...(body ? {"Content-Type": "application/json"} : {})}, body: body ? JSON.stringify(body) : undefined});
+  let r;
+  try { r = await fetch(url, {method, headers: {"X-Meshpool-Token": MP.token, ...(body ? {"Content-Type": "application/json"} : {})}, body: body ? JSON.stringify(body) : undefined}); }
+  catch (e) { throw new Error("meshpool isn't responding, so nothing was saved. Your text is still here: try again, and if it keeps happening, quit and reopen meshpool."); }
   let j = {}; try { j = await r.json(); } catch (e) { /* not JSON */ }
   return {ok: r.ok, status: r.status, json: j};
 }
@@ -20,7 +22,8 @@ function edReveal(root, path) {
 function edCtx(e, root, path, isDir) {
   e.preventDefault(); e.stopPropagation();
   const items = [
-    {label: isDir ? "Open folder" : "Open in Meshpool", icon: isDir ? ICON.folderopen : ICON.files, fn: () => isDir ? openFolderInApp(root, path) : openPreview(root, path)},
+    {label: isDir ? "Open folder" : "Open in meshpool", icon: isDir ? ICON.folderopen : ICON.files, fn: () => isDir ? openFolderInApp(root, path) : openPreview(root, path)},
+    ...(isDir ? [] : [{label: "Download", icon: ICON.dl, fn: () => pvDownload(root, path)}]),
     {label: "Copy path", icon: ICON.copy, fn: () => { try { navigator.clipboard.writeText(root.replace(/[\\/]$/, "") + (path ? "/" + path : "")); toast("Path copied", 2000); } catch (err) { toast("Could not copy the path."); } }},
     {sep: true},
     {label: edRevealLabel(), icon: ICON.ext, fn: () => edReveal(root, path)},
@@ -238,7 +241,7 @@ async function edLoad(root, path, id, mode) {
   let f;
   try { f = await api(`/api/fs/read?${edQ(root, path)}`); } catch (e) { if (id === PVX.id) pvNote(e.message); return; }
   if (id !== PVX.id) return;
-  if (f.kind !== "text") { pvNote(f.note || "Meshpool cannot show this kind of file yet."); return; }
+  if (f.kind !== "text") { pvNote(f.note || "meshpool cannot show this kind of file yet."); return; }
   edStop();
   const lang = edLangOf(path);
   EDX.f = {root, path, name: f.name, sha: f.sha, mtime_ns: f.mtime_ns, size: f.size, readonly: !!f.readonly, note: f.note || "", lang, ext: f.ext};
@@ -345,7 +348,7 @@ async function edSave(force) {
   try {
     const r = await edFetch("POST", "/api/fs/save", {root: f.root, path: f.path, text, base_sha: f.sha, overwrite: !!force});
     if (r.status === 409 && r.json.conflict) { EDX.saving = false; edStatus(); edConflict(r.json.error); return; }
-    if (!r.ok) throw new Error(r.json.error || "Could not save this file.");
+    if (!r.ok) throw new Error(r.json.error || `Could not save this file: meshpool gave no reason (status ${r.status}). Your text is still here; try again.`);
     f.sha = r.json.sha; f.mtime_ns = r.json.mtime_ns; EDX.base = text; EDX.dirty = ta.value !== text; EDX.savedAt = Date.now();
     edWarn(""); toast("File saved", 1800);
   } catch (e) { toast(e.message, 6000); }
@@ -373,7 +376,7 @@ async function edCheckDisk() {                        // the agent or another to
   if (EDX.f !== f) return;
   if (s.gone) { edWarn("This file is gone from the folder.", []); return; }
   if (s.sha && s.sha !== f.sha) {
-    if (!EDX.dirty) { await edReload(); toast("The file changed on disk, so Meshpool reloaded it.", 3000); }
+    if (!EDX.dirty) { await edReload(); toast("The file changed on disk, so meshpool reloaded it.", 3000); }
     else if ($("#edWarn")?.hidden) edConflict("This file changed on disk while you were editing it.");
   }
 }

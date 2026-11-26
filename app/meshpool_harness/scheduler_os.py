@@ -47,6 +47,18 @@ def _windowless(exe: str) -> str:
     return exe
 
 
+def _crontab_lines(run) -> list:
+    """The user's current crontab, line by line; [] when they have none. Any other failure of crontab -l raises:
+    rewriting from an empty list would delete every other entry the user has."""
+    cur = run(["crontab", "-l"])
+    if cur.returncode == 0:
+        return (cur.stdout or "").splitlines()
+    if "no crontab" in ((cur.stderr or "") + (cur.stdout or "")).lower():
+        return []
+    raise RuntimeError("could not read your crontab, so it was left as it is: "
+                       + ((cur.stderr or cur.stdout or "").strip()[-200:] or f"crontab -l exited {cur.returncode}"))
+
+
 def install(run=_run, platform: str | None = None, home: Path | None = None) -> str:
     try:
         return _install(run, platform, home)
@@ -97,8 +109,7 @@ def _install(run, platform, home) -> str:
     import shlex
     line = (f"cd {shlex.quote(str(_data_home()))} && env " + " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
             + " " + " ".join(shlex.quote(c) for c in cmd)).replace("%", "\\%")   # % is special in a crontab line
-    cur = run(["crontab", "-l"])
-    lines = [x for x in (cur.stdout if cur.returncode == 0 else "").splitlines() if TAG not in x]
+    lines = [x for x in _crontab_lines(run) if TAG not in x]
     lines.append(f"*/10 * * * * {line} >/dev/null 2>&1 {TAG}")
     r = run(["crontab", "-"], input="\n".join(lines) + "\n")
     if r.returncode:
@@ -125,9 +136,10 @@ def _uninstall(run, platform, home) -> str:
         if p.exists():
             p.unlink()
     else:
-        cur = run(["crontab", "-l"])
-        lines = [x for x in (cur.stdout if cur.returncode == 0 else "").splitlines() if TAG not in x]
-        run(["crontab", "-"], input="\n".join(lines) + ("\n" if lines else ""))
+        old = _crontab_lines(run)
+        lines = [x for x in old if TAG not in x]
+        if len(lines) != len(old):                       # only when meshpool's line is there: nothing else changes
+            run(["crontab", "-"], input="\n".join(lines) + ("\n" if lines else ""))
     return "Removed. Scheduled tasks run only while Meshpool is open."
 
 
@@ -151,8 +163,9 @@ def available(platform: str | None = None) -> bool:
     return True if plat.startswith("win") or plat == "darwin" else bool(shutil.which("crontab"))
 
 
-def run_due() -> int:
-    """Run every task that is due, one after another, and wait for each to finish. Returns how many ran."""
+def run_due(failed: list | None = None) -> int:
+    """Run every task that is due, one after another, and wait for each to finish. Returns how many ran. The name of
+    each task that could not be started is added to `failed` when one is given."""
     import time
 
     from meshpool_harness import assistant as AS
@@ -171,4 +184,6 @@ def run_due() -> int:
             n += 1
         except Exception as e:  # noqa: BLE001
             print(f"could not run {t.get('name')}: {e}", file=sys.stderr)
+            if failed is not None:
+                failed.append(t.get("name") or t.get("id") or "?")
     return n

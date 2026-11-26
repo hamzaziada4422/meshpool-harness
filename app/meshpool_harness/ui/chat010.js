@@ -14,8 +14,9 @@ window.cbar010 = function () {
   return xr + ic;
 };
 window.cbar010bind = function () {
-  $("#xrayBtn")?.addEventListener("click", e => xray010(e.currentTarget));
-  $("#incogBtn")?.addEventListener("click", () => setIncognito010(!S.draft.incognito));
+  const x = $("#xrayBtn"), i = $("#incogBtn");                       // onclick: renderBar keeps these buttons
+  if (x) x.onclick = e => xray010(e.currentTarget);
+  if (i) i.onclick = () => setIncognito010(!S.draft.incognito);
 };
 function setIncognito010(on) {
   if (S.cur) return;
@@ -55,7 +56,7 @@ async function xray010(anchor) {
   const draw = () => `<h4>What the agent sees</h4><p class="note">${esc(x.note)} ${x.incognito ? "Incognito: no memory." : x.memory_on ? "" : "Memory is off."}</p>
     ${x.sections.map(sec => `<div class="sec2">${esc(sec.title)}</div>${sec.facts.length ? sec.facts.map(f => `<label class="it"><span><input type="checkbox" data-leave="${esc(f.id)}" ${exclude.has(f.id) ? "" : "checked"}> ${esc(f.text)}<small>${esc(f.scope_label)}</small></span></label>`).join("") : `<details><summary class="note">Show</summary><pre>${esc(sec.text.length > 500 ? sec.text.slice(0, 500) + "…" : sec.text)}</pre></details>`}`).join("")}
     ${(x.excluded || []).length ? `<div class="sec2">Left out of this chat</div>${x.excluded.map(f => `<label class="it"><span><input type="checkbox" data-leave="${esc(f.id)}" ${exclude.has(f.id) ? "" : "checked"}> ${esc(f.text)}</span></label>`).join("")}` : ""}
-    <p class="note" style="margin-top:10px">Untick to leave a fact out of this chat. <button class="linkbtn" id="xrMem">Open memory</button></p>`;
+    <p class="note" style="margin-top:8px">Untick to leave a fact out of this chat. <button class="linkbtn" id="xrMem">Open memory</button></p>`;
   const p = popAt(anchor, draw(), "xray");
   const bind = () => {
     $$("[data-leave]", p).forEach(c => c.onchange = async () => {
@@ -72,7 +73,7 @@ const REV_WORD = {met: "Met", not_met: "Not done", unverified: "Could not check"
 window.reviewCard010 = function (ev, add) {
   const v = ev.verdict || "error", items = ev.items || [], open = items.filter(i => i.status !== "met").length;
   const acc = {accept: "The reviewer would accept this as it is.", accept_with_notes: "The reviewer would accept this, with notes.", would_send_back: "The reviewer would send this back."}[ev.acceptance] || "";
-  const meta = ev.secs ? `${Math.round(ev.secs)} s · ${(((ev.tokens?.in || 0) + (ev.tokens?.out || 0)) / 1000).toFixed(1)}k tokens` : "";
+  const meta = ev.secs ? `${fmtDur(ev.secs)} · ${(((ev.tokens?.in || 0) + (ev.tokens?.out || 0)) / 1000).toFixed(1)}k tokens` : "";
   const head = esc(String(ev.text || "Independent check").split("\n")[0]);
   const rows = items.map(i => `<li class="${esc(i.status)}"><span class="rv-s">${REV_WORD[i.status] || esc(i.status)}</span> ${esc(i.requirement)}${i.evidence ? `<small>${esc(i.evidence)}</small>` : ""}</li>`).join("");
   const why = (ev.acceptance_reasons || []).map(r => `<p class="rv-why">${esc(r)}</p>`).join("");
@@ -96,6 +97,26 @@ async function checkThis010(btn) {
   btn.disabled = false;
 }
 
+/* ---------- the receipt line: time, cost, model ----------
+   Drawn from the receipt's own fields the way receipts.py line() writes it now, so a chat saved by an older version
+   reads the same: "3 min 45 s · <$0.01 · DeepSeek V4.1 Flash, chosen for documents". The saved text is the fallback. */
+function receiptBits010(ev, withWho = true) {
+  if (!("secs" in ev) && !("model" in ev)) return String(ev.text || "").split(" · ").filter(b => withWho || !/chosen for|^(Codex|Claude|Gemini|OpenCode|Pi|meshpool Code)\b| on [A-Z]/.test(b));
+  const bits = [], unp = Number(ev.unpriced_calls) || 0, tok = (Number(ev.tokens_in) || 0) + (Number(ev.tokens_out) || 0);
+  if (ev.secs != null) bits.push(fmtDur(ev.secs));
+  if (ev.cost != null) bits.push(fmtCost(ev.cost) + (unp ? ` + ${unp} unpriced call${unp === 1 ? "" : "s"}` : ""));
+  else if (unp) bits.push("cost not known (unpriced model)");
+  else if (tok) bits.push(`${tok >= 1000 ? (tok / 1000).toFixed(1) + "k" : tok} tokens, cost not measured`);
+  const rv = String(ev.text || "").split(" · ").find(b => b.startsWith("checked independently: "));
+  if (rv) bits.push(rv);
+  const own = /^meshpool/i.test(String(ev.harness || ev.harness_name || ""));
+  const who = [own ? "" : lowBrand(ev.harness_name || ""), ev.model ? modelName(ev.model) : ""].filter(Boolean).join(" on ");
+  const why = String(ev.text || "").match(/, (chosen for [^·]+|[^,·]+)$/);
+  const whyText = why && ev.reason && !/\b(code|chat|work|cowork) mode\b/i.test(why[1]) ? ", " + why[1].trim() : "";   // "code mode" is the router's note, not for people
+  if (who && withWho) bits.push(who + whyText);
+  return bits;
+}
+
 /* ---------- events after a turn ---------- */
 const seen010 = new Set();
 function foot010() { return S.cur?.lastFoot || null; }
@@ -113,26 +134,49 @@ function ev010(ev) {
     const d = document.createElement("div"); d.className = "chk010 " + (ev.ok ? "ok" : "bad"); d.innerHTML = `${ev.ok ? ICON.check : ICON.warn}<span>${esc(ev.text)}</span>`; r.appendChild(d); return;
   }
   if (ev.type === "checks_line") {
-    under010(`<details class="chkline"><summary>${ICON.check2}<span>${esc(ev.text)}</span></summary><ul>${(ev.items || []).map(i => `<li>${esc(i.text || i.label || i)}</li>`).join("")}</ul></details>`, "chkwrap"); return;
+    const c = S.cur;    // the look line under the reply is part of this line now: one line, not two
+    if (ev.look && c.lastAi && c.lastAi.isConnected && c.lastText && c.lastText.includes(ev.look)) {
+      const t = c.lastText.replace(ev.look, "").replace(/\n{3,}/g, "\n\n").trim();
+      mdRender(c.lastAi, t); c.lastText = t;
+    }
+    // "Checked · all good": a short muted line in the footer; what was looked at and found is in the fold
+    under010(`<details class="chkline"><summary>${ICON.check2}<span>${esc(ev.text)}</span></summary>${ev.summary && ev.summary !== ev.text ? `<p class="chksum">${esc(ev.summary)}</p>` : ""}<ul>${(ev.items || []).map(i => `<li>${esc(i.text || i.label || i)}</li>`).join("")}</ul>${(ev.details || []).length ? `<p class="chkdet">Did not pass:</p><ul class="chkdet">${ev.details.map(d => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}</details>`, "chkwrap"); return;
   }
-  if (ev.type === "task_receipt") { under010(`<span title="${esc(ev.reason || "")}">${esc(ev.text || "")}</span>`, "rcpt010"); return; }
+  if (ev.type === "task_receipt") {
+    // "cost not known (unpriced model)" on every reply said nothing new: it moves to the line's tooltip.
+    const chat = chatMode();      // Chat mode: no engine or router names in the footer; the model is in the fold
+    const bits = receiptBits010(ev, !chat), unk = bits.some(b => /^cost not known/.test(b));
+    const tip = [unk ? "The cost is not known: this model has no price list." : "", chat ? "" : ev.reason || ""].filter(Boolean).join(" ");
+    const line = esc(bits.filter(b => !/^cost not known/.test(b)).join(" · ")), mdl = chat && ev.model ? modelName(ev.model) : "";
+    under010(mdl ? `<details class="rcfold"><summary title="${esc(tip)}">${line}</summary><div>Model: ${esc(mdl)}</div></details>` : `<span title="${esc(tip)}">${line}</span>`, "rcpt010"); return;
+  }
   if (ev.type === "insight" && ev.card) {
     insightUnder010(ev.card);
     const ns = Object.assign({suggest: false}, store("notify") || {});
     if (ev.card.type !== "followup" && ns.suggest && document.hidden) {        // only if the user allowed it, and Meshpool is not in view
-      post("/api/insights/os", {}).then(r => { if (r && r.card) post("/api/notify", {title: "Meshpool", body: r.card.title}).catch(() => {}); }).catch(() => {});
+      post("/api/insights/os", {}).then(r => { if (r && r.card) post("/api/notify", {title: "meshpool", body: r.card.title}).catch(() => {}); }).catch(() => {});
     }
     return;
   }
-  if (ev.type === "turn_end") sources010();
+  if (ev.type === "turn_end") {
+    sources010();
+    // the Plan tip: once, in a Code chat, after its first reply, and never again once it is dismissed or used
+    if (S.mode === "code" && S.cur && S.cur.ready && !ev.synthetic && !(store("tips_off") || []).includes("plan"))
+      insightCard010({id: "tip-plan", title: "Tip:", body: "for bigger changes, turn on Plan first in the plus menu. meshpool shows its plan before it edits anything.", action: {label: "Try it"},
+        local: () => { setPlan(true); store("tips_off", [...(store("tips_off") || []), "plan"]); }});
+  }
 }
 function insightUnder010(c) {
   if (c.type === "followup") {            // one card per chip: they share one row under the reply
     const f = foot010(); if (!f) return;
     const box = under010("", "chips010 schips"); if (!box) return;
     const row = box.parentElement.querySelector(".chips010") || box;
-    const b = document.createElement("button"); b.className = "schip"; b.textContent = c.action?.label || c.title;
-    b.onclick = () => { post("/api/insights/act", {id: c.id, event: "accepted"}).catch(() => {}); $("#input").value = c.action?.payload?.text || b.textContent; sendNow(false); };
+    const used = (S.cur.usedChips ||= new Set()), label = c.action?.label || c.title;
+    if (used.has(label)) { if (!row.children.length) box.parentElement?.remove(); return; }       // already used: it does not come back
+    const b = document.createElement("button"); b.className = "schip"; b.textContent = label;
+    b.onclick = () => {
+      used.add(label); b.remove(); if (!$(".schip", row)) (row.closest(".after010 > .chips010") || row).remove();     // a used chip goes at once
+      post("/api/insights/act", {id: c.id, event: "accepted"}).catch(() => {}); $("#input").value = c.action?.payload?.text || label; sendNow(false); };
     row.appendChild(b); post("/api/insights/act", {id: c.id, event: "shown"}).catch(() => {});
     return;
   }
@@ -140,8 +184,14 @@ function insightUnder010(c) {
 }
 /* A suggestion is one quiet line above the composer: what it is, one button, a way to dismiss. One at a time. */
 const nudgeQ010 = [];
+// Tips are rare: never on a fresh page (before the first message), one at a time, and one that was dismissed is gone for
+// good. Dismissing or using one also drops the rest of the queue for this visit.
+const nudgeOff010 = () => store("nudge_off") || [];
+const isTip010 = c => c.type === "tip" || String(c.id || "").startsWith("tip-");
 function insightCard010(c) {
-  if (nudgeQ010.some(x => x.id === c.id) || $(`.nudge010[data-id="${c.id}"]`)) return;
+  if (!S.cur || nudgeOff010().includes(String(c.id))) return;
+  if (isTip010(c) && capOn("tips") === false) return;          // Settings, "Show tips", is off
+  if (nudgeQ010.some(x => x.id === c.id) || $(`.nudge010[data-id="${CSS.escape(String(c.id))}"]`)) return;
   nudgeQ010.push(c); nextNudge010();
 }
 function nextNudge010() {
@@ -150,13 +200,19 @@ function nextNudge010() {
   const wrap = $(".composer-wrap"); if (!wrap) return;
   const c = nudgeQ010.shift();
   const el = document.createElement("div"); el.className = "nudge010"; el.dataset.id = c.id; el.setAttribute("role", "status");
-  el.innerHTML = `<span class="n-t" title="${esc(c.body || "")}"><b>${esc(c.title)}</b> <span class="n-b">${esc(c.body || "")}</span></span><button class="btn primary sm" data-ic="accepted">${esc(c.action?.label || "Do it")}</button><button class="iconbtn" data-ic="more" aria-label="More" aria-haspopup="menu">${ICON.more}</button><button class="iconbtn" data-ic="dismissed" aria-label="Dismiss">${ICON.x}</button>`;
-  wrap.appendChild(el);
-  post("/api/insights/act", {id: c.id, event: "shown"}).catch(() => {});
-  const done = () => { el.remove(); setTimeout(nextNudge010, 400); };
+  el.innerHTML = `<span class="n-t" title="${esc(c.body || "")}"><b>${esc(c.title)}</b> <span class="n-b">${esc(c.body || "")}</span></span><button class="btn primary sm" data-ic="accepted">${esc(c.action?.label || "Do it")}</button>${isTip010(c) ? `<button class="linkbtn n-never" data-ic="never">Never show tips</button>` : ""}<button class="iconbtn" data-ic="more" aria-label="More" aria-haspopup="menu">${ICON.more}</button><button class="iconbtn" data-ic="dismissed" aria-label="Dismiss">${ICON.x}</button>`;
+  wrap.insertBefore(el, $("#sugg", wrap) || $("#composer", wrap));   // in the flow above the box: it never covers the chat
+  if (!c.local) post("/api/insights/act", {id: c.id, event: "shown"}).catch(() => {});
+  const done = () => { el.remove(); nudgeQ010.length = 0; store("nudge_off", [...new Set([...nudgeOff010(), String(c.id)])].slice(-200)); };
   el.addEventListener("click", async e => {
     const b = e.target.closest("[data-ic]"); if (!b) return;
     const event = b.dataset.ic;
+    if (event === "never") {                // turns the Settings switch off: no tip card shows again, here or in the terminal
+      done();
+      try { const r = await post("/api/capabilities", {id: "tips", on: false}); if (r?.features) S.caps = r.features; } catch (err) { S.caps = (S.caps || []).map(f => f.id === "tips" ? Object.assign({}, f, {on: false}) : f); }
+      toast("Tips are off. You can turn them back on in Settings, under Features.", 7000);
+      return;
+    }
     if (event === "more") {
       return ctxMenu({type: "click", currentTarget: b}, [
         {label: "Why this?", fn: () => whyPop010(b, c)},
@@ -164,6 +220,7 @@ function nextNudge010() {
         {label: "Show me less like this", fn: async () => { done(); const r = await post("/api/insights/act", {id: c.id, event: "muted"}).catch(() => null); toast("Okay, fewer like this.", 7000, {label: "Undo", fn: () => post("/api/insights/settings", {action: "undo_mute", id: r?.mute?.id}).catch(() => {})}); }}]);
     }
     done();
+    if (c.local) { if (event === "accepted") c.local(); return; }
     let r = null;
     try { r = await post("/api/insights/act", {id: c.id, event}); } catch (err) { /* the card is gone either way */ }
     if (event === "accepted") runInsightAction(r?.action || c.action, {card: c});
@@ -196,7 +253,7 @@ window.runInsightAction = async function (a, ctx) {
     return;
   }
   if (kind === "connect") return openSettings("connectors");
-  if (kind === "remember") return toast("Added to \"Meshpool thinks\" on the memory page. Nothing is remembered until you say yes.", 9000, {label: "Review", fn: () => goPage("memory")});
+  if (kind === "remember") return toast("Added to \"meshpool thinks\" on the memory page. Nothing is remembered until you say yes.", 9000, {label: "Review", fn: () => goPage("memory")});
   if (kind === "rerun") { newThread(); $("#input").value = p.prompt || ""; $("#input").focus(); if ((p.files || []).length) toast("Attach the new file with +."); return; }
   if (kind === "send") { $("#input").value = p.text || ""; return sendNow(false); }
   if (kind === "route") return openSettings("models");
@@ -289,14 +346,17 @@ openThread = function (id, fresh) {
 
 
 /* ---------- under every reply: copy, try again, thumbs. Edit on your own message rewinds to that point. ---------- */
-const THUMB = d => `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
+const THUMB = d => `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
 const UP = THUMB("M7 11v9H4v-9zM7 11l4-8a2 2 0 0 1 2 2v4h5.5a2 2 0 0 1 2 2.3l-1.2 6A2 2 0 0 1 17.3 20H7");
 const DOWN = THUMB("M7 13V4H4v9zM7 13l4 8a2 2 0 0 0 2-2v-4h5.5a2 2 0 0 0 2-2.3l-1.2-6A2 2 0 0 0 17.3 4H7");
 function feedback010(outcome, n) { if (S.cur) post("/api/receipt/feedback", {chat: S.cur.id, outcome, turn: n}).catch(() => {}); }
 function acts010(n, text, ei) {
   const f = foot010(); if (!f || f.dataset.acts010) return; f.dataset.acts010 = "1";
   const w = document.createElement("span"); w.className = "racts010";
-  w.innerHTML = `<button class="iconbtn" data-ra="copy" data-tip="Copy reply" data-tip-pos="above" aria-label="Copy reply">${ICON.copy}</button><button class="iconbtn" data-ra="check" data-tip="Check this" data-tip-pos="above" aria-label="Check this: have an independent reviewer check the result">${ICON.check2}</button><button class="iconbtn" data-ra="retry" data-tip="Try again" data-tip-pos="above" aria-label="Try again">${ICON.refresh}</button><button class="iconbtn" data-ra="up" data-tip="Good reply" data-tip-pos="above" aria-label="Good reply" aria-pressed="false">${UP}</button><button class="iconbtn" data-ra="down" data-tip="Not good" data-tip-pos="above" aria-label="Not good" aria-pressed="false">${DOWN}</button>`;
+  // A turn that ended in an error, with no reply: Try again is the one useful action (nothing to copy, check or rate).
+  let bad = false; for (let x = f.previousElementSibling; x && !x.classList.contains("msg-user"); x = x.previousElementSibling) if (x.matches(".note.bad")) bad = true;
+  if (bad && !text) w.innerHTML = `<button class="iconbtn" data-ra="retry" data-tip="Try again" data-tip-pos="above" aria-label="Try again">${ICON.refresh}</button>`;
+  else w.innerHTML = `<button class="iconbtn" data-ra="copy" data-tip="Copy reply" data-tip-pos="above" aria-label="Copy reply">${ICON.copy}</button><button class="iconbtn" data-ra="check" data-tip="Check this" data-tip-pos="above" aria-label="Check this: have an independent reviewer check the result">${ICON.check2}</button><button class="iconbtn" data-ra="retry" data-tip="Try again" data-tip-pos="above" aria-label="Try again">${ICON.refresh}</button><button class="iconbtn" data-ra="up" data-tip="Good reply" data-tip-pos="above" aria-label="Good reply" aria-pressed="false">${UP}</button><button class="iconbtn" data-ra="down" data-tip="Not good" data-tip-pos="above" aria-label="Not good" aria-pressed="false">${DOWN}</button>`;
   f.appendChild(w);
   const older = (S.cur?.view?.versions || {})[String(n)] || [];
   const body = S.cur?.lastAi;
@@ -315,7 +375,7 @@ function acts010(n, text, ei) {
     if (b.dataset.ra === "check") return checkThis010(b);
     const on = b.getAttribute("aria-pressed") !== "true";
     $$("[data-ra=up],[data-ra=down]", w).forEach(x => { x.setAttribute("aria-pressed", "false"); x.classList.remove("on"); });
-    if (on) { b.setAttribute("aria-pressed", "true"); b.classList.add("on"); feedback010(b.dataset.ra, n); toast(b.dataset.ra === "up" ? "Thanks." : "Thanks. Meshpool will use agents like this less for this kind of task.", 3500); }
+    if (on) { b.setAttribute("aria-pressed", "true"); b.classList.add("on"); feedback010(b.dataset.ra, n); toast(b.dataset.ra === "up" ? "Thanks." : "Thanks. meshpool will use agents like this less for this kind of task.", 3500); }
   };
 }
 // Edit and Try again go back to just before one of your messages, found by its event number (the server maps it to the
@@ -325,7 +385,7 @@ async function rewind010(ei) {
   const cur = S.cur;
   const r = await post(`/api/agent/${cur.id}/rewind`, {event_index: ei, files: true, since: 1e9});
   if (r.forked) { await loadThreads(); openThread(r.forked); return r; }
-  renderBranch(); clearTimeout(cur.pollT); resetChat(cur); await poll(); if (S.panel === "diff") renderPanel();
+  renderBranch(true); clearTimeout(cur.pollT); resetChat(cur); await poll(); if (S.panel === "diff") renderPanel();
   return r;
 }
 async function retry010(ei, n) {
@@ -346,11 +406,11 @@ document.addEventListener("click", async e => {
   const b = e.target.closest('[data-ma="edit"]'); if (!b || !S.cur) return;
   const msgs = $$(".msg-user").filter(m => $(".macts", m)), mine = b.closest(".msg-user"), idx = msgs.indexOf(mine) + 1;
   const ei = mine && mine.dataset.ei !== undefined && mine.dataset.ei !== "" ? +mine.dataset.ei : NaN;
-  const text = $(".b", mine)?.innerText.replace(/^Plan mode\n?/, "").trim() || "";
+  const text = userText(mine);                    // as sent: without the tag and the names of attached pictures
   e.stopImmediatePropagation();
   const fill = () => fillInput(text);             // a draft in the box is kept: the message goes after it
   if (S.cur.busy || idx < 1 || isNaN(ei)) { fill(); return toast("Edit it and send to ask again.", 3500); }
-  if (idx < msgs.length && !await ask({title: "Edit this message?", text: "The replies after it are removed, and files Meshpool changed after it go back.", ok: "Edit it", danger: true})) return;
+  if (idx < msgs.length && !await ask({title: "Edit this message?", text: "The replies after it are removed, and files meshpool changed after it go back.", ok: "Edit it", danger: true})) return;
   try { const r = await rewind010(ei); fill(); toast(r.forked ? "This agent cannot go back in place, so the conversation up to there is a new chat. Edit it and send." : "Edit it and send. The old reply is gone.", 4000); } catch (err) { toast(err.message); }
 }, true);
 const _ev010b = ev010;

@@ -143,6 +143,8 @@ def test_b7_b8_the_panel_close_button_stays_on_screen(make_page, width):
     pg = make_page(width=width, height=800)
     pg.evaluate("togglePanel(panelSet()[0], true)")
     pg.wait_for_selector("#pclose", timeout=10000)
+    # the panel slides in (UX-14): measure where it comes to rest, not a frame of the slide
+    pg.wait_for_function("() => document.getAnimations().every(a => a.playState !== 'running')", timeout=5000)
     box = pg.locator("#pclose").bounding_box()
     assert box and box["x"] >= 0 and box["x"] + box["width"] <= width + 1, box
     # the strip scrolls on its own instead of pushing Close away

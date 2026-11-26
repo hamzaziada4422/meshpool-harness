@@ -71,17 +71,33 @@ def _host(base: str) -> str:
         return ""
 
 
+def _ollama(base: str) -> bool:
+    """An Ollama server: its port (11434) or its name, on this computer or another."""
+    try:
+        u = urlparse(base or "")
+        return u.port == 11434 or "ollama" in (u.hostname or "").lower()
+    except ValueError:
+        return False
+
+
 def provider_cap(base: str) -> int:
     """How many model calls an endpoint takes at once when MH_MAX_INFLIGHT is not set: the Meshpool gateway 16, the
-    known cloud APIs 32, a local server 2, anything else 8."""
+    known cloud APIs 32, a local server or Ollama 2 (one model on one machine: more calls at once only make each one
+    slower and can push the model out of memory), anything else 8."""
     host = _host(base)
     if host == "meshpool.ai" or host.endswith(".meshpool.ai"):
         return 16
     if host in _CLOUD_HOSTS:
         return 32
-    if host in _LOCAL_HOSTS:
+    if host in _LOCAL_HOSTS or _ollama(base):
         return 2
     return 8
+
+
+def wait_line(n: int, m: int) -> str:
+    """What a chat says while the model's call slots are all taken (Omar, 0.0.19: three meshpool processes at once
+    printed "Waiting for a free slot... (MH_MAX_INFLIGHT)", which names a setting nobody knows)."""
+    return f"Waiting: other meshpool chats are using the model right now ({max(n, 0)} of {max(m, 1)})."
 
 
 def default_slots_dir() -> str:
@@ -101,6 +117,7 @@ class _Slots:
     def __init__(self, name: str):
         self.dir = os.environ.get("MH_SLOTS_DIR") or default_slots_dir()
         self.name = name
+        self.held = 0                                # how many slots other processes held at the last pass
 
     def _try(self, i: int):
         path = os.path.join(self.dir, f"{self.name}-{i}.lock")
@@ -125,6 +142,7 @@ class _Slots:
             return None                              # no shared folder: the in-process gate still holds
         told = False
         while True:
+            self.held = 0
             for i in range(n() if callable(n) else n):         # the setting as it is now, on every pass
                 try:
                     f = self._try(i)
@@ -132,6 +150,7 @@ class _Slots:
                     return None
                 if f:
                     return f
+                self.held += 1
             if not told:
                 told = True
                 waiting()
@@ -208,8 +227,7 @@ class Gate:
             check_stop()
             if not emit and not st["warned"] and time.time() - t0 > 2:
                 st["warned"] = True
-                print(f"[Meshpool] waiting for a free model-call slot ({self.inflight} running, limit "
-                      f"{self.limit})", file=sys.stderr, flush=True)
+                print("[Meshpool] " + wait_line(self.inflight, self.limit), file=sys.stderr, flush=True)
 
         with self.cond:
             counted = False
@@ -221,9 +239,7 @@ class Gate:
                         if emit:
                             emit({"type": "status", "text": "Waiting for another chat's model call to finish (the "
                                                             "endpoint is recovering, so calls go one at a time)."
-                                                            if self.degraded else
-                                                            f"Waiting for a free slot: {self.inflight} model calls "
-                                                            "are already running on this key (MH_MAX_INFLIGHT)."})
+                                                            if self.degraded else wait_line(self.inflight, self.limit)})
                         announce()
                     self.cond.wait(0.25)
                     self.cond.release()
@@ -244,8 +260,7 @@ class Gate:
                 with self.cond:
                     self.waiting += 1
                 if emit:
-                    emit({"type": "status", "text": "Waiting for a free slot: sub-agents or another Meshpool window "
-                                                    "are using this key's model calls (MH_MAX_INFLIGHT)."})
+                    emit({"type": "status", "text": wait_line(self.slots.held, self.limit)})
                 announce()
             try:
                 slot = self.slots.take(lambda: self.limit, tick, wait_shared)
@@ -290,6 +305,7 @@ class Health:
         self.down_since = 0.0
         self.prober = False
         self.last_probe = (0.0, "")
+        self.last_why = ""                          # what the last failed probe said, for the error the user reads
         self.next_probe = 0.0                       # while down: no one probes before this (shared backoff)
         self.fails = 0
         self.up_at = 0.0
@@ -395,6 +411,8 @@ class Health:
             if str(res).startswith("tls"):          # an untrusted certificate is final: no waiting (S-11)
                 raise RuntimeError(_tls_text(res))
             got = "up" if res == "ok" else "auth" if res == "auth" else "down"
+            if got == "down":
+                self.last_why = str(res or "")
         finally:
             with self.cond:
                 self.prober = False
@@ -449,7 +467,7 @@ class Health:
         shared by every caller (10, 20 ... 60 s); the others wait for its answer. With no budget (recovery off) the
         caller probes once at once, whatever the backoff, so a past outage never blocks the app. True when it is
         up. Stop works throughout (sleep and check_stop raise)."""
-        t0, told, first = time.time(), False, True
+        t0, told, first, tries = time.time(), False, True, 0
         while True:
             check_stop()
             with self.cond:
@@ -466,15 +484,16 @@ class Health:
             if not lead:                            # another caller is probing, or it is not time yet
                 if not told and prober:
                     told = True
-                    emit({"type": "status", "text": "The model endpoint isn't answering. Another chat is already "
-                                                    "checking it; this one carries on when it is back."})
+                    emit({"type": "status", "down": True, "text": "The model endpoint isn't answering. Another chat "
+                                                                  "is already checking it; this one carries on when it is back."})
                 elif not told:
                     told = True
-                    emit({"type": "status", "text": "The model endpoint isn't answering. Checking again in "
-                                                    f"{max(1, int(self.next_probe - time.time()))} s."})
+                    emit({"type": "status", "down": True, "text": "The model endpoint isn't answering. Checking again "
+                                                                  f"in {max(1, int(self.next_probe - time.time()))} s."})
                 sleep(min(1.0, max(0.05, budget_s - (time.time() - t0))))
                 continue
             wait, got = 0.0, ""
+            tries += 1
             try:
                 got = probe()
                 if str(got).startswith("tls"):
@@ -485,18 +504,22 @@ class Health:
                     if got == "ok":
                         self._mark_up()
                     else:
+                        self.last_why = str(got or "")
                         wait = self._failed()
             finally:
                 with self.cond:
                     self.prober = False
                     self.cond.notify_all()
             if got == "ok":
-                emit({"type": "status", "text": "The model endpoint is answering again. Picking up where it left off."})
+                emit({"type": "status", "down": False,
+                      "text": "The model endpoint is answering again. Picking up where it left off."})
                 return True
             if time.time() - t0 + wait < budget_s:
-                emit({"type": "status", "text": f"The model endpoint isn't answering ({str(got)[:80]}). Checking "
-                                                f"again in {wait:.0f} s, for up to {max(1, int(budget_s // 60))} min. "
-                                                "Press Stop to end."})
+                from meshpool_harness.core import errtext as _ET
+                # one line the page updates in place ("down", "attempt"): it was a new line every check, 7 of them
+                emit({"type": "status", "down": True, "attempt": tries,
+                      "text": f"The model endpoint isn't answering ({_ET.reason(got)}). Checking again in {wait:.0f} s, "
+                              f"attempt {tries + 1}, for up to {max(1, int(budget_s // 60))} min. Press Stop to end."})
 
 
 def _tls_text(res: str) -> str:

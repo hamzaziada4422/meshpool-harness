@@ -309,7 +309,7 @@ def test_wide_table_band_overflow_goes_to_notes(tmp_path):
     render([s], str(out), carry=False, density="read")
     sl = Presentation(str(out)).slides[0]
     on, notes = _shapes_text(sl), sl.notes_slide.notes_text_frame.text
-    assert "Did not fit" in notes
+    assert "Did not fit" not in notes and "[QA]" not in notes          # moved text is plain presenter notes
     for b in long:
         assert b["text"] in on or b["text"] in notes
     if HAS_LO:
@@ -343,4 +343,4 @@ def test_word_budget_moves_supporting_lines_to_notes():
     assert [st["action"] for st in out["steps"]] == [f"Action {i}" for i in range(5)]
     body = " ".join(" ".join([st.get("detail", "")] + st.get("milestones", [])) for st in out["steps"])
     assert len(body.split()) < len(long.split()) * 15 and "…" not in body
-    assert "Detail for the presenter" in out["notes"]
+    assert "Detail for the presenter" not in out["notes"] and "plan funds the capital programme" in out["notes"]

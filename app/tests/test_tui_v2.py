@@ -31,7 +31,7 @@ def test_startup_header_notices_box_and_footer():
     assert "~/projects/demo" in text
     assert "1 more notice hidden" in text
     assert 'Try "fix the failing test in tests/"' in text
-    assert "full access on (shift+tab to cycle) · 2 background agents" in text
+    assert "Full access: asks only before destructive steps (shift+tab to cycle) · 2 background agents" in text
     assert "Not logged in · Run /login · ✔ Update installed · Restart to update" in text
     lines = scr.lines()
     rules = [i for i, ln in enumerate(lines) if ln == "─" * S.COLS]
@@ -112,9 +112,9 @@ def test_shift_tab_cycles_modes_and_updates_footer():
                                           S.screen(out).text()))
     t.read_input()
     assert seen == ["edits", "auto", "ask"]
-    assert "accept edits on (shift+tab to cycle)" in shots[0] and "(edits)" in shots[0]
-    assert "full access on" in shots[1] and "(auto)" in shots[1]
-    assert "ask before changes" in shots[2]
+    assert "Accept edits: edits and local commits run without asking (shift+tab to cycle)" in shots[0] and "(edits)" in shots[0]
+    assert "Full access: asks only before" in shots[1] and "(auto)" in shots[1]
+    assert "Ask: runs in this folder, asks before risky steps" in shots[2] and "ask before changes" not in shots[2]
 
 
 def test_slash_list_filters_and_tab_completes():

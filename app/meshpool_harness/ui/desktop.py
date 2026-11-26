@@ -220,7 +220,7 @@ def _native_window(url: str) -> bool:
             kw["icon"] = str(ico)
             try:
                 import ctypes
-                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Meshpool.Desktop")
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(WIN_AUMID)
             except Exception:  # noqa: BLE001
                 pass
         webview.start(**kw)
@@ -369,7 +369,7 @@ def run() -> int:
         if not ready.wait(60):
             print("The Meshpool server did not start. See the lines above.")
             return 1
-        url = SV.app_url(box["port"])                  # the launch key: only this window gets the API token
+        url = SV.open_url(box["port"])                 # a one-time key: only this window gets the API token
         if os.name == "nt":
             shown = _window_process(url) == "closed"    # blocks until the window closes
         else:
@@ -379,7 +379,7 @@ def run() -> int:
             t.join(10)
         else:
             SV.NATIVE[0] = False
-            open_window(url)
+            open_window(SV.open_url(box["port"]))       # the first key may be used up by the window that failed
             t.join()
         return 0
     finally:
@@ -660,25 +660,72 @@ def _mac_folders(request: bool) -> bool | None:
     return ok
 
 
+def _mac_notify(title: str, body: str) -> bool:
+    """Post a macOS notification in Meshpool's own name: from Meshpool.app's process (the launcher runs Python inside
+    the app, so the main bundle is Meshpool.app) through Foundation's notification centre. False when this process is
+    not Meshpool.app (a source checkout, the terminal app, a helper process): nothing is shown then.
+
+    It used to run `osascript -e 'display notification ...'`. macOS files those under the scripting app, not Meshpool,
+    so every "Done: ..." with the reply text arrived as another app's notification (users saw TextEdit or Script
+    Editor), clicking it opened that app, and Meshpool's own notification setting could not turn them off."""
+    try:
+        from Foundation import NSBundle, NSUserNotification, NSUserNotificationCenter
+    except Exception:  # noqa: BLE001 - no PyObjC: not the packaged app
+        return False
+    from meshpool_harness.autoupdate import MAC_BUNDLE_ID
+    bundle = NSBundle.mainBundle()
+    if not bundle or str(bundle.bundleIdentifier() or "") != MAC_BUNDLE_ID:
+        return False
+    center = NSUserNotificationCenter.defaultUserNotificationCenter()
+    if center is None:
+        return False
+    n = NSUserNotification.alloc().init()
+    n.setTitle_(title)
+    if body:
+        n.setInformativeText_(body)
+    center.deliverNotification_(n)
+    return True
+
+
+WIN_AUMID = "Meshpool.Desktop"          # the app window's AppUserModelID (SetCurrentProcessExplicitAppUserModelID)
+WIN_AUMID_KEY = "Software\\Classes\\AppUserModelId\\" + WIN_AUMID   # HKCU; also in installer.nsi
+_POWERSHELL_AUMID = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe"
+
+
+def _win_register_aumid() -> bool:
+    """Register Meshpool's AppUserModelID for the current user, so a toast sent with it shows as "Meshpool" with its
+    icon and has its own switch in Settings > Notifications. Toasts used to be sent with PowerShell's ID, so every
+    "Done: ..." showed as "Windows PowerShell" and clicking it opened PowerShell. An unregistered ID makes Windows drop
+    the toast without an error, so this returns False on any failure and the caller keeps PowerShell's ID then.
+    HKCU only (no admin); the installer writes the same key and the uninstaller removes it."""
+    try:
+        import winreg
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, WIN_AUMID_KEY) as k:
+            winreg.SetValueEx(k, "DisplayName", 0, winreg.REG_SZ, "Meshpool")
+            ico = C.APP.parent / "Meshpool.ico"
+            if ico.is_file():
+                winreg.SetValueEx(k, "IconUri", 0, winreg.REG_SZ, str(ico))
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def notify(title: str, body: str = "") -> None:
-    """A desktop notification (best effort; never raises)."""
+    """A desktop notification (best effort; never raises). macOS: only in Meshpool.app's own name (_mac_notify)."""
     title, body = (title or "Meshpool")[:120], (body or "")[:240]
     try:
         if sys.platform == "darwin":
-            def q(x):
-                return '"' + x.replace("\\", "\\\\").replace('"', '\\"') + '"'
-            subprocess.Popen(["osascript", "-e", f"display notification {q(body)} with title {q(title)}"],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            _mac_notify(title, body)
         elif os.name == "nt":
+            sender = WIN_AUMID if _win_register_aumid() else _POWERSHELL_AUMID
             ps = ("[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null;"
                   "$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
                   "$x = $t.GetElementsByTagName('text'); $x.Item(0).AppendChild($t.CreateTextNode($env:MP_T)) > $null;"
                   "$x.Item(1).AppendChild($t.CreateTextNode($env:MP_B)) > $null;"
-                  "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("
-                  "'{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe').Show("
+                  "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:MP_ID).Show("
                   "[Windows.UI.Notifications.ToastNotification]::new($t))")
             subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-                             env=dict(os.environ, MP_T=title, MP_B=body), stdout=subprocess.DEVNULL,
+                             env=dict(os.environ, MP_T=title, MP_B=body, MP_ID=sender), stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, creationflags=0x08000000)
     except Exception:  # noqa: BLE001
         pass
@@ -715,7 +762,7 @@ def permissions() -> dict:
         note = ("Windows does not need extra permissions: agents run commands and control apps as you. "
                 "Windows may ask to allow network access the first time a tool listens on a port.")
     else:
-        note = "Linux does not need extra permissions."
+        note = ""
     return {"platform": sys.platform, "rows": rows, "note": note}
 
 

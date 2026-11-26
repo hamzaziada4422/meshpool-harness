@@ -7,6 +7,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 LOG = sys.argv[2] if len(sys.argv) > 2 else "/tmp/mock_requests.jsonl"
 
 
+LANDING_BUGGY = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" "
+                 "content=\"width=device-width\"><title>Petal</title></head><body><h1>Petal flowers</h1>"
+                 "<div style=\"width:2000px\">Fresh bouquets every morning</div><script>initGallery();</script>"
+                 "</body></html>\n")
+LANDING_FIXED = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" "
+                 "content=\"width=device-width\"><title>Petal</title></head><body><h1>Petal flowers</h1>"
+                 "<div style=\"max-width:100%\">Fresh bouquets every morning</div></body></html>\n")
+
+
 def _write(names, path, content):
     """A file write in the tool set this chat offers: write_file (classic), apply_patch (Codex-style lanes) or write."""
     if "write_file" in names:
@@ -34,6 +43,32 @@ def plan(messages, tools):
                                     "acceptance_reasons": [] if fixed else ["You asked for a pricing slide and there is none."],
                                     "items": items, "blockers": [] if fixed else ["Pricing slide missing"],
                                     "fix": [] if fixed else ["Add a pricing slide with the three plan prices"]}))
+    lu = max(i for i, m in enumerate(messages) if m["role"] == "user")
+    lc = messages[lu]["content"]
+    lt = (lc if isinstance(lc, str) else " ".join(x.get("text", "") for x in lc if isinstance(x, dict))).lower()
+    if str(messages[0].get("content", "")).startswith("You are a reviewer. You did not build"):   # the look reviewer (agent/lookreview.py)
+        who = ("a customer on her phone ordering a birthday cake from the bakery" if "bakery" in lt else
+               "a finance director reading this memo before a board meeting" if "memo" in lt or "deck" in lt else
+               "a shopper on her phone looking for fresh bouquets at the Petal flower shop")
+        if "actions: up to" in lt:                                                    # the first call: persona and actions
+            return ("text", json.dumps({"persona": who, "actions": [{"do": "click", "target": "Order now", "width": "phone"}]
+                                        if "bakery" in lt else []}))
+        broken = "sideways" in lt or "initgallery" in lt or "did not work" in lt
+        probs = ([{"what": "sideways scrolling on the phone", "where": "the banner", "severity": "blocker"},
+                  {"what": "a script error in place of the gallery", "where": "gallery", "severity": "major"}]
+                 if broken else [])
+        return ("text", json.dumps({"persona": who, "can_do_the_job": not broken, "problems": probs, "pass": not broken}))
+
+    if "landing page demo" in lt:                           # the look-at-it review (agent/look.py, 0.0.18)
+        step = len([m for m in messages[lu + 1:] if m["role"] == "tool"])
+        review = "look at what you made" in lt
+        page = LANDING_FIXED if review else LANDING_BUGGY
+        if step == 0 and "exec_command" in names and not names & {"write_file", "apply_patch", "write"}:
+            return ("tool", "exec_command", {"cmd": "cat > index.html <<'EOF'\n" + page + "EOF"})   # a Code chat
+        if step == 0:
+            return _write(names, "index.html", page)
+        return ("text", "Fixed the wide banner and the script error. The landing page is index.html."
+                if review else "Made the landing page: index.html.")
     if "big job demo" in str(messages[-1].get("content", "")).lower() or any("big job demo" in str(m.get("content", "")).lower() for m in messages if m["role"] == "user"):
         done_ = [m for m in messages if m["role"] == "tool"]
         if not done_:
@@ -58,6 +93,13 @@ def plan(messages, tools):
         if step == 0:
             return _write(names, f"goal{n}.txt", f"part {n}\n")
         return ("text", f"Wrote goal{n}.txt.\nGOAL: DONE" if n >= 3 else f"Wrote goal{n}.txt.\nGOAL: CONTINUE with part {n + 1}")
+    if "raise all prices by 10%" in u:                     # Undo of an office edit (Maya's Flowers): set_range in place
+        ed = next((n for n in names if n.endswith("edit_office_file")), "mcp__meshpool-office__edit_office_file")
+        if step == 0:
+            prices = [69, 42, 48, 150, 65, 38, 55, 72, 88, 135, 28, 59]
+            return ("tool", ed, {"path": "Bouquet Price List.xlsx", "in_place": True, "operations": [
+                {"op": "set_range", "sheet": "Inputs", "start": "C4", "values": [[round(p * 1.1, 2)] for p in prices]}]})
+        return ("text", "All 12 prices in Bouquet Price List.xlsx are 10% higher.")
     mf = __import__("re").search(r"make the file (\S+)", u)
     if mf:                                                 # Undo and rewind tests: one file per message
         if step == 0:

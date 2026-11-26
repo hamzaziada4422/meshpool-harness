@@ -90,6 +90,12 @@ def cw(ch: str) -> int:
     """Display columns of one character."""
     if unicodedata.combining(ch) or ch in "\u200b\u200d\ufe0f":
         return 0
+    # Marks that sit on the letter before them take no column even when their combining class is 0 (Thai and
+    # Devanagari vowel signs), and neither do format characters (the Persian zero-width non-joiner, direction
+    # marks) or Hangul medial vowels. The soft hyphen is the one format character a terminal draws.
+    cat = unicodedata.category(ch)
+    if cat in ("Mn", "Me") or (cat == "Cf" and ch != "\u00ad") or "\u1160" <= ch <= "\u11ff":
+        return 0
     return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
 
 
@@ -145,6 +151,45 @@ def hard_wrap(s: str, width: int) -> list[str]:
         cur += ch
         n += w
     return out + [cur]
+
+
+def word_wrap(s: str, width: int) -> list[int]:
+    """Where each row starts when `s` is word-wrapped at `width` columns (greedy: a row breaks before the word that
+    does not fit; a word wider than a row is cut). Rows before the last never change as text is added, so a streamed
+    paragraph is wrapped from the start of its last row only (OM-08)."""
+    width = max(1, width)
+    starts, n, i, L = [0], 0, 0, len(s)
+    while i < L:
+        j = i
+        while j < L and s[j] != " ":
+            j += 1
+        word = s[i:j]
+        ww = vlen(word)
+        if n and n + ww > width:                   # the word goes to a new row
+            starts.append(i)
+            n = 0
+        if ww > width:                             # longer than a row: cut it
+            for k, ch in enumerate(word):
+                c = cw(ch)
+                if n + c > width and n:
+                    starts.append(i + k)
+                    n = 0
+                n += c
+        else:
+            n += ww
+        while j < L and s[j] == " ":
+            j += 1
+            n += 1
+        i = j
+    return starts
+
+
+def exec_output(out: str) -> str:
+    """The output of an exec_command result without the lines meant for the model (Chunk ID, Wall time, Process
+    exited, Original token count, Output:): the screen shows the command's own output (OM-08)."""
+    m = re.match(r"Chunk ID: [0-9a-f]+\nWall time: [^\n]*\n(?:Process exited with code -?\d+\n)?"
+                 r"(?:Original token count: \d+\n)?Output:\n?", out or "")
+    return out[m.end():] if m else out
 
 
 # ---------- markdown -----------------------------------------------------------------------------------------------
@@ -289,6 +334,17 @@ def collapse(lines: list[str], limit: int) -> tuple[list[str], int]:
     return lines, 0
 
 
+def receipt_line(ln: str, st: Style, width: int) -> str:
+    """One line of the turn's receipt ("**Changed:** a.py (+1 -0)") for a terminal: no literal asterisks. The label is
+    bold when the terminal has color and plain text when it has not (-p to a file or a pipe); the rest is dim."""
+    m = re.match(r"\s*\*\*([^*]+?)\*\*\s*(.*)$", ln)
+    if not m:
+        return st.dim(clip(ln.replace("**", ""), width))
+    label, rest = m.group(1), m.group(2)
+    rest = clip(rest.replace("**", ""), max(10, width - len(label) - 1))
+    return st.bold(label) + " " + st.dim(rest)
+
+
 def guard(fn, st: Style, *a, **k):
     """OSS-12: a renderer that throws must not end the session: show a small placeholder instead."""
     try:
@@ -299,9 +355,10 @@ def guard(fn, st: Style, *a, **k):
 
 
 def shell_block(command: str, output: str, took: float | None, st: Style, width: int, meta: str = "",
-                limit: int = 10, ok: bool = True) -> tuple[list[str], int]:
+                limit: int = 10, ok: bool = True, expand: bool = True) -> tuple[list[str], int]:
     """A shell call as a full-width block: bold `$ command` (with dim metadata at the end of the last line), a blank
-    line, the output (dim), a blank line, `Took 2.6s`. Returns (lines, hidden output line count)."""
+    line, the output (dim), a blank line, `Took 2.6s`. Returns (lines, hidden output line count). expand: say that
+    Ctrl+O shows the hidden lines (not in a -p run, where no key can be pressed)."""
     inner = max(4, width - 2)
     fill = st.on_bg(FILL) if st.on else st
     cmd_lines = []
@@ -323,7 +380,8 @@ def shell_block(command: str, output: str, took: float | None, st: Style, width:
     if shown or hidden:
         rows.append("")
         if hidden:
-            rows.append(fill.dim(f"… ({hidden} earlier line{'s' if hidden != 1 else ''}, ctrl+o to expand)"))
+            rows.append(fill.dim(f"… ({hidden} earlier line{'s' if hidden != 1 else ''}"
+                                 + (", ctrl+o to expand)" if expand else ")")))
         for ln in shown:
             for seg in hard_wrap(ln, inner):
                 rows.append(fill.dim(seg) if ok else fill.red(seg))
@@ -482,7 +540,11 @@ MODE_NAMES = {"ask": "ask", "edits": "accept edits", "auto": "full access"}
 
 
 def mode_hint(st: Style, mode: str, agents: int = 0) -> str:
-    seg = {"ask": "ask before changes", "edits": "⏵⏵ accept edits on", "auto": "⏵⏵ full access on"}.get(mode, mode)
+    from meshpool_harness import config as C
+    if mode in C.MODE_INFO:                  # the web app's words (config.MODE_INFO), one line each
+        seg = ("" if mode == "ask" else "⏵⏵ ") + f"{C.MODE_INFO[mode][0]}: {C.MODE_FOOTER[mode]}"
+    else:
+        seg = mode
     s = " " + st.amber(seg) + st.dim(" (shift+tab to cycle)")
     if agents:
         s += st.dim(f" · {agents} background agent{'s' if agents != 1 else ''}")

@@ -158,7 +158,7 @@ def transcript(agent) -> str:
         text = c if isinstance(c, str) else "\n".join(p.get("text", "") for p in c or [] if isinstance(p, dict))
         text = (text or "").split("​")[0].strip()
         if role == "user":
-            if text.startswith("[Meshpool]"):
+            if text.startswith(("[Meshpool]", "[meshpool]")):
                 continue
             lines += ["## You", "", text, ""]
         elif role == "assistant":

@@ -21,8 +21,16 @@ HONESTY = ("Honesty comes first. Never make something up to fill a gap. If you o
 # consulting house style (takeaway titles, one message per slide, an exhibit on every page) and the checks.
 # What Pi (tools="deferred") gets instead of HONESTY and PLAIN: the same rules in about a fifth of the words. Every word
 # here is in Pi's first request.
-LEAN_RULES = ("Never invent facts, numbers or sources: say \"I don't know\". Never say something was done or tested "
-              "when it was not. Write plainly: answer first, no preamble or closing offers, no em dashes, no emoji.")
+# Sara, round 3: a lock file named "Sara Finance" and the reply said "she appears to have the workbook open ... ask her
+# to close it". The person reading the reply is the user: always "you".
+ADDRESS = ("Address the user as \"you\", never in the third person (\"she\", \"he\", their name), even when a "
+           "lock file or author field names them.")
+# Sara, round 3: Codex's reply pointed to a backup it had made in a temporary folder outside the project; the link
+# opened "That folder is not one of your projects."
+NO_SCRATCH_COPIES = ("Do not make backup copies of the user's files outside the project folder, and never point the "
+                     "user to a file outside it: they cannot open it. meshpool keeps every change and Undo takes it back.")
+LEAN_RULES = ("Never invent facts, numbers or sources: say \"I don't know\". Never claim work was done or tested when "
+              "it was not. Answer first: no preamble, closing offers, em dashes or emoji. Address the user as \"you\".")
 # The office rules for Pi, only in a chat that asked for an office file.
 ENGINES_LEAN = ("Slides and workbooks: make_deck, add_slides, make_spreadsheet or office_task, never python-pptx, "
                 "openpyxl or xlsxwriter by hand. To change a file the user has (.docx, .xlsx, .pptx), use "
@@ -65,7 +73,23 @@ PLAIN = ("Write plainly, like a senior colleague, not a chatbot: the answer firs
          "machine text: delve, leverage, robust, seamless, crucial, pivotal, tapestry, landscape, realm, embark, "
          "elevate, unlock, streamline, game-changer, cutting-edge, \"in today's fast-paced world\", \"it's important "
          "to note\". Prose by default, one idea per paragraph; headings, bold and bullets only where they help. Files "
-         "you make look like a professional's work: one consistent style, restrained colour, no filler.")
+         "you make look like a professional's work: one consistent style, restrained colour, no filler. " + ADDRESS)
+
+
+# Chat mode (not the Code tab): the person is not a developer. Round 3 replies said "add min-height: 44px; to the input
+# rule", "my tools stopped working", "cached values", and asked Maya to "put your shop address in SHOP_EMAIL near the
+# bottom of index.html". One short paragraph, sent once with the chat's first message.
+CHAT_MODE = ("This is a chat with someone who is not a developer. Tell them outcomes and decisions in plain words: "
+             "what you made, what it shows, what they may want to decide. Leave out implementation detail (code, CSS "
+             "rules, pixel sizes, file internals, tool or setting names, how your tools work) unless they ask for "
+             "it. When something needs a change in a file, a setting or a service, offer to do it yourself and ask "
+             "only for what you need (\"Tell me your email and I'll connect the form\"); never ask them to edit code "
+             "or files. A chart or graph they ask for is a picture: save it as a PNG in their folder, so it shows in "
+             "the chat, and never draw it in text with characters.")
+# Chat mode with the office tools (Maya, round 4: an .xlsx was read with "cat; cp; unzip", which asked for approval).
+CHAT_MODE_OFFICE = ("Read a Word, Excel, PowerPoint or PDF file with read_document. It needs no approval. Do not "
+                    "unzip it or open it with a script to read it. Change a Word, Excel or PowerPoint file they "
+                    "already have with edit_office_file when you have it, not with a script that rewrites the file.")
 
 
 def dashless(text: str) -> str:
@@ -400,13 +424,13 @@ def project_block(project_id: str, task: str = "", exclude=()) -> str:
 
 def context_block(task: str = "", root: str = "", project_id: str = "", chat_id: str = "", incognito: bool = False,
                   exclude=(), record: bool = True, lookup: bool = True, rules: bool = True, tools: str = "all",
-                  office: bool = True, data_rule: bool = False) -> str:
+                  office: bool = True, data_rule: bool = False, chat: bool = False) -> str:
     """Text the app adds, out of sight, to the first message of a new thread. task and root pick what memory is
     relevant: the user's core facts, the facts that match the task, and the project's notes. project_id adds the
     project's instructions, memory and knowledge files (see project_store). `incognito` reads no memory at all.
     With a chat_id, the facts given are recorded (so a reply can show its sources)."""
     return build_context(task, root, project_id, chat_id, incognito, exclude, record, lookup, rules, tools, office,
-                         data_rule)["text"]
+                         data_rule, chat)["text"]
 
 
 def _notes(tools: str, office, mem_on: bool, incognito: bool) -> str:
@@ -438,7 +462,7 @@ def _notes(tools: str, office, mem_on: bool, incognito: bool) -> str:
 
 def build_context(task: str = "", root: str = "", project_id: str = "", chat_id: str = "", incognito: bool = False,
                   exclude=(), record: bool = False, lookup: bool = True, rules: bool = True, tools: str = "all",
-                  office: bool = True, data_rule: bool = False) -> dict:
+                  office: bool = True, data_rule: bool = False, chat: bool = False) -> dict:
     """context_block with its parts: {text, facts: [ids given], sections: [{title, text, ids}]} for the X-ray.
     `rules`: add HONESTY and PLAIN (Meshpool's own agents carry them in their system prompt, so their first message
     leaves them out; Pi and Codex get them here, once). `tools`: which Meshpool tools the agent has, "all", "deferred"
@@ -463,6 +487,13 @@ def build_context(task: str = "", root: str = "", project_id: str = "", chat_id:
     if rules or data_rule:                     # an agent whose system prompt is someone else's text gets it here
         from meshpool_harness.agent.core import DATA_RULE
         parts.append(DATA_RULE)
+    if rules:                                  # meshpool's own agents have SCRATCH_RULE in their system prompt
+        if not lean:                           # Pi's coding chats: the short rules only (the 450-character budget)
+            parts.append(NO_SCRATCH_COPIES)
+    if chat:                                   # Chat mode, not the Code tab: outcomes, not implementation
+        parts.append(CHAT_MODE)
+        if office and tools == "all":          # the office reader is there: office files are read with it
+            parts.append(CHAT_MODE_OFFICE)
     sections.append({"title": "Meshpool's own rules", "text": "\n".join(parts), "ids": []})
     try:                                       # who the user is and the language to answer in (Settings, General)
         from meshpool_harness.ui import settings_v2 as SV
@@ -1083,6 +1114,7 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
 
     class Sub(K.Agent):
         _delegate_depth = 99                                 # these never start sub-agents of their own
+        reports_to_agent = True                              # it reports to the parent model, not to the user
 
         def _tool_names(self):
             return tools

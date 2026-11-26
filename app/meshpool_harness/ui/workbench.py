@@ -64,6 +64,8 @@ def _save_projects(rows: list[dict]):
 
 @_projects_locked
 def add_project(path: str, name: str = "") -> dict:
+    if not str(path or "").strip().strip('"').strip():   # Path("") is ".": the folder the app happened to start in
+        raise ValueError("Choose a folder first.")
     p = Path(path.strip().strip('"')).expanduser()
     if not p.is_dir():
         raise ValueError(f"Folder not found: {path}")
@@ -114,6 +116,8 @@ def known_roots() -> list[Path]:
 
 def check_root(root: str) -> Path:
     """Only folders the user added as projects (or a live session's folder) are browsable from the page."""
+    if not str(root or "").strip():                # "" would resolve to the app's own working folder
+        raise ValueError("Choose a folder first.")
     p = Path(root).expanduser().resolve()
     from meshpool_harness import project_store as PS
     if PS.is_scratch(str(p)):                      # a chat's own private folder
@@ -218,6 +222,20 @@ def models(refresh: bool = False) -> dict:
             "error": "" if any(g["ready"] for g in groups) else err, "base_url": base}
 
 
+def known_models() -> set | None:
+    """Model ids the key endpoint serves, from the list models() last read for the endpoint set up now, plus the
+    names set up by hand (the default model, which may be one the list lacks, and favorites). None when no list is
+    known (offline, not read yet, or an endpoint without a list): then any name may be right."""
+    from meshpool_harness import providers as _PV
+    base, key, _src = _PV.endpoint_pair()
+    if _MODELS["key"] != base + "|" + key[-6:] or not _MODELS["rows"]:
+        return None
+    vals = C.read()
+    mine = [vals.get("MH_MODEL") or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash",   # the default models() shows
+            *(vals.get("MH_FAVORITE_MODELS") or "").split(","), _PV.env_deployment()]
+    return {r["id"] for r in _MODELS["rows"]} | {_PV.split(m)[1] for m in mine if m}
+
+
 def set_default_model(mid: str) -> dict:
     C.write({"MH_MODEL": str(mid or "").strip()})   # may carry a provider prefix
     C.load_into_env(override=True)
@@ -259,9 +277,9 @@ def list_dir(root: str, rel: str = "") -> dict:
 
 def _perm_hint(p: Path) -> str:
     if sys.platform == "darwin":
-        return (f"macOS did not let Meshpool read {p}. Allow it when macOS asks, or turn on Full Disk Access for "
-                "Meshpool in Settings, Permissions.")
-    return f"Meshpool cannot read {p}: permission denied."
+        return (f"macOS did not let meshpool read {p}. Allow it when macOS asks, or turn on Full Disk Access for "
+                "meshpool in Settings, Permissions.")
+    return f"meshpool cannot read {p}: permission denied."
 
 
 # B4: decided by name first, so an empty or odd-looking .jpg is never opened as text with a Save button.
@@ -334,8 +352,29 @@ def attach(root: str, name: str, data: bytes) -> dict:
     return attach_to(check_root(root), name, data)
 
 
-def attach_to(r: Path, name: str, data: bytes) -> dict:
-    """The saving itself, for a folder that is already known to be the chat's own (no check_root)."""
+def find_same(r: Path, name: str, data: bytes, limit: int = 20000) -> str | None:
+    """A file inside the folder with this name and exactly these bytes (its path relative to the folder), else None.
+    A file dropped into a chat that already lives in the chat's folder is used where it is: a second copy at the
+    folder's top level was made before, without a word. Only same-named files of the same size are read."""
+    seen = 0
+    for dirpath, dirs, files in os.walk(r):
+        dirs[:] = [d for d in dirs if d not in HIDE and not d.startswith(".")]
+        seen += len(files) + len(dirs)
+        if seen > limit:
+            return None
+        if name in files:
+            p = Path(dirpath) / name
+            try:
+                if not p.is_symlink() and p.is_file() and p.stat().st_size == len(data) and p.read_bytes() == data:
+                    return p.relative_to(r).as_posix()
+            except OSError:
+                continue
+    return None
+
+
+def attach_to(r: Path, name: str, data: bytes, reuse: bool = False) -> dict:
+    """The saving itself, for a folder that is already known to be the chat's own (no check_root). reuse: a file with
+    the same name and contents already in the folder is used where it is ({"path", "reused": True})."""
     name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", Path(name or "file").name).strip().rstrip(". ") or "file"
     if name.strip(".") == "":
         name = "file"
@@ -347,6 +386,10 @@ def attach_to(r: Path, name: str, data: bytes) -> dict:
         name = name[:-1]
     if len(data) > 150 * 1024 * 1024:
         raise ValueError("Attachments can be up to 150 MB. Put bigger files in the project folder instead.")
+    if reuse:
+        same = find_same(r, name, data)
+        if same:
+            return {"path": same, "reused": True}
     sub = ""                                     # at the folder's root, so an edit in place lands where the file is
     base = r / sub if sub else r
     try:
@@ -359,7 +402,7 @@ def attach_to(r: Path, name: str, data: bytes) -> dict:
         with open(p, "xb") as f:                 # x: never through a link or over a file made meanwhile
             f.write(data)
     except PermissionError:
-        raise ValueError(f"Meshpool can't save files in {r}: it is read-only. Choose another folder or change its permissions.")
+        raise ValueError(f"meshpool can't save files in {r}: it is read-only. Choose another folder or change its permissions.")
     except OSError as e:
         raise ValueError(f"Couldn't save {name}: {e.strerror or e}")
     try:
@@ -412,6 +455,18 @@ def _gh_git_env(env: dict) -> dict:
     return dict(env, MESHPOOL_GH_TOKEN=tok) if tok else env
 
 
+def _git_cmd(args) -> str:
+    """The git command in args ("commit" in `-c user.name=X commit -m ...`): the first word that is neither an
+    option nor the value of a -c or -C before it."""
+    it = iter(args)
+    for a in it:
+        if a in ("-c", "-C"):
+            next(it, None)
+        elif not str(a).startswith("-"):
+            return str(a)
+    return ""
+
+
 def _git(root: Path, *args, check=True, timeout=60) -> str:
     g = git_exe()
     if not g:
@@ -427,11 +482,10 @@ def _git(root: Path, *args, check=True, timeout=60) -> str:
         r = subprocess.run([g, *safe, *extra, *args], cwd=str(root), capture_output=True, text=True, encoding="utf-8",
                            errors="replace", timeout=timeout, creationflags=NO_WINDOW, env=env)
     except subprocess.TimeoutExpired:
-        raise ValueError(f"git {args[0] if args else ''} took too long and was stopped. Check your network "
+        raise ValueError(f"git {_git_cmd(args)} took too long and was stopped. Check your network "
                          "connection and try again.") from None
     if check and r.returncode != 0:
-        raise ValueError((r.stderr or r.stdout).strip()[-800:]
-                         or f"git {next((a for a in args if not a.startswith('-')), 'command')} failed")
+        raise ValueError((r.stderr or r.stdout).strip()[-800:] or f"git {_git_cmd(args) or 'command'} failed")
     return r.stdout
 
 
@@ -441,8 +495,8 @@ _GS_TTL = 1.5
 
 
 def git_status(root: str, fresh: bool = False) -> dict:
-    """Status of a project's repository. It is six git processes, so calls within a moment share one answer, and
-    callers at the same time wait for it instead of each starting their own. fresh=True after a change."""
+    """Status of a project's repository. Calls within a moment share one answer, and callers at the same time wait
+    for it instead of each starting their own. fresh=True after a change."""
     key = str(root)
     gate = _GS_LOCKS.setdefault(key, threading.Lock())
     with gate:
@@ -450,6 +504,8 @@ def git_status(root: str, fresh: bool = False) -> dict:
         hit = _GS.get(key)
         if hit and not fresh and hit[2] == stamp and time.monotonic() - hit[0] < _GS_TTL:
             return dict(hit[1])
+        if fresh:
+            _GX.clear()
         res = _git_status(root)
         if len(_GS) > 50:
             _GS.clear()
@@ -469,14 +525,127 @@ def _git_stamp(root: str) -> tuple:
     return tuple(out)
 
 
+# project folder -> what changes only with the repository's commits, refs or config: its top folder and git folders,
+# the log of the current commit, the origin URL and the branch list, each with the stamp it was read under. A status
+# is then one git process (status --porcelain=v2 --branch) instead of seven. The ceiling covers what the stamps miss
+# (an included config file, a reftable repository).
+_GX: dict = {}
+_GX_CEIL = 60.0
+
+
+def _stat_key(*paths) -> tuple:
+    out = []
+    for p in paths:
+        try:
+            st = os.stat(p)
+            out.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append(None)
+    return tuple(out)
+
+
+def _refs_key(common: str) -> tuple:
+    """Branches made, moved or deleted change a folder's mtime under refs/heads, or packed-refs."""
+    if os.path.isdir(os.path.join(common, "reftable")):
+        return (time.monotonic(),)                    # refs this check cannot see: read every time
+    out = [_stat_key(os.path.join(common, "packed-refs"))]
+    for d, _subs, _files in os.walk(os.path.join(common, "refs", "heads")):
+        out.append((d, _stat_key(d)))
+    return tuple(out)
+
+
+def _git_facts(r: Path) -> dict | None:
+    """The cached facts of r's repository, None when r is not in one. Only a repository is remembered."""
+    key = str(r)
+    hit = _GX.get(key)
+    now = time.monotonic()
+    if hit and (now - hit["t"] > _GX_CEIL or not os.path.isdir(hit["gitdir"])
+                or hit["dotgit"] != os.path.exists(os.path.join(key, ".git"))):
+        hit = None
+    if not hit:
+        try:
+            lines = _git(r, "rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir").splitlines()
+        except ValueError:
+            _GX.pop(key, None)
+            return None
+        top, gitdir, common = (lines + ["", "", ""])[:3]
+        if common and not os.path.isabs(common):
+            common = os.path.normpath(os.path.join(key, common))
+        if not os.path.isdir(common):
+            common = gitdir
+        if len(_GX) > 50:
+            _GX.clear()
+        hit = _GX[key] = {"t": now, "top": top, "gitdir": gitdir, "common": common,
+                          "dotgit": os.path.exists(os.path.join(key, ".git"))}
+    return hit
+
+
 def _git_status(root: str) -> dict:
     r = check_root(root)
     if not git_exe():
         return {"repo": False, "git": False}
-    try:
-        top = _git(r, "rev-parse", "--show-toplevel").strip()
-    except ValueError:
+    fx = _git_facts(r)
+    if fx is None:
         return {"repo": False, "git": True}
+    top = fx["top"]
+    raw = _git(r, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--", ".", check=False).split("\0")
+    branch, oid, ahead, behind, upstream = "", "", 0, 0, False
+    files, i = [], 0
+    while i < len(raw):
+        line = raw[i]
+        i += 1
+        if line.startswith("# "):                     # "# branch.head main", "# branch.ab +1 -2"
+            k, _, v = line[2:].partition(" ")
+            if k == "branch.head":
+                branch = "" if v == "(detached)" else v
+            elif k == "branch.oid":
+                oid = v
+            elif k == "branch.ab":
+                ab = v.split()
+                ahead, behind, upstream = int(ab[0].lstrip("+")), int(ab[1].lstrip("-")), True
+            continue
+        kind = line[:1]
+        if kind == "?":
+            xy, path = "??", line[2:]
+        elif kind in "12u" and line:
+            parts = line.split(" ", {"1": 8, "2": 9, "u": 10}[kind])
+            if len(parts) < {"1": 9, "2": 10, "u": 11}[kind]:
+                continue
+            xy, path = parts[1].replace(".", " "), parts[-1]
+            if kind == "2":                           # a rename or copy: the old path comes next
+                i += 1
+        else:
+            continue
+        rel = os.path.relpath(Path(top) / path, r).replace(os.sep, "/")   # git gives repository paths
+        files.append(((xy == "??", path), {"status": xy.strip(), "path": rel, "xy": xy,
+                                           "staged": xy[0] not in (" ", "?"), "unstaged": xy[1] != " " or xy[0] == "?"}))
+    files = [f for _, f in sorted(files, key=lambda x: x[0])]   # by path, untracked last, as the v1 format lists them
+    if not oid:                                       # a git too old for --porcelain=v2 --branch
+        _GX.pop(str(r), None)
+        return _git_status_v1(r, top)
+    lg = fx.get("log")
+    if not lg or lg[0] != oid or time.monotonic() - lg[2] > 60:   # by commit, and "2 minutes ago" ages
+        log = []
+        for line in _git(r, "log", "-15", "--pretty=format:%h%x1f%an%x1f%ar%x1f%s", check=False).splitlines():
+            p = line.split("\x1f")
+            if len(p) == 4:
+                log.append({"hash": p[0], "author": p[1], "when": p[2], "subject": p[3]})
+        fx["log"] = (oid, log, time.monotonic())
+    cfg = _stat_key(os.path.join(fx["common"], "config"), os.path.join(fx["gitdir"], "config.worktree"))
+    if fx.get("remote", (None,))[0] != cfg:
+        fx["remote"] = (cfg, _git(r, "remote", "get-url", "origin", check=False).strip())
+    refs = _refs_key(fx["common"])
+    if fx.get("branches", (None,))[0] != refs:
+        fx["branches"] = (refs, [b.strip().lstrip("* ").strip() for b in
+                                 _git(r, "branch", "--format=%(refname:short)", check=False).splitlines() if b.strip()])
+    remote, branches = fx["remote"][1], fx["branches"][1]
+    return {"repo": True, "git": True, "top": top, "branch": branch or "(detached)", "files": files[:500],
+            "dirty": len(files), "staged": sum(1 for f in files if f["staged"]), "log": list(fx["log"][1]),
+            "ahead": ahead, "behind": behind, "upstream": upstream, "remote": remote, "branches": branches[:200],
+            "github": _github_slug(remote), "oid": oid, "gitdir": fx["gitdir"]}
+
+
+def _git_status_v1(r: Path, top: str) -> dict:
     branch = _git(r, "branch", "--show-current", check=False).strip() or "(detached)"
     raw = _git(r, "status", "--porcelain", "-z", "--untracked-files=all", "--", ".", check=False).split("\0")
     files, i = [], 0
@@ -604,7 +773,7 @@ def _open_pr(r: Path, body: dict) -> dict:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 base = json.loads(resp.read())["default_branch"]
         except urllib.error.HTTPError as e:
-            raise ValueError(f"GitHub did not let Meshpool read {slug} (HTTP {e.code}). Check the GitHub "
+            raise ValueError(f"GitHub did not let meshpool read {slug} (HTTP {e.code}). Check the GitHub "
                              "connection in Settings.") from None
         except (urllib.error.URLError, OSError, ValueError, KeyError):
             raise ValueError("Could not reach GitHub to look up the default branch. Check your network "
@@ -628,11 +797,12 @@ def _open_pr(r: Path, body: dict) -> dict:
             raise ValueError(out.stderr.strip()[-600:])
         return st | {"pr": out.stdout.strip().splitlines()[-1]}
     return st | {"pr": f"https://github.com/{slug}/compare/{st['branch']}?expand=1",
-                 "note": "Connect GitHub (Settings, Connectors) to open pull requests from Meshpool. This link opens the form."}
+                 "note": "Connect GitHub (Settings, Connectors) to open pull requests from meshpool. This link opens the form."}
 
 
 # ======================================== terminal ================================================================
 TERMS: dict[str, dict] = {}
+_TERMS_LOCK = threading.Lock()          # two commands started at once changed TERMS while the other walked it
 
 
 SHELLS_WIN = {"powershell": "PowerShell", "cmd": "Command Prompt", "bash": "Git Bash"}
@@ -673,10 +843,11 @@ def term_run(root: str, command: str, shell: str = "") -> dict:
     tid = uuid.uuid4().hex[:8]
     t = {"id": tid, "cwd": str(r), "command": command, "out": [], "base": 0, "rc": None, "start": time.time(),
          "p": None, "lock": threading.Lock()}
-    done = [k for k, v in TERMS.items() if v["rc"] is not None]
-    for k in done[:-20]:                         # finished commands keep their output, but only the last few
-        TERMS.pop(k, None)
-    TERMS[tid] = t
+    with _TERMS_LOCK:
+        done = [k for k, v in TERMS.items() if v["rc"] is not None]
+        for k in done[:-20]:                         # finished commands keep their output, but only the last few
+            TERMS.pop(k, None)
+        TERMS[tid] = t
     env = dict(C.user_env(), TERM="dumb", FORCE_COLOR="0", NO_COLOR="1")
     argv = _shell_cmd(command, shell)
     if argv[0] == os.environ.get("MH_BASH"):    # Git Bash on Windows (config.msys_lang)
@@ -826,7 +997,7 @@ def usage(since: float = 0) -> dict:
 def open_editor(root: str) -> dict:
     """"Open in Meshpool editor": the project folder opens in the app's own file tree and editor. No other program starts."""
     r = check_root(root)
-    return {"ok": True, "open": {"root": str(r), "path": ""}, "message": "Opened in the Meshpool editor."}
+    return {"ok": True, "open": {"root": str(r), "path": ""}, "message": "Opened in the meshpool editor."}
 
 
 # ======================================== pull request, CI and deployments =======================================
@@ -1359,6 +1530,14 @@ def model_window(model: str) -> tuple[int, str]:
                 return int(row["context"]), "endpoint"
             except (TypeError, ValueError):
                 pass
+    # OM-10: the same source as the chat's "context 200k (assumed)" line (core/context.py), never a second rule of
+    # thumb: the panel said 128K while the chat said 200k. Only what the endpoint already reported: no network call.
+    try:
+        from meshpool_harness.core import context as CTX
+        n, src = CTX.window_info(model, probe_endpoint="cache")
+        return n, ("estimate" if src in ("default", "table", "profile") else src)
+    except Exception:  # noqa: BLE001 - a panel never fails on this
+        pass
     for rx, n in _WINDOWS:
         if re.search(rx, bare, re.I):
             return n, "estimate"
@@ -1407,13 +1586,11 @@ def _rel(root: Path, p: str) -> str:
 
 
 _OUT_RX = re.compile(r"(?:Saved(?: the [\w ]+)?|[Ww]rote|[Cc]reated)[: ]+((?:[A-Za-z]:)?[^\n\"'`<>():]+?\."
-                     r"(?:docx|xlsx|pptx|pdf|csv|md|png|jpg|html|txt|json))(?![\w.])")
+                     r"(?:docx|xlsx|pptx|pdf|csv|md|png|jpg|html|txt|json))(?![\w]|\.\w)")
 
 
-def outputs_from(evs: list, turns: list, root: Path) -> list[dict]:
-    """Files a session created or changed, from its events (edits and writes, files its tools said they saved) and
-    from what its checkpoints recorded per reply. Only files that still exist inside the folder."""
-    found: dict[str, dict] = {}
+def _found_in_events(evs, root: Path, found: dict) -> None:
+    """Add to found the files these events wrote, edited or said they saved."""
     for e in evs:
         if e.get("type") == "tool_start" and e.get("name") in ("write_file", "edit"):
             rel = _rel(root, e.get("summary") or "")
@@ -1424,14 +1601,151 @@ def outputs_from(evs: list, turns: list, root: Path) -> list[dict]:
                 rel = _rel(root, m.group(1))
                 if rel:
                     found.setdefault(rel, {"path": rel, "how": "saved"})
+
+
+BUILD_SUFFIXES = {".json", ".jsonl", ".log", ".run", ".py"}
+
+
+def is_build_file(rel: str) -> bool:
+    """A file an engine keeps for its own build and checks, not the user's deliverable: the JSON, logs and scripts in
+    a "Meshpool outputs/<job>" folder (qa.json, clarity.json, facts.json, slides.json, frame.json...) and any
+    *.provenance.json. Artifacts, Your work, the outputs list and the "files changed" count leave them out (WF-04)."""
+    p = Path(str(rel).replace("\\", "/"))
+    if p.name.lower().endswith(".provenance.json"):
+        return True
+    return "Meshpool outputs" in p.parts[:-1] and p.suffix.lower() in BUILD_SUFFIXES
+
+
+_SHA1_MEMO: dict = {}
+_OWN_MEMO: dict = {}
+
+
+def _sha1_file(p: Path) -> str:
+    """A file's sha1, read once per version: own_changes runs on every chat update, so a big output is hashed once
+    per (path, mtime, size), not on every poll (release review)."""
+    import hashlib
+    try:
+        st = p.stat()
+    except OSError:
+        return ""
+    key = (str(p), st.st_mtime_ns, st.st_size)
+    if key not in _SHA1_MEMO:
+        if len(_SHA1_MEMO) > 2000:
+            _SHA1_MEMO.clear()
+        try:
+            h = hashlib.sha1()
+            with open(p, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+            _SHA1_MEMO[key] = h.hexdigest()
+        except OSError:
+            return ""
+    return _SHA1_MEMO[key]
+
+
+def own_changes(turns: list, root) -> list:
+    """The turns as the chat shows them ("2 files changed", the file cards): a file a job copied into its "Meshpool
+    outputs" folder whose bytes are the same as a file that was already in the folder is not a change (priya018: the
+    sheets engine stages a copy of the attached rooms.xlsx, and the reply said it changed rooms.xlsx). Compared by
+    content hash, never by time. The checkpoints themselves are left as they are, so Undo is unaffected."""
+    root = Path(root) if root else None
+    out = []
+    for t in turns or []:
+        ch = t.get("changed") or []
+        keep = []
+        for c in ch:
+            rel = str(c.get("path") or "")
+            parts = rel.replace("\\", "/").split("/")
+            if root is not None and c.get("status") != "deleted" and rel and not _exists(root, rel):
+                continue      # made, then deleted (memo_check.pdf, Daniel 0.0.18): a card that leads nowhere
+            if root is not None and c.get("status") == "added" and "Meshpool outputs" in parts[:-1]:
+                try:
+                    st = (root / rel).stat()
+                    mk = (str(root), rel, st.st_mtime_ns, st.st_size)
+                except OSError:
+                    mk = None
+                if mk is not None and mk in _OWN_MEMO:        # decided once per version of the file, not on every poll
+                    twin = _OWN_MEMO[mk]
+                else:
+                    mine = _sha1_file(root / rel)
+                    twins = [root / parts[-1], *sorted(root.glob("*/" + parts[-1]))[:20]]
+                    twin = bool(mine) and any(q.is_file() and "Meshpool outputs" not in q.parts[len(root.parts):]
+                                              and _sha1_file(q) == mine for q in twins)
+                    if mk is not None:
+                        if len(_OWN_MEMO) > 2000:
+                            _OWN_MEMO.clear()
+                        _OWN_MEMO[mk] = twin
+                if twin:
+                    continue
+            keep.append(c)
+        keep = _one_card_each(keep)
+        out.append(dict(t, changed=keep) if len(keep) != len(ch) else t)
+    return out
+
+
+def _exists(root: Path, rel: str) -> bool:
+    try:
+        return (root / rel).exists()
+    except (OSError, ValueError):
+        return True                                   # cannot tell: keep the card
+
+
+def gone_files(evs: list, root) -> list[str]:
+    """Files this turn's tools said they saved or wrote that no longer exist at its end (a preview PDF the agent made
+    and deleted): the page drops their cards and leaves them out of the outputs list."""
+    if not root:
+        return []
+    found: dict = {}
+    _found_in_events(evs, Path(root), found)
+    return sorted(rel for rel in found if not _exists(Path(root), rel))[:50]
+
+
+def _one_card_each(changed: list) -> list:
+    """One deliverable, one entry: the cards and the "files changed" count are of distinct files. Lina saw "3 files
+    changed" and three identical region_summary.xlsx cards: three job folders of an older chat each held a copy. The
+    same path listed twice counts once; copies of one file name in "Meshpool outputs" job folders count once (the
+    latest), and not at all when the turn also has that file in the user's own folder."""
+    def parts(c):
+        return str(c.get("path") or "").replace("\\", "/").split("/")
+
+    def in_job(c):
+        return "Meshpool outputs" in parts(c)[:-1]
+    own = {parts(c)[-1].lower() for c in changed if c.get("status") != "deleted" and not in_job(c)}
+    last_job = {}
+    for i, c in enumerate(changed):
+        if in_job(c) and c.get("status") != "deleted":
+            last_job[parts(c)[-1].lower()] = i
+    out, seen = [], set()
+    for i, c in enumerate(changed):
+        key = (str(c.get("path") or ""), c.get("status") == "deleted")
+        if key in seen:
+            continue
+        if in_job(c) and c.get("status") != "deleted":
+            name = parts(c)[-1].lower()
+            if name in own or last_job.get(name) != i:
+                continue
+        seen.add(key)
+        out.append(c)
+    return out
+
+
+def outputs_from(evs: list, turns: list, root: Path, found: dict | None = None) -> list[dict]:
+    """Files a session created or changed, from its events (edits and writes, files its tools said they saved) and
+    from what its checkpoints recorded per reply. Only files that still exist inside the folder. `found`: what the
+    events gave, when the caller already has it (session_outputs)."""
+    if found is None:
+        found = {}
+        _found_in_events(evs, root, found)
+    else:
+        found = dict(found)
     for t in turns:
         for c in t.get("changed") or []:
             if c.get("status") != "deleted":
                 found.setdefault(str(c["path"]), {"path": str(c["path"]), "how": c.get("status") or "changed"})
     out = []
     for rel, row in found.items():
-        if any(part in HIDE or part.startswith(".") for part in Path(rel).parts):
-            continue                                   # caches and tool folders are not the user's files
+        if any(part in HIDE or part.startswith(".") for part in Path(rel).parts) or is_build_file(rel):
+            continue                                   # caches, tool folders and build files are not the user's files
         try:
             f = _inside(root, rel)
             if f.is_file():
@@ -1442,14 +1756,25 @@ def outputs_from(evs: list, turns: list, root: Path) -> list[dict]:
 
 
 def session_outputs(s, root: Path) -> list[dict]:
-    """Files this session created or changed (see outputs_from)."""
+    """Files this session created or changed (see outputs_from). The side panel asks every 4 s while the chat works,
+    and each ask ran the file-name pattern over every tool output of the chat (about 0.1 s for a long one). Events
+    are only appended to the same list (a rewind or a reload makes a new list), so each event is scanned once."""
     with s.lock:
-        evs = list(s.events)
+        lst = s.events
+        evs = list(lst)
+    key = (getattr(s, "epoch", None), str(root))
+    c = getattr(s, "_outputs_scan", None)
+    if c and c[0] is lst and c[1] == key and c[2] <= len(evs):
+        start, found = c[2], dict(c[3])
+    else:
+        start, found = 0, {}
+    _found_in_events(evs[start:], root, found)
+    s._outputs_scan = (lst, key, len(evs), found)
     try:
-        turns = s.cp.turns() if s.cp else []
+        turns = own_changes(s.cp.turns(), s.cp.root) if s.cp else []
     except Exception:  # noqa: BLE001
         turns = []
-    return outputs_from(evs, turns, root)
+    return outputs_from(evs, turns, root, found)
 
 
 def session_connectors(s) -> dict:
@@ -1595,15 +1920,45 @@ def session_panel(sid: str) -> dict:
             env["name"] = slug
         out["branch"] = {"name": g["branch"], "branches": g["branches"], "ahead": g["ahead"], "behind": g["behind"],
                          "upstream": g["upstream"]}
-        add = rem = 0
-        for line in _git(r, "diff", "--numstat", "HEAD", check=False).splitlines():
-            a_, d_ = (line.split("\t") + ["0", "0"])[:2]
-            add += int(a_) if a_.isdigit() else 0
-            rem += int(d_) if d_.isdigit() else 0
+        add, rem = _tree_size(r, g)
         out["tree"] = {"files": g["dirty"], "added": add, "removed": rem}
     out["outputs"] = session_outputs(s, Path(root))
     out["plan"] = session_plan(s)
     return out
+
+
+_NUMSTAT: dict = {}                  # project folder -> (stamp, lines added, lines removed)
+
+
+def _tree_size(r: Path, g: dict) -> tuple[int, int]:
+    """Lines added and removed against HEAD (git diff --numstat). The answer only changes with the commit, the index,
+    the list of changed files or one of those files, so it is kept while all of them stay the same. A file changed in
+    the last 2 seconds is not trusted to show its next change in its mtime, and a project inside a larger repository
+    (whose diff covers files the status of this folder does not list) is read every time."""
+    stamp = None
+    files = g.get("files") or []
+    if (g.get("oid") and g.get("top") and os.path.realpath(g["top"]) == os.path.realpath(str(r))
+            and len(files) == g.get("dirty") and len(files) < 500):
+        now = time.time_ns()
+        stats = _stat_key(*(r / f["path"] for f in files))
+        if all(st is None or now - st[0] > 2_000_000_000 for st in stats):
+            stamp = (g["oid"], _stat_key(os.path.join(g["gitdir"], "index")),
+                     tuple((f["path"], f["xy"]) for f in files), stats)
+    hit = _NUMSTAT.get(str(r))
+    if stamp is not None and hit and hit[0] == stamp:
+        return hit[1], hit[2]
+    add = rem = 0
+    for line in _git(r, "diff", "--numstat", "HEAD", check=False).splitlines():
+        a_, d_ = (line.split("\t") + ["0", "0"])[:2]
+        add += int(a_) if a_.isdigit() else 0
+        rem += int(d_) if d_.isdigit() else 0
+    if len(_NUMSTAT) > 50:
+        _NUMSTAT.clear()
+    if stamp is None:
+        _NUMSTAT.pop(str(r), None)
+    else:
+        _NUMSTAT[str(r)] = (stamp, add, rem)
+    return add, rem
 
 
 def session_pr(sid: str) -> dict:

@@ -16,8 +16,11 @@ import threading
 import time
 from types import SimpleNamespace
 
-DENIED_NOTE = ("Not allowed in -p mode: nobody can approve it. Re-run with --auto, --permission-mode edits, or "
-               "--allowed-tools.")
+# What the model is told about a refused action: only that it was refused, and why. The flags that would allow it are
+# for the user (denial_note), and depend on what was refused and the mode the run already has (0.0.19: the note told
+# the model to "re-run with --permission-mode edits" in a run that had it, and the model told the user the same).
+DENIED_NOTE = ("Not run: this needs a person's yes, and in -p mode nobody can answer. Do not try it another way; "
+               "say in your reply what was not done.")
 # Full access (--auto) still asks before a command that deletes recursively, rewrites git history or uses sudo
 # (core._destructive): "re-run with --auto" would be wrong advice for those, to the model and to the user alike.
 DESTRUCTIVE_NOTE = ("Not run: this command deletes or rewrites things (rm -r/-f, git reset --hard, sudo...), which "
@@ -28,12 +31,18 @@ DESTRUCTIVE_HINT = ("commands that delete recursively, rewrite git history or us
 
 
 def _denied(ev: dict) -> dict:
-    """What a -p run reports about a refused action: a destructive command by its text, not the bare word."""
+    """What a -p run reports about a refused action: a command by its text, not the bare "Run this command?"."""
     if ev.get("title") == "Run this destructive command?":     # the card shows the command itself
         return {"kind": "bash", "title": ev.get("title"), "destructive": True,
                 "command": " ".join(str(ev.get("detail") or "").split())[:300]}
     if ev.get("title") != "destructive":
-        return {"kind": ev.get("kind"), "title": ev.get("title")}
+        d = {"kind": ev.get("kind"), "title": ev.get("title")}
+        if ev.get("kind") == "bash" and str(ev.get("detail") or "").strip():
+            d["command"] = str(ev.get("detail")).strip()[:300]
+            from meshpool_harness.agent import core as K
+            if K._destructive({"command": d["command"]}):      # git checkout -- file, reset --hard: a yes, even with --auto
+                d["destructive"] = True
+        return d
     cmd = ""
     try:
         args = json.loads(ev.get("detail") or "{}")
@@ -46,7 +55,7 @@ def _denied(ev: dict) -> dict:
     return {"kind": "bash", "title": "Run this destructive command?", "destructive": True,
             "command": " ".join(str(cmd).split())[:300]}
 _QUIET = ("Starting MCP servers", "No MCP servers enabled")          # status lines the terminal shows its own way
-_NO_STREAM = ("text_delta", "token", "delta", "thinking")
+_NO_STREAM = ("text_delta", "token", "delta", "thinking", "model_wait")
 
 
 class TermFrontend:
@@ -218,6 +227,16 @@ class TermFrontend:
                     return e["text"]
         return ""
 
+    def checked(self) -> str:
+        """The "Checked:" line of this run's last turn (agent/look.py), or ""."""
+        lk = getattr(self.s.agent, "last_look", None) or {}
+        return str(lk.get("line") or "") if lk.get("turn") == getattr(self.s.agent, "_turn_no", 0) else ""
+
+    def answer(self) -> str:
+        """The last answer without the "Checked:" line under it: -p reports that line on its own."""
+        from meshpool_harness.agent import look as L
+        return L.strip_checked(self.reply(), self.checked())
+
     @staticmethod
     def _tool_steps(a) -> int:
         return len([m for m in getattr(a, "messages", []) or [] if m.get("role") == "tool"])
@@ -245,32 +264,101 @@ class TermFrontend:
         """The last error this run showed (an unreachable endpoint, a rejected key), for a script reading --json."""
         with self.s.lock:
             evs = list(self.s.events[getattr(self, "_ev0", 0):])
-        return next((str(e.get("text") or "") for e in reversed(evs) if e.get("type") == "error"), "")
+        from meshpool_harness.core import errtext as ET
+        return ET.for_terminal(next((str(e.get("text") or "") for e in reversed(evs) if e.get("type") == "error"), ""),
+                               self.headless)
 
     def result(self, failed: bool) -> dict:
         a = self.s.agent
-        out = {"type": "result", "ok": not failed, "result": self.reply(), "session_id": self.s.id,
+        out = {"type": "result", "ok": not failed, "result": self.answer(), "session_id": self.s.id,
                "chat_id": self.s.id, "usage": self._usage(a, getattr(self, "_u0", None)),
                "steps": max(0, self._tool_steps(a) - getattr(self, "_steps0", 0)),
                "denied": list(self.denied)}
         err = self._error() if failed else ""
         if err:
             out["error"] = err
+        if self.checked():                                   # the look at what it made (agent/look.py)
+            out["checked"] = self.checked()
         rv = getattr(a, "last_review", None)
         if rv:                                               # the independent check of a big task (agent/grader.py)
             out["review"] = {k: v for k, v in rv.items() if k not in ("type", "turn")}
         return out
 
     def denial_note(self) -> str:
+        """What -p prints after a run that refused actions: each one by name, with the flag or rule that allows it,
+        then a re-run that works for all of them. "--permission-mode edits" is offered only for file edits: it never
+        lets a command run (OM-01)."""
         if not self.denied:
             return ""
-        titles = "; ".join(f"`{d['command'][:80]}`" if d.get("command") else str(d.get("title") or d.get("kind"))
-                           for d in self.denied[:5])
-        more = f" (and {len(self.denied) - 5} more)" if len(self.denied) > 5 else ""
-        hint = "re-run with --auto, --permission-mode edits, or --allowed-tools edit,bash:..."
-        if any(d.get("destructive") for d in self.denied):
-            hint = DESTRUCTIVE_HINT if all(d.get("destructive") for d in self.denied) else hint + "; " + DESTRUCTIVE_HINT
-        return f"{len(self.denied)} action(s) were not allowed: {titles}{more}. In -p mode nobody can approve them; {hint}"
+        rows, kinds = [], set()
+        for d in self.denied[:8]:
+            what, how, k = _allow_hint(d, getattr(self.s.agent, "mode", "ask"))
+            kinds.add(k)
+            rows.append(f"  {what}: {how}")
+        more = [f"  (and {len(self.denied) - 8} more)"] if len(self.denied) > 8 else []
+        if kinds <= {"edit"}:
+            hint = "re-run with --permission-mode edits (or --auto for full access)."
+        elif kinds <= {"outside"}:
+            hint = "re-run with --dir set to a folder that holds those files: edits stay inside the project folder."
+        elif kinds <= {"destructive"}:
+            hint = DESTRUCTIVE_HINT
+        else:
+            hint = ("re-run with --permission-mode auto (full access, the same as --auto), or allow each one as "
+                    "shown above.")
+            if "destructive" in kinds:
+                hint += " " + DESTRUCTIVE_HINT
+        if "command" in kinds and getattr(self.s.agent, "mode", "ask") in ("ask", "edits"):
+            try:
+                from meshpool_harness.core import sandbox as SBX
+                if not SBX.available():
+                    hint += (" Ordinary commands in the folder run without a question only inside the command sandbox "
+                             "(bubblewrap on Linux, sandbox-exec on macOS), which this computer does not have.")
+            except Exception:  # noqa: BLE001
+                pass
+        return "\n".join([f"{len(self.denied)} action(s) were not allowed. In -p mode nobody can approve them:",
+                          *rows, *more, "To allow them, " + hint])
+
+
+def _allow_hint(d: dict, mode: str) -> tuple[str, str, str]:
+    """(what was refused, what allows it, its kind) for one refused action of a -p run. A rule offered here is checked
+    against the permission code itself, so it is one that really lets the command through."""
+    from meshpool_harness.agent import core as K
+    from meshpool_harness.core import permrules as PR
+    title = str(d.get("title") or d.get("kind") or "an action").rstrip("?")
+    cmd = str(d.get("command") or "")
+    if d.get("destructive"):
+        rule = f"bash:{cmd}"
+        ok = cmd and K._allow_hit([rule], "bash", {"command": cmd})
+        return (f"`{cmd[:120]}`", (f'--auto --allowed-tools "{rule}"' if ok else "run it yourself")
+                + " (deletes or rewrites things)", "destructive")
+    if d.get("kind") == "bash" and cmd:
+        shown = f"`{' '.join(cmd.split())[:120]}`"
+        if title.startswith("Your rule"):
+            return shown, "your saved ask rule covers it; change the rule in permissions.json", "rule"
+        if title.startswith("Change "):
+            return shown, "it changes meshpool's own rule files; run it yourself", "rule"
+        for p in PR.grant_patterns(cmd)[:1]:
+            rule = f"bash:{p}*"
+            if K._allow_hit([rule], "bash", {"command": cmd}):
+                return shown, f'--allowed-tools "{rule}"', "command"
+        if K._allow_hit(["bash"], "bash", {"command": cmd}):
+            return shown, "--allowed-tools bash (every command except the destructive ones)", "command"
+        return shown, "--permission-mode auto", "command"
+    if d.get("kind") == "edit":
+        if title.startswith("Your rule"):
+            return title, "your saved ask rule covers it; change the rule in permissions.json", "rule"
+        if title.startswith("Change ") and "outside the project folder" not in title:
+            return title, "it changes meshpool's own rule files; make that change yourself", "rule"
+        if "outside the project folder" in title:
+            # no mode lets an edit leave the folder (Workspace refuses it): name the run that can make it
+            return title, "--dir with a folder that holds the file (edits stay inside the project folder)", "outside"
+        if mode in ("edits", "auto"):
+            # the run already accepts edits: it was refused for another reason (a file open in Office, a saved rule)
+            return title, "close the file in Office or change your saved rule, then run again", "other"
+        return title, "--permission-mode edits", "edit"
+    if d.get("kind") == "read":
+        return title, "--permission-mode auto (it reaches outside the folder)", "other"
+    return title, "--permission-mode auto", "other"
 
 
 _IMAGES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
@@ -297,6 +385,18 @@ def collect_attachments(paths: list, workdir: str) -> tuple[str, list]:
             from meshpool_harness.ui import workbench as W
             names.append("@" + W.attach(str(root), p.name, p.read_bytes())["path"])
     return ("Attached: " + " ".join(names)) if names else "", images
+
+
+def split_args(arg: str) -> list:
+    """The words of a slash command's argument, with "quoted words" kept together (/schedule add --name "Daily news").
+    A backslash is kept as it is, so a Windows path stays whole. Unbalanced quotes fall back to plain words."""
+    import shlex
+    try:
+        lex = shlex.shlex(arg or "", posix=True)
+        lex.whitespace_split, lex.escape, lex.commenters = True, "", ""
+        return list(lex)
+    except ValueError:
+        return (arg or "").split()
 
 
 # ---------- slash commands that call the Session ---------------------------------------------------------------
@@ -388,8 +488,9 @@ class SharedCommands:
             return None
         if arg.isdigit():
             return int(arg)
-        i = t.choose(title, [], [f"{x['n']}. {x.get('title') or ''}" + ("  (" + str(len(x['changed'])) + " files)"
-                                                                       if x.get('changed') else "") for x in turns],
+        # the menu numbers its rows itself: a row that began with the turn's number read "1. 1. fix the test" (OM-08)
+        i = t.choose(title, [], [(x.get('title') or f"Turn {x['n']}") + ("  (" + str(len(x['changed'])) + " files)"
+                                                                         if x.get('changed') else "") for x in turns],
                      sel=len(turns) - 1)
         return None if i is None else turns[i]["n"]
 
@@ -419,13 +520,18 @@ class SharedCommands:
         n = self._turn_pick(arg, "Undo from which turn?")
         if n is None:
             return
+        turns_before = self.s.cp.turns() if self.s.cp else []
         d = self.s.cp.diff(n)
         if d.get("patch"):
             self._show_patch(d["patch"])
         i = t.choose(f"Undo turn {n} and everything after it?", [], ["Undo", "Cancel"], sel=1)
         if i == 0:
-            self.s.revert(n)
+            r = self.s.revert(n)
             self._rebind()
+            if r.get("conversation"):            # the status line names the files; say what left the conversation
+                title = next((x.get("title") for x in turns_before if x.get("n") == n), "") or ""
+                t.p(t.st.dim(f"  The conversation is back to before turn {n}" + (f" ({title})" if title else "")
+                             + "."))
 
     def cmd_grade(self, arg):
         if not self._need_shared():
@@ -523,16 +629,16 @@ class SharedCommands:
     def cmd_project(self, arg):
         if arg.startswith("use ") and self._need_shared():          # move this chat into a project
             return self._cli(["chats", "move", self.s.id, arg[4:].strip()])
-        self._cli(["projects"] + (arg.split() if arg else ["list"]))
+        self._cli(["projects"] + (split_args(arg) if arg else ["list"]))
 
     def cmd_memory(self, arg):
         self._cli(["memory"] + (arg.split(None, 1) if arg else ["list"]))
 
     def cmd_skills(self, arg):
-        self._cli(["skills"] + (arg.split() if arg else ["list"]))
+        self._cli(["skills"] + (split_args(arg) if arg else ["list"]))
 
     def cmd_schedule(self, arg):
-        self._cli(["schedule"] + (arg.split() if arg else ["list"]))
+        self._cli(["schedule"] + (split_args(arg) if arg else ["list"]))
 
     def cmd_settings(self, arg):
         parts = arg.split(None, 1)

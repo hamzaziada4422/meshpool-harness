@@ -6,6 +6,7 @@ os.environ.setdefault("MH_FAILURES_LOG", "off")
 os.environ.setdefault("MH_RECOVER_MIN", "0")        # an outage in a test fails at once instead of waiting 30 min
 os.environ.setdefault("MH_GRADER", "0")            # the independent grader has its own tests (test_grader.py); off elsewhere
 os.environ.setdefault("MH_LEARN", "0")
+os.environ.setdefault("MH_LOOK_REVIEW", "0")      # looking at pages it made has its own tests (test_look_review.py)
 os.environ.setdefault("MH_UI_OPEN_PAGE", "1")      # UI tests load / directly; test_ui_launch_key.py covers the key            # the learning loop calls a model after a turn: off in tests
 
 import pytest  # noqa: E402
@@ -98,6 +99,9 @@ def _offline_gateway(monkeypatch, tmp_path):
     monkeypatch.setenv("MH_AUTO_ROUTE", "0")            # unit tests drive a bare Agent; test_ws20_cli_route opts in
     monkeypatch.setenv("MH_CLASSIFY_TIMEOUT", "1")      # a routing hint against the dead URL above gives up fast
     monkeypatch.setenv("MH_ROUTING_LOG", "0")           # tests never write a routing log (the log test turns it on)
+    # ordinary work in the folder runs without a question in the OS sandbox (0.0.18); the permission tests written for
+    # the questions keep testing them on machines with bubblewrap (CI) too. test_sandbox_auto.py turns it on.
+    monkeypatch.setenv("MH_SANDBOX_AUTO", "0")
     # Unit tests exercise the mechanisms with no shipped profile assignment (app/defaults/profiles.json picks the
     # Codex-design engine for every route); test_profiles.test_shipped_assignment and test_codex_engine test that file.
     monkeypatch.setenv("MH_PROFILES_DEFAULTS", "none")

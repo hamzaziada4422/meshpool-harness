@@ -70,6 +70,20 @@ def _ready(kind: str) -> dict:
             and (not h.get("plan") or h["plan"] == chosen or subs_ok)}
 
 
+def office_engine(text: str, kind: str, ready: dict) -> str:
+    """meshpool's own agent for a request whose main input or output is an office file (office_intent.office_work):
+    meshpool Work in a Work chat, meshpool Code in a Code chat (it has the same office tools; a Code chat is never
+    moved to Work, S-04). "" for any other request, or when that agent cannot run."""
+    try:
+        from meshpool_harness.office_intent import office_work
+        if not office_work(text):
+            return ""
+    except Exception:  # noqa: BLE001
+        return ""
+    own = "meshpool-code" if kind == "code" else "meshpool-work"
+    return own if own in ready else ""
+
+
 def _money(v: float) -> str:
     return f"${v:.4f}".rstrip("0").rstrip(".") if v < 0.1 else f"${v:.2f}"
 
@@ -106,6 +120,17 @@ def route(text: str, kind: str = "cowork", category: str | None = None, model: s
             quality[hid] += bonus
     cost, secs = c.get("cost_usd") or {}, c.get("seconds") or {}
     ready = _ready(kind)
+    own = office_engine(text, kind, ready)
+    if own:
+        # Priya, round 3: "make rooms-summary.xlsx" on Auto went to Codex twice (a 6-minute hang, then a raw command
+        # as the answer); meshpool Work did it in 27 s. Office work goes to meshpool's own agent, whatever else is
+        # installed; an outside agent still runs it when the user picks one.
+        rest = [h for h in sorted(quality, key=lambda h: -quality[h]) if h in ready and h != own]
+        return {"harness": own, "name": ready[own]["name"], "category": cat, "score": quality.get(own),
+                "reason": "Office files (Word, Excel, PowerPoint, PDF) go to meshpool's own agent, which makes and "
+                          "checks them.",
+                "ranking": [{"harness": h, "name": ready[h]["name"], "score": quality.get(h)}
+                            for h in [own, *rest][:5]]}
     scored = {h: q for h, q in quality.items() if h in ready}
     if not scored:
         hid = HR.default_for(kind if kind in HR.MODES else "cowork")

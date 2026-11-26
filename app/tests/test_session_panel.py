@@ -119,7 +119,9 @@ def test_context_estimates_from_messages_and_guesses_window(repo):
     s.agent.current_model = lambda: "mystery"
     s.agent.messages = [{"role": "user", "content": "x" * 40000}]
     c = W.context_info(s)
-    assert c["used"] == 10000 and c["size"] == 128000 and "estimate" in c["source"]
+    from meshpool_harness.core import context as CTX       # OM-10: the window the chat's context line names
+    assert c["used"] == 10000 and c["size"] == CTX.window_info("mystery", probe_endpoint=False)[0]
+    assert "estimate" in c["source"]
     assert W.model_window("claude-opus-x")[0] == 200000
 
 

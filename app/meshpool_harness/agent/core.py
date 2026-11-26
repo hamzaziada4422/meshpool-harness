@@ -10,6 +10,7 @@ Front ends (terminal, web app) talk to it through two callbacks:
 """
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import copy
 import datetime
@@ -52,6 +53,9 @@ DEFAULT_MODEL = "deepseek-v4.1-flash"
 
 READ_ONLY = {"bash_output", "bash_stop", "read_file", "grep", "glob", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
              "ask_user", "diagnostics", "find_skill", "update_plan", "mcp_find_tools"}
+# Run without asking, yet they write files into the chat's folder: the turn's checkpoint books them (office_task's
+# engine saves the finished deck or workbook there), so Undo of the turn takes those files back.
+WRITES_FILES = {"office_task"}
 # MCP tools that change nothing: the only ones plan mode runs (SAFE_MCP, which skips the approval prompt, also has
 # tools that save or schedule things).
 PLAN_MCP = {"mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mcp__meshpool_web__web_research",
@@ -79,7 +83,8 @@ PROJECT_FILES = ("MESHPOOL.md", "AGENTS.md", "CLAUDE.md")
 
 
 SCRATCH_RULE = ("\n\nPut scratch files (check scripts, repro copies, notes) in $TMPDIR, which is private to this task, "
-                "never in a fixed /tmp path that another task could also be using.")
+                "never in a fixed /tmp path that another task could also be using. The user cannot see $TMPDIR: never "
+                "point them to a file there (a backup or a copy); Undo in meshpool takes a change back.")
 
 
 def _lean_work_on() -> bool:
@@ -123,6 +128,49 @@ ENGINE_MCP = ("make_deck", "make_spreadsheet", "make_document", "make_pdf", "add
 def _engine_tool(name: str) -> bool:
     n = name.replace("-", "_")
     return n == "office_task" or (n.startswith("mcp__meshpool_office__") and n.rsplit("__", 1)[-1] in ENGINE_MCP)
+
+
+_MADE_EXT = (".pptx", ".docx", ".xlsx", ".pdf")
+
+
+def _job_file(out: str, root) -> str:
+    """The deliverable an office engine call reports it wrote ("Saved as: X", "saved it as X", "Saved the Word document:
+    X", or the first deliverable under "Files:"), as a path that exists, else ""."""
+    text = str(out or "")
+    cands = re.findall(r"Saved as: (.+?\.(?:pptx|docx|xlsx|pdf))\b", text) + \
+        re.findall(r"saved it as (.+?\.(?:pptx|docx|xlsx|pdf))\b", text) + \
+        re.findall(r"Saved the (?:Word document|PDF): (.+?\.(?:docx|pdf))\b", text) + \
+        re.findall(r"^- (.+?\.(?:pptx|docx|xlsx|pdf))\s*$", text, re.M)
+    for c in cands:
+        p = Path(c.strip())
+        p = p if p.is_absolute() else Path(root or ".") / p
+        if p.is_file():
+            return str(p)
+        hit = next(iter(Path(root or ".").glob(f"**/{Path(c).name}")), None) if root else None
+        if hit is not None and hit.is_file():
+            return str(hit)
+    return ""
+
+
+def _made_summary(path: str) -> str:
+    """A plain line for a job that finished when the model's last reply came back empty: "Made X.pptx, 7 slides." """
+    p = Path(path or "")
+    if not path or not p.is_file():
+        return ""
+    extra = ""
+    try:
+        if p.suffix.lower() == ".pptx":
+            from pptx import Presentation
+            n = len(Presentation(str(p)).slides)
+            extra = f", {n} slide{'s' if n != 1 else ''}"
+        elif p.suffix.lower() == ".xlsx":
+            import zipfile
+            with zipfile.ZipFile(p) as z:
+                n = len([x for x in z.namelist() if re.match(r"xl/worksheets/sheet\d+\.xml$", x)])
+            extra = f", {n} sheet{'s' if n != 1 else ''}"
+    except Exception:  # noqa: BLE001 - the name alone still says what was made
+        extra = ""
+    return f"Made {p.name}{extra}."
 
 
 def _codex_prompt(lean: bool = False, work: bool = False) -> str:
@@ -395,7 +443,7 @@ Research budget: when the request or its files already hold sourced research, us
 mark as a gap; otherwise prefer a few authoritative sources (filings, the company's releases) over many pages, and \
 stop researching once each number you need has a source. To change text, cells, comments or tracked changes in a Word, Excel or PowerPoint file the user already has, call edit_office_file (it keeps their formatting; never rewrite the file's XML by hand). Never build a deck or a workbook yourself with python-pptx or openpyxl when make_deck, make_spreadsheet or \
 office_task can make it: the engines carry the design system and the checks. To add or change slides in a deck the \
-user already has, use add_slides (it builds them in that deck's look and keeps the original): never write slides \
+user already has, use add_slides (it builds them in that deck's look and saves them into it; Undo keeps the earlier version): never write slides \
 with python-pptx code. If an engine call returns a job id, \
 wait for it with office_job_status. If its result has a problem, call it again with the specific fix in the request \
 (e.g. "exactly 10 slides; merge the two risk slides"). Run check_deck on every .pptx, check_workbook on every .xlsx \
@@ -438,7 +486,7 @@ then call it again with the answers as fields. If you already asked them, pass b
 
 Rules
 - Copy values the request gives (dates, amounts, labels, names) exactly as written, unless it asks you to reformat them: do not rewrite an ISO date, add a note such as "(excl. VAT)" or round a figure the user gave.
-- Save a result at the exact path and file name the request names (for example ./deck.pptx); use the Meshpool outputs folder only when it names none.
+- Save a result at the exact path and file name the request names (for example ./deck.pptx); when it names none, give it a plain name in the working folder. Never make a folder of your own for results.
 - To fill in or change a workbook, document or deck the user already has, use edit_office_file with direct edits (cell references such as Assumptions!B2 on the named sheets); build with an engine only for a new file.
 - Use facts from the user's files and fetched sources. Never invent numbers, quotes or sources; say what is missing.
 - You can only write inside the working folder. Ask before deleting or overwriting the user's files.
@@ -489,6 +537,20 @@ _ABORT: contextvars.ContextVar = contextvars.ContextVar("meshpool_abort", defaul
 
 class _EndpointDown(RuntimeError):
     """The endpoint stayed down for the whole recovery wait: report it, do not wait again."""
+
+
+class _ModelFailing(RuntimeError):
+    """The model answered every try with a server error (5xx) until the retries were used up."""
+
+
+def _clip(text: str, n: int = 120) -> str:
+    """text on one line, at most n characters, cut at a word with an ellipsis when it is longer."""
+    t = " ".join(str(text).split())
+    if len(t) <= n:
+        return t
+    cut = t[:n - 1]
+    sp = cut.rfind(" ")
+    return (cut[:sp] if sp > n // 2 else cut).rstrip(" ,;:") + "…"
 
 
 def _urlopen(req, timeout: float, sink):
@@ -543,7 +605,7 @@ def _image_in_newest_ask(messages: list) -> bool:
         c = m.get("content")
         text = c if isinstance(c, str) else " ".join(str(p.get("text") or "") for p in c or []
                                                        if isinstance(p, dict) and p.get("type") == "text")
-        if text.startswith(("Image returned by", "[Meshpool]")):
+        if text.startswith(("Image returned by", "[Meshpool]", "[meshpool]")):
             continue                                    # attached by a tool (_attach_images) or a harness note
         return isinstance(c, list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in c)
     return False
@@ -584,6 +646,7 @@ def _lighten(messages: list) -> None:
         _compact(messages, keep_recent=8)
 
 
+STOPPED_MARK = "(Stopped by the user before this reply was finished.)"
 RESUME_NOTE = ("\n\n\u200b[Meshpool] Your previous turn was cut off by an error (such as a rate limit or a lost "
                "connection) before you finished. Unless this message asks for something else, pick the task up exactly "
                "where it stopped: the tool calls and results above are what was already done, so do not redo finished "
@@ -645,12 +708,468 @@ def _patch_files(patch: str) -> list:
     return list(dict.fromkeys(x.strip() for x in out if x and x.strip()))
 
 
+_FILE_WORD = re.compile(r"[\w.()~-]+\.(?:pdf|docx?|xlsx?|xlsm|csv|tsv|pptx?|txt|md|json|png|jpe?g|html?|py|ipynb|zip)\b",
+                        re.I)
+_READERS = {"cat", "head", "tail", "less", "more", "wc", "file", "pdftotext", "pdfinfo", "grep", "rg", "sed", "awk",
+            "strings", "xxd", "od", "stat", "ls", "find", "tree", "du", "unzip", "zipinfo", "jq", "sort", "uniq", "cut"}
+_PROGRAMS = {"python": "Python", "python3": "Python", "node": "JavaScript", "Rscript": "R", "ruby": "Ruby",
+             "perl": "Perl", "soffice": "LibreOffice", "libreoffice": "LibreOffice", "pandoc": "Pandoc"}
+
+
+_GIT_PRE = r"git(?:\s+(?:-[Cc]\s*\S+|--?[\w-]+(?:=\S*)?))*\s+"
+
+
+def _git_discard_title(steps) -> str:
+    """A title for a step that throws away work the user may not have saved elsewhere: git checkout or restore of files,
+    reset --hard, clean, and stash (Omar, 0.0.19: the card read "Run a Python step on cli.py, report.py ..."). "" if no
+    step is one of these."""
+    for x in steps:
+        x = x.strip()
+        m = re.match(_GIT_PRE + r"(checkout|restore)\b(.*)$", x, re.S)
+        if m:
+            args = m.group(2).split()
+            if m.group(1) == "restore" and any(a in ("--staged", "-S") for a in args) and \
+                    not any(a in ("--worktree", "-W") for a in args):
+                continue                                          # only unstages: nothing is lost
+            if m.group(1) == "checkout" and not ("--" in args or args[:1] == ["."]):
+                continue                                          # a branch switch or a new branch
+            paths = [a.strip("'\"") for a in (args[args.index("--") + 1:] if "--" in args else args)
+                     if not a.startswith("-")]
+            if not paths:
+                continue
+            if paths == ["."]:
+                return "Discard all your changes in this folder?"
+            if len(paths) == 1:
+                return "Discard your changes to " + os.path.basename(paths[0].rstrip("/")) + "?"
+            return f"Discard your changes to {len(paths)} files?"
+        if re.match(_GIT_PRE + r"reset\b.*--hard\b", x):
+            return "Discard all your uncommitted changes (git reset --hard)?"
+        m = re.match(_GIT_PRE + r"clean\b(.*)$", x)
+        if m and not re.search(r"(?:^|\s)(?:-[a-z]*n[a-z]*|--dry-run)(?=\s|$)", m.group(1)):
+            return "Delete the files git does not track (git clean)?"
+        if re.match(_GIT_PRE + r"stash(?:\s+(?:push|save)\b.*|(?:\s+-[-\w]+.*)?)?$", x):
+            return "Shelve your uncommitted changes (git stash)?"
+    return ""
+
+
+_HEREDOC_OPEN = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n")
+
+
+def _strip_heredocs(s: str):
+    """(script without the heredoc bodies, [bodies])."""
+    out, bodies, pos = [], [], 0
+    while True:
+        m = _HEREDOC_OPEN.search(s, pos)
+        if not m:
+            out.append(s[pos:])
+            break
+        out.append(s[pos:m.end()])
+        end = re.search(r"^[ \t]*" + re.escape(m.group(2)) + r"[ \t]*$", s[m.end():], re.M)
+        if not end:
+            bodies.append(s[m.end():])
+            break
+        bodies.append(s[m.end():m.end() + end.start()])
+        pos = m.end() + end.end()
+    return "".join(out), bodies
+
+
+def _heredoc_title(s: str) -> str:
+    """Title for a script with a heredoc (`cat > chart.py <<'EOF' ... EOF` then `python chart.py`, or `python - <<'EOF'`):
+    from what it does, not from the lines of the program text (Lina, 0.0.19: "Run 27 steps: cat, import, ...")."""
+    if "<<" not in s:
+        return ""
+    head, bodies = _strip_heredocs(s)
+    if not bodies:
+        return ""
+    w = re.search(r"(?:\bcat|\btee(?:\s+-a)?)\s*(?:>>?\s*)?(?P<f>[^\s<>|;&]+)\s*<<|\bcat\s*>>?\s*(?P<g>[^\s<>|;&]+)\s*<<",
+                  head)
+    written = os.path.basename((w.group("f") or w.group("g") or "").strip("'\"")) if w else ""
+    if not written and not re.search(r"(?:^|[;&|\s])(?:python[\d.]*|node|Rscript|ruby|perl)\b[^\n<]*<<", head):
+        return ""
+    hfiles = [f for f in dict.fromkeys(m.group(0).rsplit("/", 1)[-1] for b in bodies + [head] for m in _FILE_WORD.finditer(b))
+              if f != written][:3]
+    on = (" on " + ", ".join(hfiles)) if hfiles else ""
+    lang = next((v for k, v in _PROGRAMS.items() if re.search(r"\b" + k + r"\b", head)), "")
+    if not lang and re.search(r"\bimport\b|\bdef\b|\bprint\(", " ".join(bodies)):
+        lang = "Python"
+    step = f"a {lang} step{on}" if lang else f"a step{on}"
+    if written:
+        ran = bool(re.search(r"(?:python[\d.]*|node|Rscript|ruby|perl|bash|sh)\s+\S*" + re.escape(written), head))
+        return f"Write {written} and run it ({step})?" if ran else f"Write {written}?"
+    return f"Run {step}?"
+
+
+# Office's lock files: "~$Budget.xlsx" (Microsoft Office) and ".~lock.Budget.xlsx#" (LibreOffice).
+_OFFICE_LOCK = re.compile(r"(?:~\$|\.~lock\.)([\w .()-]+?\.(?:docx?|xlsx?|xlsm|pptx?|od[tsp]|csv|rtf))#?(?=['\"\s;&|]|$)",
+                          re.I)
+_SCRATCH_DIR = re.compile(r"^(?:/tmp/|/var/folders/|\$\{?TMPDIR\}?|\$\{?TMP\}?|\$\{?TEMP\}?|[A-Za-z]:\\[^\s]*\\Temp\\)")
+
+
+def _user_steps_text(script: str) -> str:
+    """The script without the steps that only work in a scratch folder: after `cd` into /tmp or $TMPDIR (until a `cd`
+    elsewhere), and steps whose every path is in one. What is left is what touches the user's folder."""
+    masked, out, at, scratch = PR._scan(script)[0], [], 0, False
+    parts = []
+    for m in re.finditer(r"&&|\|\||[;|\n]", masked):
+        parts.append(script[at:m.start()])
+        at = m.end()
+    parts.append(script[at:])
+    for x in parts:
+        w = x.strip().split()
+        if w and w[0] == "cd":
+            scratch = len(w) > 1 and bool(_SCRATCH_DIR.match(w[1].strip("'\"")))
+            continue
+        paths = [t.strip("'\"") for t in w[1:] if "/" in t or t.strip("'\"").startswith("$")]
+        if scratch or (paths and all(_SCRATCH_DIR.match(t) for t in paths)):
+            continue
+        out.append(x)
+    return " ; ".join(out)
+
+
+_READ_PROGS = {"cat", "head", "tail", "less", "more", "wc", "file", "ls", "grep", "rg", "pdftotext", "pdfinfo", "unzip",
+               "zipinfo", "xxd", "strings", "stat", "tree", "jq", "sort", "uniq", "cut", "cp", "mkdir", "cd", "echo",
+               "true", "sed", "awk", "tr", "column", "xmllint", "find", "du"}
+
+
+def _only_reads(s: str) -> list | None:
+    """The user's files a chain only reads ([] when it names none), or None when any step may change something outside
+    a temporary folder. Copying or unpacking into a temporary folder (cp x /tmp/..., cd /tmp/... && unzip -o x) is
+    reading (persona Maya, round 4: "Run 5 steps: cat, cp, unzip?" for looking at her price list)."""
+    vals = dict(re.findall(r"(?:^|[;&|\n]\s*|\s)([A-Za-z_]\w*)=([^\s;&|$`]+)", s))
+    t = re.sub(r"\$\{?([A-Za-z_]\w*)\}?", lambda m: vals.get(m.group(1), m.group(0)), s)
+    if re.search(r"\$\(|`|<\(|>\(|\$", t):
+        return None                                       # something left that expands: not judged here
+    temp = lambda x: bool(_SCRATCH_PATH.match(x.strip("'\""))) or x.strip("'\"") in ("/dev/null", "-")   # noqa: E731
+    here_tmp, names = False, []
+    for seg in PR._segments(t):
+        w = PR._tokens(seg)
+        if w is None:
+            return None
+        while w and re.match(r"^[A-Za-z_]\w*=", w[0]):
+            w = w[1:]
+        if not w:
+            continue
+        prog, rest = os.path.basename(w[0]), w[1:]
+        if prog not in _READ_PROGS:
+            return None
+        red = re.search(r"(?<![0-9&])>>?\s*([^\s;&|<>]+)", PR._OKREDIR.sub(" ", seg))
+        if red and not (temp(red.group(1)) or here_tmp):
+            return None                                   # writes a file of the user's
+        pos = [a for a in rest if not a.startswith("-")]
+        if prog == "cd":
+            here_tmp = bool(pos) and temp(pos[0])
+            continue
+        if prog == "mkdir" and not all(temp(a) for a in pos):
+            return None
+        if prog == "cp" and (len(pos) < 2 or not temp(pos[-1])):
+            return None
+        if prog == "unzip" and not ("-l" in rest or "-p" in rest or "-Z" in rest or here_tmp or
+                                    ("-d" in rest and rest.index("-d") + 1 < len(rest) and temp(rest[rest.index("-d") + 1]))):
+            return None
+        if prog == "sed" and any(a.startswith("-i") or a.startswith("--in-place") for a in rest):
+            return None
+        if prog == "find" and any(a in ("-delete", "-exec", "-execdir", "-ok", "-fprint") for a in rest):
+            return None
+        if prog == "pdftotext" and len(pos) > 1 and not temp(pos[1]):
+            return None
+        if prog == "awk" and re.search(r"system|>|\|", " ".join(rest)):
+            return None
+        if prog in ("cd", "mkdir", "echo", "true"):
+            continue
+        src = pos[:-1] if prog == "cp" else pos
+        for a in src:
+            a = a.strip("'\"")
+            if not temp(a) and not here_tmp and re.search(r"\.\w{2,5}$", a):
+                names.append(os.path.basename(a))
+    return list(dict.fromkeys(names))
+
+
+def _plain_command_title(script: str) -> str:
+    """What a command does, in words a person can judge, for the approval card (persona runs, 0.0.18: every card was
+    a raw `D=/tmp/...; python3 -I -c "..."` line nobody could judge). The command itself stays below the title.
+    Never milder than the command (review, 0.0.18): "Read" only when every step only reads, a write, delete or the
+    network is named as such, and a chain says how many steps it has."""
+    s = str(script or "")
+    from meshpool_harness.office_guard import plain_command_title as _office_title
+    conv = _office_title(s)                           # Sara: "Convert Board_Update_Q3.pptx to PDF", not the soffice line
+    if conv:
+        return conv + "?"
+    hd = _heredoc_title(s)                            # a heredoc's lines are text for a program, never steps
+    if hd:
+        return hd
+    # Steps that only look at a scratch copy (cd into $TMPDIR or /tmp, then unzip, cat, find) name no file of the user's
+    # (Sara: "rm -f '~$Budget_2026.xlsx' && cd <scratch> && unzip ..." read as "Delete Budget_2026.xlsx?").
+    named = _user_steps_text(s)
+    files = list(dict.fromkeys(m.group(0).rsplit("/", 1)[-1] for m in _FILE_WORD.finditer(named)))[:3]
+    on = (" on " + ", ".join(files)) if files else ""
+    words = re.findall(r"(?:^|[;&|]\s*|\bdo\s+|\bthen\s+)([A-Za-z][\w.+-]*)", s)
+    progs = [os.path.basename(w) for w in words if w not in ("cd", "export", "set", "for", "do", "done", "if", "then",
+                                                              "fi", "echo", "true", "D", "mkdir")]
+    masked, cuts, at = PR._scan(s)[0], [], 0          # split where the shell would: not inside quoted code
+    for m in re.finditer(r"&&|\|\||[;|\n]", masked):
+        cuts.append(s[at:m.start()])
+        at = m.end()
+    cuts.append(s[at:])
+    steps = [x.strip() for x in cuts
+             if x.strip() and not re.match(r"(?:cd|export|set|echo|true|mkdir)\b|[A-Za-z_]\w*=\S*$", x.strip())]
+    more = f" ({len(steps)} steps: " + ", ".join(dict.fromkeys(x.split()[0] for x in steps))[:60] + ")" \
+        if len(steps) > 1 else ""
+    if re.search(r"\b(?:pip3?|npm|pnpm|yarn|cargo|gem|brew|apt|apt-get|conda|uv)\s+(?:install|add|i)\b", s):
+        return "Install software from the internet? (" + s.strip().splitlines()[0][:80] + ")"
+    if re.search(r"\bgit\s+push\b", s):
+        return "Send your commits to the remote repository?"
+    if re.search(r"\bgit\s+(?:clone|fetch|pull)\b", s):
+        return "Download from a git repository?"
+    why = _git_discard_title(steps)
+    if why:
+        return why
+    if re.search(r"(?:^|[\s;&|(])(?:curl|wget)(?=\s|$)", s):   # a URL that is only text (an XML namespace in a
+        host = re.search(r"https?://([^/\s'\"]+)", s)         # script, a link in a commit message) is not the network
+        return "Use the internet" + (f" ({host.group(1)})" if host else "") + "?"
+    if PR.NETWORK.search(s):
+        return "Use the internet? (" + s.strip().splitlines()[0][:80] + ")"
+    if PR._HOME_REF.search(s) or re.search(r"(?:^|[\s'\"=(])~(?:/|\s|$)|/(?:home|Users)/|\b[A-Za-z]:\\Users\\", s):
+        # release review: `cat $HOME/.ssh/id_rsa` asked under "Look at files in this folder?", which anyone would allow
+        return "Use files outside this folder, in your home folder? (" + s.strip().splitlines()[0][:80] + ")"
+    if PR.DELETES.search(s):
+        # name only what the deleting steps remove: "sed -i … report.py && rm sample.csv" deletes sample.csv, not both
+        dsegs = [x for x in steps if PR.DELETES.search(x)] or [s]
+        locks = list(dict.fromkeys(m.group(1) for x in dsegs for m in _OFFICE_LOCK.finditer(x)))
+        rest = [_OFFICE_LOCK.sub(" ", x) for x in dsegs]
+        gone = list(dict.fromkeys(m.group(0).rsplit("/", 1)[-1] for x in rest for m in _FILE_WORD.finditer(x)))[:3]
+        if locks and not gone:                    # "~$Budget_2026.xlsx" is Office's lock file, not the workbook
+            return "Remove the Office lock file for " + ", ".join(locks[:3]) + "?"
+        if locks and gone:
+            return "Delete " + ", ".join(gone) + " and the Office lock file for " + ", ".join(locks[:2]) + "?"
+        return ("Delete " + ", ".join(gone) + "?") if gone else f"Delete files?{more}"
+    reads = _only_reads(s) if len(steps) > 1 else None
+    if reads is not None:
+        return ("Read " + " and ".join([", ".join(reads[:-1]), reads[-1]] if len(reads) > 1 else reads) + "?") \
+            if reads else "Look at files in this folder?"
+    lang = next((_PROGRAMS[p] for p in progs if p in _PROGRAMS), "")
+    if lang:
+        return f"Run a {lang} step{on}?" if not more else f"Run a {lang} step{on}{more}?"
+    if "find" in progs and re.search(r"\bfind\s+(?:/|~)", s):
+        return "Search your computer's files?"
+    writes = PR.writes(s) or re.search(r"\bsed\s+(?:-\w*\s+)*-i|\b(?:tee|cp|mv|touch|chmod|chown|ln)\b", s)
+    if progs and not writes and all(p in ("which", "command", "type") for p in progs):
+        return "Check which programs are installed?"
+    if progs and not writes and all(p in _READERS for p in progs) and \
+            all(T.read_only(x) or re.match(r"pdfinfo\b|pdftotext\b.*\s-$", x) for x in steps or [s]):
+        return ("Read " + ", ".join(files) + "?") if files else "Look at files in this folder?"
+    if re.search(r"\bsed\s+(?:-\w*\s+)*-i", s) and files and not more:
+        return "Change " + ", ".join(files) + "?"
+    dest = re.search(r"(?<![0-9&])>>?\s*([^\s;&|<>]+)", PR._OKREDIR.sub(" ", s))
+    if dest and not more:
+        return f"Write {os.path.basename(dest.group(1).strip(chr(39) + chr(34)))}?"
+    # the first real step (not cd, export or VAR=...), up to three words before an option or a quoted argument
+    seg = steps[0] if steps else ""
+    first = []
+    for w in seg.split()[:3]:
+        if w.startswith(("-", "'", '"', "$")):
+            break
+        first.append(w)
+    first = " ".join(first)
+    if first and any(f in first for f in files):
+        on = ""
+    if more:
+        return f"Run {len(steps)} steps: " + ", ".join(dict.fromkeys(x.split()[0] for x in steps))[:60] + "?"
+    return f"Run {first}{on}?" if first else "Run this command?"
+
+
+# A step row in Chat mode, in plain words (round 2: "Ran a command: ls -la", a whole heredoc, "Used a connector /tmp/..."):
+# (pattern, imperative, running, done) for each title _plain_command_title can give. The first that matches wins.
+_STEP_FORMS = [
+    (r"Look at files in this folder", "Look at the files in the folder", "Looking at the files in the folder", "Looked at the files in the folder"),
+    (r"Read (.+)", r"Read \1", r"Reading \1", r"Read \1"),
+    (r"Change (.+)", r"Change \1", r"Changing \1", r"Changed \1"),
+    (r"Write (.+)", r"Create \1", r"Creating \1", r"Created \1"),
+    (r"Delete (.+)", r"Delete \1", r"Deleting \1", r"Deleted \1"),
+    (r"Run an? (\w+) step(?: on (.+?))?(?: \(.*)?", None, None, None),
+    (r"Install software.*", "Install software", "Installing software", "Installed software"),
+    (r"Send your commits.*", "Send your commits", "Sending your commits", "Sent your commits"),
+    (r"Download from a git repository", "Download from a git repository", "Downloading from a git repository", "Downloaded from a git repository"),
+    (r"Use the internet.*", "Use the internet", "Using the internet", "Used the internet"),
+    (r"Use files outside this folder.*", "Use files in your home folder", "Using files in your home folder", "Used files in your home folder"),
+    (r"Search your computer's files", "Search the files", "Searching the files", "Searched the files"),
+    (r"Check which programs are installed", "Check which programs are installed", "Checking which programs are installed", "Checked which programs are installed"),
+    (r"Run (\d+) steps.*", r"Run \1 steps", r"Running \1 steps", r"Ran \1 steps"),
+    (r"Run this command", "Run a command", "Running a command", "Ran a command"),
+    (r"Run (.+?)(?: on .*)?", r"Run \1", r"Running \1", r"Ran \1"),
+]
+
+
+def _plain_forms(title: str):
+    t = re.sub(r"\s+", " ", str(title or "")).strip().rstrip("?").strip()
+    for rx, imp, run, done in _STEP_FORMS:
+        m = re.fullmatch(rx, t)
+        if not m:
+            continue
+        if imp is None:                                    # "Run a Python step on a.py"
+            lang, on = m.group(1), m.group(2)
+            tail = f" on {on}" if on else ""
+            return f"Run a {lang} step{tail}", f"Running a {lang} step{tail}", f"Ran a {lang} step{tail}"
+        return tuple(m.expand(x) for x in (imp, run, done))
+    return None
+
+
+_OFFICE_VERBS = {"check document": ("Check", "Checking", "Checked"), "read document": ("Read", "Reading", "Read"),
+                 "convert document": ("Convert", "Converting", "Converted"), "edit office file": ("Change", "Changing", "Changed"),
+                 "add slides": ("Add slides to", "Adding slides to", "Added slides to"),
+                 "fill template": ("Fill in", "Filling in", "Filled in"),
+                 "merge decks": ("Combine decks into", "Combining decks into", "Combined decks into")}
+
+
+def _no_heredocs(script: str) -> str:
+    """The script without the text inside its heredocs (a file written with cat <<EOF is a wall of text, not steps)."""
+    out, end = [], None
+    for line in str(script or "").split("\n"):
+        if end is not None:
+            if line.strip() == end:
+                end = None
+            continue
+        out.append(line)
+        m = re.search(r"<<-?\s*['\"]?(\w+)['\"]?", line)
+        if m:
+            end = m.group(1)
+    return "\n".join(out)
+
+
+def plain_step(name: str, summary: str, mcp: bool = False) -> dict | None:
+    """The step row of one tool call in plain words, for Chat mode: {"base": "Create a.html", "run": "Creating a.html",
+    "done": "Created a.html"}; None when the tool needs no change (its row already reads well). It reads the same plain
+    titles the approval cards use (_plain_command_title, office_card), so the page never guesses at a command. A title
+    never holds file contents: the raw command stays in the step's details."""
+    nm = str(name or "").replace("-", "_")
+    short = nm.split("__", 2)[-1] if nm.startswith("mcp__") else nm
+    s = str(summary or "")
+    if short in ("bash", "bash_many", "shell", "exec_command", "terminal"):
+        if s.startswith("Edit ") and "\n" not in s and len(s) < 200:      # _patch_step: "Edit a.py, then run ..." is plain
+            tail = s[5:]
+            return {"base": "Change " + tail, "run": "Changing " + tail, "done": "Changed " + tail}
+        script = s.replace(" ; ", "\n") if short == "bash_many" else s
+        script = _no_heredocs(re.sub(r"^cd\s+\S+\s*&&\s*", "", script))
+        base, run, done = _plain_forms(_plain_command_title(script)) or ("Run a command", "Running a command", "Ran a command")
+        return {"base": base[:90], "run": run[:90], "done": done[:90]}
+    if short == "read_document":
+        f = ""
+        try:
+            a = json.loads(s) if s.strip().startswith("{") else {}
+            f = os.path.basename(str(a.get("path") or a.get("filename") or ""))
+        except ValueError:
+            pass
+        if not f and ("/" in s or "\\" in s or _FILE_WORD.search(s)):
+            f = os.path.basename(s.strip().strip("'\"").replace("\\", "/"))
+        what = f[:60] or "the file"
+        return {"base": f"Read {what}", "run": f"Reading {what}", "done": f"Read {what}"}
+    if short in ("make_document", "make_pdf", "make_spreadsheet", "make_deck", "office_task", "analyze_data") or \
+            (nm.startswith("mcp__") and "office" in nm):
+        title = s.strip()
+        if title.startswith("{"):
+            try:
+                a = json.loads(title)
+                title = str(a.get("filename") or a.get("path") or a.get("save_as") or a.get("title") or "")
+            except ValueError:
+                title = ""
+        files = [m.group(0).rsplit("/", 1)[-1] for m in _FILE_WORD.finditer(title)]
+        f = files[0] if files else ""
+        m = re.match(r"Use the office tool ([a-z ]+?)(?: on .*)?$", title)
+        if m and m.group(1) in _OFFICE_VERBS:
+            v = _OFFICE_VERBS[m.group(1)]
+            what = f or "the file"
+            return {"base": f"{v[0]} {what}", "run": f"{v[1]} {what}", "done": f"{v[2]} {what}"}
+        if title.startswith("Make a") or short in ("make_document", "make_pdf", "make_spreadsheet", "make_deck"):
+            if f:
+                return {"base": f"Make {f}", "run": f"Making {f}", "done": f"Made {f}"}
+            noun = {"make_document": "a Word document", "make_pdf": "a PDF", "make_spreadsheet": "a spreadsheet",
+                    "make_deck": "a deck"}.get(short) or (re.sub(r"^Make (?:a new |an? )?", "", title) or "file")
+            noun = noun if noun.startswith(("a ", "an ")) else "a " + noun
+            return {"base": f"Make {noun}", "run": f"Making {noun}", "done": f"Made {noun}"}
+        what = f or "the file"
+        for rx, v in ((r"^(?:Change|Shorten|Fix)\b", ("Change", "Changing", "Changed")),
+                      (r"^Convert|^Make a PDF of", ("Convert", "Converting", "Converted")),
+                      (r"^Analyse", ("Analyse", "Analysing", "Analysed")),
+                      (r"^Add slides", ("Add slides to", "Adding slides to", "Added slides to")),
+                      (r"^Fill in", ("Fill in", "Filling in", "Filled in")),
+                      (r"^Combine", ("Combine decks into", "Combining decks into", "Combined decks into"))):
+            if re.match(rx, title):
+                if v[0] == "Analyse":
+                    what = ", ".join(dict.fromkeys(m2.group(0).rsplit("/", 1)[-1] for m2 in _FILE_WORD.finditer(title))) or "the data"
+                return {"base": f"{v[0]} {what}", "run": f"{v[1]} {what}", "done": f"{v[2]} {what}"}
+        return {"base": f"Work on {what}", "run": f"Working on {what}", "done": f"Worked on {what}"}
+    if not (mcp or nm.startswith("mcp__")) and short in ("read_file", "read", "grep", "glob", "search", "list", "find") \
+            and re.match(r"(?:List|Read|Search|Find|Look|Open|View|Show|Grep|Glob|Get|Check)\b \S", s.strip()):
+        # an outside agent's own title ("List files in 'rooms-summary.xlsx'") is a sentence, not the path a built-in step has
+        if short in ("read_file", "read") and _FILE_WORD.search(s):
+            f = _FILE_WORD.search(s).group(0)
+            return {"base": f"Read {f}", "run": f"Reading {f}", "done": f"Read {f}"}
+        return {"base": "Look through the files", "run": "Looking through the files", "done": "Looked through the files"}
+    if mcp or nm.startswith("mcp__"):
+        if short in ("web_search", "web_fetch", "web_research", "memory_save", "run_subtasks", "schedule_task") \
+                or short.startswith("browser_"):
+            return None
+        return {"base": "Connector step", "run": "Using a connector", "done": "Used a connector"}
+    return None
+
+
+def _unknown_model_text(bare: str, prov: str = "key", msg: str = "", key: str = "") -> str:
+    """OM-04: the error for a model named with --model that the endpoint does not serve, with the closest names it
+    does serve (one read of the endpoint's model list, made only now that the call failed). When the endpoint says
+    key_model_access_denied the model exists but this key may not use it: say that, with the endpoint's own words."""
+    import difflib
+    ids: list = []
+    try:
+        if prov == "chatgpt":
+            from meshpool_harness.core import chatgpt as CG
+            ids = list(CG.models())
+        else:
+            from meshpool_harness.ui import workbench as W
+            ids = [str(r.get("id")) for r in W.models().get("models") or [] if r.get("id")]
+            ids = [i.split(":", 1)[1] if i.startswith("chatgpt:") else i for i in ids]
+    except Exception:  # noqa: BLE001 - the list is a help, never a second failure
+        ids = []
+    ids = [i for i in dict.fromkeys(ids) if i != bare]       # the name asked for is never offered back as a close one
+    close = difflib.get_close_matches(bare, ids, n=5, cutoff=0.4) or \
+        [i for i in ids if bare.lower().split("-")[0] in i.lower()][:5]
+    if "key_model_access_denied" in (msg or ""):
+        from meshpool_harness.core import errtext as ET
+        text = f"Your key is not allowed to use the model {bare}."
+        said = ET.said(ET.parse(msg)[1], key)[:200].strip()
+        if said:
+            text += f" The endpoint said: {said}"
+    else:
+        text = f"The endpoint does not serve the model {bare}."
+    if close:
+        text += " Close names it does serve: " + ", ".join(close) + "."
+    return text + " Pick one with --model, or run `meshpool models` to see them all."
+
+
+def _patch_step(script) -> str:
+    """The step row of a shell script that starts with apply_patch, in plain words: "Edit a.py, b.py, then run
+    python -m pytest" (0.0.19: the row above the approval card read `apply_patch <<'EOF' *** Begin...`). "" when the
+    script is not a patch."""
+    hit = T.patch_from_shell(script)
+    sp = None if hit else T.split_patch_script(script)
+    body = hit[0] if hit else sp[0] if sp else None
+    if body is None:
+        return ""
+    files = _patch_files(body)
+    text = "Edit " + (", ".join(files[:4]) + (f" and {len(files) - 4} more" if len(files) > 4 else "") if files
+                      else "files")
+    rest = sp[2] if sp else ""
+    if rest:
+        more = _patch_step(re.sub(r"^cd\s+\S+\s*&&\s*", "", rest)) or _plain_command_title(rest).rstrip("?")
+        text += ", then " + more[:1].lower() + more[1:]
+    return text
+
+
 def _summary_of(name: str, args: dict) -> str:
-    if name == "shell":
-        cmd = T.shell_script(args.get("command"))
-        return (f"cd {args['workdir']} && " if args.get("workdir") else "") + cmd
-    if name == "exec_command":
-        return (f"cd {args['workdir']} && " if args.get("workdir") else "") + str(args.get("cmd") or "")
+    if name in ("shell", "exec_command"):
+        script = T.shell_script(args.get("command")) if name == "shell" else str(args.get("cmd") or "")
+        plain = _patch_step(script)
+        if plain:
+            return plain
+        return (f"cd {args['workdir']} && " if args.get("workdir") else "") + script
     if name == "apply_patch":
         files = _patch_files(args.get("input"))
         return ", ".join(files[:6]) + (f" (+{len(files) - 6} more)" if len(files) > 6 else "") if files else "patch"
@@ -678,8 +1197,9 @@ def _summary_of(name: str, args: dict) -> str:
         return args.get("pattern", "")
     if name == "fetch_url":
         return args.get("url", "")
-    if name == "office_task":
-        return f"{args.get('engine', '')}: {str(args.get('request', ''))[:160]}"
+    if name == "office_task" or name.replace("-", "_").startswith("mcp__meshpool_office__") and \
+            name.replace("-", "_").rsplit("__", 1)[-1] not in ("read_document", "find_icon", "office_job_status"):
+        return office_card(name, args)[0]       # what it will make or change, not its JSON or the model's brief
     if name == "web_search":
         return args.get("query", "")
     if name == "web_research":
@@ -790,6 +1310,13 @@ def _args_ok(call: dict) -> bool:
         return isinstance(json.loads((call.get("function") or {}).get("arguments") or "{}"), dict)
     except (ValueError, TypeError):
         return False
+
+
+# What one picture costs a vision model, as characters for the usage estimates (core/usage.estimate counts 3 characters
+# a token). A 1280 px wide screenshot is about 1,100 to 1,600 tokens on the common vision models (tiles or pixel
+# area, after their own downscaling), so it is counted as 1,600 tokens.
+IMAGE_EST_TOKENS = 1600
+IMAGE_EST_CHARS = IMAGE_EST_TOKENS * 3
 
 
 def _image_part(im: dict) -> dict:
@@ -934,6 +1461,102 @@ def _stopped_early(final: str) -> bool:
     last_sentence = re.split(r"(?<=[.!?])\s+", last)[-1]
     return bool(_PROMISE.search(last_sentence))
 
+
+_ACT_VERB = (r"(?:check|read|run|re-?run|open|look|inspect|verify|confirm|review|test|fix|update|change|edit|move|"
+             r"replace|copy|rename|delete|remove|add|build|re-?build|make|create|write|save|convert|render|search|find|"
+             r"list|install|fetch|download|compare|apply|generate|draft|export|scan|load|try|retry|set|clean|tighten|"
+             r"use|go|do|put|insert|append|merge|split|resize|format|style|draw|count|measure|compute|calculate|"
+             r"re-?check|recheck|finish|start|begin|continue|swap|restore|upload|send|patch|implement|rewrite|correct|"
+             r"adjust|modify|revise|refactor|rework|tweak|handle|commit|stage|revert|rebase|stash|reset|trim|sort|"
+             r"dedupe|normali[sz]e|bump|pin|wire|thread|extend|introduce)")
+_ACT_PROMISE = re.compile(r"\b(?:I'll|I will|I'm going to|I am going to|let me|next,? I(?:'ll| will)|now I(?:'ll| will))"
+                          r"\s+(?:(?:now|first|then|quickly|also|just|next|go ahead and|go and|start by)\s+){0,2}"
+                          + _ACT_VERB + r"\b", re.I)
+# Lina, round 4: "The first attempt stopped on a header-styling error... I'm fixing that line and running it again."
+# ended the turn with no call, and Progress said Done. Work said to be under way now is a promise too.
+_ACT_DOING = re.compile(r"\b(?:I'm|I am)\s+(?:now\s+|just\s+|already\s+|currently\s+)?(?:checking|reading|re-?running|"
+                        r"running|opening|looking|fixing|updating|changing|editing|making|creating|writing|saving|"
+                        r"building|re-?building|trying|retrying|adding|moving|redoing|regenerating|rendering|applying|"
+                        r"testing|verifying|re-?checking|installing|starting|working on|correcting|patching|"
+                        r"generating|converting|exporting|re-?doing)\b", re.I)
+_ACT_OFFER = re.compile(r"\b(?:if you|would you|do you want|want me to|let me know|shall I|should I|once you|when you|"
+                        r"if that|if needed|if it helps|happy to)\b", re.I)
+
+
+def malformed_fallback(root, since: float, made: str | None = None) -> str:
+    """The answer when the model's last reply was a command, markup or a path twice over: what the turn made, from
+    the file itself ("Made rooms-summary.xlsx, 1 sheet."), else a plain line that asks the user to ask."""
+    path = made or ""
+    if not path:
+        try:
+            got = _recent_files(root, since, (".xlsx", ".docx", ".pptx", ".pdf", ".csv", ".html", ".png"))
+            path = str(got[0]) if got else ""
+        except Exception:  # noqa: BLE001
+            path = ""
+    done = _made_summary(path) if path else ""
+    if done:
+        return done
+    if path:
+        return f"Made {Path(path).name}."
+    return "The work is done, but my last message came out as a command instead of an answer. Ask me what changed."
+
+
+def _announces_action(final: str) -> bool:
+    """True when the reply that ended the turn says what the agent will do next with a tool ("I'll check the folder
+    and read the deck...") instead of doing it. An offer to the user ("If you want, I'll add a chart") is not one.
+    Daniel, 0.0.18: two turns ended on "I'll check..." after a malformed tool call, and nothing ran."""
+    paras = [p for p in re.split(r"\n\s*\n", str(final or "").strip()) if p.strip()]
+    if not paras:
+        return False
+    last = " ".join(re.sub(r"[*_`#>]", "", paras[-1]).split())[-500:]
+    sentences = [x for x in re.split(r"(?<=[.!?\u2026])\s+", last) if x.strip()][-2:]
+    for sent in sentences:
+        if sent.rstrip().endswith("?") or _ACT_OFFER.search(sent):
+            continue
+        if _ACT_PROMISE.search(sent) or _ACT_DOING.search(sent):
+            return True
+    return False
+
+
+_CALL_JUNK = re.compile(r"<\s*(?:antml:)?(?:invoke|function_calls|tool_calls?)\b|<function=|<\|python_tag\||<｜DSML｜|\[TOOL_CALLS\]|"
+                        r"\{\s*\"(?:name|tool_calls?|tool|function)\"\s*:", re.I)
+
+
+def _prose_before_call(text: str) -> str:
+    """The words of a reply before a tool call that was written as text and could not be read (an unknown tool name, a
+    call cut off in the middle). "I'll patch both." followed by `<invoke name="placeholder">` ended the turn with no
+    nudge, because the junk was the last paragraph and the promise was not."""
+    t = str(text or "")
+    m = _CALL_JUNK.search(t)
+    return t[:m.start()].rstrip() if m and t[:m.start()].strip() else t
+
+
+ACT_NUDGE = "[Meshpool] You said you would do that. Do it now with the tools, or say why you can't."
+
+# Round 4 (Maya, Lina): follow-up turns ended on "the tool I use to edit your page wasn't available just now" and "none
+# of my file tools were available this turn", with no call, though the request offered 24 or 25 tools. The cause was
+# the test adapter, but a model can say it on its own too. Such a reply is sent back once, with the tools' names.
+_NO_TOOL = re.compile(
+    r"\b(?:tools?|commands?)\b[^.!?\n]{0,60}?\b(?:(?:is|are|was|were)(?:n't| not)|isn't|aren't|wasn't|weren't)\s+"
+    r"(?:(?:currently|really|actually|even)\s+)?(?:available|working|accessible|enabled|loaded|connected)\b"
+    r"|\b(?:tools?|commands?)\b[^.!?\n]{0,60}?\b(?:unavailable|not available|inaccessible|(?:would|could|did)(?:n't| not)"
+    r" run|(?:won't|will not|can't|cannot) run)\b"
+    r"|\b(?:none|neither) of my\b[^.!?\n]{0,30}\btools?\b"
+    r"|\bI (?:don't|do not|no longer) have (?:access to )?(?:the |my |any )?(?:\w+ ){0,2}tools?\b"
+    r"|\bI (?:can't|cannot|can not) run (?:commands|anything|code|tools)\b"
+    r"|\bI only have (?:a|one) tool\b|\bno tools? (?:is|are) available\b", re.I)
+
+
+def claims_no_tools(final: str) -> bool:
+    """True when a reply says its tools are unavailable ("The tool I need isn't available in this session")."""
+    return bool(_NO_TOOL.search(re.sub(r"[*_`]", "", str(final or ""))))
+
+
+def tools_nudge(names: list) -> str:
+    """The note that answers a "tool unavailable" reply: the tools offered, by name, and the job."""
+    names = list(dict.fromkeys(str(n) for n in names if n))
+    shown = ", ".join(names[:30]) + (f" and {len(names) - 30} more" if len(names) > 30 else "")
+    return f"[Meshpool] Your tools are available: {shown}. Use them to do the change."
 
 _DESTRUCTIVE = PR.DESTRUCTIVE                   # shared with re-check on edit (core/tools.py _recheckable)
 
@@ -1263,15 +1886,142 @@ def _piped_check_hides_status(cmd: str) -> bool:
     return any(_TEST_RUN.search(s) for s in stages[:-1])
 
 
-def _check_line(cmd: str, shown: str, code: int) -> str:
-    """The receipt's verdict on the last command after the last change: never "passed" when the exit status could
-    not show a failure (a check piped into another command without pipefail)."""
+_GIT_LOOK = re.compile(_GIT_PRE + r"(?:status|diff|log|show|branch|rev-parse|ls-files|blame|describe|remote|tag)\b")
+_STASH_PUSH = re.compile(_GIT_PRE + r"stash(?:\s+(?:push|save)\b.*|(?:\s+-[-\w]+(?:\s+-[-\w]+)*)?\s*)$")
+_STASH_BACK = re.compile(_GIT_PRE + r"stash\s+(?:pop|apply)\b")
+
+
+_HIST_MOVE = re.compile(_GIT_PRE + r"(?:reset|rebase|revert|stash\s+drop|branch\s+(?:-\w*[dD]\w*|--delete)\b|"
+                        r"commit\b.*--amend|checkout\s+(?!-[^-]|--\s)(?!.*\s--\s)[^-\s])")
+
+
+def _history_key(cmds) -> str:
+    """A normal form of a shell command that moves git history (reset, rebase, checkout of a ref, revert, commit
+    --amend, branch -D, stash drop), else "". Two calls with the same key are the same history move."""
+    for cmd in cmds or []:
+        for seg in PR._segments(str(cmd or "")):
+            seg = re.sub(r"^cd\s+(\"[^\"]*\"|'[^']*'|\S+)\s*&&\s*", "", seg).strip()
+            if _HIST_MOVE.match(seg):
+                return " && ".join(" ".join(str(x).split()) for x in cmds)
+    return ""
+
+
+def _leaves_tree_as_it_was(cmd: str) -> bool:
+    """A command whose only effect on the files is a round trip, or none: git status, diff and log, a test run, and
+    a `git stash` that its own `git stash pop` puts back. It is not an edit, so a passing test run before it is still
+    the check of the files as they are (Omar: a stash round trip after the tests made the receipt say "nothing was run
+    after the last change, so it is not verified"). A stash with no pop in the same command is a change."""
+    pushes = backs = 0
+    for seg in PR._segments(str(cmd or "")):
+        seg = re.sub(r"^cd\s+(\"[^\"]*\"|'[^']*'|\S+)\s*&&\s*", "", seg).strip()
+        if _STASH_BACK.match(seg):
+            backs += 1
+        elif _STASH_PUSH.match(seg):
+            pushes += 1
+        elif not (_GIT_LOOK.match(seg) or _TEST_RUN.search(seg) or T.read_only(seg)):
+            return False
+    return pushes == backs
+
+
+_NO_MATCH_CMD = re.compile(r"^\s*(?:cd\s+\S+\s*&&\s*)?(?:git\s+(?:-\w+\s+\S+\s+)*grep|rg|grep|egrep|fgrep|ag|ack|fd|find)\b")
+
+
+def _no_match(cmd: str, code: int, tail: str = "") -> bool:
+    """grep, rg and the like exit 1 with no output when nothing matched: that is an answer, not a failed check."""
+    segs = PR._segments(str(cmd or ""))
+    return (code == 1 and bool(segs) and all(_NO_MATCH_CMD.match(x) for x in segs)
+            and not str(tail or "").strip())
+
+
+def _test_summary(cmd: str, tail: str) -> str:
+    """"pytest, 14 passed" (or "pytest, 2 failed, 14 passed") for a test run, from the runner's own summary line;
+    "" when the command is no test run or printed no counts."""
+    m = _TEST_RUN.search(cmd or "")
+    if not m:
+        return ""
+    word = re.sub(r"\s+", " ", m.group(1).lower())
+    runner = word if word in ("pytest", "py.test", "unittest", "go test", "cargo test", "jest", "vitest", "mocha",
+                              "rspec", "phpunit", "npm test", "yarn test", "pnpm test", "dotnet test") else "tests"
+    low = str(tail or "")
+    nums = [f"{n} {w}" + ("s" if w == "error" and n != "1" else "")           # "1 error" and "2 errors" both count
+            for w in ("failed", "error", "passed", "skipped")
+            for n in re.findall(r"\b(\d+) " + w + r"s?\b", low)[-1:]]
+    ok = re.search(r"(?m)^Ran (\d+) tests?\b", low)
+    if not nums and ok and re.search(r"(?m)^OK\b", low):
+        nums = [f"{ok.group(1)} passed"]
+    return ", ".join([runner] + nums) if nums else ""
+
+
+def _tests_after_own_edit(cmd) -> bool:
+    """One combined step that writes files and then runs a test (a patch or a heredoc script, then pytest): the test
+    ran after the change, though the step as a whole changed the tree."""
+    wrote = False
+    for seg in PR._segments(str(cmd or "")):
+        seg = re.sub(r"^cd\s+(\"[^\"]*\"|'[^']*'|\S+)\s*&&\s*", "", seg).strip()
+        if _TEST_RUN.search(seg) and not T.read_only(seg):
+            if wrote:
+                return True
+        elif not (_GIT_LOOK.match(seg) or T.read_only(seg)):
+            wrote = True
+    return False
+
+
+def _fails_of(c: dict) -> list:
+    """The failed test ids a recorded command reported (parsed again from its tail for older records)."""
+    return list(c.get("fails") or T.failed_test_ids(c.get("tail", "")))
+
+
+_FILE_WRITE_CMD = re.compile(r"\bsed\s+(?:-\w+\s+)*-\w*i|\btee\b|\bdd\b[^|;]*\bof=|\binstall\s+-m|\bcp\s|\bmv\s")
+
+
+def _writes_a_file(name: str, args: dict) -> bool:
+    """A shell call whose command redirects into a file, or is tee, sed -i, cp or mv: a file change that
+    apply_patch or the edit tool can make in its place."""
+    if name not in ("bash", "shell", "exec_command", "bash_start", "bash_many", "probe", "trace"):
+        return False
+    return any(PR.writes(c) or _FILE_WRITE_CMD.search(c) for c in PR.commands_of(name, args))
+
+
+def _is_test_cmd(cmd: str) -> bool:
+    """A real test or check run: it matches the runner words and is not a read-only command that only mentions them
+    (`cat tests/x.py`, `git diff --stat tests`)."""
+    return bool(_TEST_RUN.search(cmd or "")) and not T.read_only(cmd or "")
+
+
+def _without_failures(summ: str) -> str:
+    """"pytest, 14 passed" from "pytest, 2 failed, 14 passed"."""
+    return ", ".join(x for x in summ.split(", ") if not re.match(r"\d+ (?:failed|errors?)$", x))
+
+
+def _check_line(cmd: str, shown: str, code: int, tail: str = "", fails=None, before=None) -> str:
+    """The receipt's verdict on the check that ran after the last change: never "passed" when the exit status could
+    not show a failure (a check piped into another command without pipefail), "no match" for a search that found
+    nothing, and the name of the test run when one verified the change ("Verified: pytest, 14 passed").
+    fails: the test ids that run reported failed; before: the ids that failed in a run before this turn's first edit
+    (None when there was no such run). Failures that were all there before are not this change's: "Verified: pytest,
+    14 passed (2 failures were there before this change)". Without the earlier ids it says the counts, not "Not
+    verified"."""
+    if _no_match(cmd, code, tail):
+        return f"`{shown}` found no match (exit 1 is how a search says so)"
+    summ = _test_summary(cmd, tail)
+    bad = bool(re.search(r"\b[1-9]\d* (?:failed|errors?)\b", summ))
+    if bad:
+        nf = sum(int(n) for n in re.findall(r"\b(\d+) (?:failed|errors?)\b", summ))
+        if before is not None and fails and set(fails) <= set(before) and len(set(fails)) >= nf:
+            were = "failures were" if nf != 1 else "failure was"
+            return f"Verified: {_without_failures(summ)} ({nf} {were} there before this change)"
+        if before is not None and fails:
+            return f"Not verified: {summ}"
+        return summ.replace(", ", ": ", 1)          # "pytest: 2 failed, 14 passed", with no earlier ids to compare
     if code != 0:
-        return f"`{shown}` FAILED (exit {code})"
+        return f"`{shown}` FAILED (exit {code})" + (f": {summ}" if summ else "")
+    if summ:                                    # the runner's own summary line shows it passed, pipe or not
+        return f"Verified: {summ}"
     if _piped_check_hides_status(cmd):
-        return (f"`{shown}` ran (exit status is the last command's in the pipe; failures before it are not visible)")
+        return (f"Not verified: `{shown}` ran (exit status is the last command's in the pipe; failures before it are not visible)"
+                + (f": {summ}" if summ else ""))
     if _TEST_RUN.search(cmd or "") and re.search(r"\|\|\s*(?:true\b|:(?=\s|;|$)|exit\s+0\b)", cmd or ""):
-        return f"`{shown}` ran (its exit status is ignored by `|| true`, so a failure would not show)"
+        return f"Not verified: `{shown}` ran (its exit status is ignored by `|| true`, so a failure would not show)"
     return f"`{shown}` passed"
 
 
@@ -1577,6 +2327,31 @@ def _recent_office(root, since: float, ext: str, cap: int = 20000) -> list:
     return [f for f in cache[key][1] if f.suffix.lower() == ext]
 
 
+IMG_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")
+
+
+def _recent_files(root, since: float, suffixes: tuple, cap: int = 20000) -> list:
+    """Files with these suffixes changed at or after `since` under root, newest first: one bounded walk that skips
+    version control, dependency, build and hidden folders, as _recent_office."""
+    found, seen = [], 0
+    for d, dirs, files in os.walk(str(root)):
+        dirs[:] = [x for x in dirs if x not in _WALK_SKIP and not x.startswith(".")]
+        for f in files:
+            seen += 1
+            if not f.lower().endswith(suffixes):
+                continue
+            fp = Path(d) / f
+            try:
+                mt = fp.stat().st_mtime
+            except OSError:
+                continue
+            if mt >= since:
+                found.append((mt, fp))
+        if seen >= cap:
+            break
+    return [p for _, p in sorted(found, key=lambda x: -x[0])]
+
+
 _SLIDES = re.compile(r"\b(\d{1,2})\s*(?:to|-|–|or)\s*(\d{1,2})[\s-]+slides?\b|\b(\d{1,2})[\s-]+slides?\b", re.I)
 
 
@@ -1652,7 +2427,14 @@ def _total_row_miss(asked: str, root, since: float) -> str:
             "with a live =SUM formula and a \"Total\" label in that row, save it and check again.")
 
 
-_TEMPLATE = re.compile(r"[\w][\w.()-]*template[\w.()-]*\.docx\b|\btemplate\b", re.I)
+# File names in a message: a match starts only where a run of name characters starts ("(a.docx" gives "a.docx").
+# The old form, [\w][\w.()-]*\.docx, retried from every character of one long token: quadratic, so a pasted
+# 100 KB token held the turn for minutes (pass-2 audit P2-uiserver-2, same shape).
+def _names_re(ext: str) -> str:
+    return r"(?<![\w.()-])[.()-]*(\w[\w.()-]*\.(?:" + ext + r"))\b"
+
+
+_TEMPLATE = re.compile(r"(?<![\w.()-])[.()-]*\w[\w.()-]*template[\w.()-]*\.docx\b|\btemplate\b", re.I)
 
 
 def _template_format_miss(asked: str, root, since: float) -> str:
@@ -1663,7 +2445,7 @@ def _template_format_miss(asked: str, root, since: float) -> str:
     text = str(asked or "").split(_SEP)[0]
     if not _TEMPLATE.search(text):
         return ""
-    names = re.findall(r"[\w][\w.()-]*\.docx\b", text)
+    names = re.findall(_names_re("docx"), text)
     tpl = next((Path(root) / n for n in names if "template" in n.lower() and (Path(root) / n).is_file()), None)
     if tpl is None:
         return ""
@@ -1778,6 +2560,64 @@ def _norm_text(t: str) -> str:
     return " ".join(t.lower().split())
 
 
+def _sandbox_auto_on() -> bool:
+    """MH_SANDBOX_AUTO (Settings, Permissions: "Ask before every command and change" sets 0), read from the
+    environment or the settings file at call time, so a change in Settings reaches open chats."""
+    v = os.environ.get("MH_SANDBOX_AUTO")
+    if v is None:
+        try:
+            v = C.read().get("MH_SANDBOX_AUTO")
+        except Exception:  # noqa: BLE001
+            v = None
+    return str(v if v is not None else "1").strip().lower() not in ("0", "off", "false", "no")
+
+
+def _pptx_orphan_slides(path) -> list:
+    """Slides inside a .pptx that its slide list no longer shows: (part name, first text) for each. Removing a slide's
+    entry from presentation.xml's sldIdLst hides it, but the slide (its text, notes and pictures) stays in the file
+    until its relationship is dropped too."""
+    import zipfile
+    from xml.etree import ElementTree as ET
+    p_ns = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+    r_ns = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = set(z.namelist())
+            pres = ET.fromstring(z.read("ppt/presentation.xml"))
+            rels = ET.fromstring(z.read("ppt/_rels/presentation.xml.rels"))
+            target = {r.get("Id"): r.get("Target", "") for r in rels}
+            listed = set()
+            for sid in pres.iter(p_ns + "sldId"):
+                t = target.get(sid.get(r_ns + "id"), "")
+                listed.add("ppt/" + t.lstrip("/").removeprefix("ppt/") if not t.startswith("/") else t.lstrip("/"))
+            out = []
+            for n in sorted(names):
+                if re.fullmatch(r"ppt/slides/slide\d+\.xml", n) and n not in listed:
+                    texts = [e.text for e in ET.fromstring(z.read(n)).iter() if e.tag.endswith("}t") and e.text]
+                    out.append((n, " ".join(texts)[:60]))
+            return out
+    except Exception:  # noqa: BLE001 - not a deck we can read: no note
+        return []
+
+
+def _pptx_orphan_slides_miss(root, since: float) -> str:
+    """Decks written this turn that still carry slides their slide list no longer shows: a note, else "". Live deck
+    check for 0.0.18 (deck_reorder): asked to delete a "DRAFT - do not present" slide, Meshpool (2 of 3 runs) and
+    Codex (3 of 3) removed it from the list only; PowerPoint does not show it, but its text stays in the file the user
+    sends on."""
+    for f in _recent_office(root, since, ".pptx"):
+        if not str(f).lower().endswith(".pptx"):
+            continue
+        orphans = _pptx_orphan_slides(f)
+        if orphans:
+            shown = "; ".join(f"{n.rsplit('/', 1)[-1]}" + (f' ("{t}")' if t else "") for n, t in orphans[:3])
+            return (f"{f.name} still contains {len(orphans)} slide(s) that are no longer in its slide list: {shown}. "
+                    "PowerPoint hides them, but their text, notes and pictures are still inside the file. If they "
+                    "were meant to be deleted, also drop each one's relationship (python-pptx: "
+                    "prs.part.drop_rel(sldId.rId) before removing the sldId), save, and check the file again.")
+    return ""
+
+
 def _docx_hidden_text_miss(asked: str, root, since: float) -> str:
     """A text file the request names, whose text a Word document written this turn does not show: as a note; else "".
     Two ways it goes missing, both from OfficeBench ob-1-15-2 ("Retrieve reference text from reference.txt and add it
@@ -1789,7 +2629,7 @@ def _docx_hidden_text_miss(asked: str, root, since: float) -> str:
       the text and does not ask to summarise, rewrite, translate or restyle it."""
     from meshpool_harness.capabilities import SEP as _SEP
     text = str(asked or "").split(_SEP)[0]
-    names = re.findall(r"[\w][\w.()-]*\.(?:txt|md)\b", text)
+    names = re.findall(_names_re("txt|md"), text)
     if not names:
         return ""
     verbatim = bool(_ADD_TEXT.search(text)) and not _REWORD.search(text)
@@ -1802,7 +2642,7 @@ def _docx_hidden_text_miss(asked: str, root, since: float) -> str:
                 hits = list(Path(root).glob(f"*/{n}"))[:1]          # ./data/reference.txt (the task names the file only)
                 fp = hits[0] if hits else fp
             if fp.is_file() and fp.stat().st_size <= 200_000:
-                body = _norm_text(fp.read_text(errors="replace"))
+                body = _norm_text(fp.read_text(encoding="utf-8", errors="replace"))   # not the locale (cp1252)
                 if len(body) >= 15:
                     snippets.append((fp.name, body[:40]))
         if not snippets:
@@ -1856,11 +2696,11 @@ def _unchanged_output_miss(asked: str, root, since: float) -> str:
                   str(getattr(getattr(c.fill, "fgColor", None), "rgb", "")) if c.fill else "", c.number_format)
                  for c in row] for ws in wb.worksheets for row in ws.iter_rows()]
     try:
-        names = {n.lower() for n in re.findall(r"[\w][\w.()-]*\.xlsx\b", text)}
+        names = {n.lower() for n in re.findall(_names_re("xlsx"), text)}
         outs = _recent_office(root, since, ".xlsx")
         if not outs:
             return ""
-        inputs = [Path(root) / n for n in re.findall(r"[\w][\w.()-]*\.xlsx\b", text)
+        inputs = [Path(root) / n for n in re.findall(_names_re("xlsx"), text)
                   if (Path(root) / n).is_file() and (Path(root) / n).stat().st_mtime < since]
         if not inputs:
             return ""
@@ -1922,17 +2762,44 @@ def _recalc_formulas(path, tmp: str, forms: dict | None = None, timeout: float =
             return {} if not forms else None
         out = Path(tmp) / Path(path).parent.name
         out.mkdir(parents=True, exist_ok=True)
-        kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
-        prof = Path(tmp) / "lo-profile"                   # its own profile: never blocked by a LibreOffice already open
-        subprocess.run([exe, f"-env:UserInstallation={prof.as_uri()}", "--headless", "--calc", "--convert-to", "xlsx",
-                        "--outdir", str(out), str(path)], capture_output=True, timeout=max(1, timeout), **kw)
-        made = out / Path(path).name
+        from meshpool_harness import lo_session          # the kept LibreOffice, else a one-off run
+        made = lo_session.convert(exe, str(path), "xlsx", str(out), max(1, timeout), recalc=True)
+        if made is None:
+            kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
+            prof = Path(tmp) / "lo-profile"               # its own profile: never blocked by a LibreOffice already open
+            subprocess.run([exe, f"-env:UserInstallation={prof.as_uri()}", "--headless", "--calc", "--convert-to",
+                            "xlsx", "--outdir", str(out), str(path)], capture_output=True, timeout=max(1, timeout), **kw)
+            made = out / (Path(path).stem + ".xlsx")
         if not made.is_file():
             return None
         vals = openpyxl.load_workbook(made, data_only=True)
         return {k: (f, vals[k[0]][k[1]].value if k[0] in vals.sheetnames else None) for k, f in forms.items()}
     except Exception:  # noqa: BLE001 - a check that cannot run says nothing
         return None
+
+
+def _cache_formula_values(root, since: float, cp=None) -> int:
+    """Workbooks written or changed this turn whose formulas have no stored result (openpyxl writes none) get the
+    results written in, calculated once by the kept LibreOffice: Quick Look, phones and mail show numbers, not blanks.
+    Formulas and formatting stay as they are. Never stops a turn. `cp`, the chat's checkpoints: each rewrite is booked
+    to the open turn, so Undo of the turn puts the file back as it was before the turn (the persona run: the rewrite
+    came after the edit was booked, and Undo kept the file as "changed since")."""
+    n = 0
+    try:
+        from meshpool_harness import xl_values
+        files = _recent_office(root, since, ".xlsx")
+        wrote = cp.turn_written() if cp is not None else None
+        if wrote is not None:                        # only what this turn wrote: never a workbook it only read
+            mine = {str((Path(cp.root) / r).resolve()) for r in wrote}
+            files = [f for f in files if str(Path(f).resolve()) in mine]
+        for f in files[:6]:
+            if f.name.startswith("~$"):
+                continue
+            with (cp.own_write(f) if cp is not None else contextlib.nullcontext()):
+                n += xl_values.fill(f)
+    except Exception:  # noqa: BLE001
+        pass
+    return n
 
 
 def _formula_result_miss(asked: str, root, since: float) -> str:
@@ -1947,7 +2814,7 @@ def _formula_result_miss(asked: str, root, since: float) -> str:
         outs = _recent_office(root, since, ".xlsx")[:4]
         if not outs:
             return ""
-        inputs = [Path(root) / n for n in re.findall(r"[\w][\w.()-]*\.xlsx\b", text)
+        inputs = [Path(root) / n for n in re.findall(_names_re("xlsx"), text)
                   if (Path(root) / n).is_file() and (Path(root) / n).stat().st_mtime < since]
         says_wrong = bool(re.search(_SAYS_WRONG, text, re.I))
         errors, same = [], []
@@ -2107,12 +2974,378 @@ REQ_NOTE = ("\n\n\u200b[Meshpool] Before you finish, list each rule the request 
 KEEP_NOTE = ("\n\n\u200b[Meshpool] This request says existing behaviour must stay the same. Before your first edit, run "
              "the current code and save its exact output; after your edits, run it again and compare line by line.")
 
+# Office tools that build or change a file from what the model sends: called with nothing, they are failed back to the
+# model before any approval card is drawn.
+_NEEDS_CONTENT = {"make_document", "make_pdf", "make_spreadsheet", "make_deck", "add_slides", "fill_template",
+                  "merge_decks", "convert_document", "edit_office_file"}
+
+# --- office tool cards in plain words (0.0.19 persona runs: the cards showed the raw JSON of edit_office_file, with
+# "op": "set_range", "in_place": true and lists of numbers, paragraph-long "find" strings, and the model's own brief
+# for make_spreadsheet). The card says what will change; the exact call stays under "Details".
+DETAILS_MARK = "\n\nDetails:\n"
+
+
+def _q(s, n: int = 40) -> str:
+    s = " ".join(str(s if s is not None else "").split())
+    return "“" + (s if len(s) <= n else s[:n - 3].rstrip() + "...") + "”"
+
+
+def _cell_text(v, fmt: str = "") -> str:
+    if isinstance(v, bool) or v is None:
+        return "empty" if v is None else str(v)
+    if isinstance(v, (int, float)):
+        cur = next((c for c in ("$", "€", "£") if c in (fmt or "")), "")
+        if isinstance(v, float) and not v.is_integer():
+            num = f"{v:,.2f}"
+        else:
+            num = f"{int(v):,}"
+        return cur + num
+    s = str(v)
+    return s if len(s) <= 30 else s[:27] + "..."
+
+
+def _plural(n: int, word: str) -> str:
+    w = word.lower()
+    if n == 1:
+        return f"1 {w}"
+    return f"{n} {w if w.endswith('s') else w[:-1] + 'ies' if w.endswith('y') and w[-2:-1] not in 'aeiou' else w + 's'}"
+
+
+def _xlsx_changes(path, ops: list) -> tuple[list, list]:
+    """(summary parts, detail lines) for the cell edits of an edit_office_file call on a workbook: by the column's
+    header ("12 prices", "6 Total formulas"), the row's label and the value before and after."""
+    import openpyxl
+    from openpyxl.utils.cell import column_index_from_string, coordinate_from_string, get_column_letter
+    wb = None
+    try:
+        if path and Path(path).is_file() and Path(path).stat().st_size < 8_000_000:
+            wb = openpyxl.load_workbook(str(path))
+    except Exception:  # noqa: BLE001 - the card still says what is asked, without the values before
+        wb = None
+    cells, parts, lines = [], [], []
+    for o in ops:
+        op = str(o.get("op") or "")
+        op = {"set_formula": "set_cell", "set_value": "set_cell", "write_cell": "set_cell", "write_range": "set_range",
+              "delete_row": "delete_rows", "remove_rows": "delete_rows", "append_row": "add_row", "clear": "clear_cell",
+              "clear_range": "clear_cell", "create_sheet": "add_sheet", "remove_sheet": "delete_sheet"}.get(op, op)
+        sheet = o.get("sheet")
+        try:
+            if op == "set_cell":
+                v = o.get("value", o.get("formula"))
+                if isinstance(v, str) and o.get("formula") is not None and not v.startswith("="):
+                    v = "=" + v
+                cells.append((sheet, str(o.get("cell")), v))
+            elif op == "set_range":
+                col, row = coordinate_from_string(str(o.get("start") or o.get("cell") or str(o.get("range", "A1")).split(":")[0]))
+                c0 = column_index_from_string(col)
+                for i, vals in enumerate(o.get("values") or []):
+                    for j, v in enumerate(vals if isinstance(vals, list) else [vals]):
+                        cells.append((sheet, f"{get_column_letter(c0 + j)}{row + i}", v))
+            elif op == "add_row":
+                parts.append("add a row")
+            elif op == "delete_rows":
+                n, r = int(o.get("count") or o.get("amount") or 1), o.get("row") or o.get("start") or "?"
+                parts.append(f"delete row {r}" if n == 1 else f"delete rows {r} to {int(r) + n - 1}"
+                             if str(r).isdigit() else f"delete {n} rows")
+            elif op == "clear_cell":
+                refs = [r for r in (o.get("cells") or [o.get("cell") or o.get("range")]) if r]
+                parts.append("clear " + ", ".join(map(str, refs[:3])) + (" and more" if len(refs) > 3 else ""))
+            elif op == "add_sheet":
+                parts.append(f"add the sheet {_q(o.get('name') or o.get('title') or o.get('new_sheet'), 30)}")
+            elif op == "delete_sheet":
+                parts.append(f"delete the sheet {_q(sheet or 'the first one', 30)}")
+            elif op == "freeze_panes":
+                parts.append("freeze the top rows")
+            elif op == "add_comment":
+                parts.append(f"add a comment on {o.get('cell')}")
+            else:
+                parts.append(op.replace("_", " ") or "an edit")
+        except Exception:  # noqa: BLE001
+            parts.append(op.replace("_", " ") or "an edit")
+    groups: dict = {}
+    for sheet, ref, v in cells:
+        ws = None
+        try:
+            ws = (wb[sheet] if sheet else wb.active) if wb is not None else None
+        except KeyError:
+            ws = None
+        header, label, old, fmt = "", "", None, ""
+        try:
+            col, row = coordinate_from_string(ref)
+            if ws is not None:
+                c = ws[ref]
+                old, fmt = c.value, c.number_format or ""
+                for r in range(1, min(row, 6)):
+                    h = ws.cell(row=r, column=column_index_from_string(col)).value
+                    if isinstance(h, str) and h.strip():
+                        header = h.strip()
+                        break
+                for cc in range(1, min(column_index_from_string(col), 4)):
+                    lab = ws.cell(row=row, column=cc).value
+                    if isinstance(lab, str) and lab.strip():
+                        label = lab.strip()
+                        break
+        except Exception:  # noqa: BLE001
+            pass
+        formula = isinstance(v, str) and v.startswith("=")
+        groups.setdefault((header or f"column {ref.rstrip('0123456789')}", formula), []).append((ref, label, old, v, fmt))
+    for (header, formula), items in groups.items():
+        n = len(items)
+        ref, label, old, new, fmt = items[0]
+        if formula:
+            fixing = all(isinstance(it[2], str) and it[2].startswith("=") for it in items)
+            parts.append(f"{'fix' if fixing else 'set'} {n} {header} formula{'s' if n != 1 else ''}")
+        else:
+            what = _plural(n, header) if header and not header.startswith("column ") else \
+                f"{n} cell{'s' if n != 1 else ''} in {header}"
+            first = f"{label or ref} {_cell_text(old, fmt)} to {_cell_text(new, fmt)}" if old is not None else \
+                f"{label or ref} to {_cell_text(new, fmt)}"
+            parts.append(f"{what} ({first}{', and ' + str(n - 1) + ' more' if n > 1 else ''})")
+        for ref, label, old, new, fmt in items[:8]:
+            lines.append(f"{header}, {ref}{' (' + label + ')' if label else ''}: "
+                         + (f"{_cell_text(old, fmt)} to " if old is not None else "") + _cell_text(new, fmt))
+        if n > 8:
+            lines.append(f"... and {n - 8} more in {header}")
+    return parts, lines
+
+
+def _docx_sections(path, finds: list) -> list:
+    """The headings the texts in `finds` sit under, in order ("" for text before any heading)."""
+    out = []
+    try:
+        from docx import Document
+        doc = Document(str(path))
+        paras = [(p.text, (p.style.name if p.style is not None else "") or "") for p in doc.paragraphs]
+    except Exception:  # noqa: BLE001
+        return out
+    for f in finds:
+        key, head = " ".join(str(f or "").split())[:60], ""
+        for text, style in paras:
+            if style.lower().startswith(("heading", "title")) and text.strip():
+                head = text.strip()
+            if key and key in " ".join(text.split()):
+                out.append(head)
+                break
+    return out
+
+
+def _section_name(head: str) -> str:
+    m = re.match(r"^(?:section\s+)?(\d+(?:\.\d+)*)[.)]?\s+\S", head, re.I)
+    return f"section {m.group(1)}" if m else _q(head, 40)
+
+
+def office_in_place(args: dict, root=None) -> bool:
+    """edit_office_file changes the file itself: in_place=true, or (since ad27fe76) in_place left out for a file in
+    the project folder with no `output`. The same reading as office_mcp_server.edit_office_file."""
+    v = args.get("in_place")
+    if args.get("output") and v is None:
+        return False
+    if v is not None:
+        return v in (True, "true", 1, "yes")           # in_place=true wins over output there too
+    p = os.path.expanduser(str(args.get("path") or ""))
+    if root is None:
+        return not os.path.isabs(p)
+    try:
+        q = (Path(p) if os.path.isabs(p) else Path(root) / p).resolve()
+        r = Path(root).resolve()
+        return q == r or r in q.parents
+    except (OSError, ValueError):
+        return False
+
+
+def office_card(name: str, args: dict, root=None) -> tuple[str, list]:
+    """(title without the question mark, plain lines) for an office tool call, for its approval card and its step
+    row. Never raises: the arguments come from the model unchecked."""
+    try:
+        return _office_card(name, args or {}, Path(root) if root else None)
+    except Exception:  # noqa: BLE001
+        tool = name.split("__", 2)[-1].replace("_", " ")
+        return f"Use the office tool {tool}", []
+
+
+def _office_card(name: str, args: dict, root) -> tuple[str, list]:
+    tool = name.replace("-", "_").split("__", 2)[-1]
+
+    def full(p):
+        p = os.path.expanduser(str(p or ""))
+        return Path(p) if os.path.isabs(p) or root is None else root / p
+
+    def base(p):
+        return str(p or "").rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+    files = [base(f) for f in (args.get("files") if isinstance(args.get("files"), list) else [args.get("files")])
+             if isinstance(f, str) and f.strip()]
+    using = (" from " + ", ".join(files[:3]) + (" and more" if len(files) > 3 else "")) if files else ""
+    new_file = "A new file in this folder. No file you have is changed."
+    if tool == "edit_office_file":
+        p, ops = args.get("path"), [o for o in (args.get("operations") or []) if isinstance(o, dict)]
+        fname, ext = base(p), os.path.splitext(str(p or ""))[1].lower()
+        in_place = office_in_place(args, root)
+        where = ("It changes the file itself. Undo can put it back." if in_place else
+                 f"It saves the result as {base(args.get('output'))}; {fname} stays as it is."
+                 if args.get("output") else
+                 f"It saves a copy, {os.path.splitext(fname)[0]} (edited){ext}; {fname} stays as it is.")
+        if ext in (".xlsx", ".xlsm"):
+            parts, lines = _xlsx_changes(full(p), ops)
+            only_fix = len(parts) == 1 and re.match(r"^fix \d+ .* formulas?$", parts[0])
+            title = (f"Fix {parts[0][4:]} in {fname}" if only_fix else
+                     f"Change {fname}: " + "; ".join(parts[:3]) + (f"; and {len(parts) - 3} more changes"
+                                                                    if len(parts) > 3 else "")) if parts else f"Change {fname}"
+            return title, lines + [where]
+        tracked = [o for o in ops if str(o.get("op")) in ("tracked_replace", "tracked_delete", "tracked_insert_after")
+                   or (str(o.get("op")) in ("replace_text", "replace") and o.get("tracked") in (True, "true", "yes", 1))]
+        lines, parts = [], []
+        dels = sum(1 for o in tracked if o.get("op") == "tracked_delete")
+        reps = [o for o in ops if o not in tracked and str(o.get("op")) in ("replace_text", "replace", "find_replace")]
+        for o in ops:
+            op = str(o.get("op"))
+            if o in tracked:
+                if op == "tracked_delete":
+                    lines.append(f"Delete {_q(o.get('find'), 70)} (tracked)")
+                elif op == "tracked_insert_after":
+                    lines.append(f"Insert {_q(o.get('text') or o.get('replace'), 50)} after {_q(o.get('find'), 30)} (tracked)")
+                else:
+                    lines.append(f"Replace {_q(o.get('find'), 40)} with {_q(o.get('replace'), 40)} (tracked)")
+            elif o in reps:
+                lines.append(f"Replace {_q(o.get('find'), 40)} with {_q(o.get('replace'), 40)}")
+            elif op == "add_comment":
+                lines.append(f"Add a comment at {_q(o.get('find'), 30)}: {_q(o.get('text'), 50)}")
+            elif op == "append_paragraph":
+                lines.append(f"Add a paragraph at the end: {_q(o.get('text'), 60)}")
+            elif op == "set_notes":
+                lines.append(f"Set the speaker notes on slide {o.get('slide', 1)}")
+            else:
+                lines.append(op.replace("_", " "))
+        if len(lines) > 10:
+            lines = lines[:10] + [f"... and {len(lines) - 10} more"]
+        if tracked and len(tracked) == len(ops):
+            shorter = all(o.get("op") == "tracked_delete" or (o.get("op") == "tracked_replace" and len(
+                str(o.get("replace") or "")) < len(str(o.get("find") or ""))) for o in tracked)
+            secs = [s for s in dict.fromkeys(_docx_sections(full(p), [o.get("find") for o in tracked]))]
+            sec = f"{_section_name(secs[0])} of " if len(secs) == 1 and secs[0] else ""
+            count = []
+            if dels:
+                count.append(_plural(dels, "deletion"))
+            if len(tracked) - dels:
+                count.append(_plural(len(tracked) - dels, "change"))
+            title = f"{'Shorten' if shorter else 'Change'} {sec}{fname} as tracked changes ({', '.join(count)})"
+        elif reps and len(reps) == len(ops):
+            title = (f"Change {fname}: replace {_q(reps[0].get('find'), 30)} with {_q(reps[0].get('replace'), 30)}"
+                     if len(reps) == 1 else f"Change {fname}: {len(reps)} text replacements")
+        else:
+            title = f"Change {fname}: {_plural(len(ops), 'edit')}"
+        return title, lines + [where]
+    if tool == "convert_document":
+        src, to = base(args.get("path")), str(args.get("to") or "pdf").lower().lstrip(".")
+        out = base(args.get("output")) or os.path.splitext(src)[0] + "." + to
+        return (f"Make a PDF of {src}" if to == "pdf" else f"Convert {src} to {to.upper()}"), \
+            [f"A new file, {out}. {src} stays as it is."]
+    if tool == "make_spreadsheet":
+        return "Make a new spreadsheet" + (f", {base(args.get('save_as'))}" if args.get("save_as") else "") + using, [new_file]
+    if tool == "make_deck":
+        return "Make a new PowerPoint deck" + (f", {base(args.get('save_as'))}" if args.get("save_as") else "") + using, [new_file]
+    if tool == "make_document":
+        return "Make a Word document" + (f", {base(args.get('filename'))}" if args.get("filename") else ""), [new_file]
+    if tool == "make_pdf":
+        return "Make a PDF" + (f", {base(args.get('filename'))}" if args.get("filename") else ""), [new_file]
+    if tool == "add_slides":
+        deck = base(args.get("deck"))
+        return f"Add slides to {deck or 'a deck'}", [f"It saves them into {deck or 'the deck'}; Undo puts the earlier "
+                                                    "version back."]
+    if tool == "analyze_data":
+        return "Analyse " + (", ".join(files[:3]) if files else "data") + " into charts and a summary", [new_file]
+    if tool == "office_task" or name == "office_task":
+        eng = str(args.get("engine") or "").strip()
+        return ("Make a new " + {"slides": "PowerPoint deck", "sheets": "spreadsheet", "docs": "Word document",
+                                 "data": "data analysis"}.get(eng, "office file") + using), [new_file]
+    nice = {"fill_template": "Fill in", "merge_decks": "Combine decks into"}.get(tool)
+    target = base(args.get("filename") or args.get("path") or args.get("output") or "")
+    return (f"{nice} {target}".strip() if nice else f"Use the office tool {tool.replace('_', ' ')}"
+            + (f" on {target}" if target else "")), []
+
+
+def office_detail(name: str, args: dict, root=None) -> str:
+    """The approval card's text for an office tool: the plain lines, then the exact call under "Details"."""
+    title, lines = office_card(name, args, root)
+    call = json.dumps({k: v for k, v in (args or {}).items() if not str(k).startswith("_")}, indent=1,
+                      ensure_ascii=False)
+    return "\n".join(lines) + DETAILS_MARK + (call if len(call) <= 6000 else call[:6000] + "\n...")
+
+
+_SCRATCH_PATH = re.compile(r"(?:/tmp|/var/folders|/private/var)/[^\s'\"<>;&|)]*")
+
+
+def approval_view(kind: str, title: str, detail: str) -> dict:
+    """What an approval card shows a person who does not read shell: {"sum": one plain line, "file": {"name", "text", "run"}
+    when the command writes a file with a heredoc}. The command itself, scratch paths and all, stays in the card's
+    "Details" fold (it is the card's `detail`, unchanged). {} when the card needs no plain view."""
+    if kind != "bash" or not str(detail or "").strip():
+        return {}
+    d = str(detail)
+    line = re.sub(r"\s+", " ", str(title or "")).strip().rstrip("?").strip()
+    if not line or line.lower().startswith(("run this", "run these", "start this", "execute terminal", "terminal")):
+        line = _plain_command_title(d).rstrip("?").strip()
+    line = _SCRATCH_PATH.sub("a temporary folder", line)
+    out: dict = {"sum": line[:160]} if line else {}
+    if "<<" in d:
+        head, bodies = _strip_heredocs(d)
+        w = re.search(r"(?:\bcat|\btee(?:\s+-a)?)\s*(?:>>?\s*)?(?P<f>[^\s<>|;&]+)\s*<<|\bcat\s*>>?\s*(?P<g>[^\s<>|;&]+)\s*<<", head)
+        tgt = (w.group("f") or w.group("g") or "").strip("'\"") if w else ""
+        name = os.path.basename(tgt)
+        ran = bool(name) and bool(re.search(r"(?:python[\d.]*|node|Rscript|ruby|perl|bash|sh)\s+\S*" + re.escape(name), head))
+        # release review, 0.0.18: the plain line names the file only when writing it (and setting up for it, and
+        # running it) is ALL the command does: "Save notes.txt" over a trailing `rm -rf ~/Documents && curl ...`
+        # left the rest to the folded Details. And it says where the file goes when that is not this folder.
+        if name and bodies and _only_writes(head, name) and not re.match(r"(?:this deletes|run this destructive)",
+                                                                          line, re.I):
+            text = bodies[0].rstrip()
+            lines = text.split("\n")
+            if len(lines) > 40 or len(text) > 3000:
+                text = "\n".join(lines[:40])[:3000].rstrip() + "\n..."
+            where, shown = _write_place(head, tgt)
+            out["file"] = {"name": name, "text": text, "run": ran, "where": where, "path": shown}
+            out["sum"] = f"Save {name}" + {"in": "", "temp": " in a temporary folder",
+                                            "outside": f" outside this folder ({shown})"}[where] + \
+                (" and run it" if ran else "")
+    return out
+
+
+def _only_writes(head: str, name: str) -> bool:
+    """Every step of a heredoc script (bodies taken out) only writes `name`, sets up for it (cd, mkdir, VAR=...,
+    ls, echo) or runs it."""
+    for seg in PR._segments(head):
+        w = seg.split()
+        while w and re.match(r"^[A-Za-z_]\w*=\S*$", w[0]):
+            w = w[1:]
+        if not w or "<<" in seg or w[0] in ("cd", "mkdir", "ls", "echo", "true", "export", "set"):
+            continue
+        if re.match(r"(?:python[\d.]*|node|Rscript|ruby|perl|bash|sh)$", os.path.basename(w[0])) and \
+                any(os.path.basename(x.strip("'\"")) == name for x in w[1:]):
+            continue
+        return False
+    return True
+
+
+def _write_place(head: str, tgt: str) -> tuple:
+    """Where a heredoc writes: ("in", name) in this folder, ("temp", path) a temporary folder, ("outside", path)."""
+    vals = dict(re.findall(r"(?:^|[;&|\n]\s*|\s)([A-Za-z_]\w*)=([^\s;&|$`]+)", head))
+    t = re.sub(r"\$\{?([A-Za-z_]\w*)\}?", lambda m: vals.get(m.group(1), m.group(0)), tgt).strip("'\"")
+    if _SCRATCH_PATH.match(t) or t.startswith(("$TMPDIR", "${TMPDIR")):
+        return "temp", ""                                 # a scratch path never reaches the card
+    if t.startswith(("/", "~", "$", "\\")) or re.match(r"[A-Za-z]:[\\/]", t) or ".." in t.replace("\\", "/").split("/"):
+        home = os.path.expanduser("~")
+        return "outside", ("~" + t[len(home):] if home and t.startswith(home + os.sep) else t)
+    return "in", t
+
+
 class Agent:
+    _model_prog = 0.0
+    model_req_at = None    # when the model call now running began; None while no request is made or waited on
     office_on = False      # a message in this chat asked for an office file: Codex style shows the office tools too
     browser_on = False     # a message in this chat is about a web page or app UI: Codex style shows the browser tools
     office_engines = False  # MH_OFFICE_DIRECT=1: a message asked for a new deck, report or model (engine tools shown)
     office_c171 = False  # MH_WORK_OFFICE_STYLE=c171: this Work chat's office job sends Codex 0.171's request
     office_revisions = False  # MH_OFFICE_DIRECT=1: a message asked for tracked changes or comments (edit_office_file shown)
+    chat_mode = False      # the web UI's Chat mode (not the Code tab): read_document is offered for office files
     usage_task = None      # the session may set one usage task before send() to share it across goal / resume turns
     usage_source = "chat"  # what this agent's own calls are called in the usage ledger ("subagent" for a sub-agent)
     _turn_no = 0           # counted up by each send(); turn-scoped guards read it before the first turn too
@@ -2285,10 +3518,45 @@ class Agent:
             own = str(asked or "").split(CAP.SEP)[0]
             if self.office_engines or engines_wanted(own) or wants_revisions(own):
                 return False
+            if self._office_panel_chat(own):
+                return False
             return bool(getattr(self, "office_on", False) or re.search(r"\.(docx?|xlsx?|pptx?|pdf)\b", own, re.I)
                         or CAP.needs(own))
         except Exception:  # noqa: BLE001
             return False
+
+    _PANEL = "using the meshpool panel"   # office/taskpane.js buildMessage: the first message of an Office panel chat
+
+    @staticmethod
+    def _panel_title(text: str) -> str:
+        """The title of an Office panel chat: "Excel: " and the user's own words, after the panel's context block
+        ("[I am in Excel, using the meshpool panel. ...]") and the selection. The chat list showed that block
+        ("[I am in Excel, using the me..."). "" when the message is not from the panel."""
+        m = re.match(r"\s*\[I am in ([A-Za-z]+), using the meshpool panel\.[^\]]*\]\s*", str(text or ""))
+        if not m:
+            return ""
+        rest = re.sub(r"[^\n]*:\n<selection>.*?</selection>\s*", "", text[m.end():], count=1, flags=re.S)
+        paras = [x.strip() for x in re.split(r"\n\s*\n", rest) if x.strip()]
+        if len(paras) > 1 and "\n" not in paras[0] and re.match(
+                r"(?:The active cell is|Nothing is selected|Selected |Selection )", paras[0]):
+            paras = paras[1:]                               # the context line when there was no selection text
+        ask = paras[0].splitlines()[0].strip() if paras else ""
+        return f"{m.group(1)}: {ask}" if ask else m.group(1)
+
+    def _office_panel_chat(self, own: str = "") -> bool:
+        """A chat the Office add-in panel started (its first message says so). It answers about the selection in
+        Excel, Word or PowerPoint, in the chat, and may ask the user (the panel shows ask_user questions). Codex
+        0.171's request has neither the Work prompt for that nor ask_user, so these chats keep the Work route: "I am
+        in Excel" made every panel message an office job and the panel's questions stopped working (0.0.17)."""
+        if self._PANEL in own:
+            return True
+        for m in self.messages:
+            if m.get("role") == "user":
+                c = m.get("content")
+                t = c if isinstance(c, str) else " ".join(str(x.get("text", "")) for x in c or [] if isinstance(x, dict))
+                if self._PANEL in t:
+                    return True
+        return False
 
     def _office_direct(self) -> bool:
         """MH_OFFICE_DIRECT=1 in a lean Work chat: office jobs on existing files are done by hand; the engine tools are
@@ -2449,7 +3717,12 @@ class Agent:
             def keep(name: str) -> bool:
                 n = name.replace("-", "_")
                 if n.startswith("mcp__meshpool_office__"):      # not on Codex's request for a Work office edit:
-                    return bool(getattr(self, "office_on", False)) and not getattr(self, "office_c171", False)
+                    if getattr(self, "office_c171", False):
+                        return False
+                    # Chat mode (Maya, round 4): the reader is always there, so a price list in the folder is read
+                    # with read_document, not with "cat; cp; unzip" behind an approval card
+                    return bool(getattr(self, "office_on", False)) or (
+                        bool(getattr(self, "chat_mode", False)) and n.endswith("__read_document"))
                 if n.startswith("mcp__meshpool_assistant__"):      # memory, schedules, chat search stay in Code chats
                     return not n.endswith("run_subtasks")
                 if name in own_browser:                          # Meshpool's own browser server: on request, as
@@ -2471,8 +3744,10 @@ class Agent:
             if self.office_engines:                                      # appended, never reordered
                 return head + T.schemas(["office_task"]) + [x for x in mcp if _engine_tool(x["function"]["name"])] \
                     + [x for x in mcp if is_dup(x)]
-            if getattr(self, "office_revisions", False):                 # tracked changes or comments: the editor
-                return head + [x for x in mcp if is_dup(x)]              # writes real Word revisions
+            if getattr(self, "office_revisions", False) or getattr(self, "chat_mode", False):
+                # tracked changes or comments: the editor writes real Word revisions. Chat mode (Lina, round 4): a
+                # change to a file the user has goes through the editor, which keeps it whole and shows a plain card
+                return head + [x for x in mcp if is_dup(x)]
             return head
         names = self._tool_names()
         if getattr(self, "lane", "task") == "chat" and not getattr(self, "_tools_full", False) \
@@ -2496,7 +3771,9 @@ class Agent:
                if not x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_web__")
                and not x["function"]["name"].endswith("run_subtasks")   # delegate_task instead
                and not (self.profile == "code" and not getattr(self, "office_on", False)   # about 3k tokens per call:
-                        and x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_office__"))]
+                        and x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_office__")
+                        and not (getattr(self, "chat_mode", False)                 # Chat mode keeps the reader
+                                 and x["function"]["name"].endswith("__read_document")))]
               if self.mcp else [])             # a Code chat gets the office tools once a message asks for a file
         out = (T.schemas(names) + self._lazy_apply(ms))[:128]    # no endpoint takes more than 128 tools
         defn = getattr(self, "_as_agent", None)
@@ -2540,10 +3817,14 @@ class Agent:
         if self._codex():
             if self._c171():
                 return ["exec_command"]
+            # an Office panel chat: the user is in Excel, Word or PowerPoint and the panel shows ask_user questions;
+            # the lean Work route had no ask_user since 0.0.16, so the panel's questions never came. Before
+            # office_task, which is appended later, so the list only grows at its end.
+            ask = ["ask_user"] if self.profile == "work" and self._office_panel_chat() else []
             if self._office_direct():                  # office_task only once a message asked for a deck or model
-                return list(T.CODEX_TOOLS) + [n for n in LEAN_WORK_TOOLS if n != "office_task"] + \
+                return list(T.CODEX_TOOLS) + [n for n in LEAN_WORK_TOOLS if n != "office_task"] + ask + \
                     (["office_task"] if self.office_engines else [])
-            return list(T.CODEX_TOOLS) + (LEAN_WORK_TOOLS if self.profile == "work" else [])
+            return list(T.CODEX_TOOLS) + (LEAN_WORK_TOOLS if self.profile == "work" else []) + ask
         names = PLAN_TOOLS if self.plan else (WORK_TOOLS if self.profile == "work" else BUILTIN)
         extra = []
         route = getattr(self, "route", None)
@@ -2833,8 +4114,15 @@ class Agent:
                 if self.messages and self.messages[0].get("role") == "system":
                     self.messages[0] = {"role": "system", "content": self.system_prompt()}
         if not self.title:
-            self.title = os.environ.pop("MH_SESSION_NAME", "").strip()[:80] or (
-                text.strip().splitlines()[0][:80] if text.strip() else "Session")
+            # the first line (with the next one when it is only "Hi!"), never cut inside a word: a path cut at 80
+            # characters made the title name a different folder
+            ln = [x.strip() for x in text.strip().splitlines() if x.strip()]
+            hi = len(ln) > 1 and re.fullmatch(r"(?i)(?:hi|hello|hey|hiya|good (?:morning|afternoon|evening))\b"
+                                              r"[\w ]{0,20}[!.,]*", ln[0])
+            first = " ".join(ln[:2]) if hi else (ln[0] if ln else "")
+            first = self._panel_title(text) or first
+            first = (first[:80] + re.match(r"\S*", first[80:]).group(0))[:240]
+            self.title = os.environ.pop("MH_SESSION_NAME", "").strip()[:80] or first or "Session"
         body = text
         if self.plan:
             body = ("[Plan mode] Investigate as needed with read-only tools, then reply with a clear, numbered plan "
@@ -2852,8 +4140,20 @@ class Agent:
                 and _requirements(text) >= 2:
             body += REQ_NOTE                         # eval: short wrong answers checked the agent's reading of the task,
                                                      # not each stated rule (line-diff: the tie-break rule went untested)
-        if images:
-            parts = [{"type": "text", "text": body}] + [_image_part(im) for im in images[:6]]
+        fig_note, fig_pages = self._figure_pages(asked)   # a question about "the barriers chart": the pages with
+        if fig_note:                                       # figures go with it (Daniel, 0.0.18)
+            body += "\n\n" + fig_note
+        try:                                               # a file asked for in a chat with no folder of its own
+            from meshpool_harness import nofolder as NF
+            nf_note = NF.note(self.root, asked)
+        except Exception:  # noqa: BLE001
+            nf_note = ""
+        if nf_note:
+            body += "\n\n" + nf_note
+        if images or fig_pages:
+            parts = [{"type": "text", "text": body}] + [_image_part(im) for im in (images or [])[:6]]
+            for im in fig_pages:
+                parts += [{"type": "text", "text": im["label"]}, _image_part(im)]
             self.messages.append({"role": "user", "content": parts})
         else:
             self.messages.append({"role": "user", "content": body})
@@ -2999,6 +4299,7 @@ class Agent:
         self._todo_touched = False
         self.ws.turn_files = set()
         self.ws.turn_new = set()
+        self.ws.turn_edits0, self.ws.turn_cmd0 = self.ws.edits, len(self.ws.commands)   # the receipt's baseline test run
         g = {"hist": [], "doom_at": -10, "seen": set(), "edits": self.ws.edits, "edits0": self.ws.edits, "last": 0,
              "cmds0": len(self.ws.commands), "t0": time.time(),
              "todo_nudged": False}
@@ -3006,8 +4307,14 @@ class Agent:
         g["req"] = self.messages[-1].get("content") if self.messages else ""
         g.update({"since_todo": 0, "plan_asked": False})
         g.update({"msg0": max(0, len(self.messages) - 1), "t0": time.time(), "cmd0": len(self.ws.commands),
-                  "after_plan": bool(getattr(self, "_prev_plan", False)), "grade_rounds": 0})
+                  "after_plan": bool(getattr(self, "_prev_plan", False)), "grade_rounds": 0,
+                  "trace0": len(getattr(self, "trace", []))})
         self._last_g, self._last_final = g, ""
+        try:      # the pictures of an earlier turn's look review are stale: they stay out of every later request
+            from meshpool_harness.agent import look as _LK      # (round 4: they rode on each follow-up turn)
+            _LK.drop_look_images(self.messages[:-1])
+        except Exception:  # noqa: BLE001
+            pass
         self._turn_no = getattr(self, "_turn_no", 0) + 1
         cx = self._codex()
         if cx:                                       # Codex's loop: no plan round, no reminders, no extra checks
@@ -3148,6 +4455,14 @@ class Agent:
                         "[Meshpool] Your reply ran out of output space while you were thinking, before any answer. "
                         "Give your answer now, briefly, without more deliberation.")})
                     continue
+                if not calls and not content.strip() and not said and g.get("made"):
+                    # Daniel, 0.0.19: the deck job finished and wrote its file, then the last model turn came back
+                    # empty and a red "empty reply" error ended the turn. The job's own result says what was made.
+                    done = _made_summary(g["made"])
+                    if done:
+                        self.messages.append({"role": "assistant", "content": done})
+                        self.emit({"type": "assistant", "text": done, "streamed": False, "has_tools": False})
+                        return done
                 if not calls and not content.strip() and not said:
                     # nothing said and nothing asked for: not a reply to keep in the history
                     self.emit({"type": "assistant", "text": "", "streamed": streamed, "has_tools": False})
@@ -3189,6 +4504,8 @@ class Agent:
                         if rep:
                             self.messages.append({"role": "user", "content": "[Meshpool] " + rep})
                             continue
+                    if os.environ.get("MH_CACHE_FORMULAS", "1") != "0":     # any route that wrote a workbook; a no-op when none needs it
+                        _cache_formula_values(self.root, g.get("t0", 0), getattr(self, "checkpoint", None))
                     if self._office_direct() and not g.get("office_check_nudged") \
                             and os.environ.get("MH_OFFICE_FINISH_CHECK", "1") != "0":
                         # SpreadsheetBench (38f57ffb), sb-374-31: the agent's own assert failed, it printed the rows
@@ -3239,6 +4556,14 @@ class Agent:
                         miss = _docx_hidden_text_miss(getattr(self, "_asked_text", ""), self.root, g.get("t0", 0))
                         if miss:
                             g["office_checks"].add("hidden")
+                            self.messages.append({"role": "user", "content": "[Meshpool] " + miss})
+                            continue
+                    if (getattr(self, "office_c171", False) or self._office_direct()) \
+                            and os.environ.get("MH_OFFICE_FINISH_CHECK", "1") != "0" \
+                            and "orphan" not in g.setdefault("office_checks", set()):
+                        miss = _pptx_orphan_slides_miss(self.root, g.get("t0", 0))     # deleted slides left in the file
+                        if miss:
+                            g["office_checks"].add("orphan")
                             self.messages.append({"role": "user", "content": "[Meshpool] " + miss})
                             continue
                     route = getattr(self, "route", None)
@@ -3292,18 +4617,75 @@ class Agent:
                         continue
                     if self.has_steers():           # added while the checks above ran
                         continue
-                    if (E2E and not self.plan and not cx and g.get("promise_n", 0) < 2
-                            and _stopped_early(final) and self._tool_msgs_since(g["msg0"])):
+                    pushed = g.get("act_nudged") or g.get("push_at")
+                    if pushed and self._tool_msgs_since(pushed) == 0 and g.get("made") \
+                            and (_announces_action(final) or not final.strip()):
+                        # the push produced no action either: end on what the job made, from its own result
+                        # (Daniel, 0.0.18: the deck turn ended on "The build finished, so I'll check which files...")
+                        done = _made_summary(g["made"])
+                        if done:
+                            self.messages.append({"role": "assistant", "content": done})
+                            self.emit({"type": "assistant", "text": done, "streamed": False, "has_tools": False})
+                            final = done
+                            break
+                    if (not self.plan and not tools_off and not self._pace_wrapped and not g.get("tools_nudged")
+                            and claims_no_tools(final)):
+                        try:
+                            offered = [t["function"]["name"] for t in self.tool_schemas()]
+                        except Exception:  # noqa: BLE001
+                            offered = []
+                        if offered:                     # once per turn: "the tool I need isn't available" with tools
+                            g["tools_nudged"] = len(self.messages)
+                            self.messages.append({"role": "user", "content": tools_nudge(offered)})
+                            continue
+                    if (E2E and not self.plan and not cx and g.get("promise_n", 0) < 2 and not g.get("act_nudged")
+                            and _stopped_early(_prose_before_call(final)) and self._tool_msgs_since(g["msg0"])):
                         g["promise_n"] = g.get("promise_n", 0) + 1   # E2E-AUTONOMY: a promise or a permission question
+                        g["push_at"] = len(self.messages)
                         self.messages.append({"role": "user", "content": (     # mid-task is not a finished turn
                             "[Meshpool] Your reply ends with what you will do next, or asks whether to go on, but "
                             "no tool call came with it, so the turn ended. Do the next step now with a tool call; do "
                             "not ask permission for work you were given. If you are truly finished or truly blocked, "
                             "say so plainly, without promising more.")})
                         continue
+                    if (not self.plan and not tools_off and not self._pace_wrapped and not pushed
+                            and _announces_action(_prose_before_call(final)) and self._tools_offered()):
+                        # the same in every wire style (Codex too) and before any tool ran: "I'll check the folder
+                        # and read the current deck..." after a malformed call ended the turn (Daniel, 0.0.18)
+                        g["act_nudged"] = len(self.messages)   # once per turn
+                        self.messages.append({"role": "user", "content": ACT_NUDGE})
+                        continue
+                    if (tools_off or self._pace_wrapped or self.plan) and g.get("made") and _announces_action(final):
+                        done = _made_summary(g["made"])    # no push is possible now: say what was made
+                        if done:
+                            self.messages.append({"role": "assistant", "content": done})
+                            self.emit({"type": "assistant", "text": done, "streamed": False, "has_tools": False})
+                            final = done
+                            break
+                    from meshpool_harness.core import textcalls as _TCM
+                    if not getattr(self, "reports_to_agent", False) and _TCM.malformed_reply(final):
+                        # Priya, round 3: the answer was a raw shell command, a link, a machine path and "30000".
+                        # Not an answer: it goes from the chat, the model is asked once for words, then the turn ends
+                        # on what it made.
+                        self.emit({"type": "review_round", "malformed": True})
+                        if not g.get("malformed_nudged") and not tools_off:
+                            g["malformed_nudged"] = len(self.messages)
+                            self.messages.append({"role": "user", "content": _TCM.MALFORMED_NUDGE})
+                            continue
+                        done = malformed_fallback(self.root, g.get("t0", 0), g.get("made"))
+                        self.messages.append({"role": "assistant", "content": done})
+                        self.emit({"type": "assistant", "text": done, "streamed": False, "has_tools": False})
+                        final = done
+                        break
+                    if not self._pace_wrapped:
+                        from meshpool_harness.agent import look as _LOOK   # look at a page or file it made (0.0.18)
+                        again, final = _LOOK.gate(self, g, final, turn=turn)
+                        if again:
+                            continue
                     again, final = self._grade_gate(g, turn, final)   # independent check of a big task (agent/grader.py)
                     if again:
                         continue
+                    final = self._without_trailing_promise(final)
                     break
                 if tools_off and os.environ.get("MH_REPEAT_STOP", "8") != "0":
                     g["off_calls"] = g.get("off_calls", 0) + 1     # tools were off for this reply, yet it asked for some
@@ -3336,14 +4718,22 @@ class Agent:
                     step_out += outs
                     for c, out in zip(batch, outs):
                         self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": clean(out)})
+                        if _engine_tool((c.get("function") or {}).get("name") or ""):   # the file an office job made
+                            made = _job_file(str(out), self.root)
+                            if made:
+                                g["made"] = made
                         if (c.get("function") or {}).get("name") in ("apply_patch", "edit", "write_file", "edit_file") \
                                 and str(out).lstrip().startswith(("ERROR", "Error", "error:")):
                             edit_failed = True
                     if self.mcp is not None and getattr(self.mcp, "last_images", None):
                         shots += [(batch[-1].get("function", {}).get("name", ""), im) for im in self.mcp.last_images]
                         self.mcp.last_images = []
+                    for c, out in zip(batch, outs):     # a document with charts as pictures: its pages, to see them
+                        if str((c.get("function") or {}).get("name") or "").endswith("read_document"):
+                            shots += self._doc_figure_shots(c, out)
                 if shots:
-                    self._attach_images(shots)
+                    pages = sum(1 for _, im in shots if im.get("label"))
+                    self._attach_images(shots, lim=max(2, min(pages, int(os.environ.get("MH_MAX_IMAGES", "4") or 4))))
                 self._track_progress(calls, step_out, g)
                 step_note = self._step_budget(g)        # counts every step, so it runs even when another guard speaks
                 note = self._refusal_escalation(g) or self._budget_escalation(g, turn) or step_note
@@ -3366,7 +4756,9 @@ class Agent:
                     "\"continue\") to carry on. The limit is \"Max steps per reply\" in Settings (MH_MAX_STEPS; 0 = no "
                     "limit).")})
         except (Interrupted, KeyboardInterrupt):
+            n0 = len(self.messages)
             self._repair()
+            self._mark_stopped(n0)
             for cid, nm in list(self._open_calls.items()):       # no card stays "running" after a Stop
                 self._open_calls.pop(cid, None)
                 self.emit({"type": "tool_end", "id": cid, "name": nm, "ok": False, "denied": False,
@@ -3393,6 +4785,13 @@ class Agent:
                        "the key's limit, or pick another model or key in Settings, then send \"continue\".")
             elif re.search(r"rejected the API key|stopped accepting the API key", msg):
                 msg = "The endpoint rejected the API key. Check it in Settings, then send your message again."
+            elif isinstance(e, _ModelFailing):       # every retry got a server error: waiting a moment will not help
+                msg = ("The model keeps failing: it returned a server error on every try. Everything done so far is "
+                       "kept. Switch to another model and send \"continue\", or try this one again later.")
+            elif re.search(r"sent an unreadable reply|sent no usable reply|stream ended before the reply was complete",
+                           msg):                     # it answered, but not with a reply: not a network problem
+                from meshpool_harness.core import errtext as ET
+                msg = ET.explain(raw, **self._error_where())
             elif re.search(r"HTTP 0|connection problem|timed out|urlopen error", msg, re.I) and \
                     "answers small requests" not in msg and self._recover_off():
                 msg = (f"Couldn't reach the model endpoint ({self._endpoint_host()}). Check the network and the "
@@ -3411,8 +4810,14 @@ class Agent:
             if re.search(r"HTTP 0|connection problem|timed out|urlopen error|HTTP 5\d\d", raw, re.I):
                 _lighten(self.messages)                # the next message starts lighter, on a fresh route
                 self.rotate_route()
-            if msg != raw:
-                msg += f" ({raw[:120]})"               # the detail, for support and the command line
+            where = self._error_where()
+            from meshpool_harness.core import errtext as ET
+            if msg == raw:                             # no plain sentence above: say what the reply itself said
+                msg = ET.explain(raw, **where)
+            elif msg.startswith(where["host"]) or msg.startswith("The reply from"):
+                pass                                   # errtext already said it all, with where it happened
+            else:                                      # the detail, for support and the command line: the status,
+                msg += f" ({_clip(ET.detail(raw, **where), 220)})"   # where, and the service's words, never a raw body
             rid = getattr(self, "last_request_id", "")
             if rid and rid not in msg:
                 msg += f" Request id: {rid}."
@@ -3506,6 +4911,13 @@ class Agent:
 
     def _tool_msgs_since(self, start: int) -> int:
         return sum(1 for m in self.messages[start:] if m.get("role") == "tool")
+
+    def _tools_offered(self) -> bool:
+        """True when this request offers the model any tool."""
+        try:
+            return bool(self.tool_schemas())
+        except Exception:  # noqa: BLE001
+            return False
 
     def _grade_info(self, g: dict, final: str) -> dict:
         from meshpool_harness.agent import grader as GR
@@ -3711,7 +5123,7 @@ class Agent:
     _LOOP_EXACT = 3      # the same call, with no file changed since, is refused from its 3rd run
     _LOOP_SHAPE = 5      # the same call with only numbers changed (od -c | sed -n '8,9p', '9,10p', ...): from the 5th
 
-    _REFUSED = ("[Meshpool] Not run", "[Meshpool] Shell checks stopped")
+    _REFUSED = ("[Meshpool] Not run", "[Meshpool] Shell checks stopped", "Skipped: this is the same command")
     _FAILED = re.compile(r"(?:ERROR: |\[exit [1-9]\d*\]"
                          r"|Chunk ID: \w+\nWall time: [^\n]*\nProcess exited with code (?!0\n))")   # exec_command
 
@@ -3733,7 +5145,23 @@ class Agent:
                 g["rseq"] = g.get("rseq", 0) + 1          # a refusal like the others: the refused-streak guard counts it
                 return (f"[Meshpool] Not run: {short} already ran {cap} times for this request. Fix what it reported "
                         "and answer, or answer now if it found nothing to fix.")
+        hist = ""
+        try:
+            fa = json.loads((c.get("function") or {}).get("arguments") or "{}")
+            hist = _history_key(PR.commands_of(name, fa if isinstance(fa, dict) else {}))
+        except (ValueError, TypeError):
+            pass
+        last_hist = g.pop("hist_last", None)             # only the call right before this one counts
+        if hist and last_hist == (hist, getattr(self.ws, "edits", 0)):
+            # the model sent the same `git reset --mixed HEAD~1` twice in one reply: both ran, and a commit was lost
+            g["rseq"] = g.get("rseq", 0) + 1
+            g["hist_last"] = last_hist
+            return ("Skipped: this is the same command you just ran. It already moved git history, and running it "
+                    "again would move it a second time. Check `git log` and `git status`, then run something "
+                    "different if you still need to.")
         out = self._guarded_tool_inner(c, g, cut)
+        if hist and not str(out).lstrip().startswith(("ERROR", "Denied", "Not allowed", "Blocked")):
+            g["hist_last"] = (hist, getattr(self.ws, "edits", 0))
         # consecutive refused calls (a model re-sending a call the guards just refused); any call that runs resets it
         refused = str(out).startswith(self._REFUSED)
         if not refused:
@@ -3883,6 +5311,29 @@ class Agent:
                         "tests, or answer with what you have." if len(prev) >= 4 else "")
                 return ("[Meshpool] Not run: you already ran this; the result is unchanged and no file changed since. "
                         "It was: " + str(prev[-1][4])[:200].replace("\n", " ") + more)
+        if nm in ("shell", "exec_command", "bash", "bash_many") and os.environ.get("MH_REPEAT_SHELL", "1") != "0" \
+                and not self._POLL.search(str(f.get("arguments", ""))):
+            # the same command three times in a row with no file changed between them, whatever it printed, or a
+            # pair of commands taking turns (git stash, git stash pop, five times: Omar's run): the fourth is refused.
+            # For other commands, "no file changed" also covers a change made outside the edit tools (a script that
+            # writes, a fixed input): the three runs must each have left the tree as it is now. A git
+            # command that moves state (stash, pop, checkout) changes the tree itself, so it counts by edits only.
+            gitcmd = bool(re.search(r"(?:^|[\s\"';&|(])git\s", str(f.get("arguments", ""))))
+            sig0 = None if gitcmd else self._tree_sig()
+            g["_sig0"] = (id(c), sig0)
+            tail = [r for r in runs if r[2] == edits]
+            ks = [r[0] for r in tail]
+            n3 = len(ks) >= 3 and ks[-1] == ks[-2] == ks[-3] == key
+            if n3 and sig0 is not None:
+                n3 = all(len(r) <= 5 or r[5] is None or r[5] == sig0 for r in tail[-3:])
+            bg = self.ws.__dict__.get("_bg") or {}
+            if not any(e["p"].poll() is None for e in list(bg.values())) and (
+                    n3 or
+                    (len(ks) >= 5 and ks[-1] != key and ks[-2] == ks[-4] == key and ks[-1] == ks[-3] == ks[-5])):
+                g["refused"] = g.get("refused", 0) + 1
+                return ("[Meshpool] Not run: you are repeating yourself. This command (or this pair of commands) "
+                        "has just run again and again, and no file changed in between. Running it once more changes "
+                        "nothing. Do something different, or answer with what you have.")
         if os.environ.get("MH_REPEAT_WINDOW") == "1":
             stuck = (sum(1 for r in runs if r[0] == key and r[2] == edits and r[3]) >= 3
                      and len({r[1] for r in runs if r[0] == key and r[2] == edits}) == 1)
@@ -3896,10 +5347,12 @@ class Agent:
                     "blocking you.")
         sh = (nm in ("shell", "exec_command", "bash", "bash_many") and os.environ.get("MH_REPEAT_SHELL", "1") != "0"
               and not self._POLL.search(str(f.get("arguments", ""))))     # a poll of a job or service may repeat
-        sig = self._tree_sig() if sh else None
+        pre = g.pop("_sig0", None)
+        sig = (pre[1] if pre and pre[0] == id(c) else self._tree_sig()) if sh else None
         if sh and sig is not None:
             bg = self.ws.__dict__.get("_bg") or {}
-            killed = [r for r in runs if r[0] == key and len(r) > 6 and r[6]]
+            # killed with no project file changed since: a changed input or fixed code may well run now
+            killed = [r for r in runs if r[0] == key and len(r) > 6 and r[6] and r[5] == sig]
             if len(killed) >= 2 and not any(e["p"].poll() is None for e in list((self.ws.__dict__.get("_bg") or {}).values())):
                 return ("[Meshpool] Not run: this command was killed twice already (exit 137 or 124: it ran out of memory "
                         "or time). Running it again will not change that. Use a smaller input, a shorter timeout, or "
@@ -3913,7 +5366,14 @@ class Agent:
                 if sq.get("sig") == sig and sq.get("n", 0) >= 10:
                     return ("[Meshpool] Shell checks stopped for this turn: ten runs in a row gave the same result and no "
                             "project file changed. Give your best answer from what you have, and say what is unresolved.")
-        out = self._run_tool(c, cut=cut)
+        # exec_command fingerprints the tree before and after it runs, and this guard did the same around it: four
+        # walks of up to 4,000 files per command. The guard's walk is handed to _run_tool and _run_tool's back.
+        self.__dict__.pop("_sig_post", None)
+        self._sig_pre = (id(c), sig) if sh else None
+        try:
+            out = self._run_tool(c, cut=cut)
+        finally:
+            self._sig_pre = None
         import hashlib
         h = hashlib.md5(str(out).encode("utf-8", "replace")).hexdigest()
         failed = bool(re.search(r"\[exit (?!0\b)\d+\]|Process exited with code (?!0\b)-?\d+|timed out|Traceback|Error|"
@@ -3937,7 +5397,8 @@ class Agent:
             if not last or last[-1][3] != failed:
                 g["wprog"] = g.get("wprog", 0) + 1
         if sh:
-            sig2 = self._tree_sig()
+            post = self.__dict__.pop("_sig_post", None)
+            sig2 = post[1] if post and post[0] == id(c) and post[1] is not None else self._tree_sig()
             sq = g.get("sseq") or {}
             sq = {"sig": sig2, "h": h, "n": sq["n"] + 1} if sq and sq.get("sig") == sig2 and sq.get("h") == h and sig2 is not None \
                 else {"sig": sig2, "h": h, "n": 1}
@@ -3946,8 +5407,10 @@ class Agent:
                 wnote += "\n[Meshpool] Your checks keep giving the same result; change approach or answer."
             sig = sig2
         out = str(out) + wnote if wnote else out
-        oom = bool(re.search(r"\[exit (137|124)\]|\brc=(137|124)\b|exit(?:ed with)? code (137|124)\b|\bKilled\b|timed out",
-                             str(out)))
+        # a kill by memory or time: the exit code, bash's "1234 Killed" line or the tool's own timeout note; not the
+        # words "timed out" or "Killed" anywhere in a log (a passing test_request_timed_out)
+        oom = bool(re.search(r"\[exit (137|124)\]|\brc=(137|124)\b|exit(?:ed with)? code (137|124)\b|"
+                             r"(?m:^|\d\s+)Killed\b|\[timed out after \d+s\]", str(out)))
         runs.append((key, h, edits, failed, str(out)[:240], sig, oom))   # a failed call counts for the failure breaker; a read for the read breaker
         del runs[:-12]
         return out
@@ -4273,9 +5736,10 @@ class Agent:
         return " ".join(notes)
 
     # ---------- images (computer use, browser screenshots) -----------------------------------------------------
-    def _attach_images(self, shots: list):
+    def _attach_images(self, shots: list, lim: int = 2):
         """Tool results cannot carry images on the chat API, so screenshots follow as a user message. Only the latest
-        two images stay in the conversation; older ones become a short note to keep requests small."""
+        `lim` images (two, or a document's pages with figures) stay in the conversation; older ones become a short
+        note to keep requests small. An image with a "label" gets that text before it."""
         if os.environ.get("MH_VISION", "1") == "0" or self._model_is_blind():
             return
         # A screenshot bigger than the endpoint takes (a full-size Retina or 4K PNG) would fail every request and
@@ -4291,11 +5755,88 @@ class Agent:
                                   "without it."})
         if not shots:
             return
-        _drop_images(self.messages, keep=max(0, 2 - len(shots)))
+        _drop_images(self.messages, keep=max(0, lim - len(shots)))
         parts = [{"type": "text", "text": "Image returned by " + ", ".join(sorted({n for n, _ in shots})) + ":"}]
-        for _, im in shots[-2:]:
+        for _, im in shots[-lim:]:
+            if im.get("label"):
+                parts.append({"type": "text", "text": str(im["label"])})
             parts.append(_image_part(im))
         self.messages.append({"role": "user", "content": parts})
+
+    _IMG_TOOLS = ("bash", "bash_many", "shell", "exec_command", "write_file")
+    _IMG_HINT = re.compile(r"\.(?:png|jpe?g|gif|webp|svg)\b|savefig|matplotlib|plt\.|plotly|\bPIL\b|Image\.|"
+                           r"pdftoppm|--convert-to\s+(?:png|jpg)|chart|plot", re.I)
+
+    def _image_note(self, name: str, args, out: str, t0: float) -> str:
+        """A picture this call saved in the chat's folder is shown to the user in the chat, as a card under the reply.
+        The tool result says so, and, for a model that takes images, that it may look at it with view_output (Lina,
+        round 3: "I can't display images in this chat", with the chart on screen)."""
+        if name not in self._IMG_TOOLS and not (self.mcp and self.mcp.has(name)):
+            return ""
+        if not self._IMG_HINT.search(json.dumps(args, default=str)[:20000] + str(out)[-4000:]):
+            return ""                                  # no picture in sight: no walk of the folder
+        try:
+            got = [p for p in _recent_files(self.root, t0 - 0.05, IMG_SUFFIXES) if not self.ws._in_scratch(p)][:4]
+        except Exception:  # noqa: BLE001 - a note never breaks a tool
+            return ""
+        if not got:
+            return ""
+        names = ", ".join(os.path.relpath(p, self.root) for p in got)
+        one = len(got) == 1
+        note = (f"\n\n[meshpool] {names} {'is' if one else 'are'} saved in the user's folder and shown to the user in "
+                f"this chat, as {'a picture' if one else 'pictures'} under your reply. You can refer to "
+                f"{'it' if one else 'them'} as shown here.")
+        if self._sees_images():
+            note += f" You can look at {'it' if one else 'them'} yourself with view_output to check how it came out."
+        return note
+
+    def _sees_images(self) -> bool:
+        """True when this chat's model takes images, as the chat knows it (MH_VISION, a model that refused them)."""
+        return os.environ.get("MH_VISION", "1") != "0" and not self._model_is_blind()
+
+    def _figure_pages(self, asked: str) -> tuple[str, list]:
+        """For a message that names a chart, figure, graph, diagram or image: a note on where the figures are in the
+        chat's PDF, Word and PowerPoint files, and their pages as pictures when the model takes images. The model
+        answered "The report has no barriers chart" from the text alone, without calling a tool (Daniel, 0.0.18)."""
+        self._fig_sent = set()                       # pages sent with this message: read_document does not resend them
+        if os.environ.get("MH_DOC_FIGURES", "1") == "0":
+            return "", []
+        try:
+            from meshpool_harness import docfigures as DF
+            if DF.chat_folder_files(asked):            # a chat with no folder of its own: the file's text and its
+                note, pages = DF.for_attachments(self.root, asked, self._sees_images())   # figure pages go with it
+                if note or pages:
+                    self._fig_sent = {(str(Path(im["label"].rsplit(",", 1)[0])), im["page"]) for im in pages}
+                    return note, pages
+            if not DF.asks_about_figures(asked):
+                return "", []
+            see = self._sees_images()
+            note, pages = DF.for_question(self.root, self.messages, asked, see)
+            if pages:
+                self._fig_sent = {(str(Path(im["label"].rsplit(",", 1)[0])), im["page"]) for im in pages}
+            return note, pages
+        except Exception:  # noqa: BLE001 - never in the way of the message
+            return "", []
+
+    def _doc_figure_shots(self, call: dict, out) -> list:
+        """The pages with figures of a file read_document just read, as (tool name, image) shots for the model, when
+        it takes images and the reader's note says the file has figures."""
+        if "[Figures]" not in str(out) or not self._sees_images() or os.environ.get("MH_DOC_FIGURES", "1") == "0":
+            return []
+        try:
+            from meshpool_harness import docfigures as DF
+            args = json.loads((call.get("function") or {}).get("arguments") or "{}") or {}
+            p = Path(str(args.get("path") or ""))
+            p = p if p.is_absolute() else Path(self.root) / p
+            figs = DF.in_pages(DF.figures(p), args.get("pages") if p.suffix.lower() != ".docx" else None)
+            sent = getattr(self, "_fig_sent", set())
+            figs = [f for f in figs if (p.name, f.get("page")) not in sent]
+            name = (call.get("function") or {}).get("name", "read_document")
+            got = DF.page_images(p, figs)
+            self._fig_sent = sent | {(p.name, im["page"]) for im in got}
+            return [(name, im) for im in got]
+        except Exception:  # noqa: BLE001
+            return []
 
     def _model_is_blind(self) -> bool:
         """True when this chat's current model refused images earlier (a bare model id in _no_vision_models)."""
@@ -4337,19 +5878,60 @@ class Agent:
         more = f" and {len(rel) - 12} more" if len(rel) > 12 else ""
         after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits and c.get("kind") != "read"]
         if after:
-            last = after[-1]
+            real = [c for c in after if not _no_match(c["cmd"], c["code"], c.get("tail", ""))]
+            tests = [c for c in real if _is_test_cmd(c["cmd"])]
+            last = (tests or real or after)[-1]  # a search that found nothing is not the check; nor is a read-only
+                                                 # command that ran after the tests (git diff --stat)
             # the command, not the `cd <long project path> &&` the model put in front of it
             cmd = re.sub(r"^\s*cd\s+(\"[^\"]*\"|'[^']*'|\S+)\s*&&\s*", "", last["cmd"]).strip() or last["cmd"]
             cmd = cmd.splitlines()[0][:80]
-            check = _check_line(last["cmd"], cmd, last["code"])
+            check = _check_line(last["cmd"], cmd, last["code"], last.get("tail", ""),
+                                _fails_of(last), Agent._fails_before_turn(self))
             check += f" ({len(after)} command{'s' if len(after) > 1 else ''} after the last change)"
         else:
             check = "nothing was run after the last change, so it is not verified"
+        lk = getattr(self, "last_look", None)              # the page or file was looked at (agent/look.py)
+        if lk and lk.get("turn") == getattr(self, "_turn_no", 0):
+            seen = lk["line"].split(":", 1)[-1].strip().rstrip(".")
+            check = seen if not after else check + "; " + seen
         rv = getattr(self, "last_review", None)
         if rv and rv.get("turn") == getattr(self, "_turn_no", 0):
             from meshpool_harness.agent import grader as GR
             check += "  \n**Independent check:** " + GR.receipt_line(rv)
         return f"**Changed:** {', '.join(parts)}{more}  \n**Checked:** {check}"
+
+    def _without_trailing_promise(self, final: str) -> str:
+        """The turn ended with no tool call, and its last paragraph still promises an action ("I'll retry the commit
+        as before..."), after the promise nudge fired or when it did not apply. The answer above it says what
+        happened; the promise would contradict it. Drop that paragraph from what is shown (the chat, -p, the reply
+        the run returns) and keep the full reply in the run's turn.log. A reply that is only the promise stays."""
+        paras = re.split(r"\n\s*\n", str(final or "").rstrip())
+        if len(paras) < 2 or len(paras[-1]) > 300 or not _announces_action(paras[-1]) \
+                or not "".join(paras[:-1]).strip():
+            return final
+        kept = str(final).rstrip()[:len(str(final).rstrip()) - len(paras[-1])].rstrip()
+        try:
+            with (self.ws.run_dir / "turn.log").open("a", encoding="utf-8", errors="replace") as f:
+                f.write("\n[dropped trailing promise]\n" + paras[-1] + "\n")
+        except (OSError, AttributeError):
+            pass
+        for m in reversed(self.messages):                  # the chat shows the answer without it
+            if m.get("role") == "assistant" and not m.get("tool_calls"):
+                if isinstance(m.get("content"), str) and m["content"].rstrip().endswith(paras[-1]):
+                    m["content"] = kept
+                break
+        self.emit({"type": "reply_trim", "text": kept})
+        return kept
+
+    def _fails_before_turn(self):
+        """The test ids that failed in the last test run before this turn's first edit; None when none ran then."""
+        ws = self.ws
+        e0, c0 = getattr(ws, "turn_edits0", None), getattr(ws, "turn_cmd0", 0)
+        if e0 is None:
+            return None
+        before = [c for c in ws.commands[c0:] if c.get("after_edit", -1) <= e0 and _is_test_cmd(c["cmd"])
+                  and _test_summary(c["cmd"], c.get("tail", ""))]
+        return set(_fails_of(before[-1])) if before else None
 
     def _turn_line_stats(self) -> dict:
         """{path: "+a -d"} of the open turn from the chat's checkpoint: the lines this turn changed, not the user's
@@ -4374,6 +5956,7 @@ class Agent:
             sc = self._scrubber = StreamScrubber()
         t = sc.feed(t)
         if t:
+            self._model_prog = time.time()
             self.emit({"type": "text_delta", "text": t})
 
     def _check_stop(self):
@@ -4494,6 +6077,10 @@ class Agent:
         if os.environ.get("MH_ELIDE_OLD_CALLS", "0") == "1":      # measured: it cost solves, so off unless asked
             msgs = _elide_old_calls(msgs)
         keep = int(os.environ.get("MH_MAX_IMAGES", "4"))
+        last_user = next((m for m in reversed(msgs) if m.get("role") == "user"), None)
+        if last_user is not None and isinstance(last_user.get("content"), list):    # a question's pages with figures
+            keep = max(keep, min(6, sum(1 for p in last_user["content"]                # (up to 6) all go with it
+                                        if isinstance(p, dict) and p.get("type") == "image_url")))
         if sum(1 for m in msgs if isinstance(m.get("content"), list)
                for p in m["content"] if isinstance(p, dict) and p.get("type") == "image_url") > keep:
             # Only the latest images go with a request; the chat keeps all of them. A month-old chat full of
@@ -4646,6 +6233,35 @@ class Agent:
         return MC.resolve(base, bare, prof)
 
     def _chat(self, turn: dict) -> tuple[dict, bool]:
+        """One model call, with its retries. model_req_at says a request is being made or waited on right now, so the
+        app can tell a real wait from a turn that is stuck with no request (ui/agent_api.py view, ui/app.js workTick)."""
+        self.model_req_at = self._model_prog = time.time()
+        done = threading.Event()
+        threading.Thread(target=self._wait_notes, args=(done,), daemon=True).start()
+        try:
+            return self._chat_call(turn)
+        finally:
+            done.set()
+            self.model_req_at = None
+
+    def _wait_notes(self, done: threading.Event):
+        """While the model says nothing (no text, no reasoning), tell the front end once a minute: a model_wait event
+        with the seconds waited. Session.emit hands it to the terminal only; it is not kept in the chat."""
+        every = max(0.2, float(os.environ.get("MH_WAIT_NOTE_S", "60") or 60))
+        told = 0
+        while not done.wait(min(1.0, every / 4)):
+            idle = time.time() - self._model_prog
+            n = int(idle // every)
+            if n < told:
+                told = 0                                   # text arrived and then stopped: count again
+            if n > told:
+                told = n
+                try:
+                    self.emit({"type": "model_wait", "secs": int(idle)})
+                except Exception:  # noqa: BLE001  a note never breaks the call
+                    pass
+
+    def _chat_call(self, turn: dict) -> tuple[dict, bool]:
         body = self._body()
         # The model's provider decides where the call goes (providers.py): the key endpoint in settings or the
         # ChatGPT sign-in.
@@ -4703,7 +6319,8 @@ class Agent:
                 else:
                     h = GW.health(base, key, body["model"])
                     if h.is_down() and not self._await_endpoint(h, base, key, body["model"]):
-                        raise _EndpointDown("HTTP 0: the model endpoint did not come back")
+                        why = getattr(h, "last_why", "")         # what its last probe said (DNS, refused ...)
+                        raise _EndpointDown("HTTP 0: the model endpoint did not come back" + (f" ({why})" if why else ""))
                     slot = h.acquire(self._check_stop, self.emit)
                     tok: dict = {}                         # the worker gives the slot back when the request ends
                     resp, streamed = self._wait(self._post_slotted, h, slot, base, key, body, stream, tok,
@@ -4746,6 +6363,10 @@ class Agent:
                 if type(e).__name__ == "NotSignedIn":     # no sign-in: retrying cannot help
                     raise
                 kind = classify_error(msg)                 # the same reading as LiveClient.chat (core/client.py)
+                from meshpool_harness.core import errtext as _ETP
+                if kind == "fatal" and _ETP.permanent_200(msg):
+                    raise                                  # a 200 error body naming an unknown model or a refused key:
+                    #                                        a resend gets the same answer, so say it now
                 if kind == "tls":                          # an untrusted certificate: no probe, no waiting (S-11)
                     raise RuntimeError(self._tls_text(base, msg))
                 fix = self._diagnose(kind, msg, body)
@@ -4768,6 +6389,10 @@ class Agent:
                         continue
                     raise RuntimeError("The endpoint rejected the API key. Check it in settings. " + msg[:200])
                 if kind == "model_missing":
+                    if getattr(self, "model_named", False):
+                        # OM-04: a model the user named on the command line (--model) is not swapped for another one
+                        # without a word: the run stops and says which names the endpoint does serve.
+                        raise RuntimeError(_unknown_model_text(body["model"], prov, msg, key))
                     # A chat from weeks ago on a model the endpoint has dropped: continue on today's default for
                     # its provider, once per call. Otherwise say so at once; retrying the same model cannot help.
                     C.load_into_env(override=True)
@@ -4963,7 +6588,7 @@ class Agent:
                         continue
                     if attempt >= 5:                       # up, yet this conversation's requests keep failing
                         if re.search(r"HTTP 5\d\d", msg):  # the endpoint itself fails: no claim that it is fine
-                            raise RuntimeError(msg)
+                            raise _ModelFailing(msg) from e
                         raise RuntimeError(msg + " (the endpoint answers small requests, but this conversation's "
                                            "requests keep failing)")
                     if re.search(r"timed out", msg, re.I):   # up but slow to start (prefill, a queue): wait longer
@@ -4976,6 +6601,8 @@ class Agent:
                         stream = False
                         self.emit({"type": "status", "text": "Trying again without streaming."})
                 elif attempt >= 5:
+                    if re.search(r"HTTP 5\d\d", msg):      # a server error on every try: the model keeps failing
+                        raise _ModelFailing(msg) from e
                     raise
                 stalled = re.search(r"HTTP 5\d\d|timed out", msg, re.I)   # 5xx, or no byte back within the timeout
                 if stalled and attempt >= 1:               # a big request that keeps failing upstream:
@@ -5071,9 +6698,10 @@ class Agent:
         finally:
             _AUX.on = False
 
-    def _aux_complete(self, system: str, user: str, turn: dict, max_tokens: int = 700) -> str:
+    def _aux_complete(self, system: str, user, turn: dict, max_tokens: int = 700, source: str = "review") -> str:
         """One separate chat completion (fresh messages, no tools) on the same model and endpoint. Goes through
-        _post, so auth, the refused-field list and usage accounting are the agent's own. Raises on failure."""
+        _post, so auth, the refused-field list and usage accounting are the agent's own. Raises on failure. `user` is
+        text, or a list of content parts (text and images, for the look reviewer, agent/lookreview.py)."""
         from meshpool_harness import providers as PV
         prov, model = PV.split(self.current_model())
         base, key = PV.endpoint(prov)
@@ -5081,6 +6709,8 @@ class Agent:
             raise RuntimeError("no plain chat endpoint for the reviewer")
         body = {"model": model, "max_tokens": max_tokens, "temperature": 0,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+        ulen = len(user) if isinstance(user, str) else sum(
+            len(p.get("text", "")) if p.get("type") == "text" else IMAGE_EST_CHARS for p in user if isinstance(p, dict))
         _apply_refused(body)
         body = self._prepare(body)
         resp = None
@@ -5089,14 +6719,14 @@ class Agent:
         if h.is_down():                                    # a side call never waits out an outage
             raise _EndpointDown("HTTP 0: the model endpoint is down; the review was skipped")
         for _ in range(3):
-            res = usage.reserve(model, request_chars=len(system) + len(user), max_tokens=max_tokens, base=base, task=task)
+            res = usage.reserve(model, request_chars=len(system) + ulen, max_tokens=max_tokens, base=base, task=task)
             try:
                 slot = h.acquire(self._check_stop, self.emit)
                 tok: dict = {}
                 resp, _s = self._wait(self._post_slotted, h, slot, base, key, body, False, tok,
                                       on_abandon=lambda: tok.__setitem__("abort", True))
-                usage.record(model, resp.get("usage"), base=base, source="review", task=task, reservation=res,
-                             request_chars=len(system) + len(user), reply_chars=_reply_chars(resp))
+                usage.record(model, resp.get("usage"), base=base, source=source, task=task, reservation=res,
+                             request_chars=len(system) + ulen, reply_chars=_reply_chars(resp))
                 break
             except RuntimeError as e:
                 if not _adapt_params(body, str(e)):
@@ -5247,6 +6877,17 @@ class Agent:
         except ValueError:
             return False
 
+    def _error_where(self) -> dict:
+        """host, model and key for core/errtext: where a failed call went, and the key to keep out of the message."""
+        try:
+            from meshpool_harness import providers as PV
+            prov, bare = PV.split(self.current_model())
+            if prov == "chatgpt":
+                return {"host": "ChatGPT", "model": bare, "key": ""}
+            return {"host": self._endpoint_host(), "model": bare, "key": PV.endpoint(prov)[1] or ""}
+        except Exception:  # noqa: BLE001 - a message must still go out
+            return {"host": self._endpoint_host(), "model": "", "key": ""}
+
     def _endpoint_host(self) -> str:
         try:
             from urllib.parse import urlparse
@@ -5353,6 +6994,8 @@ class Agent:
                     _MC.observe_first_byte(base, _bare, time.time() - t_sent)   # remembered: the next wait is 3x it
                 thinking = []                            # one "Thinking…" status per call, before any text
                 parts: list = []                         # the reply so far: kept if the stream drops (_keep_partial)
+                if not aux:                              # and if the user stops it (_mark_stopped, OM-06)
+                    self._stream_parts = (len(self.messages), parts)
                 thought: list = []                       # the model's reasoning, when it sends it
 
                 def flush_thought():
@@ -5374,6 +7017,7 @@ class Agent:
                         self.emit({"type": "status", "text": "Thinking…"})
                     if isinstance(t, str) and t and not aux and os.environ.get("MH_SHOW_THINKING", "1") != "0":
                         thought.append(t)
+                        self._model_prog = time.time()
                         self.emit({"type": "thought", "text": t, "delta": True})   # live only
 
                 def check():
@@ -5440,6 +7084,145 @@ class Agent:
             self._partial_text = text
 
     # ---------- tools ------------------------------------------------------------------------------------------
+    def _sandboxed(self) -> bool:
+        """This chat's commands run in the OS sandbox (bubblewrap, sandbox-exec): writes only in the project and temp."""
+        try:
+            from meshpool_harness.core import sandbox as SBX
+            return not getattr(self.ws, "container", None) and SBX.requested(self.mode) and SBX.available()
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _work_without_asking(self) -> bool:
+        """Ordinary work in the folder runs without a question: in the sandbox, or after the user's one yes for the
+        chat where there is none. MH_SANDBOX_AUTO=0 asks as before 0.0.18."""
+        if not _sandbox_auto_on():
+            return False
+        return self._sandboxed() or bool(getattr(self, "_folder_ok", False))
+
+    def _edit_inside(self, name: str, args: dict) -> bool:
+        """Every file this edit touches is inside the chat's folder (or one the user added)."""
+        if name == "edit" and isinstance(args.get("changes"), list) and not args.get("path"):
+            paths = [str(c.get("path") or "") if isinstance(c, dict) else "" for c in args["changes"]]
+        elif name in ("edit", "write_file", "notebook_edit"):
+            paths = [str(args.get("path") or args.get("notebook_path") or "")]
+        elif name == "apply_patch":
+            paths = [str(x) for x in _patch_files(args.get("input"))]
+        else:
+            return False
+        if not paths or any(not p.strip() for p in paths):
+            return False
+        try:                                    # ~, $HOME and $VAR as the shell reads them (Workspace._path does too)
+            paths = [T.expand_path(p) for p in paths]
+        except ToolError:
+            return False                        # a variable that is not set: never "inside"
+        return all(not self._outside_path(p) for p in paths)
+
+    def _edit_targets(self, name: str, args: dict) -> list:
+        """The files an edit writes, as full paths (~ and $VAR expanded); [] when they cannot be read."""
+        if name == "apply_patch":
+            raw = [str(x) for x in _patch_files(args.get("input"))]
+        elif name == "edit" and isinstance(args.get("changes"), list):
+            raw = [str(c.get("path") or "") for c in args["changes"] if isinstance(c, dict)] + [str(args.get("path") or "")]
+        else:
+            raw = [str(args.get("path") or args.get("notebook_path") or "")]
+        out = []
+        for p in filter(None, (x.strip() for x in raw)):
+            try:
+                p = T.expand_path(p)
+            except ToolError:
+                continue
+            out.append(p if os.path.isabs(p) else os.path.join(str(self.root), p))
+        return out
+
+    def _office_write(self, name: str) -> bool:
+        """An office tool that writes a file: office_task and every tool of the office server that is not one of the
+        read-only ones in SAFE_MCP (make_*, add_slides, analyze_data, edit_office_file, convert_document...)."""
+        n = name.replace("-", "_")
+        return n == "office_task" or (n.startswith(self._OFFICE_MCP) and n not in SAFE_MCP)
+
+    def _office_write_risk(self, name: str, args: dict) -> str:
+        """"" when an office tool's write needs no question by the rule for shell edits in the folder: a new file in
+        the folder, or a change to a file in the folder that Undo can put back. Else the card's question: a file
+        open in Office (its lock file is there), a result saved outside the folder, or a file Undo does not keep.
+        The office tools never delete a file and never use the network themselves."""
+        tool = name.replace("-", "_").rsplit("__", 1)[-1]
+        if tool != "edit_office_file":
+            return ""                          # make_*, convert, add_slides: a new file, never over an existing one
+        targets = []
+        if office_in_place(args, self.root):
+            targets.append(str(args.get("path") or ""))
+        elif args.get("output"):
+            targets.append(str(args.get("output")))
+        for t in filter(None, targets):
+            try:
+                t = T.expand_path(t)
+            except ToolError:
+                return f"Save {t[:80]}? Its path names a variable that is not set."
+            full = t if os.path.isabs(t) else os.path.join(str(self.root), t)
+            nm = os.path.basename(full.rstrip("/\\"))
+            if self._outside_path(t):
+                return f"Change {nm}, outside the project folder ({full[:100]})?"
+            if PR.office_lock(full):
+                # edit_office_file never writes a file Office holds open: it saves a copy (Sara: "Change it anyway?"
+                # and then "Budget_2026 (edited).xlsx" appeared). The card says what will happen.
+                stem, ext = os.path.splitext(nm)
+                copy = f"{stem} (edited){ext}" if office_in_place(args, self.root) else f"{stem} (copy){ext}"
+                return f"{nm} is open in Office. Save your changes as a copy, {copy}?"
+            if os.path.exists(full):
+                why = PR.undo_covers(full, self.root)
+                if why:
+                    return f"Change {nm}? Undo cannot put it back: {why}."
+        return ""
+
+    def _chat_made(self) -> set:
+        """Full paths of the files this chat made (its edits, and what Undo booked as added in its turns): the files
+        it may delete without a question. Anything else in the folder is the user's."""
+        made = {str(x) for x in getattr(self.ws, "created", ()) or ()}
+        cp = getattr(self, "checkpoint", None)
+        try:
+            for t in (cp.turns() if cp is not None else []):
+                made.update(str(self.root / c["path"]) for c in t.get("changed") or []
+                            if c.get("status") == "added" and c.get("path"))
+        except Exception:  # noqa: BLE001 - no Undo record: only this chat's own edits count
+            pass
+        return made
+
+    def _git_local_ok(self, name: str, args: dict) -> bool:
+        """A command made only of local git writes in the project repository (add, commit, stash, reset --soft,
+        restore, checkout of a file, a new branch) and reads. Omar, 0.0.19: `git add` and `git commit` were refused in
+        Accept edits and a whole task was lost. The network (push, pull, fetch, clone), history rewrites (reset --hard,
+        rebase, filter-branch), clean, and git's config and hooks still ask."""
+        if name not in ("bash", "shell", "exec_command"):
+            return False
+        wd = None
+        if args.get("workdir"):
+            try:
+                wd = self.ws._path(str(args["workdir"]))
+            except Exception:  # noqa: BLE001
+                return False
+        cmds = PR.commands_of(name, args)
+        return bool(cmds) and not _destructive(args, self.root) and \
+            all(PR.git_local_ok(c, self.root, wd, self._chat_touched()) for c in cmds)
+
+    def _chat_touched(self) -> set:
+        """Full paths of every file this chat changed (added, edited or removed), for the stash rule: shelving
+        changes the chat did not make is the user's work and asks."""
+        out = set(self._chat_made())
+        out.update(str(x) for x in getattr(self.ws, "turn_files", ()) or ())
+        cp = getattr(self, "checkpoint", None)
+        try:
+            for t in (cp.turns() if cp is not None else []):
+                out.update(str(self.root / c["path"]) for c in t.get("changed") or [] if c.get("path"))
+        except Exception:  # noqa: BLE001
+            pass
+        return out
+
+    def _edit_unasked(self, name: str, args: dict) -> bool:
+        """The rule for a file change that needs no question, for every way of making one (edit, write_file,
+        apply_patch, a patch inside a shell script): every file it writes is in the chat's folder, and none of them
+        is open in Office (Word, Excel, PowerPoint or LibreOffice would overwrite the change, or lose it)."""
+        return self._edit_inside(name, args) and not any(PR.office_lock(p) for p in self._edit_targets(name, args))
+
     def _outside(self, name: str, args: dict) -> str:
         """Why a read-only call still needs a yes in Ask and Accept edits: it reads outside the project
         (an SSH key, another app's secrets), or a web fetch carries a lot of data out in its address. "" if fine."""
@@ -5497,7 +7280,7 @@ class Agent:
             return f"Read {p[:80]} (outside the project)?"
         # the project, folders the user added (/add-dir), this chat's own tool output and the files the user
         # attached; never other chats' histories
-        ok = [self.ws.root, *getattr(self.ws, "extra_roots", []), self.dir.resolve(), (C.runs_dir() / "_uploads").resolve()]
+        ok = [self.ws.root, *getattr(self.ws, "extra_roots", []), self.dir.resolve(), *C.upload_roots(self.id)]
         return "" if any(q == r or r in q.parents for r in ok) else f"Read {str(q)[:120]} (outside the project)?"
 
     # A new deck or workbook written in code instead of through the engines (python-pptx, openpyxl, xlsxwriter,
@@ -5537,6 +7320,62 @@ class Agent:
                 "workbook or model; describe the sheets, inputs and outputs in the request. To read or change a few "
                 "values in an existing workbook, openpyxl.load_workbook is fine.")
 
+    _OFFICE_FILE = re.compile(r"\.(?:xlsx|xlsm|xls|docx|doc|pptx|ppt)\b", re.I)
+    _OFFICE_READ = re.compile(r"\bunzip\b|\bzipfile\b|sharedStrings\.xml|word/document\.xml|ppt/slides/|xl/worksheets/|"
+                              r"\bload_workbook\b|\bDocument\(|\bPresentation\(|\bread_excel\b")
+    _OFFICE_OUT = re.compile(r"\.save\(|savefig|\bto_(?:excel|csv|html|json)\(|writestr|open\([^)]*['\"][wax]b?\+?['\"]|"
+                             r"\bcat\s*>|\btee\b|\bwrite_(?:text|bytes)\(|>\s*['\"]?[^\s|;&<>]+\.(?:png|pdf|xlsx|docx|"
+                             r"pptx|csv|html|json|txt|md)\b", re.I)
+
+    _OFFICE_LOAD = re.compile(r"\b(?:openpyxl\.)?load_workbook\(\s*([^,)]+)|\b(?:docx\.)?Document\(\s*([^,)]+)|"
+                              r"\b(?:pptx\.)?Presentation\(\s*([^,)]+)")
+    _OFFICE_SAVE = re.compile(r"\.save\(\s*([^,)]+)")
+
+    def _rewrites_office_file(self, text: str) -> bool:
+        """A script that opens an office file and saves it under the same name: an in-place edit by hand."""
+        def norm(x: str) -> str:
+            x = x.strip().strip("'\"")
+            return re.split(r"[\\/]", x)[-1]
+        loads = {norm(next(g for g in m.groups() if g)) for m in self._OFFICE_LOAD.finditer(text)}
+        loads.discard("")
+        return bool(loads & {norm(m.group(1)) for m in self._OFFICE_SAVE.finditer(text)})
+
+    def _offered_tool(self, suffix: str) -> str:
+        """The full name of an offered tool that ends with `suffix` ("" when none is offered)."""
+        try:
+            return next((t["function"]["name"] for t in self.tool_schemas() if t["function"]["name"].endswith(suffix)),
+                        "")
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _office_read_steer(self, name: str, args: dict) -> str:
+        """Chat mode with read_document offered: a command that only reads a Word, Excel or PowerPoint file (unzip and
+        cat its XML, or a script that loads it and prints) is not run; the reply points at read_document, which needs
+        no approval. Maya, round 4: "cat; cp; unzip" on her price list showed a "Run 5 steps" approval card. "" when
+        the call is fine."""
+        if not getattr(self, "chat_mode", False) or name not in ("exec_command", "bash", "bash_many", "shell"):
+            return ""
+        cmd = args.get("cmd") if name == "exec_command" else args.get("command")
+        text = " ".join(map(str, cmd)) if isinstance(cmd, list) else str(cmd or "")
+        text += " ".join(str(c) for c in args.get("commands") or [])
+        if self._rewrites_office_file(text):
+            editor = self._offered_tool("__edit_office_file")
+            if editor:                       # Lina, round 4: "freeze the top row" rewrote her workbook with a script
+                return (f"Not run: in this chat, a Word, Excel or PowerPoint file the user has is changed with "
+                        f"{editor}, not rewritten by a script. It keeps the file's formatting and formulas, and Undo "
+                        "can put it back. Excel: set_cell (a value or =formula), set_range, add_row, add_sheet, "
+                        "delete_rows, freeze_panes, set_column_width. Work out the values first with a read-only "
+                        "command if you need to, then make the change in one call.")
+            return ""
+        if not (self._OFFICE_FILE.search(text) and self._OFFICE_READ.search(text)) or self._OFFICE_OUT.search(text):
+            return ""
+        reader = self._offered_tool("__read_document")
+        if not reader:
+            return ""
+        return (f"Not run: in this chat, Word, Excel and PowerPoint files are read with {reader}, which needs no "
+                "approval. Call it with the file's path (for a workbook, `sheet` picks one sheet). Use a command only "
+                "to compute or change something.")
+
     def _mcp_destructive(self, name: str) -> bool:
         """A connected app's tool its server marks destructiveHint: it asks first in every mode, unless
         MH_MCP_DESTRUCTIVE_ASK=0."""
@@ -5570,18 +7409,31 @@ class Agent:
                 return skill
         return ""
 
-    def _permit(self, name: str, args: dict) -> tuple[bool, str]:
+    def _permit(self, name: str, args: dict, _part: bool = False) -> tuple[bool, str]:
         if name == "delegate_task":
             return True, ""                    # its sub-agents' own actions are checked against this chat's mode
         only = getattr(self, "_only_names", None)
-        if only is not None and name not in only:
+        if not _part and only is not None and name not in only:
             return False, f"{name} is not one of the tools this agent may use."
-        sk = self._skill_blocked(name)
+        sk = self._skill_blocked(name) if not _part else ""
         if sk:
             return False, f"The skill {sk} says not to use {name} while following it. Do it another way."
         own_name, own_args = name, args
         if name in ("shell", "exec_command"):
-            hit = T.patch_from_shell(args.get("command") if name == "shell" else args.get("cmd"))
+            key = "command" if name == "shell" else "cmd"
+            hit = T.patch_from_shell(args.get(key))
+            sp = None if hit else T.split_patch_script(args.get(key))
+            if sp and sp[2]:
+                # Omar, 0.0.19: `apply_patch <<'EOF' ... EOF` then `python -m pytest` was judged as one command of 50
+                # "steps" and refused in Accept edits. The patch is an edit (a diff card when it asks); the rest is
+                # its own commands under the usual rules. Workspace.shell and exec_command run them the same way.
+                wd, cd = str(args.get("workdir") or ""), sp[1] or ""
+                bases = [cd or wd, cd, wd, os.path.join(wd, cd)]
+                ok, note = self._permit("apply_patch", {"input": sp[0], "_bases": list(dict.fromkeys(bases))}, True)
+                if not ok:
+                    return False, note
+                ok2, note2 = self._permit(name, {**args, key: sp[2]}, True)
+                return ok2, " ".join(n for n in (note, note2) if n)
             if hit:                            # apply_patch through the shell is an edit like any other
                 wd, cd = str(args.get("workdir") or ""), hit[1] or ""
                 bases = [cd or wd, cd, wd, os.path.join(wd, cd)]        # what Workspace.shell uses comes first
@@ -5614,7 +7466,7 @@ class Agent:
             answered = True
             notes.append(note or "")
         guard = self._power_file(name, args)
-        if guard and name in ("bash", "shell", "bash_start", "bash_many", "exec_command") and self.mode == "auto":
+        if guard and name in ("bash", "shell", "bash_start", "bash_many", "exec_command", "probe", "trace") and self.mode == "auto":
             guard = ""                             # full access: commands run as the user chose
         if guard:                                  # hooks, allow rules, MCP servers: the agent never grants itself these
             if not self.approve:
@@ -5633,6 +7485,11 @@ class Agent:
             return True, ""
         risky = self._outside(name, args) if self.mode != "auto" else ""
         destr = self._mcp_destructive(name)       # the connector itself says this deletes or overwrites
+        # 0.0.19: an office tool that writes a file follows the rule for shell edits in the folder: a new file, or a
+        # change Undo can put back, needs no question in sandbox-auto and Accept edits; "Before every command and
+        # change" asks for all of them, office_task included; a file open in Office or a result outside asks.
+        office_w = self._office_write(name) and self.mode != "auto"
+        orisk = self._office_write_risk(name, args) if office_w and not risky else ""
         if self.mode == "auto" and _destructive(args, self.root):        # OSS-18: Full access still asks about these ...
             if _allow_hit([r for r in rules["allow"] if r.startswith("bash:")], name, args):
                 return True, ""          # ... unless the user allowlisted this command ("bash:rm -rf build*"; a bare
@@ -5641,15 +7498,25 @@ class Agent:
             from meshpool_harness import trust as TRD
             if not TRD.is_trusted(self.root):      # cargo check, dotnet build run the project's own build code
                 risky = "Run this folder's checks? Build checks run the project's own code, and the folder is not trusted."
-        if not risky and (self.mode == "auto" and not (destr and self.approve) or name in READ_ONLY
+        if not risky and (self.mode == "auto" and not (destr and self.approve) or name in READ_ONLY and not office_w
                           or name.replace("-", "_") in SAFE_MCP):
             return True, ""
         if not risky and name in ("bash", "shell") and not args.get("workdir") and \
                 T.git_read_only(T.shell_script(args.get("command")) if name == "shell" else str(args.get("command") or "")) \
                 and T.git_config_safe(self.root):
             return True, ""                    # git status, log, diff and other reads never ask
-        if self.mode == "edits" and name in ("edit", "write_file", "apply_patch", "notebook_edit"):
-            return True, ""                    # auto-accept edits: file changes go through, commands still ask
+        if self.mode == "edits" and name in ("edit", "write_file", "apply_patch", "notebook_edit") and \
+                self._edit_unasked(name, args):
+            return True, ""                    # auto-accept edits: file changes in the folder go through
+        if self.mode == "edits" and not risky and self._git_local_ok(name, args):
+            if self._sandboxed():              # release review: local git needs no network, and hides no secrets
+                script = (T.shell_script(args.get("command")) if name == "shell"
+                          else str(args.get("cmd") if name == "exec_command" else args.get("command") or ""))
+                self.ws.__dict__.setdefault("sbx_offline", set()).add(script.strip())
+            return True, ""                    # local git writes in the project repo (add, commit, stash...)
+        if office_w and not risky and not orisk and not destr and (
+                self.mode == "edits" or self.mode == "ask" and self._work_without_asking()):
+            return True, ""                    # a new office file, or an undoable change to one, in the folder
         if name in ("edit", "write_file") and self._exists(args.get("path", "")) and \
                 self._diff(name, args) == "(no change)" and self._same_bytes(name, args):
             return True, ""                    # nothing would change, byte for byte: do not ask
@@ -5658,14 +7525,38 @@ class Agent:
         if risky:
             group = "outside-" + name
         cmds = PR.commands_of(name, args) if group == "bash" and not risky else []
-        if cmds and self.mode in ("ask", "edits") and not _destructive(args, self.root) and \
-                all(PR.safe_read(c, self.root) for c in cmds):
+        wd, wd_ok = None, True                     # shell and exec_command run in their workdir: paths start there
+        if cmds and name in ("shell", "exec_command") and args.get("workdir"):
+            try:
+                wd = self.ws._path(str(args["workdir"]))
+            except Exception:  # noqa: BLE001
+                wd_ok = False                      # unresolvable: never the shortcut
+        if not risky and self.mode in ("ask", "edits") and not destr and self._work_without_asking():
+            # 0.0.18 (owner: "way too many approvals for normal users"): ordinary work in the chat's folder runs
+            # without a question, as in Codex's default (workspace-write sandbox) and Claude's: inside the OS sandbox
+            # (writes only in the folder and temp, network cut for these commands) or after the user's one "Allow
+            # ordinary work in this folder for this chat" where there is no sandbox. Undo covers the changes.
+            # Still asked: destructive commands, the network and installs, paths elsewhere in the user's home,
+            # meshpool's own rule files (the guard above), and anything outside the folder.
+            if name in ("bash", "shell", "exec_command") and cmds and wd_ok and not _destructive(args, self.root) \
+                    and all(PR.sandbox_auto_ok(c, self.root, wd, self._chat_made(), self._chat_touched()) and not PR.open_office_write(c, self.root, wd)
+                            for c in cmds):
+                if self._sandboxed():
+                    script = (T.shell_script(args.get("command")) if name == "shell"
+                              else str(args.get("cmd") if name == "exec_command" else args.get("command") or ""))
+                    self.ws.__dict__.setdefault("sbx_offline", set()).add(script.strip())
+                return True, ""
+            if group == "edit" and self._edit_unasked(name, args):
+                return True, ""                    # a file open in Office asks before it is replaced
+        if cmds and wd_ok and self.mode in ("ask", "edits") and not _destructive(args, self.root) and \
+                all(PR.safe_read(c, self.root, wd) for c in cmds):
             return True, ""                    # H-15: a plain read-only command inside the project needs no question
         if group == "bash":
             pats = [x[5:] for x in self.always if x.startswith("bash:")]
             if cmds and not _destructive(args, self.root) and all(PR.granted(c, pats) for c in cmds):
                 return True, ""                # the chat grant covers only the command patterns the user allowed
-        elif group in self.always and risky != "destructive" and not _destructive(args, self.root) and not destr:
+        elif group in self.always and risky != "destructive" and not _destructive(args, self.root) and not destr \
+                and not orisk:
             return True, ""                    # a chat grant never covers a destructive command (OSS-18)
         if not self.approve:
             return False, "No one is available to approve this. Run with --auto to allow changes."
@@ -5673,16 +7564,23 @@ class Agent:
             shown = PR.commands_of(name, args) or [str(args.get("command") or args.get("cmd") or "")]
             wd = f"cd {args['workdir']} && " if name in ("shell", "exec_command") and args.get("workdir") else ""
             kind, title, detail = "bash", "Run this destructive command?", wd + "\n".join(shown)
+        elif risky and office_w:
+            kind, title, detail = "mcp", risky, office_detail(name, args, self.root)
         elif risky:
             kind, title, detail = "read", risky, json.dumps(args, indent=1, ensure_ascii=False)[:3000]
+        elif office_w and not args.get("markdown"):
+            kind, title, detail = "mcp", orisk or office_card(name, args, self.root)[0] + "?", \
+                office_detail(name, args, self.root)
+            if destr:
+                title = "The app marks this as one that deletes or overwrites data. " + title
         elif name == "bash":
-            kind, title, detail = "bash", "Run this command?", args.get("command", "")
+            kind, title, detail = "bash", _plain_command_title(args.get("command", "")), args.get("command", "")
         elif name == "bash_start":
             kind, title, detail = "bash", "Start this in the background?", args.get("command", "")
         elif name in ("probe", "trace"):        # FL-L13: they run a command, so they ask like bash (no MCP-style title)
             kind, title, detail = "bash", f"Run this command ({name})?", str(args.get("command") or args.get("cmd") or "")
         elif name in ("shell", "exec_command"):
-            kind, title, detail = "bash", "Run this command?", _summary_of(name, args)
+            kind, title, detail = "bash", _plain_command_title(_summary_of(name, args)), _summary_of(name, args)
         elif name == "apply_patch":
             files = _patch_files(args.get("input"))
             kind, title, detail = "edit", "Apply a patch to " + (", ".join(files[:3]) + (" and more" if len(files) > 3
@@ -5696,10 +7594,14 @@ class Agent:
                 self._diff(name, args)
         else:
             tool = name.split('__', 2)[-1]
-            target = str(args.get("filename") or args.get("path") or args.get("url") or "")[:80]
+            target = str(args.get("filename") or args.get("path") or args.get("url") or "")
+            target = (target.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1] if not target.startswith("http")
+                      else target)[:80]                     # the file's name, not a temp path
             nice = {"make_document": "Make a Word document", "make_pdf": "Make a PDF", "make_spreadsheet":
                     "Build a spreadsheet", "make_deck": "Make a PowerPoint deck", "convert_document": "Convert a file",
-                    "analyze_data": "Analyse data"}.get(tool) or ("Use " + tool.replace("_", " ") + " ("
+                    "analyze_data": "Analyse data", "edit_office_file": "Change", "read_document": "Read",
+                    "add_slides": "Add slides to", "fill_template": "Fill in", "merge_decks": "Combine decks into",
+                    "check_deck": "Check", "check_workbook": "Check", "check_document": "Check"}.get(tool) or ("Use " + tool.replace("_", " ") + " ("
                                                               + (name.split('__')[1] if '__' in name else name).replace("_", " ") + ")")
             kind, title = ("doc" if args.get("markdown") else "mcp"), f"{nice}{' ' + target if target else ''}?"
             if destr:
@@ -5707,6 +7609,12 @@ class Agent:
             body = args.get("markdown") or args.get("request") or args.get("content")
             detail = (str(body)[:3000] if isinstance(body, str) and body.strip()
                       else json.dumps(args, indent=1, ensure_ascii=False)[:3000])
+        outside_edit = kind == "edit" and group == "edit" and not self._edit_inside(name, args)
+        if outside_edit:
+            where = [os.path.relpath(p, str(self.root)) if not self._outside_path(p) else p
+                     for p in self._edit_targets(name, args)]
+            title = ("Change " + (", ".join(where[:3]) + (" and more" if len(where) > 3 else "") or "files")
+                     + ", outside the project folder?")    # said plainly: the edit leaves the folder
         try:
             from meshpool_harness.agent import extras as EXN
             EXN.run_hooks(self.root, "Notification", {"message": title, "kind": kind}, timeout=10)
@@ -5714,7 +7622,15 @@ class Agent:
             pass
         pats = [p for c in cmds for p in PR.grant_patterns(c)] if group == "bash" and not _destructive(args, self.root) else []
         pats = list(dict.fromkeys(pats))
-        scope = ("once" if risky == "destructive" or _destructive(args, self.root) else   # a destructive command: this once only
+        folder = ((group in ("bash", "edit") or office_w and not orisk) and not risky
+                  and not _destructive(args, self.root) and not destr
+                  and self.mode in ("ask", "edits") and _sandbox_auto_on()
+                  and not self._sandboxed() and (group == "edit" or office_w or
+                                                 (cmds and all(PR.sandbox_auto_ok(c, self.root, wd, self._chat_made(), self._chat_touched()) for c in cmds))))
+        folder = folder and not outside_edit
+        scope = ("once" if risky == "destructive" or _destructive(args, self.root) or orisk or outside_edit else   # a destructive command: this once only
+                 # no sandbox: one yes for the chat. Said plainly (review, 0.0.18): nothing isolates these commands
+                 "ordinary commands and edits in this folder (not isolated: this computer has no sandbox)" if folder else
                  "all file edits" if group == "edit" else "this tool" if group != "bash" else
                  " and ".join(f"`{p}`" for p in pats[:3]) + " commands" if pats else "once")   # once: no chat grant
         decision, note = PR.approve_with_scope(self.approve, kind, title, detail, scope)
@@ -5732,6 +7648,8 @@ class Agent:
         if decision in ("yes", "always"):      # re-check on edit never runs a command again that needed this yes
             self.ws.__dict__.setdefault("asked_cmds", set()).update(
                 c.strip() for c in PR.commands_of(name, args) if c.strip())
+        if decision == "always" and folder:
+            self._folder_ok = True                 # what _work_without_asking reads for the rest of this chat
         if decision == "always" and scope != "once":
             if group == "bash":
                 self.always.update("bash:" + p for p in pats)   # no pattern (a chain, a redirect): this once only
@@ -5748,9 +7666,11 @@ class Agent:
             s = os.path.normcase(str(x)).casefold()
             s = re.sub(r"::\$data$", "", s)
             return re.sub(r"[. ]+$", "", s)
-        if name in ("bash", "shell", "bash_start", "bash_many"):
+        if name in ("bash", "shell", "bash_start", "bash_many", "exec_command", "probe", "trace"):
+            # every shell tool, each with its own argument (exec_command's script is `cmd`)
             text = " ".join(str(x) for x in ([args.get("command")] if not isinstance(args.get("command"), list)
-                                             else args.get("command")) + list(args.get("commands") or []))
+                                             else args.get("command")) + list(args.get("commands") or [])
+                            + [args.get("cmd") or ""])
             low = text.casefold().replace("\\", "/")
             return next((f for f in (".meshpool", ".mcp", "hooks.json", "permissions.json", "mcp.json",
                                      "trusted-folders.json") if f in low), "")   # globs and writers included
@@ -5770,6 +7690,10 @@ class Agent:
                      for b in (args.get("_bases") or [""])] if args.get("_bases") else bases
         tails = ("/.meshpool/hooks.json", "/.meshpool/permissions.json", "/.meshpool/mcp.json", "/.mcp.json")
         for p in filter(None, paths):
+            try:
+                p = T.expand_path(p)               # $HOME/.meshpool/... is the same file as the shell would write
+            except ToolError:
+                pass
             for base in bases:
                 try:
                     q = (base / p).resolve() if not os.path.isabs(os.path.expanduser(p)) else Path(p).expanduser().resolve()
@@ -5897,6 +7821,12 @@ class Agent:
         elif self.plan and name.replace("-", "_") not in PLAN_MCP:
             bad = ToolError(f"{name} is not available in plan mode: it can change things. Investigate with "
                             "read-only tools and write the plan; the user switches to building to run it.")
+        elif is_mcp and name.split("__", 2)[-1] in _NEEDS_CONTENT and not any(
+                v not in (None, "", [], {}) for v in args.values()):
+            # an empty call (priya018: the card read "Make a Word document? {}"): not put to the user to approve,
+            # and sent back to the model to send again with what the file should hold
+            bad = ToolError(f"this {name.split('__', 2)[-1]} call had no content, so nothing was made and the user "
+                            "was not asked. Call it again with the text or the request the file is to be built from.")
         from meshpool_harness.redact import redact as _rd
         self._open_calls[cid] = name
         self.emit({"type": "tool_start", "id": cid, "name": name, "summary": _rd(_summary(name, args)), "mcp": is_mcp,
@@ -5909,13 +7839,14 @@ class Agent:
                    "diff": _rd(self._diff(name, args)) if name in ("edit", "write_file", "apply_patch") and not bad else ""})
         ok, denied = True, False
         cp = getattr(self, "checkpoint", None)          # the chat's checkpoints (journal mode); sub-agents have none
-        cp_ctx = cp.tool(name, args, read_only=name in READ_ONLY or self._inspection(
+        cp_ctx = cp.tool(name, args, read_only=name in READ_ONLY - WRITES_FILES or self._inspection(
             name, raw if isinstance(raw, str) else json.dumps(raw))) if cp else None
         cp_on = False                                    # opened only once the call may run: never across an approval wait
         try:
             if bad:
                 raise bad
-            steer = self._engine_only(name, args)
+            steer = self._engine_only(name, args) or (self._office_read_steer(name, args) if isinstance(args, dict)
+                                                      else "")
             allowed, note = (False, "") if steer else self._permit(name, args)
             if cp_ctx and allowed and not steer:
                 cp_ctx.__enter__()
@@ -5928,6 +7859,11 @@ class Agent:
                 denied, ok = True, False
                 out = "The user denied this action." + (f" Their note: {note}" if note else "") + \
                     " Do not retry it. Take another approach or ask the user."
+                if not self.approve and _writes_a_file(name, args):      # -p: nobody can say yes, so say what works
+                    have = [n for n in ("apply_patch", "edit") if n in self._tool_names()] or ["edit"]
+                    out += (f" This command writes a file. Make the same change with {' or '.join(have)}"
+                            f"{' (or the edit tool)' if have == ['apply_patch'] else ''}, "
+                            "which file edits in the project go through, and then run the tests.")
                 try:
                     from meshpool_harness.agent import extras as EXD
                     _, hn = EXD.run_hooks(self.root, "PermissionDenied", {"reason": str(note or "")[:2000]},
@@ -6019,11 +7955,18 @@ class Agent:
                 done = sum(i["status"] == "completed" for i in items)
                 out = f"Plan updated: {done} of {len(items)} done."
             elif name == "exec_command":               # Codex 0.171 (profile c171): its result format, as Codex sends it
-                before = self._tree_sig()
+                pre = getattr(self, "_sig_pre", None)  # the repeat guard's fingerprint of this same call
+                before = pre[1] if pre and pre[0] == id(c) else self._tree_sig()
+                n_edits = self.ws.edits
                 out = self.ws.exec_command(**args)
                 ok = T.exec_exit_code(out) == 0
-                if before is not None and self._tree_sig() != before:
+                after = self._tree_sig() if before is not None else None
+                self._sig_post = (id(c), after)
+                if before is not None and after != before and not _leaves_tree_as_it_was(args.get("cmd")) \
+                        and self.ws.edits == n_edits:      # a patch in the same step already counted its edit
                     self.ws.edits += 1                 # a heredoc write is an edit: the loop guards see the progress
+                    if _tests_after_own_edit(args.get("cmd")) and self.ws.commands:
+                        self.ws.commands[-1]["after_edit"] = self.ws.edits    # it tested what it had just written
             else:
                 out = getattr(self.ws, name)(**args)
                 route = getattr(self, "route", None)
@@ -6048,7 +7991,11 @@ class Agent:
                 if name == "bash_start" and ok and not denied:
                     cp.window_open()                    # the background process may still change files
         out = clean(str(out))
+        if cp_on and ok and not denied and "Call office_job_status with this id" in out:
+            cp.window_open()                            # the engine goes on building: its files land later this turn
         out += self._lookup_note(name, args)
+        if ok and not denied:
+            out += self._image_note(name, args, out, t0)
         m = re.match(r"\[exit (\d+)\]", out)
         step = {"tool": name, "s": round(time.time() - t0, 2), "ok": ok and not (m and m.group(1) != "0"),
                 "arg": _summary(name, args)[:100] if isinstance(args, dict) else ""}
@@ -6090,8 +8037,9 @@ class Agent:
                 pass
         self._open_calls.pop(cid, None)
         from meshpool_harness.redact import redact
+        from meshpool_harness.errors import tool_card    # the card: a raw exception in plain words (model text as is)
         self.emit({"type": "tool_end", "id": cid, "name": name, "ok": ok, "denied": denied,   # shown: secrets hidden
-                   "output": redact(out[:6000]) + ("\n..." if len(out) > 6000 else "")})
+                   "output": redact(tool_card(out[:6000])) + ("\n..." if len(out) > 6000 else "")})
         return out
 
     # ---------- questions (ask_user) -----------------------------------------------------------------------------
@@ -6193,7 +8141,8 @@ class Agent:
         child = usage.start_task(chat=self.id, parent=task, label="office:" + engine)
         jid, reused = OJ.start(engine, args["request"], paths, self.root, scope=self.id,
                                model=self.model or None,   # the user's pick; else the engine resolves MH_MODEL / settings
-                               env_extra=usage.child_env(child, "engine:" + engine))   # one request, one engine run
+                               env_extra=usage.child_env(child, "engine:" + engine),   # one request, one engine run
+                               work=Path(self.dir) / "office-jobs")   # the job's files stay in meshpool's own data
         if reused == "refused":
             return OJ.refusal_text(jid, rel_to=self.root), True
         if reused != "done":
@@ -6236,6 +8185,20 @@ class Agent:
             return WEB.format_page(WEB.fetch(url), start, max(2000, min(int(max_chars or 15000), 60000)), links)
         except WEB.WebError as e:
             raise ToolError(str(e))
+
+    def _mark_stopped(self, n0: int) -> None:
+        """OM-06: a turn the user stopped ends in the history with what the reply had said so far and a mark that it
+        was stopped, so the next message (also after -c) reads it as a stopped request, not one still to answer.
+        n0: the number of messages when Stop came; the streamed text counts only if its call started then."""
+        cut = getattr(self, "_partial_text", "") or ""
+        sp = self.__dict__.pop("_stream_parts", None)
+        if not cut.strip() and sp and sp[0] == n0:
+            cut = "".join(sp[1])
+        self._partial_text = ""
+        last = self.messages[-1] if self.messages else {}
+        if last.get("role") in ("user", "tool"):
+            self.messages.append({"role": "assistant",
+                                  "content": (cut.rstrip() + "\n\n" if cut.strip() else "") + STOPPED_MARK})
 
     def _repair(self, note: str = "Not run: the user stopped the agent."):
         """After an interruption every tool call must still have a result, or the next request is invalid."""

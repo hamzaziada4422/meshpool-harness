@@ -21,7 +21,7 @@ _PATTERNS = [
 ]
 # key = value where the key names a secret: the key stays, the value goes
 _ASSIGN = re.compile(r"(?i)\b([A-Z0-9_.-]*(?:api[_-]?key|access[_-]?key|secret|token|passw(?:or)?d|pwd|private[_-]?key|"
-                     r"client[_-]?secret|auth)[A-Z0-9_.-]*[\"']?\s*[=:]\s*[\"']?)(?!(?:bearer|token|basic)\b)([^\s\"',;]{6,})")
+                     r"client[_-]?secret|auth(?!ored|ors?\b))[A-Z0-9_.-]*[\"']?\s*[=:]\s*[\"']?)(?!(?:bearer|token|basic)\b)([^\s\"',;]{6,})")
 _BEARER = re.compile(r"(?i)\b((?:authorization|proxy-authorization)\s*:\s*(?:bearer|token|basic)?\s*)([^\s\"']{8,})")
 _URL_PASS = re.compile(r"(://[^/\s:@]+:)([^@\s/]{3,})(@)")
 

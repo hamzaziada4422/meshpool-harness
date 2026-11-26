@@ -247,7 +247,9 @@ def test_checks_and_receipt_render(proj):
     s.emit({"type": "checks_line", "text": "2 of 2 checks passed", "items": []})
     s.emit({"type": "task_receipt", "secs": 42, "cost": 0.03, "harness_name": "Meshpool Code", "model": "m1"})
     text = out.getvalue()
-    assert "Checked: 2 of 2 checks passed" in text and "42 s" in text and "$0.03" in text and "Meshpool Code" in text
+    # the receipt names the model as the composer does; meshpool's own agent is not named (0.0.18 design pass)
+    assert "Checked: 2 of 2 checks passed" in text and "42 s" in text and "$0.03" in text and "M1" in text
+    assert "Meshpool Code" not in text
 
 
 # ---------- 7. F-10, F-09, F-12 ---------------------------------------------------------------------------------------
@@ -475,7 +477,7 @@ def test_receipt_counts_this_turns_lines_not_uncommitted_work(monkeypatch, proj,
     rc, out, err = run_main(proj, capfd, prompt="guard div", json_out="json", auto=True)
     assert rc == 0 and "def sub" in (proj / "ops.py").read_text()
     assert "ops.py (+1 -1)" in err, err[-600:]
-    assert "Checked:** `" in err and "Checked:** `cd " not in err
+    assert "Checked: `" in err and "Checked: `cd " not in err and "**" not in err   # plain text since round 4
 
 
 # ---------- release review: --permission-mode plan holds in -p ------------------------------------------------------

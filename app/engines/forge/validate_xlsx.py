@@ -61,12 +61,32 @@ def _defined_names(wb) -> list[tuple[str, str]]:
     return out
 
 
+TABLE_SKIPS = ("X1", "X12")
+_MODEL_TABS = re.compile(r"(?i)input|assumption|driver|calc|model|forecast|budget|scenario|valuation|dcf|lbo|p&l|"
+                         r"pnl|income|balance|cash ?flow|historical|comps|precedent|statement")
+
+
+def is_model(sheetnames, roles: dict | None = None) -> bool:
+    """A model has model tabs (Inputs, Calc, a forecast, statements) or a checks tab; a list, a table or a simple
+    summary (Data, Summary, Price list, Rooms) has none."""
+    return any(r == "checks" for r in (roles or {}).values()) or any(_MODEL_TABS.search(str(n)) for n in sheetnames)
+
+
 def _is_num(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def _label(ws, row: int) -> str:
-    for c in range(1, min(ws.max_column, 6) + 1):
+    # openpyxl works out max_column from every cell on each read: asked once per row, a 50k-row data sheet took
+    # over ten minutes (Lina's sales export). Read it once per sheet.
+    cols = getattr(ws, "_mp_label_cols", None)
+    if cols is None:
+        cols = min(ws.max_column, 6)
+        try:
+            ws._mp_label_cols = cols
+        except AttributeError:
+            pass
+    for c in range(1, cols + 1):
         v = ws.cell(row, c).value
         if isinstance(v, str) and v.strip() and not v.startswith("="):
             return v.strip()
@@ -259,8 +279,8 @@ def _opens_cleanly(path, failures):
         failures.append(F("X0", pr["check"], f"{pr['part']}: {pr['detail']}. Office would offer to repair "
                           "this file.", fix_scope="renderer"))
     if r["schema_validation"] == "not_run":
-        failures.append(F("X0", "schema", "Office schemas not installed; only package and relationship checks "
-                          "ran (python -m engines.forge.ooxml_check --install-schemas).", status="not_run",
+        failures.append(F("X0", "schema", "The file's format rules were not checked; the check that it opens and "
+                          "reads correctly did run.", status="not_run",
                           severity="info", fix_scope="renderer"))
 
 
@@ -715,10 +735,30 @@ def validate(path: str, rules: dict | None = None, recompute: dict | None = None
              "formula_literals": sum(s["formula_literals"] for s in sheet_stats.values())}
     if changes is not None:
         stats["diff"] = changes[:500]
+    if not is_model(wb.sheetnames, roles):
+        # A list, table or simple summary is not a model: a Checks tab with a master flag (X12) and "typed numbers
+        # on a calc sheet" (X1, the data itself) do not apply, so they are not run or reported. priya018: a room list
+        # was reported as failing X1 and X12, and the reply explained "a rule meant for financial models".
+        failures = [f for f in failures if f["rule"] not in TABLE_SKIPS]
+        failures += [F(r, "not_applicable", "Not run: the workbook is a list or table, not a model.",
+                       status="not_run", severity="info", fix_scope="renderer") for r in TABLE_SKIPS]
     rules_status = summarize(failures, RULES)
     try:                                    # the visible-checks recorder: the rules that ran (no-op when idle)
         from meshpool_harness import checks
-        checks.rules_ran("workbook_rules", "workbook rules", rules_status, subject=os.path.basename(str(path)))
+        checks.rules_ran("workbook_rules", "workbook rules", rules_status, subject=os.path.basename(str(path)),
+                         names={f["rule"]: f.get("message", "") for f in failures if f.get("status") == "fail"})
+        has_total = has_formula = False                  # what the closing line may say it checked ("totals" needs one)
+        for ws in wb.worksheets:
+            for row in ws.iter_rows(max_row=3000):
+                for c in row:
+                    if isinstance(c.value, str):
+                        if c.value.startswith("="):
+                            has_formula = True
+                            has_total = has_total or "SUM(" in c.value.upper() or "SUBTOTAL(" in c.value.upper()
+                        elif re.match(r"\s*(?:grand\s+|sub)?totals?\b", c.value, re.I):
+                            has_total = True
+        checks.fact("workbook_totals", has_total, os.path.basename(str(path)))
+        checks.fact("workbook_formulas", has_formula, os.path.basename(str(path)))
     except Exception:  # noqa: BLE001 - the recorder never changes a validation
         pass
     return {"file": str(path), "sha256": file_sha, "rules": rules_status, "failures": failures,

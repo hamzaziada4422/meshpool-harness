@@ -72,14 +72,23 @@ class ModelCaps:
         return "medium" if "medium" in self.efforts else self.efforts[len(self.efforts) // 2]
 
 
+def _hint_rows(raw: bytes):
+    try:
+        d = json.loads(raw.decode("utf-8"))
+        return [m for m in d.get("models", []) if isinstance(m, dict) and m.get("match")]
+    except (ValueError, AttributeError):
+        return None
+
+
 def _hints() -> list[dict]:
+    """The name-pattern table. resolve() skips its own cache once a reply taught something about the model (nearly
+    always), so this ran on every model request: the parse is kept while the file is unchanged."""
     from meshpool_harness import config as C
+    from meshpool_harness import fsio
     for p in (C.home() / "model_hints.json", C.APP / "defaults" / "model_hints.json"):
-        try:
-            d = json.loads(p.read_text(encoding="utf-8"))
-            return [m for m in d.get("models", []) if isinstance(m, dict) and m.get("match")]
-        except (OSError, ValueError):
-            continue
+        rows = fsio.parse_cached(p, _hint_rows, "model-hints")
+        if rows is not None:
+            return rows
     return []
 
 

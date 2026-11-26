@@ -169,7 +169,7 @@ def scoped_rules(root: Path, path: str, seen: set) -> str:
             if pats and any(_glob_match(rel, g) for g in pats):
                 seen.add(f.resolve())
                 from meshpool_harness import skills as SK
-                body = SK.parse(_imports(_read(f), f.parent, {f.resolve()}))[1].strip()
+                body = SK.parse(_imports(_read(f), f.parent, {f.resolve()}, fence=top.resolve()))[1].strip()   # in the project
                 if body:
                     out.append(f"[Rules from {f.relative_to(top).as_posix()} for files like {', '.join(pats)} "
                                f"(follow them for {rel}):]\n{body[:MAX_FILE]}")
@@ -217,7 +217,7 @@ def nested_instructions(root: Path, path: str, seen: set) -> str:
             except OSError:
                 continue
             seen.add(f.resolve())
-            body = _imports(_read(f), f.parent, {f.resolve()}).strip()
+            body = _imports(_read(f), f.parent, {f.resolve()}, fence=_git_root(Path(root)).resolve()).strip()   # imports stay in the project
             if body:
                 out.append(f"[Instructions from {f.relative_to(root).as_posix()} for work in "
                            f"{folder.relative_to(root).as_posix()}/ (follow them there):]\n{body[:MAX_FILE]}")
@@ -265,18 +265,29 @@ def hooks(root: Path) -> dict:
     # <home>/hooks.json and the hooks of plugins the user installed are global; a project's own file needs its trust
     files = ([C.home() / "hooks.json"] + sorted((C.home() / "plugin-hooks").glob("*.json"))
              + ([Path(root) / ".meshpool" / "hooks.json"] if project_trusted(root) else []))
+    # Asked before and after every tool call: each file's parse is kept while the file is unchanged
+    from meshpool_harness import fsio
     for f in files:
-        try:
-            d = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(d, dict):
-            continue
-        for e in EVENTS:
-            for h in (d.get(e) or []):
-                if isinstance(h, dict) and isinstance(h.get("command"), str) and \
-                        (h.get("args") is None or isinstance(h.get("args"), list)):
-                    out[e].append(h)
+        for e, hs in fsio.parse_cached(f, _hook_file, "hooks", missing={}).items():
+            out[e] += [dict(h) for h in hs]
+    return out
+
+
+def _hook_file(raw: bytes) -> dict:
+    """{event: [hook, ...]} of one hooks file; {} when it is not a JSON object."""
+    try:
+        d = json.loads(raw.decode("utf-8"))
+    except ValueError:
+        return {}
+    if not isinstance(d, dict):
+        return {}
+    out: dict = {}
+    for e in EVENTS:
+        rows = d.get(e) or []
+        for h in (rows if isinstance(rows, list) else []):
+            if isinstance(h, dict) and isinstance(h.get("command"), str) and \
+                    (h.get("args") is None or isinstance(h.get("args"), list)):
+                out.setdefault(e, []).append(h)
     return out
 
 
@@ -294,6 +305,26 @@ def _hook_cmd(h: dict):
     if sh == "bash" and os.name != "nt" and shutil.which("bash"):
         return [shutil.which("bash"), "-c", cmd], False
     return cmd, True
+
+
+def _run_hook(cmd, shell=False, cwd=None, input=None, timeout=None, env=None, **_):
+    """subprocess.run(cmd, capture_output=True, text=True) for a hook, in its own process group, so a timeout ends
+    the program the hook started too: subprocess.run kills only the shell and left `sh -c "python check.py"`'s
+    python running."""
+    extra = {"creationflags": 0x00000200} if os.name == "nt" else {"start_new_session": True}
+    with subprocess.Popen(cmd, shell=shell, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", **extra) as p:
+        try:
+            out, err = p.communicate(input, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            from meshpool_harness.core.tools import _kill_tree
+            _kill_tree(p)
+            try:
+                p.communicate(timeout=5)
+            except (subprocess.TimeoutExpired, OSError, ValueError):
+                pass
+            raise subprocess.TimeoutExpired(cmd, timeout) from None
+    return subprocess.CompletedProcess(cmd, p.returncode, out, err)
 
 
 def _matches(event: str, h: dict, tool: str, args: dict, payload: dict) -> bool:
@@ -371,7 +402,7 @@ def run_hooks_full(root: Path, event: str, payload: dict, tool: str = "", args: 
         if h.get("async"):                               # fire and forget: never waits, never blocks
             def _bg(cmd=cmd, run=run):
                 try:
-                    subprocess.run(cmd, **run)
+                    _run_hook(cmd, **run)
                 except (subprocess.TimeoutExpired, OSError):
                     pass
             threading.Thread(target=_bg, daemon=True).start()
@@ -382,7 +413,7 @@ def run_hooks_full(root: Path, event: str, payload: dict, tool: str = "", args: 
         except ValueError:
             secs = timeout
         try:
-            r = subprocess.run(cmd, **dict(run, timeout=secs))
+            r = _run_hook(cmd, **dict(run, timeout=secs))
         except (subprocess.TimeoutExpired, OSError) as e:
             if can_block:                                 # a check that did not finish is not a pass
                 out.update(blocked=True, message=f"The hook {h['command'][:40]} failed ({e}), so this was stopped.")

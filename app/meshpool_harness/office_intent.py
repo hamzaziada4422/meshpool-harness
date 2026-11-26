@@ -17,7 +17,9 @@ from pathlib import Path
 SEP = "\n\n​"                  # notes only the model sees follow this (pace.SEP)
 
 # A file named in the message: "report.docx" is a file, not a request for a report.
-_FILE = re.compile(r"[\w][\w.()-]*\.(?:xlsx|xlsm|xls|csv|docx?|pptx?|pdf|od[tsp])\b", re.I)
+# A match starts only where a run of name characters starts: the old form ([\w][\w.()-]*) retried from every
+# character of one long unbroken token, which was quadratic (a 300 KB token held the server for minutes).
+_FILE = re.compile(r"(?<![\w.()-])[.()-]*\w[\w.()-]*\.(?:xlsx|xlsm|xls|csv|docx?|pptx?|pdf|od[tsp])\b", re.I)
 
 # The styled deliverables the engines build.
 _NOUN = (r"(?:(?:pitch |slide |board |investor |sales )?decks?|presentations?|slides|slideshows?|power ?points?"
@@ -90,7 +92,7 @@ def wants_revisions(text: str) -> bool:
 
 
 SHEET_SOURCES = (".xlsx", ".xlsm", ".xls", ".csv")
-_SHEET_NAME = re.compile(r"[\w][\w.()-]*\.(?:xlsx|xlsm|xls|csv)\b", re.I)
+_SHEET_NAME = re.compile(r"(?<![\w.()-])[.()-]*(\w[\w.()-]*\.(?:xlsx|xlsm|xls|csv))\b", re.I)   # linear, as _FILE
 # A name the request gives to the output, not a source: "save it as x.xlsx", "into x.xlsx", "output x.xlsx".
 _OUT_CUE = re.compile(r"\b(?:as|into|output(?:\s+(?:to|it\s+(?:to|as)))?|named|called)\s*[\"'`]?\s*$", re.I)
 
@@ -102,9 +104,9 @@ def _named_sources(request: str, files=(), workdir=None) -> list[str]:
     given = {Path(str(f)).name.lower() for f in files or []}
     out = []
     for m in _SHEET_NAME.finditer(t):
-        if _OUT_CUE.search(t[max(0, m.start() - 40):m.start()]):
+        if _OUT_CUE.search(t[max(0, m.start(1) - 40):m.start(1)]):
             continue
-        name = m.group(0)
+        name = m.group(1)
         if name.lower() in given or (workdir and (Path(workdir) / name).is_file()):
             out.append(name)
     return out
@@ -120,12 +122,45 @@ def derive_job(request: str, files=(), workdir=None) -> bool:
         bool(_named_sources(request, files, workdir))
 
 
+_NAMED_SHEET = re.compile(r"\b(?:sheet|tab|worksheet)s?\s+(?:called\s+|named\s+|titled\s+)?[\"'`‘“][^\"'`’”\n]{1,31}"
+                          r"[\"'`’”]|[\"'`‘“][^\"'`’”\n]{1,31}[\"'`’”]\s+(?:sheet|tab|worksheet)\b|"
+                          r"\b(?:sheet|tab|worksheet)\s+(?:called|named|titled)\s+\w", re.I)
+
+# A list, a table or a simple summary: one sheet with the data first. A forecast, a budget with assumptions or
+# scenarios is a model and keeps the model structure (Cover, Inputs, Calc, Outputs, Checks). Maya's Flowers: a price
+# list for 12 bouquets came back with those five tabs, a formula legend and range columns, opening on the Cover.
+_MODEL_ASK = re.compile(r"\b(?:models?|forecasts?|projections?|budgets?|scenarios?|sensitivit(?:y|ies)|assumptions?|"
+                        r"what[- ]if|dcf|lbo|valuations?|comps|precedents?|three[- ]statements?|3[- ]statements?|"
+                        r"p&l|profit and loss|income statements?|balance sheets?|cash ?flows?|npv|irr|break[- ]?even|"
+                        r"amorti[sz]ation|loan|mortgage|pricing model|unit economics|cap table|waterfall|"
+                        r"financials?)\b", re.I)
+_TABLE_ASK = re.compile(r"\b(?:lists?|listing|tables?|price ?lists?|menus?|catalogu?es?|inventor(?:y|ies)|rosters?|"
+                        r"directory|directories|registers?|logs?|trackers?|checklists?|contacts?|schedules?|rotas?|"
+                        r"timetables?|summar(?:y|ies)|totals?|one row (?:per|for each)|each row|columns?)\b", re.I)
+
+
+def table_job(request: str) -> bool:
+    """The request asks for a list, a table or a simple summary, not a model: the sheets engine builds one sheet with
+    the data first and at most a totals row.
+
+    table_job("make a price list for 12 bouquets with name, size and price")   -> True
+    table_job("a staff contact list with name, phone and email")                -> True
+    table_job("Build a 12-month budget for a coffee shop with assumptions")     -> False (a model)
+    table_job("a 3-year revenue forecast with scenarios")                       -> False
+    """
+    t = str(request or "").split(SEP)[0]
+    return bool(_TABLE_ASK.search(t)) and not _MODEL_ASK.search(t)
+
+
 def asks_for(request: str) -> set[str]:
     """What an edit request asks for outright that an edit otherwise never does: a "cover" or "checks" tab, a "title"
     row above the header, or to "rename" sheets."""
     t = str(request or "").lower()
     out = set()
-    if re.search(r"\brenam", t):
+    # A sheet the request names ("one sheet 'Summary'", "a tab called Totals") is a rename it asks for. priya018:
+    # "a summary workbook ... One sheet 'Summary'" was checked as an edit of rooms.xlsx, the checker refused the new
+    # name, and the sheet stayed "Rooms".
+    if re.search(r"\brenam", t) or _NAMED_SHEET.search(str(request or "")):
         out.add("rename")
     if re.search(r"\bcover\s*(?:sheet|tab|page)\b", t):
         out.add("cover")
@@ -137,3 +172,79 @@ def asks_for(request: str) -> set[str]:
                  r"across|over)\b", t):
         out.add("title")
     return out
+
+
+# The office file a request is about: Word, Excel, PowerPoint or PDF. A CSV counts only when the request also asks for
+# an office file ("turn sales.csv into a workbook"): a CSV on its own is data work any agent does.
+_OFFICE_NAME = re.compile(r"(?<![\w.()-])[.()-]*\w[\w.()-]*\.(?:xlsx|xlsm|xls|docx?|pptx?|pdf|od[tsp])\b", re.I)
+_CODE_NAME = re.compile(r"(?<![\w.()-])[.()-]*\w[\w.()-]*\.(?:py|js|mjs|ts|tsx|jsx|rb|go|rs|java|kt|cs|cpp|cc|c|h|"
+                        r"php|sh|ps1|sql|ipynb)\b", re.I)
+_CODE_ASK = re.compile(r"\b(?:bug|stack ?trace|traceback|exception|unit tests?|pytest|refactor|function|class|module|"
+                       r"script|repo(?:sitory)?|endpoint|api|library|parser|compile)\b", re.I)
+# Words that make a request about code even when it names an office file (release review, 0.0.18: "fix the bug where
+# report.xlsx export crashes", "Add support for .pptx uploads in the upload handler", "add a slide-in animation to the
+# sidebar component" all went to Work and out of the Code chat). The office file there is what the code reads or
+# writes, not the deliverable. A sheet function ("the VLOOKUP function", "an Excel function") is not code.
+_CODE_WINS = re.compile(
+    r"\b(?:bugs?|buggy|stack ?traces?|tracebacks?|pytest|unit tests?|refactor\w*|implement\w*|importers?|exporters?|"
+    r"handlers?|components?|carousels?|animations?|animated|endpoints?|codebase|repo(?:sitory)?|compil\w+|parsers?|"
+    r"crash(?:es|ed|ing)?|regressions?|frontend|backend|middleware|"
+    r"(?:failing|broken|flaky|integration|e2e|end-to-end) tests?|tests? (?:fail\w*|pass\w*|suite)|"
+    r"(?:write|add|run|fix) (?:a |the |some )?tests?|"
+    r"(?:to|in|into|from|for|of) (?:the|our|my|this) (?:web ?)?app(?:lication)?|"
+    r"(?:pdf|excel|xlsx?|csv|docx?|word|pptx?|powerpoint)\s+(?:export|import|upload|download)(?:s|ing)?"
+    r"(?!\s+(?:of|the|this|it|my|a)\b)|"
+    r"(?:pdf|excel|xlsx?|csv|docx?|word|pptx?|powerpoint)\s+(?:support|feature|button|endpoint))\b"
+    r"|\w+\.(?:xlsx|xls|docx|pptx|pdf)\s+(?:export|import|upload)(?:s|er|ing)?\b(?!\s+(?:of|the|this|it|my|a)\b)"
+    r"|(?<![\w./\\-])(?-i:[a-z][a-z0-9]*(?:_[a-z0-9]+)+)(?![\w.])"      # generate_report, a code identifier
+    r"|(?-i:\b[a-z_][a-z0-9_]*\(\))", re.I)
+_CODE_FUNCTION = re.compile(r"\bfunctions?\b", re.I)
+_SHEET_FUNCTION = re.compile(r"\b(?:excel|sheet|spreadsheet|workbook|formula|vlookup|xlookup|index|match|sumifs?|"
+                             r"countifs?|averageifs?|if|sum|lookup)\s+functions?\b|\bfunctions?\s+in\s+(?:a |the )?"
+                             r"(?:cell|column|row|sheet|formula)", re.I)
+_OFFICE_SUFFIX = (".xlsx", ".xlsm", ".xls", ".docx", ".doc", ".pptx", ".ppt", ".pdf")
+# A change to a deck, memo or workbook asked in words (Daniel, round 3: "Add two slides to the same deck ... Add short
+# speaker notes to every slide too"): a doing verb a few words before an office deliverable.
+_OFFICE_ASK = re.compile(r"\b(?:make|create|build|add|edit|update|change|write|draft|prepare|turn|convert|export|"
+                         r"shorten|extend|insert|remove|delete|rewrite|redo|fix|restyle|rebrand|summari[sz]e)\b"
+                         r"(?:\W+[\w&'-]+){0,8}?\W+(?:slides?|decks?|presentations?|speaker notes|memos?|"
+                         r"spreadsheets?|workbooks?|word documents?|power ?points?|excel)\b", re.I)
+
+
+def code_first(text: str) -> bool:
+    """True when a request is about code even if it names an office file: "fix the bug where report.xlsx export
+    crashes", "implement generate_report so it writes report.docx", "Add PDF export to the app". The file there is
+    what the code reads or writes, so the request stays with the Code agent."""
+    t = str(text or "").split(SEP)[0]
+    if _CODE_WINS.search(t):
+        return True
+    return bool(_CODE_FUNCTION.search(t)) and not _SHEET_FUNCTION.search(t)
+
+
+def office_work(text: str, files=()) -> bool:
+    """The request's main input or output is an office file (xlsx, xls, docx, pptx, pdf, or a CSV made into one of
+    them): meshpool Work is the engine for it. A request about code that only mentions such a file is not.
+
+    office_work("Take rooms.xlsx ... make rooms-summary.xlsx with the areas and a total")   -> True
+    office_work("Make a 10-slide pitch deck for investors")                                   -> True
+    office_work("Turn sales.csv into a workbook with a chart")                                -> True
+    office_work("clean this csv and chart revenue")                                           -> False (no office file)
+    office_work("fix the bug in export.py that writes report.xlsx")                           -> False (code)
+    office_work("Add support for .pptx uploads in the upload handler")                         -> False (code)
+    """
+    t = str(text or "").split(SEP)[0]
+    if not t.strip():
+        return False
+    office_file = bool(_OFFICE_NAME.search(t)) or any(
+        Path(str(f)).suffix.lower() in _OFFICE_SUFFIX for f in files or [])
+    if _CODE_NAME.search(t) or (_CODE_ASK.search(t) and not office_file) or code_first(t):
+        return False
+    if office_file or _OFFICE_ASK.search(t):
+        return True
+    try:
+        from meshpool_harness import capabilities as CAP
+        # a file type named outright ("the PDF", "an Excel file", "a PowerPoint"), or one asked for
+        return bool(CAP.needs(t)) or any(rx is not None and rx.search(t) for rx in CAP._STRONG_RX.values()) or (
+            bool(_SHEET_NAME.search(t)) and bool(re.search(r"\b(?:workbooks?|spreadsheets?|excel)\b", t, re.I)))
+    except Exception:  # noqa: BLE001
+        return False

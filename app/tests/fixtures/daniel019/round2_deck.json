@@ -1,0 +1,3695 @@
+[
+{
+"layout": "Title Slide",
+"shapes": [
+{
+"name": "ov_CoverField",
+"box": [
+0.0,
+0.0,
+13.333,
+7.5
+],
+"kind": "shape",
+"auto": "rect"
+},
+{
+"name": "Title 1",
+"box": [
+0.6,
+2.554,
+7.025,
+1.696
+],
+"ph": "center_title",
+"kind": "text",
+"anchor": "b",
+"wrap": "square",
+"margins": [
+0.0,
+0.05,
+0.0,
+0.05
+],
+"paras": [
+[
+{
+"t": "Start with one pilot line: predictive maintenance pays back in 19 months",
+"pt": 32.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "ov_CoverSecNo1",
+"box": [
+8.772,
+2.025,
+0.62,
+0.78
+],
+"kind": "text",
+"anchor": "ctr",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "01",
+"pt": 20.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "ov_CoverSec1",
+"box": [
+9.472,
+2.025,
+3.261,
+0.78
+],
+"kind": "text",
+"anchor": "ctr",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Where we stand",
+"pt": 15.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "CoverBar",
+"box": [
+0.6,
+2.234,
+0.9,
+0.06
+],
+"kind": "shape",
+"auto": "rect"
+},
+{
+"name": "ov_CoverSecRule1",
+"box": [
+8.772,
+2.805,
+12.733,
+2.805
+],
+"kind": "line"
+},
+{
+"name": "ov_CoverSecNo2",
+"box": [
+8.772,
+2.805,
+0.62,
+0.78
+],
+"kind": "text",
+"anchor": "ctr",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "02",
+"pt": 20.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "ov_CoverSec2",
+"box": [
+9.472,
+2.805,
+3.261,
+0.78
+],
+"kind": "text",
+"anchor": "ctr",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Options compared",
+"pt": 15.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "ov_CoverSecRule2",
+"box": [
+8.772,
+3.585,
+12.733,
+3.585
+],
+"kind": "line"
+},
+{
+"name": "ov_CoverSecNo3",
+"box": [
+8.772,
+3.585,
+0.62,
+0.78
+],
+"kind": "text",
+"anchor": "ctr",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "03",
+"pt": 20.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "ov_CoverSec3",
+"box": [
+9.472,
+3.585,
+3.261,
+0.78
+],
+"kind": "text",
+"anchor": "ctr",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Why pilot-first wins",
+"pt": 15.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "ov_CoverSecRule3",
+"box": [
+8.772,
+4.365,
+12.733,
+4.365
+],
+"kind": "line"
+},
+{
+"name": "ov_CoverSecNo4",
+"box": [
+8.772,
+4.365,
+0.62,
+0.78
+],
+"kind": "text",
+"anchor": "ctr",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "04",
+"pt": 20.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "ov_CoverSec4",
+"box": [
+9.472,
+4.365,
+3.261,
+0.78
+],
+"kind": "text",
+"anchor": "ctr",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "The plan",
+"pt": 15.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Subtitle 2",
+"box": [
+0.6,
+4.4,
+7.15,
+1.0
+],
+"ph": "subtitle",
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.05,
+0.1,
+0.05
+],
+"paras": [
+[
+{
+"t": "A pilot-first route for mid-market plants, built on the 2025 benchmark of 412 plant managers",
+"pt": 16.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "CoverRule",
+"box": [
+0.6,
+6.55,
+12.733,
+6.55
+],
+"kind": "line"
+},
+{
+"name": "Date",
+"box": [
+0.6,
+6.65,
+6.0,
+0.3
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Board meeting, November 2026",
+"pt": 11.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Firm",
+"box": [
+9.793,
+6.65,
+2.939,
+0.3
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Ridgeway Advisory | Confidential",
+"pt": 11.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+}
+]
+},
+{
+"layout": "Title Only",
+"shapes": [
+{
+"name": "Title 1",
+"box": [
+0.6,
+0.42,
+12.133,
+0.92
+],
+"ph": "title",
+"kind": "text",
+"anchor": null,
+"wrap": null,
+"margins": [
+0.0,
+0.05,
+0.1,
+0.05
+],
+"paras": [
+[
+{
+"t": "One pilot line first: the case for starting small",
+"pt": 25.0,
+"b": true,
+"face": "+mj-lt"
+},
+{
+"t": "",
+"pt": 25.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "TitleRule",
+"box": [
+0.6,
+1.42,
+12.733,
+1.42
+],
+"kind": "line"
+},
+{
+"name": "ov_MetricsPanel",
+"box": [
+10.304,
+1.6,
+2.429,
+5.02
+],
+"kind": "shape",
+"auto": "rect"
+},
+{
+"name": "role_numeral_1",
+"box": [
+0.6,
+1.71,
+0.5,
+0.5
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "01",
+"pt": 24.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "Claim1",
+"box": [
+1.111,
+1.73,
+4.472,
+0.755
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Half of plants have adopted",
+"pt": 21.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Evidence1",
+"box": [
+5.707,
+1.73,
+4.472,
+0.755
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "53%",
+"pt": 18.0,
+"b": false,
+"face": "+mn-lt"
+},
+{
+"t": " have not started",
+"pt": 18.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "role_numeral_Metric1",
+"box": [
+10.444,
+1.87,
+2.189,
+0.62
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "47%",
+"pt": 34.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "MetricLabel1",
+"box": [
+10.444,
+2.49,
+2.189,
+0.596
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "of plants adopted, 2025",
+"pt": 16.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "SummaryRule1",
+"box": [
+0.6,
+2.77,
+10.179,
+2.77
+],
+"kind": "line"
+},
+{
+"name": "role_numeral_2",
+"box": [
+0.6,
+3.075,
+0.5,
+0.5
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "02",
+"pt": 24.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "Claim2",
+"box": [
+1.111,
+3.095,
+4.472,
+0.755
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Pilot-first succeeds most often",
+"pt": 21.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Evidence2",
+"box": [
+5.707,
+3.095,
+4.472,
+0.755
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "71%",
+"pt": 18.0,
+"b": false,
+"face": "+mn-lt"
+},
+{
+"t": " success, against ",
+"pt": 18.0,
+"b": false,
+"face": "+mn-lt"
+},
+{
+"t": "44%",
+"pt": 18.0,
+"b": false,
+"face": "+mn-lt"
+},
+{
+"t": " for plant-wide launch",
+"pt": 18.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "MetricRule1",
+"box": [
+10.444,
+3.307,
+12.633,
+3.307
+],
+"kind": "line"
+},
+{
+"name": "role_numeral_Metric2",
+"box": [
+10.444,
+3.527,
+2.189,
+0.62
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "19 months",
+"pt": 24.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "SummaryRule2",
+"box": [
+0.6,
+4.135,
+10.179,
+4.135
+],
+"kind": "line"
+},
+{
+"name": "MetricLabel2",
+"box": [
+10.444,
+4.147,
+2.189,
+0.596
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "median payback, pilot-first",
+"pt": 16.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "role_numeral_3",
+"box": [
+0.6,
+4.44,
+0.5,
+0.5
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "03",
+"pt": 24.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "Claim3",
+"box": [
+1.111,
+4.46,
+4.472,
+0.755
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "The five-plant rollout is affordable",
+"pt": 21.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Evidence3",
+"box": [
+5.707,
+4.46,
+4.472,
+0.755
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Costs ",
+"pt": 18.0,
+"b": false,
+"face": "+mn-lt"
+},
+{
+"t": "EUR 3.4m",
+"pt": 18.0,
+"b": false,
+"face": "+mn-lt"
+},
+{
+"t": " over three years",
+"pt": 18.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "MetricRule2",
+"box": [
+10.444,
+4.963,
+12.633,
+4.963
+],
+"kind": "line"
+},
+{
+"name": "role_numeral_Metric3",
+"box": [
+10.444,
+5.184,
+2.189,
+0.62
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "EUR 3.1m",
+"pt": 24.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "SummaryRule3",
+"box": [
+0.6,
+5.5,
+10.179,
+5.5
+],
+"kind": "line"
+},
+{
+"name": "role_numeral_4",
+"box": [
+0.6,
+5.805,
+0.5,
+0.5
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "04",
+"pt": 24.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "MetricLabel3",
+"box": [
+10.444,
+5.804,
+2.189,
+0.596
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "net benefit by year 3, modelled",
+"pt": 16.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Claim4",
+"box": [
+1.111,
+5.825,
+4.472,
+0.755
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Five steps, gated before scaling",
+"pt": 21.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Evidence4",
+"box": [
+5.707,
+5.825,
+4.472,
+0.755
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Step one: one high-downtime line",
+"pt": 18.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Footnotes",
+"box": [
+0.6,
+6.62,
+12.133,
+0.37
+],
+"kind": "text",
+"anchor": "b",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Economics are modelled from 37 case studies; survey margin of error plus or minus 4.8 points at 95% confidence.",
+"pt": 9.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "SourceRule",
+"box": [
+0.6,
+7.02,
+12.733,
+7.02
+],
+"kind": "line"
+},
+{
+"name": "Source",
+"box": [
+0.6,
+7.06,
+9.068,
+0.34
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Source: Northfield Research, Industry Benchmark Report 2025; survey of 412 plant managers, March to May 2025",
+"pt": 9.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Firm",
+"box": [
+9.793,
+7.06,
+2.939,
+0.25
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Ridgeway Advisory | Confidential      2",
+"pt": 10.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+}
+]
+},
+{
+"layout": "Title Only",
+"shapes": [
+{
+"name": "Title 1",
+"box": [
+0.6,
+0.42,
+11.111,
+0.92
+],
+"ph": "title",
+"kind": "text",
+"anchor": null,
+"wrap": null,
+"margins": [
+0.0,
+0.05,
+0.1,
+0.05
+],
+"paras": [
+[
+{
+"t": "47% of plants use predictive maintenance, but unclear ROI holds back the rest",
+"pt": 25.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "ov_SectionNo",
+"box": [
+11.833,
+0.72,
+0.9,
+0.6
+],
+"kind": "text",
+"anchor": "b",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "01",
+"pt": 26.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "TitleRule",
+"box": [
+0.6,
+1.42,
+12.733,
+1.42
+],
+"kind": "line"
+},
+{
+"name": "Heading1",
+"box": [
+0.6,
+1.55,
+6.004,
+0.612
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Plants using predictive maintenance by country, % of plants",
+"pt": 18.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Heading2",
+"box": [
+6.729,
+1.55,
+6.004,
+0.612
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Unclear ROI is the top barrier, % of plants citing",
+"pt": 18.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "HeadingRule1",
+"box": [
+0.6,
+2.192,
+6.604,
+2.192
+],
+"kind": "line"
+},
+{
+"name": "HeadingRule2",
+"box": [
+6.729,
+2.192,
+12.733,
+2.192
+],
+"kind": "line"
+},
+{
+"name": "Chart1",
+"box": [
+0.6,
+2.312,
+6.004,
+4.366
+],
+"kind": "chart",
+"chart": {
+"cats": [
+"Germany",
+"Netherlands",
+"Italy",
+"Poland"
+],
+"vals": [
+[
+58.0,
+51.0,
+42.0,
+31.0
+]
+],
+"layout": {
+"x": 0.02,
+"y": 0.03,
+"w": 0.96,
+"h": 0.85
+},
+"max": 68.44,
+"min": 0.0,
+"gap": 82,
+"label_pt": 14.0,
+"label_pos": "outEnd"
+}
+},
+{
+"name": "Chart2",
+"box": [
+6.729,
+2.312,
+6.004,
+4.366
+],
+"kind": "chart",
+"chart": {
+"cats": [
+"Unclear ROI",
+"Legacy PLC equipment",
+"Poor data quality",
+"No in-house data engineers"
+],
+"vals": [
+[
+58.0,
+52.0,
+47.0,
+41.0
+]
+],
+"layout": null,
+"max": 64.96000000000001,
+"min": 0.0,
+"gap": 82,
+"label_pt": 14.0,
+"label_pos": "outEnd"
+}
+},
+{
+"name": "ov_TargetLabel",
+"box": [
+5.157,
+3.305,
+1.327,
+0.26
+],
+"kind": "text",
+"anchor": "b",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Target 47%",
+"pt": 12.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "ov_TargetLine",
+"box": [
+0.72,
+3.605,
+3.832,
+3.605
+],
+"kind": "line"
+},
+{
+"name": "ov_TargetLine2",
+"box": [
+4.812,
+3.605,
+6.484,
+3.605
+],
+"kind": "line"
+},
+{
+"name": "Footnotes",
+"box": [
+0.6,
+6.728,
+12.133,
+0.262
+],
+"kind": "text",
+"anchor": "b",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Up from 18% in 2021. Margin of error plus or minus 4.8 points at 95% confidence; Germany's 7-point lead over the Netherlands is outside it.",
+"pt": 9.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "SourceRule",
+"box": [
+0.6,
+7.02,
+12.733,
+7.02
+],
+"kind": "line"
+},
+{
+"name": "Source",
+"box": [
+0.6,
+7.06,
+9.068,
+0.34
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Source: Online survey of plants with 250 to 2,000 employees, March to May 2025, 412 respondents",
+"pt": 9.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Firm",
+"box": [
+9.793,
+7.06,
+2.939,
+0.25
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Ridgeway Advisory | Confidential      3",
+"pt": 10.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+}
+]
+},
+{
+"layout": "Title Only",
+"shapes": [
+{
+"name": "Title 1",
+"box": [
+0.6,
+0.42,
+11.111,
+0.92
+],
+"ph": "title",
+"kind": "text",
+"anchor": null,
+"wrap": null,
+"margins": [
+0.0,
+0.05,
+0.1,
+0.05
+],
+"paras": [
+[
+{
+"t": "Pilot-first pays back in 19 months, 12 months faster than a plant-wide launch",
+"pt": 25.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "ov_SectionNo",
+"box": [
+11.833,
+0.72,
+0.9,
+0.6
+],
+"kind": "text",
+"anchor": "b",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "02",
+"pt": 26.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "TitleRule",
+"box": [
+0.6,
+1.42,
+12.733,
+1.42
+],
+"kind": "line"
+},
+{
+"name": "Heading1",
+"box": [
+0.6,
+1.55,
+6.004,
+0.341
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Odds of success and lock-in risk",
+"pt": 18.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Heading3",
+"box": [
+6.729,
+1.55,
+6.004,
+0.341
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Median payback, months (2025)",
+"pt": 18.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "HeadingRule1",
+"box": [
+0.6,
+1.921,
+6.604,
+1.921
+],
+"kind": "line"
+},
+{
+"name": "HeadingRule3",
+"box": [
+6.729,
+1.921,
+12.733,
+1.921
+],
+"kind": "line"
+},
+{
+"name": "ov_role_numeral_Stat1_1",
+"box": [
+0.6,
+2.041,
+6.004,
+1.374
+],
+"kind": "shape",
+"auto": "rect",
+"anchor": "ctr",
+"wrap": null,
+"margins": [
+0.06,
+0.04,
+4.148,
+0.04
+],
+"paras": [
+[
+{
+"t": "71%",
+"pt": 40.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "Chart3",
+"box": [
+6.729,
+2.041,
+6.004,
+4.637
+],
+"kind": "chart",
+"chart": {
+"cats": [
+"Single pilot, then scale",
+"Vendor-managed service",
+"Plant-wide launch"
+],
+"vals": [
+[
+19.0,
+24.0,
+31.0
+]
+],
+"layout": {
+"x": 0.02,
+"y": 0.03,
+"w": 0.96,
+"h": 0.6559
+},
+"max": 42.063334118142734,
+"min": 0.0,
+"gap": 143,
+"label_pt": 14.0,
+"label_pos": "outEnd"
+}
+},
+{
+"name": "ov_StatLabel1_1",
+"box": [
+2.456,
+2.081,
+4.088,
+1.294
+],
+"kind": "text",
+"anchor": "ctr",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Pilot-first success rate, against 44% for plant-wide launch",
+"pt": 18.0,
+"b": false,
+"face": "+mn-lt"
+}
+],
+[
+{
+"t": "27 points higher",
+"pt": 15.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "ov_DeltaLabel",
+"box": [
+8.386,
+2.26,
+2.69,
+0.34
+],
+"kind": "shape",
+"auto": "rect",
+"anchor": "ctr",
+"wrap": "none",
+"margins": [
+0.0,
+0.0,
+0.0,
+0.0
+],
+"paras": [
+[
+{
+"t": "12 months faster",
+"pt": 15.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "ov_Head_Delta",
+"box": [
+11.601,
+2.504,
+0.102,
+0.17
+],
+"rot": 90.0,
+"kind": "shape",
+"auto": "chevron"
+},
+{
+"name": "ov_DeltaArrow3",
+"box": [
+11.652,
+2.63,
+11.652,
+2.584
+],
+"kind": "line"
+},
+{
+"name": "ov_DeltaArrow1",
+"box": [
+7.81,
+3.508,
+7.81,
+2.63
+],
+"kind": "line"
+},
+{
+"name": "ov_DeltaArrow2",
+"box": [
+7.81,
+2.63,
+11.652,
+2.63
+],
+"kind": "line"
+},
+{
+"name": "ov_StatRuleH1_1",
+"box": [
+0.6,
+3.515,
+6.604,
+3.515
+],
+"kind": "line"
+},
+{
+"name": "ov_role_numeral_Stat1_2",
+"box": [
+0.6,
+3.615,
+6.004,
+1.374
+],
+"kind": "shape",
+"auto": "rect",
+"anchor": "ctr",
+"wrap": null,
+"margins": [
+0.06,
+0.04,
+4.148,
+0.04
+],
+"paras": [
+[
+{
+"t": "38%",
+"pt": 40.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "ov_StatLabel1_2",
+"box": [
+2.456,
+3.655,
+4.088,
+1.294
+],
+"kind": "text",
+"anchor": "ctr",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Share of vendor service adopters who would not renew",
+"pt": 18.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "ov_FlowPointer",
+"box": [
+3.507,
+4.573,
+0.19,
+1.081
+],
+"rot": 90.0,
+"kind": "shape",
+"auto": "chevron"
+},
+{
+"name": "Heading2",
+"box": [
+0.6,
+5.238,
+6.004,
+0.341
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "So what",
+"pt": 18.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "HeadingRule2",
+"box": [
+0.6,
+5.609,
+6.604,
+5.609
+],
+"kind": "line"
+},
+{
+"name": "Callout2",
+"box": [
+0.6,
+5.729,
+6.004,
+0.949
+],
+"kind": "shape",
+"auto": "rect",
+"anchor": "ctr",
+"wrap": null,
+"margins": [
+0.25,
+0.15,
+0.25,
+0.15
+],
+"paras": [
+[
+{
+"t": "Start with one pilot line",
+"pt": 17.0,
+"b": true,
+"face": "+mn-lt"
+},
+{
+"t": ": faster, more likely to succeed, avoids lock-in",
+"pt": 17.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "ov_CatNote1",
+"box": [
+6.889,
+5.778,
+1.841,
+0.9
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "One high-downtime line first, then extend",
+"pt": 12.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "ov_CatNote2",
+"box": [
+8.81,
+5.778,
+1.841,
+0.9
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Vendor runs monitoring as a service",
+"pt": 12.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "ov_CatNote3",
+"box": [
+10.732,
+5.778,
+1.841,
+0.9
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "All plants launched at once",
+"pt": 12.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Footnotes",
+"box": [
+0.6,
+6.728,
+12.133,
+0.262
+],
+"kind": "text",
+"anchor": "b",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Payback is the median months to recover the investment, by option, 2025.",
+"pt": 9.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "SourceRule",
+"box": [
+0.6,
+7.02,
+12.733,
+7.02
+],
+"kind": "line"
+},
+{
+"name": "Source",
+"box": [
+0.6,
+7.06,
+9.068,
+0.34
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Source: Median payback by option, 2025; success rates and vendor renewal intent from the project fact base",
+"pt": 9.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Firm",
+"box": [
+9.793,
+7.06,
+2.939,
+0.25
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Ridgeway Advisory | Confidential      4",
+"pt": 10.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+}
+]
+},
+{
+"layout": "Title Only",
+"shapes": [
+{
+"name": "Title 1",
+"box": [
+0.6,
+0.42,
+11.111,
+0.92
+],
+"ph": "title",
+"kind": "text",
+"anchor": null,
+"wrap": null,
+"margins": [
+0.0,
+0.05,
+0.1,
+0.05
+],
+"paras": [
+[
+{
+"t": "A five-plant rollout costs EUR 3.4m and nets EUR 3.1m by year 3",
+"pt": 25.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "ov_SectionNo",
+"box": [
+11.833,
+0.72,
+0.9,
+0.6
+],
+"kind": "text",
+"anchor": "b",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "03",
+"pt": 26.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "TitleRule",
+"box": [
+0.6,
+1.42,
+12.733,
+1.42
+],
+"kind": "line"
+},
+{
+"name": "Heading1",
+"box": [
+0.6,
+1.55,
+3.961,
+0.612
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Cost by category, % of EUR 3.4m over three years",
+"pt": 18.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Heading2",
+"box": [
+4.686,
+1.55,
+3.961,
+0.612
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Benefit by source, % of total benefit to year 3",
+"pt": 18.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Heading3",
+"box": [
+8.772,
+1.55,
+3.961,
+0.612
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Three risks, each with a handled response",
+"pt": 18.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "HeadingRule1",
+"box": [
+0.6,
+2.192,
+4.561,
+2.192
+],
+"kind": "line"
+},
+{
+"name": "HeadingRule2",
+"box": [
+4.686,
+2.192,
+8.647,
+2.192
+],
+"kind": "line"
+},
+{
+"name": "HeadingRule3",
+"box": [
+8.772,
+2.192,
+12.733,
+2.192
+],
+"kind": "line"
+},
+{
+"name": "Chart1",
+"box": [
+0.6,
+2.312,
+3.961,
+4.366
+],
+"kind": "chart",
+"chart": {
+"cats": [
+"Sensors",
+"Software",
+"Integration",
+"Training"
+],
+"vals": [
+[
+38.0,
+27.0,
+22.0,
+13.0
+]
+],
+"layout": null,
+"max": 42.56,
+"min": 0.0,
+"gap": 50,
+"label_pt": 14.0,
+"label_pos": "outEnd"
+}
+},
+{
+"name": "Chart2",
+"box": [
+4.686,
+2.312,
+3.961,
+4.366
+],
+"kind": "chart",
+"chart": {
+"cats": [
+"Avoided downtime",
+"Lower spare parts inventory",
+"Energy savings"
+],
+"vals": [
+[
+62.0,
+21.0,
+17.0
+]
+],
+"layout": null,
+"max": 69.44000000000001,
+"min": 0.0,
+"gap": 60,
+"label_pt": 14.0,
+"label_pos": "outEnd"
+}
+},
+{
+"name": "ov_PointIntro",
+"box": [
+8.772,
+2.312,
+3.961,
+0.471
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Each risk has a ",
+"pt": 18.0,
+"b": true,
+"face": "+mn-lt"
+},
+{
+"t": "named fix",
+"pt": 18.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "ov_PointCard1",
+"box": [
+8.772,
+2.783,
+3.961,
+2.023
+],
+"kind": "shape",
+"auto": "rect",
+"anchor": "ctr",
+"wrap": null,
+"margins": [
+0.69,
+0.08,
+0.15,
+0.08
+],
+"paras": [
+[
+{
+"t": "Legacy PLCs (machine controllers):",
+"pt": 18.0,
+"b": false,
+"face": "+mn-lt"
+},
+{
+"t": " retrofit gateways cut integration cost by about 40%",
+"pt": 18.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "ov_PointBadge1",
+"box": [
+8.882,
+3.564,
+0.58,
+0.46
+],
+"kind": "text",
+"anchor": "ctr",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "01",
+"pt": 26.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "ov_PointCard2",
+"box": [
+8.772,
+4.926,
+3.961,
+1.752
+],
+"kind": "shape",
+"auto": "rect",
+"anchor": "ctr",
+"wrap": null,
+"margins": [
+0.69,
+0.08,
+0.15,
+0.08
+],
+"paras": [
+[
+{
+"t": "Unclear ROI:",
+"pt": 18.0,
+"b": false,
+"face": "+mn-lt"
+},
+{
+"t": " a business case makes plants 2.4 times likelier to scale",
+"pt": 18.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "ov_PointBadge2",
+"box": [
+8.882,
+5.572,
+0.58,
+0.46
+],
+"kind": "text",
+"anchor": "ctr",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "02",
+"pt": 26.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "Footnotes",
+"box": [
+0.6,
+6.728,
+12.133,
+0.262
+],
+"kind": "text",
+"anchor": "b",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Economics are modelled from 37 case studies.",
+"pt": 9.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "SourceRule",
+"box": [
+0.6,
+7.02,
+12.733,
+7.02
+],
+"kind": "line"
+},
+{
+"name": "Source",
+"box": [
+0.6,
+7.06,
+9.068,
+0.34
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Source: Predictive maintenance report; economics modelled from 37 case studies",
+"pt": 9.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Firm",
+"box": [
+9.793,
+7.06,
+2.939,
+0.25
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Ridgeway Advisory | Confidential      5",
+"pt": 10.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+}
+]
+},
+{
+"layout": "Title Only",
+"shapes": [
+{
+"name": "Title 1",
+"box": [
+0.6,
+0.42,
+11.111,
+0.92
+],
+"ph": "title",
+"kind": "text",
+"anchor": null,
+"wrap": null,
+"margins": [
+0.0,
+0.05,
+0.1,
+0.05
+],
+"paras": [
+[
+{
+"t": "Five steps from January 2027 start the pilot and decide when to scale up",
+"pt": 25.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "ov_SectionNo",
+"box": [
+11.833,
+0.72,
+0.9,
+0.6
+],
+"kind": "text",
+"anchor": "b",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "04",
+"pt": 26.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "TitleRule",
+"box": [
+0.6,
+1.42,
+12.733,
+1.42
+],
+"kind": "line"
+},
+{
+"name": "role_subtitle_Head9",
+"box": [
+1.111,
+1.48,
+3.45,
+0.3
+],
+"kind": "text",
+"anchor": "b",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Next step",
+"pt": 18.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "role_subtitle_Head16",
+"box": [
+4.686,
+1.48,
+5.493,
+0.3
+],
+"kind": "text",
+"anchor": "b",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "What it involves",
+"pt": 18.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "role_subtitle_Head16",
+"box": [
+10.304,
+1.48,
+2.429,
+0.3
+],
+"kind": "text",
+"anchor": "b",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Owner and timing",
+"pt": 18.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "HeadRule",
+"box": [
+0.6,
+1.84,
+12.733,
+1.84
+],
+"kind": "line"
+},
+{
+"name": "role_numeral_1",
+"box": [
+0.6,
+1.98,
+0.5,
+0.95
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "1",
+"pt": 28.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "Action1",
+"box": [
+1.111,
+1.98,
+3.45,
+0.95
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Choose one high-downtime line and write the business case",
+"pt": 18.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Detail1",
+"box": [
+4.686,
+1.98,
+5.493,
+0.95
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Plants with a structured business case were more likely to scale beyond the pilot.",
+"pt": 16.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "When1",
+"box": [
+10.304,
+1.98,
+2.429,
+0.95
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Plants \u00b7 29 Jan 2027",
+"pt": 16.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "StepRule1",
+"box": [
+1.111,
+2.97,
+12.733,
+2.97
+],
+"kind": "line"
+},
+{
+"name": "role_numeral_2",
+"box": [
+0.6,
+3.03,
+0.5,
+0.867
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "2",
+"pt": 28.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "Action2",
+"box": [
+1.111,
+3.03,
+3.45,
+0.867
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Review vendor lock-in clauses before signing",
+"pt": 18.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Detail2",
+"box": [
+4.686,
+3.03,
+5.493,
+0.867
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Check renewal, exit and data-ownership terms in any multi-year services contract before signature.",
+"pt": 16.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "When2",
+"box": [
+10.304,
+3.03,
+2.429,
+0.867
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Sourcing \u00b7 26 Feb 2027",
+"pt": 16.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "StepRule2",
+"box": [
+1.111,
+3.937,
+12.733,
+3.937
+],
+"kind": "line"
+},
+{
+"name": "role_numeral_3",
+"box": [
+0.6,
+3.997,
+0.5,
+0.95
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "3",
+"pt": 28.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "Action3",
+"box": [
+1.111,
+3.997,
+3.45,
+0.95
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Hire or train one reliability engineer per two plants",
+"pt": 18.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "When3",
+"box": [
+10.304,
+3.997,
+2.429,
+0.95
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "HR \u00b7 30 Apr 2027",
+"pt": 16.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "StepRule3",
+"box": [
+1.111,
+4.986,
+12.733,
+4.986
+],
+"kind": "line"
+},
+{
+"name": "role_numeral_4",
+"box": [
+0.6,
+5.046,
+0.5,
+1.492
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "4",
+"pt": 28.0,
+"b": true,
+"face": "+mj-lt"
+}
+]
+]
+},
+{
+"name": "Action4",
+"box": [
+1.111,
+5.046,
+3.45,
+1.492
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Add gateways to existing programmable logic controllers instead of replacing them",
+"pt": 18.0,
+"b": true,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "When4",
+"box": [
+10.304,
+5.046,
+2.429,
+1.492
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Ops \u00b7 30 Jun 2027",
+"pt": 16.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Footnotes",
+"box": [
+0.6,
+6.728,
+12.133,
+0.262
+],
+"kind": "text",
+"anchor": "b",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Owners and dates are proposed, for client confirmation.",
+"pt": 9.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "SourceRule",
+"box": [
+0.6,
+7.02,
+12.733,
+7.02
+],
+"kind": "line"
+},
+{
+"name": "Source",
+"box": [
+0.6,
+7.06,
+9.068,
+0.34
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Source: Northfield Research, Industry Benchmark Report 2025; survey of 412 plant managers",
+"pt": 9.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+},
+{
+"name": "Firm",
+"box": [
+9.793,
+7.06,
+2.939,
+0.25
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Ridgeway Advisory | Confidential      6",
+"pt": 10.0,
+"b": false,
+"face": "+mn-lt"
+}
+]
+]
+}
+]
+},
+{
+"layout": "Title Only",
+"shapes": [
+{
+"name": "Title 1",
+"box": [
+0.6,
+0.2,
+12.133,
+0.86
+],
+"kind": "text",
+"anchor": "b",
+"wrap": null,
+"margins": [
+0.0,
+0.05,
+0.1,
+0.05
+],
+"paras": [
+[
+{
+"t": "Cumulative net benefit turns positive in year 1 and reaches EUR 3.1m by year 3",
+"pt": 25.0,
+"b": true,
+"face": "Georgia"
+}
+]
+]
+},
+{
+"name": "role_subtitle_Subtitle",
+"box": [
+0.6,
+1.06,
+12.133,
+0.33
+],
+"kind": "text",
+"anchor": "b",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Cumulative net benefit, five-plant rollout, EUR m, years 0 to 3 (modelled)",
+"pt": 18.0,
+"b": false,
+"face": "Georgia"
+}
+]
+]
+},
+{
+"name": "TitleRule",
+"box": [
+0.6,
+1.42,
+12.733,
+1.42
+],
+"kind": "line"
+},
+{
+"name": "Chart",
+"box": [
+0.6,
+1.55,
+7.025,
+5.07
+],
+"kind": "chart",
+"chart": {
+"cats": [
+"Year 0",
+"Year 1",
+"Year 2",
+"Year 3"
+],
+"vals": [
+[
+-1.2,
+0.4,
+1.9,
+3.1
+]
+],
+"layout": null,
+"max": null,
+"min": null,
+"gap": 113,
+"label_pt": 14.0,
+"label_pos": "outEnd"
+}
+},
+{
+"name": "ov_PointIntro",
+"box": [
+7.75,
+1.55,
+4.982,
+0.742
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Net benefit is ",
+"pt": 18.0,
+"b": true,
+"face": "Georgia"
+},
+{
+"t": "positive from year 1",
+"pt": 18.0,
+"b": false,
+"face": "Georgia"
+},
+{
+"t": " and still rising in year 3",
+"pt": 18.0,
+"b": true,
+"face": "Georgia"
+}
+]
+]
+},
+{
+"name": "ov_PointCard1",
+"box": [
+7.75,
+2.292,
+4.982,
+1.954
+],
+"kind": "shape",
+"auto": "rect",
+"anchor": "ctr",
+"wrap": null,
+"margins": [
+0.69,
+0.08,
+0.15,
+0.08
+],
+"paras": [
+[
+{
+"t": "Year 0 starts at \u22121.2, the upfront outlay",
+"pt": 20.0,
+"b": false,
+"face": "Georgia"
+}
+]
+]
+},
+{
+"name": "ov_PointBadge1",
+"box": [
+7.86,
+3.039,
+0.58,
+0.46
+],
+"kind": "text",
+"anchor": "ctr",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "01",
+"pt": 26.0,
+"b": true,
+"face": "Georgia"
+}
+]
+]
+},
+{
+"name": "ov_PointCard2",
+"box": [
+7.75,
+4.666,
+4.982,
+1.954
+],
+"kind": "shape",
+"auto": "rect",
+"anchor": "ctr",
+"wrap": null,
+"margins": [
+0.69,
+0.08,
+0.15,
+0.08
+],
+"paras": [
+[
+{
+"t": "Annual gains are 1.6, then 1.5, then 1.2",
+"pt": 20.0,
+"b": false,
+"face": "Georgia"
+}
+]
+]
+},
+{
+"name": "ov_PointBadge2",
+"box": [
+7.86,
+5.413,
+0.58,
+0.46
+],
+"kind": "text",
+"anchor": "ctr",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "02",
+"pt": 26.0,
+"b": true,
+"face": "Georgia"
+}
+]
+]
+},
+{
+"name": "Footnotes",
+"box": [
+0.6,
+6.62,
+12.133,
+0.37
+],
+"kind": "text",
+"anchor": "b",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Northfield Research, Industry Benchmark Report 2025; economics modelled from 37 case studies",
+"pt": 9.0,
+"b": false,
+"face": "Georgia"
+}
+]
+]
+},
+{
+"name": "SourceRule",
+"box": [
+0.6,
+7.02,
+12.733,
+7.02
+],
+"kind": "line"
+},
+{
+"name": "Source",
+"box": [
+0.6,
+7.06,
+9.068,
+0.34
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Source: Northfield Research, Industry Benchmark Report 2025; economics modelled from 37 case studies",
+"pt": 9.0,
+"b": false,
+"face": "Georgia"
+}
+]
+]
+},
+{
+"name": "Firm",
+"box": [
+9.793,
+7.06,
+2.939,
+0.25
+],
+"kind": "text",
+"anchor": "t",
+"wrap": "square",
+"margins": [
+0.0,
+0.02,
+0.0,
+0.02
+],
+"paras": [
+[
+{
+"t": "Ridgeway Advisory | Confidential      7",
+"pt": 10.0,
+"b": false,
+"face": "Georgia"
+}
+]
+]
+}
+]
+}
+]

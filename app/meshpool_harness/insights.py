@@ -192,10 +192,13 @@ def chat_record(sid: str, meta: dict | None = None, sess: dict | None = None) ->
         return None
     meta = meta if meta is not None else _jread(d / "meta.json", {})
     texts, tools, outs, ins = [], [], [], []
+    reply = ""
     for m in sess.get("messages") or []:
+        if m.get("role") == "assistant" and _text_of(m.get("content")):
+            reply = _text_of(m.get("content"))                 # the last thing said: what a next-step chip must relate to
         if m.get("role") == "user":
             t = _text_of(m.get("content"))
-            if t and not AUTO_TEXT.match(t) and not t.startswith("[Meshpool]"):
+            if t and not AUTO_TEXT.match(t) and not t.startswith(("[Meshpool]", "[meshpool]")):
                 texts.append(t)
         elif m.get("role") == "assistant":
             for c in m.get("tool_calls") or []:
@@ -213,7 +216,7 @@ def chat_record(sid: str, meta: dict | None = None, sess: dict | None = None) ->
                         (ins if _IN_TOOLS.match(name) else outs if _OUT_TOOLS.search(name) else ins).append(base)
     route = sess.get("route") or {}
     return {"id": sid, "ts": float(sess.get("updated") or 0), "created": float(sess.get("created") or 0),
-            "title": sess.get("title") or "", "texts": texts, "tools": tools, "steps": len(tools),
+            "title": sess.get("title") or "", "texts": texts, "tools": tools, "steps": len(tools), "reply": reply[:4000],
             "outputs": list(dict.fromkeys(outs + list(meta.get("outputs") or []))),
             "inputs": list(dict.fromkeys(ins + list(meta.get("inputs") or []))),
             "project_id": meta.get("project_id") or "", "incognito": bool(meta.get("incognito")),
@@ -738,9 +741,72 @@ def output_kind(chat: dict) -> str:
     return ""
 
 
-def followup_chips(kind: str) -> list[dict]:
-    """The fixed next-step table for an output type: [{id, label, text}]."""
-    return [{"id": i, "label": lab, "text": txt} for i, lab, txt in FOLLOWUPS.get(kind, [])]
+# A chip is offered only when the reply or the request is about what it does (priya018: a sensitivity table, a trend
+# chart and a one-slide summary after a plain list of room sizes). Each pattern is matched against the last request
+# and the last reply; "block" patterns rule a chip out. A chip with no entry here is always offered.
+_RELATES = {
+    "sens": (r"\b(forecast|scenario|assumption|sensitiv|growth|margin|revenue|valuation|dcf|budget|irr|npv|"
+             r"projection|profit|cash ?flow)\b", r"\b(price ?list|prices|catalogue|catalog|inventory|menu)\b"),
+    "chart": (r"\b(trend|over time|monthly|quarterly|yearly|annual|by month|by year|by quarter|series|history|forecast|timeline|"
+              r"growth|weekly|daily)\b", r"\b(price ?list|prices|catalogue|catalog|inventory|menu)\b"),
+    "onepager": (r"\b(report|proposal|paper|white ?paper|strategy|analysis|study|chapters?|sections?|findings)\b",
+                 r"\b(one[- ]page|one page|short|brief|update|note|letter)\b"),
+    "cover": (r"\b(send|email|e-mail|share|client|customer|letter|proposal|application|submit|forward)\b", None),
+}
+
+
+_TIME_WORDS = re.compile(r"\b(date|day|week|month|quarter|year|period|time|q[1-4]|fy\d*|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b|\b(19|20)\d\d\b", re.I)
+
+
+def _workbook_over_time(chat: dict) -> bool | None:
+    """Does the newest workbook the chat made hold numbers over time (a date, month or year column or header row)? A price
+    list, a room list or a contact sheet does not, so analysis chips (a sensitivity table, a trend chart) are not offered
+    for it. None when the file cannot be read: the words of the request and reply decide then."""
+    root = Path(chat.get("workdir") or "")
+    books = [o for o in chat.get("outputs", []) if str(o).lower().endswith((".xlsx", ".xlsm", ".csv"))]
+    if not books or not root.is_dir():
+        return None
+    p = root / books[-1]
+    try:
+        if p.suffix.lower() == ".csv":
+            import csv
+            with p.open(newline="", encoding="utf-8", errors="replace") as f:
+                rows = [r for _, r in zip(range(40), csv.reader(f))]
+        else:
+            import openpyxl
+            wb = openpyxl.load_workbook(p, read_only=True, data_only=True)
+            rows = []
+            for ws in wb.worksheets[:4]:
+                rows += [list(r) for _, r in zip(range(40), ws.iter_rows(values_only=True))]
+    except Exception:  # noqa: BLE001
+        return None
+    import datetime
+    for r in rows:
+        for v in r:
+            if isinstance(v, (datetime.date, datetime.datetime)):
+                return True
+            if isinstance(v, str) and len(v) < 40 and _TIME_WORDS.search(v) and not re.search(r"\bprice\b", v, re.I):
+                return True
+    return False
+
+
+def _chip_relates(chip_id: str, chat: dict | None) -> bool:
+    rule = _RELATES.get(chip_id)
+    if rule is None or chat is None:
+        return True
+    if chip_id in ("sens", "chart") and _workbook_over_time(chat) is False:
+        return False
+    text = ((chat.get("texts") or [""])[-1] + " " + (chat.get("reply") or "")).lower()
+    want, block = rule
+    if block and re.search(block, text):
+        return False
+    return bool(re.search(want, text))
+
+
+def followup_chips(kind: str, chat: dict | None = None) -> list[dict]:
+    """The fixed next-step table for an output type: [{id, label, text}]. With the chat, only the chips that relate to
+    its last request and reply (none when none do)."""
+    return [{"id": i, "label": lab, "text": txt} for i, lab, txt in FOLLOWUPS.get(kind, []) if _chip_relates(i, chat)]
 
 
 def detect_followup(c: Corpus, chat_id: str | None = None) -> list[dict]:
@@ -753,7 +819,7 @@ def detect_followup(c: Corpus, chat_id: str | None = None) -> list[dict]:
             continue
         where = "task" if ch.get("scheduled") else "turn"
         n = len(ch["texts"])
-        for chip in followup_chips(kind):
+        for chip in followup_chips(kind, ch):
             out.append(_card("followup", chip["label"], chip["text"],
                              [{"text": f"This reply made a {kind}", "chat_id": ch["id"], "ts": ch["ts"]}],
                              {"kind": "send", "label": chip["label"], "payload": {"text": chip["text"], "chip": chip["id"]}},

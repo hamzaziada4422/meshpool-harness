@@ -31,7 +31,38 @@ Most lines are already fine: change only a line a reader would stumble on (expec
 and keep the author's voice and emphasis. Return JSON {"edits": [{"id": "<id>", "issue": "<= 8 words",
 "text": "<rewrite>"}]} with only the lines you changed."""
 
+# The user's own prose (a Word document they asked for): spelling and obvious typos only, never rewording (Priya,
+# round 3: the tool result said wording was tidied and "do not mention it", and the model told her it was told to hide
+# something).
+TYPO_RUBRIC = """You are a proofreader. Each line below is from a document someone wrote. Fix only spelling mistakes and
+obvious typos: a misspelt word, a doubled word ("the the"), a missing or swapped letter. Never change the wording, the
+tone, the order, the punctuation style, names, numbers or the meaning, and never rephrase. Most lines need nothing.
+Return JSON {"edits": [{"id": "<id>", "issue": "spelling", "text": "<the line with only the typos fixed>"}]} with only
+the lines you changed."""
+
 _NUM = re.compile(r"\d[\d,]*(?:\.\d+)?")
+_WORD = re.compile(r"\S+")
+
+
+def typo_fixes(old: str, new: str) -> list[tuple[str, str]] | None:
+    """The word-for-word fixes from old to new, [("recieve", "receive")], when every change is a typo fix: each
+    changed word is close to the one it replaces, or a doubled word was dropped. None when the line was reworded."""
+    import difflib
+    a, b = _WORD.findall(old), _WORD.findall(new)
+    out = []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
+        if op == "equal":
+            continue
+        if op == "delete" and i2 - i1 == 1 and i1 > 0 and a[i1].lower().strip(".,;:!?") == a[i1 - 1].lower().strip(".,;:!?"):
+            out.append((f"{a[i1 - 1]} {a[i1]}", a[i1 - 1]))
+            continue
+        if op != "replace" or i2 - i1 != j2 - j1:
+            return None
+        for x, y in zip(a[i1:i2], b[j1:j2]):
+            if difflib.SequenceMatcher(a=x.lower(), b=y.lower()).ratio() < 0.75 or _numbers(x) != _numbers(y):
+                return None
+            out.append((x, y))
+    return out
 
 
 def _numbers(t: str) -> list[str]:
@@ -101,7 +132,7 @@ def _set(slides, path, value):
 
 
 def review(slides: list[dict], client, only: set[int] | None = None, main_model: str | None = None,
-           task_id: str = "clarity") -> dict:
+           task_id: str = "clarity", typos: bool = False) -> dict:
     """Edit `slides` in place. Returns a report: model used, lines checked, changed, rejected (with reasons)."""
     items = lines(slides, only)
     if not items:
@@ -117,7 +148,7 @@ def review(slides: list[dict], client, only: set[int] | None = None, main_model:
         payload = "\n".join(f"{i}: {t}" for i, _, t in batch)
         for m in chain:
             try:
-                r = client.chat(model=m, messages=[{"role": "system", "content": RUBRIC},
+                r = client.chat(model=m, messages=[{"role": "system", "content": TYPO_RUBRIC if typos else RUBRIC},
                                                    {"role": "user", "content": payload + f"\n<run id=\"{uuid.uuid4().hex[:8]}\"/>"}],
                                 max_tokens=6000, temperature=0.2, task_id=task_id, role="verifier",
                                 extra={"response_format": {"type": "json_object"}})
@@ -147,19 +178,25 @@ def review(slides: list[dict], client, only: set[int] | None = None, main_model:
         if new == old.strip():
             continue
         why = acceptable(old, new)
+        fixes = typo_fixes(old, new) if typos and not why else None
+        if typos and not why and not fixes:
+            why = "reworded, not a typo fix"
         if why:
             rejected.append({"id": e["id"], "old": old, "new": new, "why": why})
             continue
         _set(slides, path, new)
-        edits.append({"id": e["id"], "issue": e.get("issue", ""), "old": old, "new": new})
+        edits.append({"id": e["id"], "issue": e.get("issue", ""), "old": old, "new": new,
+                      **({"fixes": fixes} if typos else {})})
     return {"model": used, "checked": len(items), "changed": len(edits), "edits": edits, "rejected": rejected,
             "errors": errors}
 
 
-def review_markdown(md: str, client, main_model: str | None = None, task_id: str = "clarity-doc") -> tuple[str, dict]:
+def review_markdown(md: str, client, main_model: str | None = None, task_id: str = "clarity-doc",
+                    typos: bool = False) -> tuple[str, dict]:
     """The same read for a Markdown document (memos, reports): prose lines and bullets; headings, tables, code and
     links are left alone (a heading is a label: the slide rubric turned "Northwind: valuation and options" into
-    "Northwind considers valuation and options."). Returns (new markdown, report)."""
+    "Northwind considers valuation and options."). typos: fix spelling and obvious typos only, never reword (the
+    user's own prose; each edit lists its word fixes). Returns (new markdown, report)."""
     out = md.split("\n")
     slots, in_code = [], False
     for k, line in enumerate(out):
@@ -173,7 +210,7 @@ def review_markdown(md: str, client, main_model: str | None = None, task_id: str
         if m and len(m.group(2).split()) >= 4:
             slots.append((k, m.group(1), m.group(2)))
     doc = [{"text": t} for _, _, t in slots]
-    rep = review([{"bullets": doc}], client, main_model=main_model, task_id=task_id)
+    rep = review([{"bullets": doc}], client, main_model=main_model, task_id=task_id, typos=typos)
     for (k, prefix, _), d in zip(slots, doc):
         out[k] = prefix + d["text"]
     return "\n".join(out), rep

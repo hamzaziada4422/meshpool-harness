@@ -444,27 +444,30 @@ def key_owner(key: str) -> str:
     return next((p for pre, p in _KEY_PREFIXES if k.startswith(pre)), "")
 
 
-def _msg(body) -> tuple[str, str]:
-    """(message, code) out of an error body of any common shape, short and single-line."""
+def _msg(body, key: str = "") -> tuple[str, str]:
+    """(message, code) out of an error body of any common shape, short and single-line. `key` is taken out before the
+    text is cut to length: a key cut in two by the limit no longer matches and would be shown in part."""
     d = body
     if isinstance(body, (bytes, str)):
         s = body.decode("utf-8", "replace") if isinstance(body, bytes) else body
         try:
             d = json.loads(s)
         except ValueError:
-            return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", s)).strip()[:200], ""
+            return redact_key(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", s)).strip(), key)[:200], ""
     if isinstance(d, list) and d:
         d = d[0]
     if isinstance(d, dict) and set(d) == {"raw"} and isinstance(d["raw"], str):
-        return _msg(d["raw"])                    # a caller's wrapper around a body that was not JSON
+        return _msg(d["raw"], key)               # a caller's wrapper around a body that was not JSON
     if not isinstance(d, dict):
         return "", ""
     e = d.get("error", d)
+    from meshpool_harness.core.errtext import _from_json      # {"detail": [{"loc", "msg"}]} as words, not a repr
     if isinstance(e, str):
-        return e[:200], ""
+        return redact_key(e, key)[:200], ""
     if isinstance(e, dict):
-        return str(e.get("message") or e.get("detail") or "")[:200], str(e.get("code") or e.get("type") or "")
-    return str(d.get("message") or d.get("detail") or "")[:200], str(d.get("code") or "")
+        return (redact_key(_from_json({k: e.get(k) for k in ("message", "detail")}), key)[:200],
+                str(e.get("code") or e.get("type") or ""))
+    return redact_key(_from_json({k: d.get(k) for k in ("message", "detail")}), key)[:200], str(d.get("code") or "")
 
 
 def redact_key(text: str, key: str) -> str:
@@ -477,10 +480,32 @@ def redact_key(text: str, key: str) -> str:
     return re.sub(r"(?<![A-Za-z0-9])" + re.escape(key) + r"(?![A-Za-z0-9])", "***", text)
 
 
+_NO_MODEL = re.compile(r"model[_ ]not[_ ]found|does not exist|doesn't exist|not found|no such model|unknown model|"
+                       r"not a valid model|invalid model|is not available|not supported")
+
+
+def missing_model(status: int, body=None, model: str = "") -> str:
+    """The model a 404 says does not exist ("The model `x` does not exist"), or "". Only when the reply is about a
+    model and names one (in quotes, or the model that was asked for): a 404 for a wrong address says nothing of the
+    kind. Such a reply came from a model API, so the address is right and the model name is what to fix."""
+    if status != 404:
+        return ""
+    msg, code = _msg(body)
+    low = f"{msg} {code}".lower()
+    if "model" not in low or not _NO_MODEL.search(low):
+        return ""
+    m = re.search(r"[`'\"\u2018\u201c]([^`'\"\u2019\u201d\s]{1,120})[`'\"\u2019\u201d]", msg)
+    if m and m.group(1).lower() not in ("model", "models"):
+        return m.group(1)
+    if model and (model.lower() in low or "model_not_found" in low):
+        return model
+    return ""
+
+
 def explain(status: int, body=None, *, kind: str = "generic", host: str = "", model: str = "", key: str = "",
             api_version: str = "") -> str:
     """A failed call in words the user can act on: what to check, not the raw reply."""
-    msg, code = _msg(body)
+    msg, code = _msg(body, key)
     low = f"{msg} {code}".lower()
     c = caps(kind)
     who = c["label"] if kind != "generic" else (host or "The endpoint")
@@ -519,6 +544,10 @@ def explain(status: int, body=None, *, kind: str = "generic", host: str = "", mo
             out = ["Azure did not find that address or deployment (404)."]
             out.append("Check the endpoint address is the one shown under Keys and Endpoint (https://NAME.openai.azure."
                        "com) and that the deployment name is spelled exactly as in Azure.")
+        elif missing_model(status, body, model):
+            out = [f"{who} has no model named '{redact_key(missing_model(status, body, model), key)}' (404)."]
+            out.append("The address works. Check the model name against the provider's list of models, or pick "
+                       "another model.")
         else:
             out = [f"{who} answered 404: no such address or model."]
             out.append("Check the base address (it usually ends in /v1) and the model name against the provider's list.")
@@ -541,8 +570,12 @@ def explain(status: int, body=None, *, kind: str = "generic", host: str = "", mo
         out = [f"{who} had a problem on its side ({status or 'no answer'}). Try again in a moment."]
     elif 300 <= status < 400 and "did not send your key" in msg:
         return msg                               # a refused redirect (core.http): names the host and what to set
+    elif status == 405:
+        out = [f"{who} does not take chat requests at this address ({status})."]
+        out.append("Check the base address: it usually ends in /v1.")
     else:
-        out = [f"{who} answered {status}."]
+        out = [f"{who} refused the request ({status})."]
+        out.append("Check the model name and this endpoint's settings, or pick another model, then try again.")
     if msg and status not in (401, 429, 402) and status < 500:
         out.append(f"(The service said: {msg})")
     return " ".join(out)

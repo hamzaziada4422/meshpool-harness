@@ -16,9 +16,10 @@ Tools
   measure_office_file(path, pages?)   -> how a .pptx/.xlsx/.pdf is built (reverse-engineering a reference file)
   find_icon(query, set?, style?, ...) -> bundled icons (Lucide, Tabler, Phosphor, Material, Carbon, ...) for a meaning
 
-Engine jobs run in the background. A call waits up to OFFICE_WAIT_S (default 100 s, under the common 120 s MCP
-timeout; Meshpool's own client sets 280 s with a 330 s timeout); a longer job returns a job id to check with
-office_job_status. Files go to "<project>/Meshpool outputs".
+Engine jobs run in the background, in meshpool's own data folder. A call waits up to OFFICE_WAIT_S (default 100 s,
+under the common 120 s MCP timeout; meshpool's own client sets 280 s with a 330 s timeout); a longer job returns a
+"still running" handle to wait on with office_job_status, never a timeout. Only the deliverable lands in the
+project folder, under its own name.
 """
 from __future__ import annotations
 
@@ -68,7 +69,8 @@ def _readable(p: Path) -> bool:
     try:
         q = p.resolve()
         from meshpool_harness import config as C
-        ok = [_project().resolve(), (C.runs_dir() / "_uploads").resolve()]
+        chat = getattr(_CALL, "chat", None) or os.environ.get("MH_CHAT_ID")      # only this chat's attached files
+        ok = [_project().resolve(), *C.upload_roots(chat)]
     except Exception:  # noqa: BLE001
         return False
     return any(q == r or r in q.parents for r in ok)
@@ -82,17 +84,30 @@ SAVE_AS: dict[str, str] = {}   # job id -> the file name the user asked for (sav
 
 
 def _report(jid: str, reused: str = "") -> tuple[str, bool]:
-    text, failed = OJ.report(jid, reused=reused)
+    """The job's report, with the file already under the name the user asked for (save_as). The engine's own name for
+    it is never in the text: Lina's reply said "the engine also named its first output sales_2025_clean.xlsx"."""
     want = SAVE_AS.get(jid)
-    if want and not failed and OJ.JOBS.get(jid, {}).get("done"):
-        text += _save_copy(jid, want)
+    j = OJ.JOBS.get(jid, {})
+    saved, old = "", ""
+    if want and j.get("done") and j.get("result"):
+        before = [m for m in OJ._made(j) if m.suffix.lower() == Path(want).suffix.lower()]
+        old = before[0].name if before else ""
+        saved = _save_copy(jid, want)
+    text, failed = OJ.report(jid, reused=reused)
+    if saved and not failed:
+        new = Path(j.get("saved_as") or "").name
+        if old and new and old != new:
+            text = text.replace(old, new)
+        text += saved
     return text, failed
 
 
 def _save_copy(jid: str, want: str) -> str:
     """Copy the job's file to the name the user asked for (save_as), in the project folder. office3 trace (pptx_chart):
     the deck stayed at "Meshpool outputs/<job>/deck.pptx", the user's ./deck.pptx never existed and the task failed.
-    An existing file is not replaced (_dest picks "name (2).ext"); the same job is copied once."""
+    An existing file is not replaced (_dest picks "name (2).ext"); the same job is saved once. The file is moved, not
+    copied: a copy left deck.pptx beside the named deck, stale after the first edit (WF-04). _made then lists the
+    named file in its place."""
     import shutil
     ext = Path(want).suffix.lower()
     made = [m for m in OJ._made(OJ.JOBS[jid]) if m.suffix.lower() == ext]
@@ -100,14 +115,24 @@ def _save_copy(jid: str, want: str) -> str:
         return f"\nNot saved as {want}: the job made no {ext or 'such'} file."
     done = OJ.JOBS[jid].get("saved_as")
     if not done:
+        try:                                     # delivered under that name already: nothing to move
+            asked = _resolve(want).resolve()
+        except (OSError, ValueError):
+            asked = None
+        if asked is not None and made[0].resolve() == asked:
+            OJ.JOBS[jid]["saved_as"] = done = str(asked)
+    if not done:
         dest = _dest(want, made[0].name, ext, named=True)
-        shutil.copy2(made[0], dest)
+        try:
+            shutil.move(str(made[0]), str(dest))
+        except OSError:                          # another disk, a locked file: a copy is better than nothing
+            shutil.copy2(made[0], dest)
         done = OJ.JOBS[jid]["saved_as"] = str(dest)
     try:
         shown = str(Path(done).relative_to(_project()))
     except ValueError:
         shown = done
-    return f"\nSaved as: {shown} (the file the user asked for; the job folder keeps the build)."
+    return f"\nSaved as: {shown} (the file the user asked for; edit this one)."
 
 
 def _scope() -> str:
@@ -127,17 +152,19 @@ def _engine(engine: str, request: str, files: list | None, save_as: str | None =
                            model=getattr(_CALL, "model", None) or None)   # the chat's model, as office_task passes it
     if reused == "refused":
         return OJ.refusal_text(jid), False
-    if save_as and str(save_as).strip():
+    if save_as and str(save_as).strip() and not SAVE_AS.get(jid):
         SAVE_AS[jid] = str(save_as).strip()
     if reused == "done":
         return _report(jid, reused=reused)
-    if reused == "running":
+    if reused == "running":                      # a retry of a build that still runs: wait on it, never a second one
         OJ.JOBS[jid]["event"].wait(WAIT)
         return _report(jid)
-    from meshpool_harness.agent.mcp_stdio import cancel_check
-    t = threading.Thread(target=_run_job, args=(jid, cancel_check()), daemon=True)   # the client's Stop ends the job
+    from meshpool_harness.agent.mcp_stdio import stop_check
+    # The job runs on after this call returns. Only the user's Stop ends it: a client that gave up waiting has not
+    # asked for that, and killing the job made the agent build the same workbook again (Lina).
+    t = threading.Thread(target=_run_job, args=(jid, stop_check()), daemon=True)
     t.start()
-    t.join(WAIT)
+    OJ.JOBS[jid]["event"].wait(WAIT)             # set once the file is delivered and checked: the report is quick
     return _report(jid)
 
 
@@ -166,7 +193,10 @@ def make_deck(request: str, files: list | None = None, audience: str | None = No
 
 def add_slides(deck: str, request: str, slides: int = 1, files: list | None = None):
     """New slides for a deck the user already has, built by the slides engine in that deck's look and added after
-    its slides, in a copy saved next to it ("<name> (updated).pptx"). The original deck is never changed."""
+    its slides, saved into that deck in place (the chat's Undo keeps the earlier version). A copy "<name>
+    (updated).pptx" is made when the deck is outside the chat's folder (Undo could not put it back), is open in
+    another app, or the request asks for one (engines/forge/engine.py deck_target). Daniel, round 2: "update the same
+    deck" left a second deck beside the first."""
     n = max(1, min(int(slides or 1), 12))
     return _engine("slides", f"[add to deck: {deck}] {request} ({n} slide{'s' if n != 1 else ''})",
                    [deck] + [f for f in files or [] if f != deck])
@@ -184,10 +214,13 @@ def office_job_status(job_id: str):
     if job_id not in JOBS:
         return f"No job with id {job_id} (jobs are kept while this server runs).", True
     j = JOBS[job_id]
-    if not j.get("done"):
-        deadline = time.time() + WAIT
-        while not j.get("done") and time.time() < deadline:
-            time.sleep(1)
+    if not j.get("done"):                        # wait for the job; still running at the end: say so, never a timeout
+        if j.get("event") is not None:
+            j["event"].wait(WAIT)
+        else:
+            deadline = time.time() + WAIT
+            while not j.get("done") and time.time() < deadline:
+                time.sleep(1)
     return _report(job_id)
 
 
@@ -250,8 +283,9 @@ def _safe_name(filename: str, default: str, ext: str) -> str:
 def _dest(filename: str | None, default: str, ext: str, named: bool | None = None) -> Path:
     """Where a file made for `filename` goes. A name the user gave (not the tool's default) is written exactly there
     when it is a plain name or a path inside the project folder, so "make report.pdf" gives ./report.pdf; with no
-    name (or one outside the project) it goes to "<project>/Meshpool outputs". Either way an existing file is never
-    replaced: a free "name (2).ext" is used."""
+    name (or one outside the project) it goes to the top of the project folder under that name, never into a
+    "Meshpool outputs" folder of its own (Lina, Maya, Priya: a folder they had not asked for, which the agent then
+    told them to delete). Either way an existing file is never replaced: a free "name (2).ext" is used."""
     name = _safe_name(filename or "", default, ext)
     given = str(filename or "").strip()
     if named is None:
@@ -266,9 +300,7 @@ def _dest(filename: str | None, default: str, ext: str, named: bool | None = Non
                 return _free(d / name)
         except OSError:
             pass
-    out = _project() / "Meshpool outputs"
-    out.mkdir(parents=True, exist_ok=True)
-    return _free(out / name)
+    return _free(_project() / name)
 
 
 def _pdf_font(text: str) -> tuple[str, str]:
@@ -342,28 +374,138 @@ def _set_num(par, num_id: int):
     ppr.numPr.get_or_add_ilvl().val = 0
 
 
+LETTER_REGIONS = {"US", "CA"}      # where Letter paper is the norm (and a few others that rarely ask)
+
+
+def _locale_region() -> str:
+    """The user's region ("US", "DE", "GB") from the locale, the way the app reads it: LC_ALL, LC_PAPER or LANG
+    ("en_US.UTF-8"), the Windows user locale ("en-US"), else the system's default locale. "" when unknown."""
+    names = [os.environ.get(k, "") for k in ("LC_ALL", "LC_PAPER", "LANG")]
+    if os.name == "nt":
+        try:
+            from meshpool_harness import config as C
+            names.append(C._windows_locale_name())
+        except Exception:  # noqa: BLE001
+            pass
+    if sys.platform == "darwin":
+        try:
+            names.append(subprocess.run(["defaults", "read", "-g", "AppleLocale"], capture_output=True, text=True,
+                                        timeout=2).stdout.strip())
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:
+        import locale
+        names.append(locale.getlocale()[0] or "")
+    except (ValueError, TypeError):
+        pass
+    for n in names:
+        m = re.match(r"^[a-z]{2,3}[_-]([A-Z]{2})\b", str(n or ""))
+        if m:
+            return m.group(1)
+    return ""
+
+
+def page_size(paper: str | None = None) -> str:
+    """"A4" or "Letter" for a new document: what the user asked for, else Letter in the US and Canada and A4
+    everywhere else (Priya, in the UK, got US Letter pages)."""
+    p = str(paper or "").strip().lower()
+    if p in ("a4",):
+        return "A4"
+    if p in ("letter", "us letter", "us-letter", "letter size"):
+        return "Letter"
+    return "Letter" if _locale_region() in LETTER_REGIONS else "A4"
+
+
+def _same_text(a: str, b: str) -> bool:
+    k = lambda s: re.sub(r"[\W_]+", " ", re.sub(r"[*_`]", "", str(s or ""))).strip().lower()   # noqa: E731
+    return bool(k(a)) and k(a) == k(b)
+
+
+def _drop_title_heading(markdown: str, title: str | None) -> str:
+    """The markdown without its first heading when that heading is the title again. Priya's client update showed
+    "Library Extension: Client Update" twice at the top: the Title paragraph, then a Heading 1 with the same words."""
+    if not title:
+        return markdown
+    lines = markdown.split("\n")
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        if not s:
+            continue
+        m = re.match(r"^#{1,6}\s+(.*)$", s)
+        if m and _same_text(m.group(1), title):
+            del lines[i]
+            while i < len(lines) and not lines[i].strip() and (i == 0 or not lines[i - 1].strip()):
+                del lines[i]
+            return "\n".join(lines)
+        return markdown
+    return markdown
+
+
+def typo_note(rep: dict) -> str:
+    """The save result's plain line about the proofreading: which typos were fixed, and that nothing else changed.
+    A neutral fact with no instruction to keep it from the user (Priya, round 3: "do not mention it to the user" made
+    the model tell her the tool had asked it to hide something)."""
+    fixes = [f for e in rep.get("edits") or [] for f in e.get("fixes") or []]
+    if not fixes:
+        return ""
+    shown = ", ".join(f"{a} to {b}" for a, b in fixes[:6]) + (f" and {len(fixes) - 6} more" if len(fixes) > 6 else "")
+    n = len(fixes)
+    return (f" While saving, {n} spelling mistake{'s were' if n != 1 else ' was'} corrected ({shown}). The wording is "
+            "otherwise exactly as written.")
+
+
+def _chat_brief() -> str:
+    """The request of this chat's latest deck job: a memo written after the deck follows the same brand."""
+    try:
+        mine = [j for j in OJ.JOBS.values() if j.get("scope", "") == _scope() and j.get("engine") == "slides"
+                and j.get("request")]
+        return str(max(mine, key=lambda j: j.get("started") or 0)["request"]) if mine else ""
+    except Exception:  # noqa: BLE001 - no job record: no brand from it
+        return ""
+
+
 def make_document(markdown: str, filename: str = "document.docx", title: str | None = None, _clarity: bool = True,
-                  _named: bool | None = None):
+                  _named: bool | None = None, paper: str | None = None, brand: str | None = None):
+    """brand: the colours, fonts and footer the user asked for, in their words ("navy #14304F, amber #E8A33D,
+    Georgia headings, footer 'Ridgeway Advisory | Confidential'"); without it, this chat's deck request is read."""
     from docx import Document
-    from docx.shared import Pt
+    from docx.shared import Mm, Pt
     markdown, title = _clean_md(markdown), _clean(title) or None
+    markdown = _drop_title_heading(markdown, title)
     doc = Document()
     doc.styles["Normal"].font.name = "Calibri"
     doc.styles["Normal"].font.size = Pt(11)
+    size = page_size(paper)
+    for sec in doc.sections:
+        sec.page_width, sec.page_height = (Mm(210), Mm(297)) if size == "A4" else (Mm(215.9), Mm(279.4))
+        sec.left_margin = sec.right_margin = Mm(25.4)
+    try:                                                   # real Heading and List styles, table padding and core
+        if str(APP) not in sys.path:                       # properties (Daniel, 0.0.19: engines/forge/docstyle.py)
+            sys.path.insert(0, str(APP))
+        from engines.forge import docstyle as DS
+    except Exception:  # noqa: BLE001 - engines not shipped: plain python-docx defaults
+        DS = None
+    spec, footer = {}, None
+    if DS and brand == "":                                 # a conversion: the text as written, Word's own look
+        DS.style(doc)
+    elif DS:
+        spec = DS.brand_for(brand if brand is not None else _chat_brief())   # requested.py's brand parsing
+        markdown, label = DS.footer_lines(markdown, spec.get("footer"))      # "Confidential" is a footer, not a
+        footer = spec.get("footer") or label                                 # heading (Daniel, round 2)
+        DS.apply_brand(doc, spec)
     if title:
         doc.add_heading(title, level=0)
     clarity_note = ""
-    if _clarity and os.environ.get("MH_CLARITY", "1") != "0":   # a second, smaller model reads the prose for clarity;
-        try:                                               # numbers and facts are guarded, failures never block
+    if _clarity and os.environ.get("MH_CLARITY", "1") != "0":   # a second, smaller model proofreads the prose:
+        try:                                               # spelling and obvious typos only, never a rewording
             if str(APP) not in sys.path:
                 sys.path.insert(0, str(APP))
             from engines.forge.clarity import review_markdown
             from meshpool_harness.core.client import LiveClient
             markdown, rep = review_markdown(markdown, LiveClient("clarity_doc"),
-                                            main_model=os.environ.get("MH_MODEL"), task_id="clarity-doc")
-            if rep.get("model"):
-                clarity_note = (f" Clarity check ({rep['model']}): {rep['changed']} of {rep['checked']} lines made "
-                                "clearer, numbers unchanged.")
+                                            main_model=os.environ.get("MH_MODEL"), task_id="clarity-doc", typos=True)
+            if rep.get("model") and rep.get("changed"):
+                clarity_note = typo_note(rep)
         except Exception:
             pass
     lines = markdown.replace("\r\n", "\n").split("\n")
@@ -412,10 +554,15 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
                     if ri == 0:
                         for r in cell.paragraphs[0].runs:
                             r.bold = True
+            if DS:
+                DS.table(t)
         elif m := re.match(r"^(#{1,6})\s+(.*)", s):
             doc.add_heading(m.group(2).strip(), level=min(len(m.group(1)), 4))
-        elif m := re.match(r"^[-*+]\s+(.*)", s):
-            _runs(doc.add_paragraph(style="List Bullet"), m.group(1))
+        elif DS and (h := DS.bold_heading(s)):          # a line that is only a bold label: a Heading 2, not Normal
+            doc.add_heading(h, level=2)
+        elif m := re.match(r"^(?:[-*+]|[\u2022\u00b7\u25aa\u25e6\u2023])\s+(.*)", s):   # typed bullets too ("• ")
+            nested = len(ln) - len(ln.lstrip()) >= 2 and "List Bullet 2" in [st.name for st in doc.styles]
+            _runs(doc.add_paragraph(style="List Bullet 2" if nested else "List Bullet"), m.group(1))
         elif m := re.match(r"^\d+[.)]\s+(.*)", s):
             if num_id is None:
                 num_id = _new_number_list(doc)
@@ -429,6 +576,8 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
         elif s:
             _runs(doc.add_paragraph(), s)
         i += 1
+    if DS:
+        DS.finish(doc, title=title or DS.first_heading(markdown), footer=footer)
     path = _dest(filename, "document.docx", ".docx", _named)
     doc.save(path)
     return f"Saved the Word document: {path}.{clarity_note}", False
@@ -443,21 +592,110 @@ def read_document(path: str, sheet: str | None = None, pages: str | None = None,
     if not _readable(p):
         return (f"{p} is outside the project. Ask the user to attach it (or open the folder it is in as the "
                 "project) and read it from there."), True
-    return docread.extract(p, sheet=sheet, pages=pages, lang=language or "auto", ocr=ocr or "auto"), False
+    return _with_pending((docread.extract(p, sheet=sheet, pages=pages, lang=language or "auto", ocr=ocr or "auto"),
+                          False), p)
 
 
-XLSX_OPS = "set_cell, add_row, add_comment, clear_cell, set_range, delete_rows, add_sheet, delete_sheet, freeze_panes"
+XLSX_OPS = ("set_cell, add_row, add_comment, clear_cell, set_range, delete_rows, add_sheet, delete_sheet, freeze_panes, "
+            "set_column_width")
 # names models reach for (seen in office1-3 transcripts: set_formula 58x, delete_rows 34x, set_value 30x, clear_cell 28x)
 _XLSX_ALIASES = {"set_formula": "set_cell", "set_value": "set_cell", "write_cell": "set_cell", "delete_row": "delete_rows",
                  "remove_rows": "delete_rows", "clear": "clear_cell", "clear_range": "clear_cell", "remove_sheet": "delete_sheet",
-                 "create_sheet": "add_sheet", "write_range": "set_range", "append_row": "add_row"}
+                 "create_sheet": "add_sheet", "write_range": "set_range", "append_row": "add_row",
+                 "column_width": "set_column_width", "set_width": "set_column_width", "widen_column": "set_column_width"}
 
 
-def edit_office_file(path: str, operations: list, output: str | None = None, in_place: bool = False):
+# Sheet extensions (extLst ext uri) openpyxl drops on save, by what the user sees.
+_XLSX_EXT_NAMES = {"{78C0D931-6437-407D-A8EE-F0AAD7539E65}": "data bars or other Excel 2010 conditional formats",
+                   "{05C60535-1F16-4FD2-B633-F4F36F0B64E0}": "sparklines",
+                   "{CCE6A557-97BC-4B89-ADB6-D9C93CAAB3DF}": "Excel 2010 data validation lists",
+                   "{A8765BA9-456A-4DAB-B4F3-ACF838C121DE}": "slicers",
+                   "{3A4CF648-6AED-40F4-86FF-DC5316D8AED3}": "slicers"}
+_SHAPE = re.compile(rb"<(?:\w+:)?(?:sp|grpSp|cxnSp)[\s>/]")
+_EXT_URI = re.compile(rb"<(?:\w+:)?ext\b[^>]*?\suri=\"(\{[^\"]+\})\"")
+
+
+def _xlsx_lost_parts(p: Path) -> list[str]:
+    """What an openpyxl load and save would drop from this workbook, in words for the user; [] when nothing.
+    openpyxl keeps cells, styles, charts, images and plain comments, but not shapes and text boxes, form controls,
+    slicers, timelines, threaded comments or the Excel 2010 extensions in a sheet (data bars, sparklines)."""
+    import zipfile
+    found: list[str] = []
+
+    def add(what):
+        if what not in found:
+            found.append(what)
+    try:
+        with zipfile.ZipFile(p) as z:
+            for name in z.namelist():
+                low = name.lower()
+                if low.startswith("xl/drawings/drawing") and low.endswith(".xml"):
+                    if _SHAPE.search(z.read(name)):
+                        add("shapes or text boxes")
+                elif low.startswith("xl/ctrlprops/"):
+                    add("form controls")
+                elif low.startswith(("xl/slicers/", "xl/slicercaches/")):
+                    add("slicers")
+                elif low.startswith(("xl/timelines/", "xl/timelinecaches/")):
+                    add("timelines")
+                elif low.startswith("xl/threadedcomments/"):
+                    add("threaded comments")
+                elif low.startswith("xl/worksheets/sheet") and low.endswith(".xml"):
+                    tail = b""                       # streamed: a big sheet is never held whole
+                    with z.open(name) as f:
+                        while chunk := f.read(1 << 20):
+                            text = tail + chunk
+                            if b"extLst" in text:
+                                for uri in _EXT_URI.findall(text):
+                                    what = _XLSX_EXT_NAMES.get(uri.decode("ascii", "replace").upper())
+                                    if what:
+                                        add(what)
+                                    elif uri.upper() != b"{B025F937-C7B1-47D3-B67F-A62EFF666E3E}":
+                                        add("other Excel 2010 sheet extensions")   # that uri only links a rule to its x14 part
+                            tail = text[-400:]
+    except (OSError, zipfile.BadZipFile, KeyError):
+        return []                                    # openpyxl reports a damaged file itself
+    return found
+
+
+def _open_in(p: Path) -> tuple[str, str]:
+    """(app, lock file name) when another app has p open, else ("", ""). LibreOffice keeps ".~lock.<name>#" next to
+    the file; Word, Excel and PowerPoint keep "~$<name>" (Word drops the first one or two letters of a long name)."""
+    try:
+        lo = p.with_name(f".~lock.{p.name}#")
+        if lo.exists():
+            return "LibreOffice", lo.name
+        names = [p.name] + ([p.name[1:], p.name[2:]] if p.suffix.lower() in (".docx", ".doc") else [])
+        for n in names:
+            ms = p.with_name("~$" + n)
+            if len(n) > len(p.suffix) and ms.exists():
+                return "Microsoft Office", ms.name
+    except OSError:
+        pass
+    return "", ""
+
+
+def _in_project(p: Path) -> bool:
+    try:
+        root = _project().resolve()
+        q = p.resolve()
+    except (OSError, ValueError):
+        return False
+    return q == root or root in q.parents
+
+
+def edit_office_file(path: str, operations: list, output: str | None = None, in_place: bool | None = None):
     """Change an existing .docx, .xlsx or .pptx without rebuilding it: styles, formulas and layout stay. Works without
-    LibreOffice. By default the result is a copy '<name> (edited).<ext>'; in_place=true changes the file itself."""
+    LibreOffice. A file in the project folder is changed itself (the chat's Undo puts it back), unless in_place=false
+    or `output` asks for a copy. A copy '<name> (edited).<ext>' is made instead when another app has the file open
+    (its lock file is next to it), when openpyxl would drop parts of the workbook, or for a file outside the project
+    folder, which Undo does not cover. Maya's Flowers: the model left in_place out, the approval card said "Change
+    Bouquet Price List.xlsx?", and a stray "(edited)" copy appeared while the file the user asked about stayed as it
+    was."""
     import shutil
     p = _resolve(path)
+    if in_place is None:
+        in_place = not output and _in_project(p)
     if not p.exists():
         return f"File not found: {p}", True
     ext = p.suffix.lower()
@@ -468,16 +706,29 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                 "tracked_replace{find,replace}, tracked_delete{find}, tracked_insert_after{find,text}, "
                 "append_paragraph{text}, add_comment{find,text}. Excel: set_cell{sheet,cell,value or =formula}, "
                 "add_row{values}, add_comment{sheet,cell,text}, clear_cell{sheet,cell or range}, set_range{sheet,start,values[[...]]}, "
-                "delete_rows{sheet,row,count}, add_sheet{name}, delete_sheet{sheet}, freeze_panes{sheet,cell}. PowerPoint: replace_text{find,replace}, "
+                "delete_rows{sheet,row,count}, add_sheet{name}, delete_sheet{sheet}, freeze_panes{sheet,cell}, "
+                "set_column_width{sheet,column,width}. PowerPoint: replace_text{find,replace}, "
                 "set_notes{slide,text}."), True
     out = p if in_place else (_resolve(output) if output else _free(p.with_name(f"{p.stem} (edited){ext}")))
-    if out != p:
-        shutil.copyfile(p, out)
+    lost = _xlsx_lost_parts(p) if ext == ".xlsx" else []
+    kept_original = False
+    if lost and out.resolve() == p.resolve():          # never rewrite the user's own file without those parts
+        out, kept_original = _free(p.with_name(f"{p.stem} (edited){ext}")), True
+    busy, lock = _open_in(out) if out.exists() else ("", "")
+    if busy:                                           # the app holding it open would overwrite (or lose) this edit
+        busy_name = out.name
+        out = _free(out.with_name(f"{p.stem} (edited){ext}") if out.resolve() == p.resolve()
+                    else out.with_name(f"{out.stem} (copy){out.suffix}"))
+    # Read from the source and write a part file next to `out`, moved into place only once it is whole: a failed
+    # edit leaves no half-made copy behind, and a failed in-place save never truncates the user's file.
+    part = out.with_name(f".{out.stem}.{os.getpid()}.{threading.get_ident()}.part{ext}")
     done, errors = [], []
+    words0 = _docx_words(p) if ext == ".docx" else None
     try:
+        out.parent.mkdir(parents=True, exist_ok=True)
         if ext == ".docx":
             from docx import Document
-            doc = Document(str(out))
+            doc = Document(str(p))
             for o in operations:
                 op = {"replace": "replace_text", "find_replace": "replace_text"}.get(o.get("op"), o.get("op"))
                 if op == "replace_text" and o.get("tracked") in (True, "true", "yes", 1):
@@ -486,9 +737,9 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                     n = _replace_in_paragraphs(_docx_paragraphs(doc), o.get("find", ""), o.get("replace", ""))
                     (done if n else errors).append(f"replace_text {o.get('find', '')[:30]!r}: {n} place(s)" if n else f"text not found: {o.get('find', '')[:40]!r}")
                 elif op in ("tracked_replace", "tracked_delete", "tracked_insert_after"):
-                    n = 0                                   # every place, like replace_text (insert_after: the first)
+                    n, mine = 0, set()                      # every place, like replace_text (insert_after: the first)
                     while n < 1000 and _tracked(_docx_paragraphs(doc), op, o.get("find", ""),
-                                                o.get("replace", o.get("text", "")), o.get("author") or "Meshpool"):
+                                                o.get("replace", o.get("text", "")), o.get("author") or "Meshpool", mine):
                         n += 1
                         if op == "tracked_insert_after":
                             break
@@ -507,11 +758,11 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                 else:
                     errors.append(f"unknown op {op!r} (replace_text, tracked_replace, tracked_delete, "
                                   "tracked_insert_after, append_paragraph, add_comment)")
-            doc.save(str(out))
+            doc.save(str(part))
         elif ext == ".xlsx":
             import openpyxl
             from openpyxl.comments import Comment
-            wb = openpyxl.load_workbook(str(out))
+            wb = openpyxl.load_workbook(str(p))
             for o in operations:
                 op, ws = o.get("op"), None
                 try:
@@ -568,6 +819,17 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                 elif op == "freeze_panes":
                     ws.freeze_panes = o.get("cell") or "A2"
                     done.append(f"froze panes at {ws.freeze_panes} on {ws.title}")
+                elif op == "set_column_width":     # Lina, round 4: "widen the date column" had no op, so a script
+                    col = str(o.get("column") or o.get("col") or "").strip().upper()     # rewrote the workbook
+                    try:
+                        width = float(o.get("width") or 0)
+                    except (TypeError, ValueError):
+                        width = 0
+                    if not re.fullmatch(r"[A-Z]{1,3}", col) or not 0 < width <= 255:
+                        errors.append("set_column_width needs column (a letter, e.g. B) and width (1 to 255)")
+                        continue
+                    ws.column_dimensions[col].width = width
+                    done.append(f"set column {col} to width {width:g} on {ws.title}")
                 elif op == "add_row":
                     ws.append(o.get("values") or [])
                     done.append(f"row added to {ws.title}")
@@ -576,14 +838,14 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                     done.append(f"comment on {ws.title}!{o['cell']}")
                 else:
                     errors.append(f"unknown op {op!r} ({XLSX_OPS})")
-            wb.save(str(out))
+            wb.save(str(part))
         else:
             from pptx import Presentation
-            prs = Presentation(str(out))
+            prs = Presentation(str(p))
             for o in operations:
                 op = {"replace": "replace_text", "find_replace": "replace_text"}.get(o.get("op"), o.get("op"))
                 if op == "replace_text":
-                    paras = [pp for sl in prs.slides for sh in sl.shapes if sh.has_text_frame for pp in sh.text_frame.paragraphs]
+                    paras = [pp for sl in prs.slides for pp in _pptx_paragraphs(sl.shapes)]
                     n = _replace_in_paragraphs(paras, o.get("find", ""), o.get("replace", ""))
                     (done if n else errors).append(f"replace_text {o.get('find', '')[:30]!r}: {n} place(s)" if n else f"text not found: {o.get('find', '')[:40]!r}")
                 elif op == "set_notes":
@@ -591,88 +853,256 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                     if not 0 <= i < len(prs.slides):
                         errors.append(f"no slide {i + 1}: the deck has {len(prs.slides)}")
                         continue
-                    prs.slides[i].notes_slide.notes_text_frame.text = o.get("text", "")
+                    text = _notes_text(o.get("text", ""))
+                    if not text:                             # never "notes set" over notes wiped to nothing
+                        errors.append(f"notes not set on slide {i + 1}: "
+                                      + ("the text held only [QA] check lines" if str(o.get("text") or "").strip()
+                                         else "no text was given") + "; its notes are unchanged")
+                        continue
+                    prs.slides[i].notes_slide.notes_text_frame.text = text
                     done.append(f"notes set on slide {i + 1}")
                 else:
                     errors.append(f"unknown op {op!r} (replace_text, set_notes)")
-            prs.save(str(out))
+            prs.save(str(part))
+        if errors and not done:                              # nothing was done: no file is written, none is claimed
+            part.unlink(missing_ok=True)
+            return f"Did not change {p.name}: nothing was done.\nNot done: " + "; ".join(errors), True
+        if out == p:
+            shutil.copymode(p, part)                         # in place: the file keeps its permissions
+        os.replace(part, out)
     except Exception as e:  # noqa: BLE001
+        try:
+            part.unlink()
+        except OSError:
+            pass
         return f"Could not edit {p.name}: {e}", True
-    msg = f"{'Changed' if in_place else 'Saved a copy as'} {out}. " + "; ".join(done)
+    what = ", ".join(lost)
+    if busy:
+        msg = (f"Did not change {busy_name}: it is open in {busy} (its lock file {lock} is next to it). Saved a copy "
+               f"as {out} instead, and {busy_name} is unchanged. Tell the user to close it there; if it is not open, "
+               f"the lock file was left behind and can be deleted. ")
+    elif kept_original:
+        msg = (f"Did not change {p.name} in place: the edit goes through openpyxl, which would drop its {what}. "
+               f"Saved a copy as {out} instead, and the original is unchanged. ")
+    else:
+        msg = f"{'Changed' if out == p else 'Saved a copy as'} {out}. "
+        if out == p:                                 # no backup copy in a scratch folder the user cannot see (Sara)
+            msg += "Undo in meshpool takes this change back; no backup copy is needed. "
+    msg += "; ".join(done)
+    words1 = _docx_words(out) if words0 is not None and done else None
+    if words1 is not None and words1 != words0:
+        # Sara, round 4: "shorten section 3 by about a third" lost half its words and the reply said a third
+        cut = words0 - words1
+        msg += (f"\nWords the reader sees: {words1:,}, {'down' if cut > 0 else 'up'} from {words0:,} "
+                f"({abs(cut):,} {'fewer' if cut > 0 else 'more'}). Compare that with the part of the document you "
+                "changed and with what the user asked for, and give the real figure in your answer.")
+    if lost:
+        msg += (f"\nThe copy lacks the original's {what} (openpyxl cannot keep them). Tell the user before the copy "
+                "replaces the original.")
     return msg + (("\nNot done: " + "; ".join(errors)) if errors else ""), bool(errors) and not done
+
+
+def _docx_words(path) -> int | None:
+    """The words a reader sees in a .docx body: tracked deletions (w:delText) are not counted, insertions are."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(str(path)) as z:
+            xml = z.read("word/document.xml").decode("utf-8", "replace")
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return None
+    n = 0
+    for para in re.findall(r"<w:p[ >].*?</w:p>", xml, re.S):
+        text = "".join(re.findall(r"<w:t(?:\s[^>]*)?>([^<]*)</w:t>", para))
+        n += len(text.split())
+    return n
 
 
 _REV_ID = [0]
 
 
-def _tracked(paragraphs, op: str, find: str, new: str, author: str) -> bool:
-    """A real Word revision (w:del and w:ins) inside one run, so Word shows it as a tracked change to accept or reject."""
+def _tracked(paragraphs, op: str, find: str, new: str, author: str, mine: set | None = None) -> bool:
+    """A real Word revision (w:del and w:ins), so Word shows it as a tracked change to accept or reject. The text may
+    lie in plain runs and in runs of an earlier insertion (w:ins), across several runs: a policy with tracked changes
+    already in it failed step after step ("not found inside one piece of formatted text"), as only plain runs were
+    searched. Text inside an earlier insertion is deleted inside that insertion (w:ins > w:del, as Word writes it), so
+    the earlier revision stays as it was; deleted text (w:del) is never matched. `mine`: insertions this edit made,
+    which later rounds of the same edit skip."""
     import copy
     import datetime as _dt
 
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
+    from docx.text.run import Run
     if not find:
         return False
+    mine = mine if mine is not None else set()
     stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     _REV_ID[0] += 10                                 # unique revision ids across calls in the same millisecond
-    rid = (int(_dt.datetime.now().timestamp() * 1000) % 100000000) + _REV_ID[0]
+    rid = [(int(_dt.datetime.now().timestamp() * 1000) % 100000000) + _REV_ID[0]]
+    R, INS, DEL = qn("w:r"), qn("w:ins"), qn("w:del")
+    QUIET = {qn("w:proofErr"), qn("w:bookmarkStart"), qn("w:bookmarkEnd"), qn("w:commentRangeStart"),
+             qn("w:commentRangeEnd"), qn("w:pPr")}
+
+    def next_id():
+        rid[0] += 1
+        return str(rid[0])
+
+    def run_like(base, text, deleted=False):
+        el = copy.deepcopy(base)
+        for ch in list(el):
+            if ch.tag != qn("w:rPr"):
+                el.remove(ch)
+        t = OxmlElement("w:delText" if deleted else "w:t")
+        t.set(qn("xml:space"), "preserve")
+        t.text = text
+        el.append(t)
+        return el
+
+    def wrap(tag, child):
+        w = OxmlElement(tag)
+        w.set(qn("w:id"), next_id())
+        w.set(qn("w:author"), author)
+        w.set(qn("w:date"), stamp)
+        w.append(child)
+        return w
+
+    def groups(p):
+        """Runs that read as one stretch of text: plain runs and runs of earlier insertions, in order. Deleted text
+        and bookmarks are skipped; anything else (a hyperlink, a field, an insertion this edit made) ends a stretch."""
+        out, cur = [], []
+
+        def walk(container, box):
+            nonlocal cur
+            for ch in container:
+                if ch.tag == R:
+                    cur.append((ch, box))
+                elif ch.tag == INS and box is None and ch not in mine:
+                    walk(ch, ch)
+                elif ch.tag == DEL or ch.tag in QUIET:
+                    continue
+                elif cur:
+                    out.append(cur)
+                    cur = []
+        walk(p, None)
+        if cur:
+            out.append(cur)
+        return out
+
     for pp in paragraphs:
-        for r in pp.runs:
-            if find not in r.text:
+        for segs in groups(pp._p):
+            texts = [Run(r, pp).text for r, _ in segs]
+            whole = "".join(texts)
+            if find not in whole:
                 continue
-            i = r.text.index(find)
-            before, after = r.text[:i], r.text[i + len(find):]
-            base = r._r
-
-            def run_like(text, deleted=False):
-                el = copy.deepcopy(base)
-                for ch in list(el):
-                    if ch.tag != qn("w:rPr"):
-                        el.remove(ch)
-                t = OxmlElement("w:delText" if deleted else "w:t")
-                t.set(qn("xml:space"), "preserve")
-                t.text = text
-                el.append(t)
-                return el
-
-            def wrap(tag, child, n):
-                w = OxmlElement(tag)
-                w.set(qn("w:id"), str(rid + n))
-                w.set(qn("w:author"), author)
-                w.set(qn("w:date"), stamp)
-                w.append(child)
-                return w
-            pieces = []
-            if before:
-                pieces.append(run_like(before))
-            if op == "tracked_insert_after":
-                pieces.append(run_like(find))
-                pieces.append(wrap("w:ins", run_like(new), 1))
-            else:
-                pieces.append(wrap("w:del", run_like(find, deleted=True), 1))
-                if op == "tracked_replace":
-                    pieces.append(wrap("w:ins", run_like(new), 2))
-            if after:
-                pieces.append(run_like(after))
-            parent = base.getparent()
-            at = parent.index(base)
-            parent.remove(base)
-            for k, el in enumerate(pieces):
-                parent.insert(at + k, el)
+            s = whole.index(find)
+            e = s + len(find)
+            pos, hit = 0, []
+            for (r, box), t in zip(segs, texts):
+                a, b = max(s, pos), min(e, pos + len(t))
+                if a < b:
+                    hit.append((r, box, t, a - pos, b - pos))
+                pos += len(t)
+            if not hit:
+                continue
+            first, last = hit[0][0], hit[-1][0]
+            after_el = None                          # where the new text goes: after the last matched piece
+            for r, box, t, a, b in hit:
+                before, mid, rest = t[:a], t[a:b], t[b:]
+                pieces = []
+                if before:
+                    pieces.append(run_like(r, before))
+                if op == "tracked_insert_after":
+                    pieces.append(run_like(r, mid))
+                else:
+                    pieces.append(wrap("w:del", run_like(r, mid, deleted=True)))
+                end = pieces[-1]
+                if rest:
+                    pieces.append(run_like(r, rest))
+                parent = r.getparent()
+                at = parent.index(r)
+                parent.remove(r)
+                for k, el in enumerate(pieces):
+                    parent.insert(at + k, el)
+                if r is last:
+                    after_el = end
+            if op in ("tracked_replace", "tracked_insert_after") and new:
+                ins = wrap("w:ins", run_like(first if op == "tracked_replace" else last, new))
+                mine.add(ins)
+                box = after_el.getparent()
+                if box.tag == INS:                   # inside an earlier insertion: split it, ours goes between
+                    k = box.index(after_el)
+                    tail = list(box)[k + 1:]
+                    box.addnext(ins)
+                    if tail:
+                        twin = copy.deepcopy(box)
+                        for ch in list(twin):
+                            twin.remove(ch)
+                        twin.set(qn("w:id"), next_id())
+                        for ch in tail:
+                            twin.append(ch)
+                        ins.addnext(twin)
+                else:
+                    after_el.addnext(ins)
             return True
     return False
 
 
+_QA_LINE = re.compile(r"(?im)^[ \t]*\[QA\b[^\]\n]*\].*(?:\n|$)")
+
+
+def _notes_text(text) -> str:
+    """Speaker notes the user asked for, as they wrote them: only [QA] check lines come out. The engine's cleaner
+    (engines/forge/notes.py clean) is for notes the engine wrote; on the user's own words it dropped whole sentences
+    ("Thank the engine team." became "", and the notes were wiped while the tool said "notes set")."""
+    return _QA_LINE.sub("", str(text or "")).strip()
+
+
 def _docx_paragraphs(doc):
-    out = list(doc.paragraphs)
-    for t in doc.tables:
-        for row in t.rows:
-            for c in row.cells:
-                out += c.paragraphs
+    """Every paragraph of the document once: the body (tables, nested tables and content controls included), then
+    each header and footer that has its own text. A header linked to the previous section is the same part, and a
+    merged table cell is the same element in several grid cells: listed once, or a replacement is made twice."""
+    from docx.oxml.ns import qn
+    from docx.text.paragraph import Paragraph
+    out, seen = [], set()
+
+    def add(root, parent):
+        for p in root.iter(qn("w:p")):
+            if p not in seen:
+                seen.add(p)
+                out.append(Paragraph(p, parent))
+    add(doc.element.body, doc._body)
     for sec in doc.sections:
-        out += list(sec.header.paragraphs) + list(sec.footer.paragraphs)
+        for hf in (sec.header, sec.footer, sec.first_page_header, sec.first_page_footer, sec.even_page_header,
+                   sec.even_page_footer):
+            if not hf.is_linked_to_previous:          # reading a linked one would add an empty header part
+                add(hf._element, hf)
     return out
+
+
+def _pptx_paragraphs(shapes) -> list:
+    """The text paragraphs of a slide's shapes: text boxes, the shapes inside groups and the cells of tables."""
+    out = []
+    for sh in shapes:
+        if sh._element.tag.endswith("}grpSp") and hasattr(sh, "shapes"):    # group (shape_type raises for some shapes)
+            out += _pptx_paragraphs(sh.shapes)
+        elif getattr(sh, "has_text_frame", False):
+            out += list(sh.text_frame.paragraphs)
+        elif getattr(sh, "has_table", False):
+            out += [pp for row in sh.table.rows for c in row.cells for pp in c.text_frame.paragraphs]
+    return out
+
+
+def _para_runs(pp) -> list:
+    """The runs whose text makes up the paragraph, in order: Word runs inside a hyperlink count too (python-docx's
+    .runs leaves them out while .text keeps their text, so offsets from .text pointed at the wrong run)."""
+    try:
+        from docx.text.paragraph import Paragraph
+        from docx.text.run import Run
+    except ImportError:
+        return list(pp.runs)
+    if isinstance(pp, Paragraph):
+        return [Run(r, pp) for r in pp._p.xpath("./w:r | ./w:hyperlink/w:r")]
+    return list(pp.runs)                                     # PowerPoint: a:r runs (a:br and a:fld hold no run)
 
 
 def _replace_in_paragraphs(paragraphs, find: str, replace: str) -> int:
@@ -683,10 +1113,11 @@ def _replace_in_paragraphs(paragraphs, find: str, replace: str) -> int:
     for pp in paragraphs:
         search = 0                                           # continue after the last replacement: a replacement
         while True:                                          # that contains `find` must not be matched again
-            start = pp.text.find(find, search)
+            runs = _para_runs(pp)                            # offsets come from the runs themselves: a line break or
+            start = "".join(r.text for r in runs).find(find, search)   # field in .text is in no run
             if start < 0:
                 break
-            runs, pos = pp.runs, 0
+            pos = 0
             first = None
             for r in runs:
                 a, b = pos, pos + len(r.text)
@@ -786,14 +1217,17 @@ def _pdf_image(src: str, max_w: float):
     return Image(str(path), width=iw * scale, height=ih * scale)
 
 
-def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = None, _named: bool | None = None):
+def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = None, _named: bool | None = None,
+             paper: str | None = None):
     from reportlab.lib import colors
-    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.pagesizes import A4, LETTER
     from reportlab.lib.styles import getSampleStyleSheet
     from reportlab.lib.units import cm
     from reportlab.platypus import ListFlowable, ListItem, Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle
     name = _safe_name(filename, "document.pdf", ".pdf")
     markdown, title = _clean_md(markdown), _clean(title) or None
+    markdown = _drop_title_heading(markdown, title)
+    page = LETTER if page_size(paper) == "Letter" else A4
     st = getSampleStyleSheet()
     reg, bold = _pdf_font(markdown + (title or ""))
     for k in ("Title", "BodyText", "Heading1", "Heading2", "Heading3", "Heading4", "Code"):
@@ -844,7 +1278,7 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
             flush()
             src = re.match(r"^!\[[^\]]*\]\(([^)]+)\)", s).group(1).strip()
             try:
-                flow += [_pdf_image(src, A4[0] - 4 * cm), Spacer(1, 8)]
+                flow += [_pdf_image(src, page[0] - 4 * cm), Spacer(1, 8)]
             except ValueError as e:
                 return f"Could not add the image: {e}. Nothing was saved.", True
         elif re.match(r"^#{1,6}\s", s):
@@ -872,9 +1306,29 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
         i += 1
     flush()
     path = _dest(filename, "document.pdf", ".pdf", _named)
-    SimpleDocTemplate(str(path), pagesize=A4, leftMargin=2 * cm, rightMargin=2 * cm, topMargin=2 * cm,
+    SimpleDocTemplate(str(path), pagesize=page, leftMargin=2 * cm, rightMargin=2 * cm, topMargin=2 * cm,
                       bottomMargin=2 * cm, title=title or name).build(flow)
     return f"Saved the PDF: {path}", False
+
+
+CONVERT_TIMEOUT = 300                         # seconds for one convert_document run
+
+
+def _run_soffice(cmd: list, timeout: float) -> subprocess.CompletedProcess:
+    """Run LibreOffice in its own process group (a console-less new group on Windows), so a timeout ends soffice and
+    the soffice.bin it starts, not only the launcher (which left soffice.bin holding the pipes open). Raises
+    TimeoutExpired once the whole tree is gone."""
+    kw = {"creationflags": 0x08000000 | 0x00000200} if os.name == "nt" else {"start_new_session": True}
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace", **kw)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        from meshpool_harness.agent.mcp import kill_tree
+        kill_tree(proc)
+        proc.kill()
+        proc.communicate()
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
 def _soffice() -> str | None:
@@ -892,8 +1346,8 @@ def convert_document(path: str, to: str = "pdf", output: str | None = None):
         if to == "pdf":                                                # no clarity rewrite
             return make_pdf(text, output, _named=True) if output else make_pdf(text, src.stem + ".pdf", _named=False)
         if output:
-            return make_document(text, output, _clarity=False, _named=True)
-        return make_document(text, src.stem + ".docx", _clarity=False, _named=False)
+            return make_document(text, output, _clarity=False, _named=True, brand="")
+        return make_document(text, src.stem + ".docx", _clarity=False, _named=False, brand="")
     infilter: list[str] = []
     if src.suffix.lower() == ".pdf":
         # LibreOffice opens a PDF in Draw, which has no Word export ("no export filter"). Opened as a text document
@@ -909,18 +1363,65 @@ def convert_document(path: str, to: str = "pdf", output: str | None = None):
         return (f"Converting Office files needs Meshpool's LibreOffice, which is not available: "
                 f"{office_runtime.missing_reason()}. Or build the file directly with make_pdf, make_document, "
                 "make_deck or make_spreadsheet."), True
-    kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
+    # A throwaway profile: LibreOffice already open on this computer (or a second conversion at the same time) holds
+    # the default profile's lock, and the headless run then hands the job over and makes nothing.
     import shutil
     import tempfile
-    with tempfile.TemporaryDirectory() as tmp:          # convert aside, then save under a free name: a conversion
-        r = subprocess.run([exe, "--headless", *infilter, "--convert-to", to, "--outdir", tmp, str(src)],   # never replaces a file
-                           capture_output=True, text=True, timeout=300, **kw)
-        made = Path(tmp) / (src.stem + "." + to)
-        if r.returncode != 0 or not made.exists():
-            return f"LibreOffice could not convert {src.name}: {(r.stderr or r.stdout)[-500:]}", True
-        dst = _dest(output, made.name, "." + to, bool(output))
-        shutil.move(str(made), str(dst))
+    from meshpool_harness import lo_session
+    with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory(prefix="mh_lo_") as profile:
+        # the kept LibreOffice first (no new process); a one-off run with its own profile when it is not available:
+        # without one, a LibreOffice the user has open took the job over and then quit
+        made = lo_session.convert(exe, str(src), to, tmp, CONVERT_TIMEOUT,
+                                  infilter=infilter[0].split("=", 1)[1] if infilter else "")
+        if made is None:
+            try:
+                r = _run_soffice([exe, f"-env:UserInstallation={Path(profile).as_uri()}", "--headless", *infilter,
+                                  "--convert-to", to, "--outdir", tmp, str(src)], CONVERT_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                return (f"Converting {src.name} took longer than {CONVERT_TIMEOUT} seconds and was stopped. The file "
+                        "may be very large or damaged."), True
+            made = Path(tmp) / (src.stem + "." + to)
+            if r.returncode != 0 or not made.exists():
+                return f"LibreOffice could not convert {src.name}: {(r.stderr or r.stdout or '')[-500:]}", True
+        key = (_scope(), str(src.resolve()), to)
+        with _convert_lock(key):
+            dst = _own_conversion(key, output) or _dest(output, made.name, "." + to, bool(output))
+            shutil.move(str(made), str(dst))
+            CONVERTED[key] = (str(dst), _sha_of(dst))
     return f"Saved: {dst}", False
+
+
+# The file each conversion made, per (chat, source, format): a conversion of the same source in the same chat replaces
+# its own earlier output instead of adding "name (2).pdf" (Sara: two identical calls made Board_Update_Q3.pdf and
+# Board_Update_Q3 (2).pdf). Only while that file still holds what the conversion wrote: one the user changed stays.
+CONVERTED: dict = {}
+_CONVERT_LOCKS: dict = {}
+_CONVERT_GUARD = threading.Lock()
+
+
+def _convert_lock(key) -> threading.Lock:
+    with _CONVERT_GUARD:
+        return _CONVERT_LOCKS.setdefault(key, threading.Lock())
+
+
+def _sha_of(p: Path) -> str:
+    import hashlib
+    try:
+        return hashlib.sha1(Path(p).read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def _own_conversion(key, output: str | None) -> Path | None:
+    prev = CONVERTED.get(key)
+    if not prev:
+        return None
+    old = Path(prev[0])
+    if output and Path(str(output)).name != old.name:
+        return None                                  # a different name was asked for: a file of its own
+    if old.is_file() and _sha_of(old) == prev[1]:
+        return old
+    return None
 
 
 def find_icon(query: str = "", set: str | None = None, limit: int = 8, style: str | None = None,
@@ -950,11 +1451,13 @@ def find_icon(query: str = "", set: str | None = None, limit: int = 8, style: st
 
 S = {"type": "string"}
 FILES = {"type": "array", "items": S, "description": "Input files (project-relative or absolute)"}
+PAPER = {"type": "string", "enum": ["A4", "Letter"], "description": "Only when the user asks; else from their region"}
 # Descriptions stay short: they ride in every request. Option lists (themes, icon sets, edit operations) are in the
 # BRIEF NEEDED answer, in an error message or in find_icon list_sets, which the model reaches only when it needs them.
 TOOLS = {
-    "add_slides": (add_slides, "Add slides to an existing .pptx in its own look; saves '<name> (updated).pptx' and "
-                   "never changes the original. Never hand-write slides with python-pptx. 2 to 5 minutes.",
+    "add_slides": (add_slides, "Add slides to an existing .pptx in its own look; saves them into that deck (Undo "
+                   "keeps the earlier version). Put 'save as a copy' in the request for '<name> (updated).pptx' "
+                   "instead. Never hand-write slides with python-pptx. 2 to 5 minutes.",
                    {"deck": S, "request": S, "slides": {"type": "integer", "description": "1-12"},
                     "files": FILES}, ["deck", "request"]),
     "make_deck": (make_deck, "Build a finished .pptx with the slides engine (storyline, charts, checks). If the brief "
@@ -971,24 +1474,28 @@ TOOLS = {
                          {"request": S, "files": FILES, "save_as": {"type": "string", "description": "The file name the user asked for, e.g. deck.pptx"}}, ["request"]),
     "analyze_data": (analyze_data, "Analyze CSV or Excel data into charts, tables and a summary.",
                      {"request": S, "files": FILES}, ["request", "files"]),
-    "make_document": (make_document, "Save Markdown as a .docx. Saved as `filename` in the project folder.",
-                      {"markdown": S, "filename": S, "title": S}, ["markdown"]),
+    "make_document": (make_document, "Save Markdown as a .docx. Saved as `filename` in the project folder. `brand`: "
+                      "the colours, fonts and footer the user asked for, in their words (e.g. \"navy #14304F, "
+                      "Georgia headings, footer 'Firm | Confidential'\"); the footer goes in the page footer, not "
+                      "the text.",
+                      {"markdown": S, "filename": S, "title": S, "paper": PAPER, "brand": S}, ["markdown"]),
     "read_document": (read_document, "Read a PDF, Word, PowerPoint, Excel, CSV, Power BI, OpenDocument, notebook, "
                       "email, HTML or image file as text (OCR for scans). `sheet`, `pages` (\"1-3,7\"), `language`, "
                       "`ocr` (auto, always, never) are optional.",
                       {"path": S, "sheet": S, "pages": S, "language": S, "ocr": S}, ["path"]),
-    "edit_office_file": (edit_office_file, "Change an existing .docx, .xlsx or .pptx; formatting and formulas stay. "
-                         "Saves '<name> (edited)' unless in_place=true. operations: [{op,...}]. Word: replace_text, "
+    "edit_office_file": (edit_office_file, "Change an existing .docx, .xlsx or .pptx, keeping its formats. "
+                         "in_place=false: a copy. operations: [{op,...}]. "
+                         "Word: replace_text, "
                          "tracked_replace{find,replace}, tracked_delete, tracked_insert_after, add_comment. Excel: "
                          "set_cell{sheet,cell,value; =formula}, set_range{start,values}, clear_cell, add_row, "
-                         "delete_rows{row,count}, add_sheet, delete_sheet, freeze_panes.",
+                         "delete_rows{row,count}, add_sheet, delete_sheet, freeze_panes, set_column_width{column,width}.",
                          {"path": S, "operations": {"type": "array", "items": {"type": "object"}}, "output": S,
                           "in_place": {"type": "boolean"}}, ["path", "operations"]),
     "make_pdf": (make_pdf, "Save Markdown as a PDF. Saved as `filename` in the project folder. Charts: a fenced "
                  "```chart block with JSON {\"type\": \"bar\"|\"line\"|\"pie\", \"title\", \"labels\": [...], "
                  "\"values\": [...]} (or \"series\": {name: [...]}) is drawn as a real chart; ![caption](file.png) "
                  "embeds an image. Never draw a chart with text characters.",
-                 {"markdown": S, "filename": S, "title": S}, ["markdown"]),
+                 {"markdown": S, "filename": S, "title": S, "paper": PAPER}, ["markdown"]),
     "convert_document": (convert_document, "Convert a document to another format (docx, pptx, xlsx, md to pdf; pdf to "
                          "docx). `to` is the target extension; `output` names the result.",
                          {"path": S, "to": S, "output": S}, ["path", "to"]),
@@ -1014,8 +1521,22 @@ def _forge_tool(name):
             if not all(_readable(f) for f in df):
                 return "A data file is outside the project. Ask the user to attach it and check from there.", True
             kw["data_files"] = [str(f) for f in df]
-        return getattr(FT, name)(str(p), **kw)
+        return _with_pending(getattr(FT, name)(str(p), **kw), p)
     return call
+
+
+def _with_pending(out, p: Path):
+    """A tool result on a workbook whose formulas have no stored results yet gets xl_values.PENDING_NOTE: meshpool
+    stores them after the turn, so the agent must not tell the user values are missing or not recalculated."""
+    try:
+        if isinstance(out, tuple) and len(out) == 2 and not out[1]:
+            from meshpool_harness import xl_values
+            note = xl_values.pending_note(p)
+            if note:
+                return f"{out[0]}\n{note}", out[1]
+    except Exception:  # noqa: BLE001
+        pass
+    return out
 
 
 try:                                        # forge checks and measurement (engines/forge), when the engines ship

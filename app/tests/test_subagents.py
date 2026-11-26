@@ -157,23 +157,39 @@ def test_the_chats_sub_agents_run_in_the_app_with_its_model_mode_and_project(tmp
 
 def test_stop_in_the_chat_stops_its_in_app_sub_agents(tmp_path, monkeypatch):
     import threading
+    monkeypatch.setenv("MH_SUBAGENT_STEPS", "200")                 # unstopped, they would run for 40 s or more
     a = K.Agent(str(tmp_path / "proj"), mode="auto")
     calls = []
+    ended = threading.Event()                                      # every sub-agent has returned
+    real = A.run_subtasks
+
+    def run_subtasks(*x, **k):
+        try:
+            return real(*x, **k)
+        finally:
+            ended.set()
+    monkeypatch.setattr(A, "run_subtasks", run_subtasks)
 
     def post(self, base, key, body, stream):
         calls.append(time.time())
         time.sleep(0.2)
         return {"choices": [{"message": {"role": "assistant", "content": "", "tool_calls": [{"id": f"c{len(calls)}",
-                "type": "function", "function": {"name": "glob", "arguments": '{"pattern": "*"}'}}]},
-                "finish_reason": "tool_calls"}], "usage": {}}, False
+                "type": "function", "function": {"name": "glob",          # a new pattern each step, so the
+                                                 "arguments": json.dumps({"pattern": f"*{len(calls)}"})}}]},  # loop
+                "finish_reason": "tool_calls"}], "usage": {}}, False                                       # guard waits
     monkeypatch.setattr(K.Agent, "_post", post)
-    threading.Timer(0.8, a.stop).start()
+    stopped_at = []
+
+    def stop():
+        stopped_at.append(time.time())
+        a.stop()
+    threading.Timer(0.8, stop).start()
     t0 = time.time()
     with pytest.raises(K.Interrupted):
         a._run_subtasks("run_subtasks", {"tasks": [{"prompt": "a"}, {"prompt": "b"}]})
     assert time.time() - t0 < 8
-    time.sleep(1.5)
-    assert not [c for c in calls if c > t0 + 2.0]                  # no sub-agent call well after Stop
+    assert ended.wait(10), "the sub-agents kept running after Stop"
+    assert not [c for c in calls if c > stopped_at[0] + 3]         # no sub-agent call well after Stop
 
 
 def test_sub_agents_work_in_the_parent_chats_project_not_the_servers(monkeypatch, _env, tmp_path):

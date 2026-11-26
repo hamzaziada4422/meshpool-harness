@@ -43,6 +43,9 @@ CODEX = {"id": "codex", "name": "Codex", "mode": "code", "type": "acp", "models"
          # asks before anything outside it. Meshpool's Undo covers every change.
          "modes": {"ask": "workspace-write", "edits": "workspace-write", "auto": "agent-full-access"},
          "command": "npx", "args": ["-y", CODEX_ACP], "share_mcp": True, "lean": True, "install": NODE_NOTE,
+         # the modes Codex runs commands in its own sandbox, which refuses the local socket LibreOffice needs
+         # (acp.ACPAgent._sandbox_note: office conversions and page pictures go through meshpool's office tools)
+         "no_soffice_in": ["ask", "edits"],
          "tagline": "Terminal and command-line work, on GPT models",
          "description": ("Best for terminal and command-line work. OpenAI's open-source Codex agent, on your Meshpool "
                          "key, another API key or your ChatGPT sign-in. It edits files in your project without "
@@ -561,12 +564,76 @@ def stop_login() -> None:
     _clear_login(proc)
 
 
+def _cmdline(pid: int) -> str:
+    """The command line of a running process, or "" (Linux and macOS; Windows is not asked)."""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            return f.read().replace(b"\0", b" ").decode("utf-8", "replace")
+    except OSError:
+        pass
+    if os.name == "nt" or not shutil.which("ps"):
+        return ""
+    import subprocess
+    try:
+        return subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True,
+                              timeout=5).stdout
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def reap_stale_login() -> bool:
+    """Stop a ChatGPT sign-in left by a meshpool that is gone (killed, or crashed before it could stop it): it held the
+    sign-in port and ran for good (seen 16 minutes after the user had picked another option). Only a process whose
+    command line is still Codex's login, and only when the app that started it is no longer running. True when one
+    was stopped. One small file read when there is nothing to do."""
+    from meshpool_harness import fsio
+    import signal
+    try:
+        rec = fsio.read_json(_login_file(), None)
+    except (fsio.CorruptFile, OSError, ValueError):
+        return False
+    if not isinstance(rec, dict):
+        return False
+    pid, owner = rec.get("pid"), rec.get("owner")
+    if owner == os.getpid() or (isinstance(owner, int) and owner > 0 and _pid_alive(owner)):
+        return False
+    if not (isinstance(owner, int) and owner > 0):
+        # no owner on the record: an older meshpool may still be running this sign-in. Only one past the timeout is stale.
+        import time
+        try:
+            started = float(rec.get("started") or 0)
+        except (TypeError, ValueError):
+            started = 0.0
+        if time.time() - started <= LOGIN_TIMEOUT_S:
+            return False
+    if not _pid_alive(pid):
+        _login_file().unlink(missing_ok=True)
+        return False
+    cl = _cmdline(pid)
+    if "codex" not in cl or "login" not in cl:
+        return False                                  # the pid now belongs to something else: leave it alone
+    for sig in (signal.SIGTERM, getattr(signal, "SIGKILL", signal.SIGTERM)):
+        try:
+            os.killpg(pid, sig) if os.name != "nt" else os.kill(pid, sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            break
+        import time
+        end = time.monotonic() + 2
+        while time.monotonic() < end and _pid_alive(pid):
+            time.sleep(0.05)
+        if not _pid_alive(pid):
+            break
+    _login_file().unlink(missing_ok=True)
+    return True
+
+
 def _login_running() -> bool:
     """A sign-in is open: started by this process, or by another Meshpool (its pid file names a live process)."""
     from meshpool_harness import fsio
     proc = _LOGIN["proc"]
     if proc is not None and proc.poll() is None:
         return True
+    reap_stale_login()                            # one an app that is gone left behind does not count
     try:
         rec = fsio.read_json(_login_file(), None)
     except fsio.CorruptFile:                      # a damaged record names no sign-in
@@ -592,6 +659,9 @@ def login(which: str) -> dict:
             raise ValueError("Signing in with ChatGPT needs Node.js (npx), which was not found. Install Node.js, or use "
                              "an API key instead.")
         cmd = [npx(), "-y", CODEX_CLI, "login"]
+        if os.name != "nt" and shutil.which("timeout"):
+            # a time limit the sign-in keeps even if this app is killed and its watchdog with it
+            cmd = ["timeout", "-k", "10", str(LOGIN_TIMEOUT_S), *cmd]
         try:
             with _LOGIN_LOCK, fsio.file_lock(_login_file(), timeout=10):
                 if _login_running():
@@ -605,7 +675,7 @@ def login(which: str) -> dict:
                 except OSError as e:
                     raise ValueError(f"Could not start the sign-in: {e}")
                 _LOGIN["proc"] = proc
-                fsio.atomic_write_json(_login_file(), {"pid": proc.pid, "started": time.time()})
+                fsio.atomic_write_json(_login_file(), {"pid": proc.pid, "started": time.time(), "owner": os.getpid()})
         except TimeoutError:
             raise ValueError("Another sign-in is starting. Try again in a moment.")
         threading.Thread(target=_login_watchdog, args=(proc,), daemon=True).start()

@@ -105,6 +105,14 @@ def test_limit_follows_the_provider(env):
     assert GW.health("https://models.example.org/v1", "k").gate.limit == 8
 
 
+def test_a_local_or_ollama_endpoint_takes_two_calls_at_once(env):
+    """Release review, 0.0.18: the local cap went from 2 to 6, which thrashes a model served by Ollama."""
+    for base in ("http://localhost:11434/v1", "http://127.0.0.1:1234/v1", "http://gpu-box.lan:11434/v1",
+                 "http://ollama:8000/v1"):
+        assert GW.provider_cap(base) == 2, base
+    assert GW.provider_cap("https://models.example.org/v1") == 8
+
+
 def test_a_fixed_setting_stays_a_cap(env, monkeypatch):
     _fixed(monkeypatch, 4)
     g = GW.health("https://llm.meshpool.ai/v1", "k").gate
@@ -178,7 +186,8 @@ def test_a_waiting_call_says_so_and_the_snapshot_shows_it(env, monkeypatch):
                      "degraded": False, "down_models": []}]
     assert KEY not in json.dumps(snap)
     assert {"type": "gate", "state": "waiting", "inflight": 1, "limit": 1} in events
-    assert any(e["type"] == "status" for e in events)
+    assert [e["text"] for e in events if e["type"] == "status"] == [
+        "Waiting: other meshpool chats are using the model right now (1 of 1)."]
     h.release(True, first)
     t.join(5)
     gate_events = [e for e in events if e["type"] == "gate"]
@@ -194,7 +203,7 @@ def test_a_long_wait_without_a_listener_writes_one_line_to_stderr(env, monkeypat
     threading.Timer(2.6, lambda: h.release(True, first)).start()
     second = h.acquire(lambda: None)
     h.release(True, second)
-    assert capsys.readouterr().err.count("waiting for a free model-call slot") == 1
+    assert capsys.readouterr().err.count("Waiting: other meshpool chats are using the model right now (1 of 1).") == 1
 
 
 # ---------- M28-02: engine and helper calls go through the gate ---------------------------------------------------

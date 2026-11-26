@@ -137,6 +137,35 @@ _WORDN = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven
           "ten": 10, "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5}
 
 
+def _forge_look(deck: str) -> dict | None:
+    """A deck this engine made carries its look in its theme: the added slides take those colours and fonts as they
+    are, and its footer line. Learning the look from the slides instead made the most used colour (navy) the accent,
+    and the added chart's bars came out navy, grey and pale amber (Daniel, 0.0.19)."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(deck) as z:
+            theme = next((z.read(n).decode("utf-8", "replace") for n in z.namelist()
+                          if re.match(r"ppt/theme/theme\d+\.xml$", n)), "")
+        if '<a:clrScheme name="Forge"' not in theme:
+            return None
+        from engines.forge.requested import _theme
+        cols, fonts = _theme(deck)
+        from pptx import Presentation
+        foot = None
+        for sl in list(Presentation(deck).slides)[1:]:
+            lab = next((sh.text_frame.text for sh in sl.shapes if sh.has_text_frame and sh.name == "Firm"), "")
+            lab = re.sub(r"\s*\d{1,3}\s*$", "", lab).strip()
+            if lab:
+                foot = lab
+                break
+    except Exception:  # noqa: BLE001 - an unreadable deck: the look is learned the usual way
+        return None
+    look = {"theme": {"palette": "navy", **cols, **({"fonts": fonts} if len(fonts) == 2 else {})}}
+    if foot:
+        look["brand"] = {"footer": foot, "footer_every": True}
+    return look
+
+
 def insert_position(task: str) -> int | None:
     """Where the new slides go in the user's deck (1-based place of the first new slide), or None to append:
     "after slide 4" -> 5, "before slide 7" / "as slide 7" / "at slide 7" / "in position 7" -> 7, "at the start" -> 1."""
@@ -154,10 +183,12 @@ def insert_position(task: str) -> int | None:
 
 
 def add_to_deck(task: str, deck: str, *, workdir: str, task_id: str, client=None, files: list[str] | None = None,
-                model: str | None = None, density: str | None = None) -> dict:
+                model: str | None = None, density: str | None = None, root: str | None = None) -> dict:
     """Slides added to a deck the user already has: forge builds them in that deck's look (its master and theme
-    when it is 16:9, else its colours and fonts), then they are appended to a copy of the deck. The original is never
-    changed; the copy is saved next to it as "<name> (updated).pptx"."""
+    when it is 16:9, else its colours and fonts), then they are added to the deck itself, in place (Undo keeps the
+    earlier version). A copy "<name> (updated).pptx" is made when the deck is outside the chat's folder (root, else
+    MH_CHECKPOINT_ROOT, which the office job sets: Undo covers only that folder), is open in another app, or the
+    request asks for one ("save as", "keep the original"): see deck_target."""
     from engines.forge.brief import slide_count
     from engines.forge.build import build
     from engines.forge.merge import append
@@ -166,30 +197,79 @@ def add_to_deck(task: str, deck: str, *, workdir: str, task_id: str, client=None
     n = min(max(slide_count(task) or 1, 1), 12)
     # A real brand (its own colours, fonts or logo) is followed; PowerPoint's stock Office theme is not a brand, and
     # copying it gave Calibri and stock colours: those decks get the forge design system instead.
-    look = {} if _plain_office(deck) else brand_from("same style as the attached deck", [deck])[0]
+    look = {} if _plain_office(deck) else (_forge_look(deck) or brand_from("same style as the attached deck", [deck])[0])
+    from engines.forge import requested as RQ               # colours, fonts, footer the request spells out win
+    look = RQ.merge(look, RQ.parse(task))
     res = build(_brief(task, workdir, files), workdir, n, client=client, task_id=task_id,
                 density=density_from(task, None, density), insert=True, **look)
     src = Path(deck)
     # the job works on a copy in "Meshpool outputs/<job>/": save next to the user's own deck when it is there
     orig = src.parent.parent.parent / src.name
     home = orig.parent if src.parent.parent.name == "Meshpool outputs" and orig.is_file() else src.parent
-    out = home / f"{src.stem} (updated){src.suffix}"
-    i = 2
-    while out.exists():
-        out = home / f"{src.stem} (updated {i}){src.suffix}"
-        i += 1
+    root = root or os.environ.get("MH_CHECKPOINT_ROOT") or None
+    out, why = deck_target(home / src.name, task, root)
     at = insert_position(task)
-    if at:                                                # "after slide 4", "before slide 7", "as slide 3"
-        from engines.forge.merge import insert
-        added = insert(str(src), res["pptx"], str(out), at)
-    else:
-        added = append(str(src), res["pptx"], str(out))
+    part = out.with_name(f".{out.stem}.{os.getpid()}.part{out.suffix}")   # written whole, then moved into place:
+    try:                                                  # a failed merge never leaves the user's deck half-written
+        if at:                                            # "after slide 4", "before slide 7", "as slide 3"
+            from engines.forge.merge import insert
+            added = insert(str(src), res["pptx"], str(part), at)
+        else:
+            added = append(str(src), res["pptx"], str(part))
+        os.replace(part, out)
+    finally:
+        if part.exists():
+            part.unlink()
     left = sum(len(v) for v in (res.get("unresolved") or {}).values())
+    where = " in this chat's folder" if root and out.parent != (home / src.name).parent else ""
+    saved = (f" and saved it as {out.name} (the same deck, changed in place; Undo puts the earlier version back)"
+             if why == "in_place" else
+             f" and saved it as {out.name}{where}: {src.name} is open in another app (its lock file is next to it), so "
+             "it was not changed" if why == "locked" else
+             f" and saved it as {out.name}{where}, as asked; {src.name} is unchanged" if why == "save_as" else
+             f" and saved them in a copy, {out.name}{where}: {src.name} is outside this chat's folder, where Undo "
+             "could not put it back, so it was not changed")
     return {"ok": out.exists(), "artifacts": [str(out)], "evidence": [], "turns": res.get("calls"), "reason": None,
             "answer": (f"Added {added} slide{'s' if added != 1 else ''} to {src.name}"
-                       + (f" at slide {at}" if at else "") + f" and saved it as {out.name} "
-                       f"(the original is unchanged). They follow the deck's look and were checked after rendering"
-                       + (f"; {left} items are flagged in the speaker notes ([QA] lines)." if left else "."))}
+                       + (f" at slide {at}" if at else "") + saved +
+                       ". They follow the deck's look and were checked after rendering"
+                       + (f"; {left} items are still flagged by the checks (listed in qa.json)." if left else "."))}
+
+
+_SAVE_AS = re.compile(r"(?i)\bsave (?:it |this |the deck |the result )?as\b|\bas a (?:new |separate )?(?:copy|file|"
+                      r"version)\b|\b(?:new|separate) (?:copy|file|version)\b|\bkeep the original\b|"
+                      r"\b(?:don'?t|do not|never) (?:change|overwrite|touch) the original\b|\bleave the original\b")
+
+
+def _locked(p: Path) -> bool:
+    """Open in PowerPoint (~$name, or ~$ and the name less one or two letters) or LibreOffice (.~lock.name#)."""
+    n = p.name
+    return any((p.parent / x).exists() for x in ("~$" + n, "~$" + n[1:], "~$" + n[2:], f".~lock.{n}#"))
+
+
+def deck_target(deck: Path, task: str = "", root: str | Path | None = None) -> tuple[Path, str]:
+    """Where slides added to a deck are saved: the deck itself, changed in place (the chat's Undo checkpoint keeps
+    the earlier version), unless the deck is open in another app (its lock file is next to it), the request asks
+    for a copy ("save as", "keep the original"), or the deck is outside root, the chat's folder that Undo covers
+    (no root known: nothing covers it). Daniel, round 2: "update the same deck" made "Deck (updated).pptx" beside
+    the original and took more prompts to merge the two. Release review: add_slides("~/Desktop/Board.pptx") changed
+    that deck in place, where Undo cannot put it back. The copy of a deck outside root is made in root, else next to
+    the deck. Returns (path, "in_place" | "locked" | "save_as" | "outside")."""
+    deck = Path(deck)
+    try:
+        inside = root is not None and Path(root).resolve() in deck.resolve().parents
+    except OSError:
+        inside = False
+    why = ("locked" if _locked(deck) else "save_as" if _SAVE_AS.search(task or "") else
+           "in_place" if inside else "outside")
+    if why == "in_place":
+        return deck, why
+    base = deck if inside or root is None else Path(root) / deck.name
+    out, i = base.with_name(f"{base.stem} (updated){base.suffix}"), 2
+    while out.exists():
+        out = base.with_name(f"{base.stem} (updated {i}){base.suffix}")
+        i += 1
+    return out, why
 
 
 def panel_sentence(panel: dict | None) -> str:
@@ -218,7 +298,7 @@ def panel_sentence(panel: dict | None) -> str:
     if panel.get("line"):
         out += f" Review panel after {n} round{'s' if n != 1 else ''}: {panel['line']}."
     if panel.get("status") == "revise" and (deck.get("final") or {}).get("open_issues"):
-        out += " Their open blocking and major issues are in the speaker notes as [REVIEW] lines."
+        out += " Their open blocking and major issues are listed in qa.json."
     return out
 
 
@@ -280,6 +360,8 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
         keep = {id(p) for p in sorted(fixed, key=lambda p: p.get("rank", 99))[:max(2, slides - 3)]}
         fixed = [p for p in fixed if id(p) in keep]               # the most useful pages, still in deck order
     look, prof = brand_from(task, attached)
+    from engines.forge import requested as RQ               # hex colours, fonts, footer text the request spells out
+    look = RQ.merge(look, RQ.parse(task))                   # go into the build, and its QA loop checks them (P28)
     iset = icon_set_from(task, options)
     if iset:                                                    # one icon set for the whole deck
         th = look.get("theme")
@@ -312,8 +394,8 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
                  + ("its slide master, " if look.get("template") else "") + "colours, fonts"
                  + (", logo" if (look.get("brand") or {}).get("logo") else "") + "), " if prof else "")
               + "checked after rendering. "
-              + (f"{left} items still flagged in the speaker notes ([QA] lines); rules failing: {', '.join(failing)}."
-                 if left or "P22" in failing else "All content checks passed."))
+              + (f"{left} items are still flagged by the checks (listed in qa.json); rules failing: "
+                 f"{', '.join(failing) or 'none'}." if left or failing else "All checks passed."))
     answer += design_sentence(res.get("design"))
     answer += panel_sentence(res.get("panel"))
     rv = res.get("review") or {}
@@ -324,5 +406,7 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
                       + (f" (most common: {rv['top'][0]['example']})" if rv.get("top") else "") + "."))
     if rv.get("note"):                                         # the review did not run (or only in part): say why
         answer += f" ({rv['note']}.)" if rv.get("score") is not None else f" {rv['note'][0].upper()}{rv['note'][1:]}."
+    if res.get("content_failed"):                              # said in the chat; never written into the file
+        answer += " Not written: " + "; ".join(res["content_failed"]) + "."
     return {"ok": Path(pptx).exists(), "answer": answer, "artifacts": [pptx], "evidence": [],
             "turns": res.get("calls"), "reason": None}

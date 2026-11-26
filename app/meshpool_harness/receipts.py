@@ -63,9 +63,10 @@ def _harness_name(hid: str) -> str:
         return ""
     try:
         from meshpool_harness import harnesses as H
-        return H.get(hid).get("name") or hid
+        name = H.get(hid).get("name") or hid
     except Exception:  # noqa: BLE001
-        return hid
+        name = hid
+    return re.sub(r"\bMeshpool\b", "meshpool", str(name))    # the brand is lowercase wherever people read it
 
 
 def _reason_from_events(chat_id: str) -> str:
@@ -81,11 +82,36 @@ def _reason_from_events(chat_id: str) -> str:
 
 
 def _fmt_secs(s: float | None) -> str:
+    """One duration format, the same as the app's: "<1 s", "42 s", "3 min 45 s", "1 h 5 min"."""
     if s is None:
         return ""
+    if s < 1:
+        return "<1 s"
+    s = int(round(s))
     if s < 60:
-        return f"{s:.0f} s" if s >= 10 else f"{s:.1f} s"
-    return f"{int(s // 60)} min {int(s % 60):02d} s"
+        return f"{s} s"
+    if s < 3600:
+        return f"{s // 60} min" + (f" {s % 60} s" if s % 60 else "")
+    return f"{s // 3600} h {s % 3600 // 60} min"
+
+
+def fmt_cost(usd: float) -> str:
+    """One cost format: "$0.42", and "<$0.01" for anything under a cent."""
+    return "<$0.01" if 0 < usd < 0.01 else f"${usd:.2f}"
+
+
+_KNOWN = {"deepseek": "DeepSeek", "gpt": "GPT", "qwen": "Qwen", "glm": "GLM", "kimi": "Kimi", "llama": "Llama",
+          "mistral": "Mistral", "grok": "Grok", "openai": "OpenAI", "minimax": "MiniMax"}
+
+
+def model_name(mid: str) -> str:
+    """The model as the composer names it: "deepseek-v4.1-flash" reads "DeepSeek V4.1 Flash" (app.js modelName)."""
+    head, sep, rest = str(mid or "").partition(":")
+    bare = rest if sep and head == "chatgpt" else str(mid or "")
+    words = [w for w in re.split(r"[-_ ]+", bare.split("/")[-1]) if w]
+    out = " ".join(_KNOWN.get(w.lower()) or (w.upper() if re.match(r"v?\d", w) else w[:1].upper() + w[1:])
+                   for w in words)
+    return re.sub(r"(\d) (?=\d)", r"\1.", out)
 
 
 def _fmt_tokens(n: int) -> str:
@@ -133,20 +159,28 @@ def plain_reason(reason: str) -> str:
     t = (reason or "").strip().rstrip(".")
     if not t:
         return ""
-    m = re.match(r"(?i)^(\w+) words?(?: \(\d+\))?(?:, .*)?$", t)
+    m = re.match(r"(?i)^(\w+) words?(?: \(\d+\))?(?: in a \w+ chat)?(?:, .*)?$", t)
+    if m:
+        return "chosen for " + _KINDS.get(m.group(1).lower(), m.group(1).lower())
+    # The router's own notes are not for people: "no strong signal" says nothing, and "Best benchmark quality for a
+    # data task (csv)" reads as "chosen for data". Prose written for people is kept as it is.
+    if re.match(r"(?i)^(no strong signal|general|(code|chat|work|cowork) mode)$", t):
+        return ""
+    m = re.match(r"(?i)^best benchmark quality for (?:a |an )?(\w+)(?: task)?(?: \(.*\))?$", t)
     if m:
         return "chosen for " + _KINDS.get(m.group(1).lower(), m.group(1).lower())
     return t[:1].lower() + t[1:]
 
 
 def line(r: dict) -> str:
-    """The one line: "42 s · $0.03 · Meshpool Work on deepseek-v4.1-flash, chosen because it fits documents"."""
+    """The one line: "42 s · $0.03 · DeepSeek V4.1 Flash, chosen for documents". The model is named as the composer
+    names it; an outside agent (Codex, Pi, Hermes) is named before it, meshpool's own agents are not."""
     bits = []
     if r.get("secs") is not None:
         bits.append(_fmt_secs(r["secs"]))
     unpriced = int(r.get("unpriced_calls") or 0)
     if r.get("cost") is not None:
-        money = f"${r['cost']:.2f}" if r["cost"] >= 0.01 else f"${r['cost']:.4f}"
+        money = fmt_cost(r["cost"])
         bits.append(money + (f" + {unpriced} unpriced call{'s' if unpriced != 1 else ''}" if unpriced else ""))
     elif unpriced:
         bits.append("cost not known (unpriced model)")
@@ -158,7 +192,10 @@ def line(r: dict) -> str:
             "could not run" if rv.get("error") else f"{rv.get('met', 0)} of {rv.get('total', 0)} met"
             + (f", {rv['rounds']} fix round{'s' if rv['rounds'] != 1 else ''}" if rv.get("rounds") else "")
             + f" ({_fmt_secs(rv.get('secs'))}, {_fmt_tokens(int(rv.get('tokens') or 0))} tokens)"))
-    who = " on ".join(x for x in (r.get("harness_name"), r.get("model")) if x)
+    agent = r.get("harness_name") or ""
+    if str(r.get("harness") or agent).lower().startswith("meshpool"):
+        agent = ""
+    who = " on ".join(x for x in (agent, model_name(r.get("model") or "")) if x)
     if who:
         why = plain_reason(r.get("reason") or "")
         bits.append(who + (f", {why}" if why else ""))

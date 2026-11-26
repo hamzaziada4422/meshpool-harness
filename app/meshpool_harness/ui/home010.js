@@ -17,7 +17,7 @@ async function fresh010(my) {
   try { r = await api("/api/firstrun/scan?folder=" + encodeURIComponent(S.draft.project || "")); } catch (e) { r = {starters: [], files: 0}; }
   if (my !== hero010Token || !$(".starters")) return;
   if (r.starters.length) {
-    $(".starters").innerHTML = r.starters.map(s => `<button data-s="${esc(s.prompt)}" title="Meshpool has only seen the file's name, not what is inside">${esc(s.prompt.replace(/\.$/, ""))}</button>`).join("") + `<button data-fr="more">Something else</button>`;
+    $(".starters").innerHTML = r.starters.map(s => `<button data-s="${esc(s.prompt)}" title="meshpool has only seen the file's name, not what is inside">${esc(s.prompt.replace(/\.$/, ""))}</button>`).join("") + `<button data-fr="more">Something else</button>`;
   } else if (!r.files) {
     $(".starters").insertAdjacentHTML("afterbegin", `<button data-fr="samples" class="primary">Try it with sample files</button>`);
   }
@@ -36,7 +36,6 @@ async function fresh010(my) {
 async function away010(my) {
   let a; try { a = await api("/api/away"); } catch (e) { return; }
   if (my !== hero010Token || !$(".hero")) return;
-  for (const c of (a.cards || []).slice(0, 1)) insightCard010(c);          // at most one nudge on the home screen
   if (!(a.runs || []).length) return;
   const el = document.createElement("section"); el.className = "away010"; el.setAttribute("aria-label", "While you were away");
   el.innerHTML = `<div class="a-h"><b>While you were away</b><button class="linkbtn" id="awayOk">Got it</button></div>
@@ -58,8 +57,8 @@ window.renderSuggestSettings = async function (b, close) {
   b.innerHTML = `${close}<h3>Suggestions</h3><p class="lead">Tips when a chat ends or you open the app. Never while it works.</p>
     <ul class="rows2"><li class="row2"><label class="switchrow"><input type="checkbox" id="sgOn" ${v.insights_on !== false ? "checked" : ""}> Show suggestions</label></li></ul>
     ${(v.notices || []).map(n => `<div class="gbanner"><div><b>${esc(n.title || "Stopped a suggestion type")}</b><span>${esc(n.text || "")}</span></div><button class="btn" data-ack="1">OK</button></div>`).join("")}
-    <h3 style="font-size:16px;margin:18px 0 4px">By type</h3>${typeList(types.filter(t => t.shown || !t.on || t.throttled))}${types.some(t => !(t.shown || !t.on || t.throttled)) ? `<details class="sgmore"><summary>${types.filter(t => !(t.shown || !t.on || t.throttled)).length} types with nothing to show yet</summary>${typeList(types.filter(t => !(t.shown || !t.on || t.throttled)))}</details>` : ""}
-    <h3 style="font-size:16px;margin:18px 0 4px">"Show me less like this"</h3>${(v.history || []).filter(m => m.active).length ? `<ul class="rows2">${v.history.filter(m => m.active).map(m => `<li class="row2"><span>${esc(m.title)}</span><button class="linkbtn" data-undo="${esc(m.id)}">Undo</button></li>`).join("")}</ul>` : `<p class="lead">Nothing muted.</p>`}
+    <h3 style="font-size:16px;margin:16px 0 4px">By type</h3>${typeList(types.filter(t => t.shown || !t.on || t.throttled))}${types.some(t => !(t.shown || !t.on || t.throttled)) ? `<details class="sgmore"><summary>${types.filter(t => !(t.shown || !t.on || t.throttled)).length} types with nothing to show yet</summary>${typeList(types.filter(t => !(t.shown || !t.on || t.throttled)))}</details>` : ""}
+    <h3 style="font-size:16px;margin:16px 0 4px">"Show me less like this"</h3>${(v.history || []).filter(m => m.active).length ? `<ul class="rows2">${v.history.filter(m => m.active).map(m => `<li class="row2"><span>${esc(m.title)}</span><button class="linkbtn" data-undo="${esc(m.id)}">Undo</button></li>`).join("")}</ul>` : `<p class="lead">Nothing muted.</p>`}
     <div style="margin-top:16px"><button class="btn" id="sgReset">Reset suggestion learning</button></div><div class="res" id="sgRes"></div>`;
   const re = () => window.renderSuggestSettings(b, close);
   $("#sgOn", b).onchange = async e => { await post("/api/insights/settings", {insights_on: e.target.checked}); re(); };

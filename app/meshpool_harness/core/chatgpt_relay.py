@@ -111,6 +111,8 @@ class _Handler(BaseHTTPRequestHandler):
             body = json.loads(raw)
         except ValueError:
             return self._error(400, "The body is not JSON.")
+        if not isinstance(body, dict):
+            return self._error(400, "The body must be a JSON object.")
         stream = bool(body.get("stream"))
         model = CG.resolve_model(body.get("model"))
         rid = "chatcmpl-" + uuid.uuid4().hex[:24]

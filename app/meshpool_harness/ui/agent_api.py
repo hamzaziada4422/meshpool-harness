@@ -26,7 +26,7 @@ LIVE: dict[str, "Session"] = {}
 # Update gate: while an update is being installed no turn or scheduled run may start (M11-02).
 GATE = threading.Lock()
 QUIESCING = [False]
-_GATE_MSG = "Meshpool is restarting to install an update. Send this again in a moment."
+_GATE_MSG = "meshpool is restarting to install an update. Send this again in a moment."
 
 
 def quiesce() -> bool:
@@ -111,8 +111,29 @@ RESUME_NEXT = "Continue where you left off."
 RESUME_WAIT_S = 30
 RESUME_TRIES = 5
 
-_KEEP = {"user", "assistant", "tool_end", "interrupted", "error", "turn_end", "approval", "approval_done",
-         "checkpoint", "status", "plan", "check", "checks_line", "task_receipt", "insight", "review", "retry_ok"}
+_KEEP = {"user", "assistant", "offer", "tool_end", "interrupted", "error", "turn_end", "approval", "approval_done",
+         "checkpoint", "status", "plan", "check", "checks_line", "task_receipt", "insight", "review", "retry_ok",
+         "review_round", "steps_retried"}
+# A step's files, for "a later step redid it" (Session._mark_retried_steps): names with an extension in its summary.
+_STEP_FILE = re.compile(r"[\w][\w ()+-]*\.(?:xlsx|xlsm|xls|csv|tsv|docx|doc|pptx|ppt|pdf|md|txt|html?|json|png|jpe?g|"
+                        r"svg|py|js|ts)\b", re.I)
+_MAKER = re.compile(r"^(?:make_|write|edit|create|apply_patch|office_task|add_slides|convert|save)", re.I)
+_SHELL = re.compile(r"bash|shell|exec|command|terminal", re.I)
+
+
+def _files_named(e: dict) -> set:
+    """The file names a step's summary or arguments mention, lower case. "from rooms.xlsx" also gives "rooms.xlsx":
+    a name may hold spaces, so every tail of the words before the extension is a candidate."""
+    args = e.get("args")
+    text = " ".join([str(e.get("summary") or ""), json.dumps(args) if isinstance(args, (dict, list)) else str(args or "")])
+    out = set()
+    for m in _STEP_FILE.finditer(text):
+        name = re.split(r"[\\/]", m.group(0).strip())[-1]
+        words = name.split()
+        out.update(" ".join(words[i:]).lower() for i in range(len(words)))
+    return out
+
+
 # Transient "trying again" notices (core.py): tagged retry:true; a retry_ok event follows once the model answers.
 _RETRY_RE = re.compile(r"Trying again \(\d+ of \d+\)|^Rate limited by the endpoint|^Trying again without streaming|"
                        r"^Usage limit reached")
@@ -141,9 +162,129 @@ def _messages_from_events(events: list) -> list:
     return out
 
 
+def _with_plain(e: dict) -> dict:
+    """A step event with its plain title for Chat mode (core.plain_step, built on the approval cards' own titles), so the
+    page shows "Created open-house.html" and keeps the command itself in the step's details."""
+    if e.get("type") != "tool_start" or "plain" in e:
+        return e
+    try:
+        from meshpool_harness.agent.core import plain_step
+        p = plain_step(e.get("name") or "", e.get("summary") or "", bool(e.get("mcp")))
+    except Exception:  # noqa: BLE001 - a title is a help, never a second failure
+        p = None
+    return dict(e, plain=p) if p else e
+
+
+def _approval_view(kind, title, detail, clean=None) -> dict:
+    """The plain line and file preview of an approval card (core.approval_view), redacted like the card's detail."""
+    try:
+        from meshpool_harness.agent.core import approval_view
+        v = approval_view(kind, title, detail)
+        if clean and v.get("file"):
+            v["file"] = dict(v["file"], text=clean(v["file"]["text"]))
+        return v
+    except Exception:  # noqa: BLE001 - the plain view is a help, never a second failure
+        return {}
+
+
 def _redact(text: str) -> str:
+    from meshpool_harness.errors import tool_card    # a reopened chat's cards read like the live ones
     from meshpool_harness.redact import redact
-    return redact(text)
+    return redact(tool_card(text))
+
+
+def undo_note(r: dict, replies: int = 1, files: bool = True) -> str:
+    """The note the model gets after Undo: which of its replies the user undid and what happened to the files.
+    "The user undid your previous reply. These files were restored to how they were before it: Bouquet Price
+    List.xlsx." Each file is named by its path in the chat's folder."""
+    def names(xs):
+        seen = []
+        for x in xs or []:
+            x = re.sub(r"^(\./)+", "", str(x).replace("\\", "/").strip())
+            if x and x not in seen:
+                seen.append(x)
+        return ", ".join(seen[:8]) + (f" and {len(seen) - 8} more" if len(seen) > 8 else "")
+    n = max(1, int(replies or 1))
+    what, it = ("your previous reply", "it") if n == 1 else (f"your last {n} replies", "them")
+    out = [f"The user undid {what}."]
+    if not files:
+        out.append(f"The files {it} changed were kept as they are now.")
+        return " ".join(out)
+    restored, deleted, kept = names(r.get("restored")), names(r.get("deleted")), names(
+        list(r.get("kept") or []) + list(r.get("outside") or []))
+    if restored:
+        out.append(f"These files were restored to how they were before {it}: {restored}.")
+    if deleted:
+        out.append(f"These files {it} made were removed: {deleted}.")
+    if kept:
+        out.append(f"These files were not put back and are as they are now: {kept}.")
+    if not (restored or deleted or kept):
+        out.append("No files were changed back.")
+    return " ".join(out)
+
+
+def undo_message(r: dict) -> tuple[str, str]:
+    """(the line the chat shows after Undo, the details behind it). The line names the files Undo restored or removed
+    and every changed file it could not put back; the folder holding copies of what Undo replaced is only in the
+    details (WF-07: a full checkpoints path filled the chat; WF-C: "Files are back to how they were" while a file
+    outside the chat's folder still had the agent's change)."""
+    def once(xs):
+        """Each file once, whatever order it came in: the same path listed twice (a file kept and also reported as
+        outside, or a list that repeated itself) is one file ("Not restored: a, b, a, b")."""
+        seen, out = set(), []
+        for x in xs:
+            key = re.sub(r"^(\./)+", "", str(x).replace("\\", "/").strip())
+            if key and key not in seen:
+                seen.add(key)
+                out.append(key)
+        return out
+
+    def named(x):
+        """A file as people read it: its name, and the folder it is in when it is not at the top ("a.xlsx (in Prices)")."""
+        name = Path(x).name or x
+        folder = str(Path(x).parent).replace("\\", "/")
+        return name if folder in ("", ".") else f"{name} (in {folder})"
+
+    def names(xs, n=4):
+        xs = [named(x) for x in once(xs)]
+        return ", ".join(xs[:n]) + (f" and {len(xs) - n} more" if len(xs) > n else "")
+
+    def count(xs, word):
+        n = len(once(xs))
+        return f"{word} {n} file{'' if n == 1 else 's'} ({names(xs)})"
+    restored, deleted, kept, outside = (once(r.get(k) or []) for k in ("restored", "deleted", "kept", "outside"))
+    done = [s for s in (count(restored, "Restored") if restored else "",
+                        count(deleted, "removed" if restored else "Removed") if deleted else "") if s]
+    if not done and r.get("conversation") is False and not kept and not outside:
+        # OM-08: nothing left the conversation and no file changed: "Undone." said something happened that did not
+        return "Nothing to undo: that turn changed no files and is no longer in the conversation.", ""
+    from meshpool_harness.checkpoints import CHANGED_AFTER
+    notes = [str(n) for n in r.get("notes") or []]
+    why = {p: next((n[len(p) + 2:] for n in notes if n.startswith(f"{p}: ")), "") for p in kept}
+    # Maya's Flowers: "No files in this chat's folder had changed. Not restored: Bouquet Price List.xlsx" said two
+    # things that cannot both be true. A file the turn changed but Undo kept is named as kept, never as unchanged.
+    if done:
+        msg = "Undone. " + " and ".join(done) + "."
+    elif kept or outside:
+        msg = "Undone. No files were put back."
+    else:
+        msg = "Undone. No files in this chat's folder had changed."
+    if kept:
+        one = len(kept) == 1
+        if all(not w or w == CHANGED_AFTER for w in why.values()):
+            msg += (f" Kept as {'it is' if one else 'they are'}: {names(kept)}, because {'it' if one else 'they'} "
+                    "changed after the agent's edit.")
+        else:
+            msg += f" Kept as {'it is' if one else 'they are'}: {names(kept)} (see details for why)."
+    if outside:
+        msg += f" Not restored, because Undo only covers this chat's folder: {names(outside)}."
+    det = list(notes)                        # why each file was kept: changed later, never stored, a link...
+    det += [f"{p}: {CHANGED_AFTER}" for p in kept if not why[p]]
+    if outside:
+        det.append("Changed outside this chat's folder, not restored: " + ", ".join(Path(x).name or x for x in once(outside)))
+    if r.get("backup"):                      # the folder of saved copies is not shown: nothing technical in the details
+        det.append("meshpool kept a copy of what Undo replaced, in case you change your mind.")
+    return msg, "\n".join(det)
 
 
 def events_from_messages(messages: list) -> list:
@@ -205,7 +346,14 @@ def _meta_path(sid: str) -> Path:
 _METAS: dict = {}                   # meta.json path -> (mtime, size, meta): the sidebar lists every chat every few s
 
 
+def _plain_id(sid) -> bool:
+    """A chat id is one folder name (the routes take [\\w-]+): "", ".." or a path would reach outside the chats folder."""
+    return isinstance(sid, str) and bool(re.fullmatch(r"[\w-]+", sid))
+
+
 def read_meta(sid: str) -> dict:
+    if not _plain_id(sid):
+        return {}
     p = _meta_path(sid)
     try:
         st = p.stat()
@@ -223,6 +371,8 @@ _META_LOCK = threading.RLock()      # read-modify-write of meta.json: turn, post
 
 
 def write_meta(sid: str, **kw) -> dict:
+    if not _plain_id(sid):
+        return {}
     s = LIVE.get(sid)
     if s is None and not (SESSIONS / sid).is_dir():
         return {}                                     # deleted thread: do not recreate its folder
@@ -259,15 +409,127 @@ _FILLER = re.compile(r"^(?:please|pls|can you|could you|would you|i want you to|
                      re.I)
 
 
+_GREETING = re.compile(r"^(?:hi|hello|hey|hiya|howdy|hallo|hej|hola|greetings|good\s+(?:morning|afternoon|evening|day))"
+                       r"(?:\s+(?:there|all|team|everyone|again)|\s+(?-i:[A-Z])[\w-]*(?=\s*[,!.]))?\s*[,.!?:;-]*\s*", re.I)
+_FILEISH = re.compile(r"\.[A-Za-z0-9]{1,5}$")
+
+
+def _path_name(tok: str) -> str:
+    """The file (or last folder) name of a path token, for a title: "/home/dan/Reports/q3.pdf" -> "q3.pdf"."""
+    parts = [x for x in re.split(r"[/\\]+", tok) if x and not re.fullmatch(r"[A-Za-z]:|~|\.{1,2}", x)]
+    return parts[-1] if parts else tok
+
+
+def _paths_to_names(t: str) -> str:
+    """Paths in t replaced by their file names, whole: quoted ones (which may hold spaces) and bare tokens that start
+    at a root (/, ~/, ./, C:\\) with two or more parts, or that end in a file name. A single "/word" stays: it is a
+    command, removed later."""
+    t = re.sub(r"[\"'`]([^\"'`]*[/\\][^\"'`]*)[\"'`]", lambda m: _path_name(m.group(1)), t)
+
+    def one(m):
+        tok, tail = re.match(r"(.*?)([.,;:!?)\]]*)$", m.group(0)).groups()
+        rooted = re.match(r"(?:~|\.{1,2}|[A-Za-z]:)?[/\\]", tok)
+        several = len([x for x in re.split(r"[/\\]+", tok) if x]) >= 2
+        if _FILEISH.search(tok) or (rooted and (several or tok[:1] not in "/\\")):
+            return _path_name(tok) + tail
+        return m.group(0)
+    return re.sub(r"(?<!\S)[^\s]*[/\\][^\s]*", one, t)
+
+
+_DELIVERABLE = (".pptx", ".xlsx", ".docx", ".pdf", ".html", ".csv", ".md")
+
+
+def deliverable_title(path: str) -> str:
+    """A file's name as a chat title: "Ridgeway_PdM_Client_Deck.pptx" reads "Ridgeway PdM Client Deck"."""
+    stem = Path(str(path).replace("\\", "/")).stem
+    return re.sub(r"\s+", " ", re.sub(r"[_\-]+", " ", stem)).strip()[:80]
+
+
+_KIND = {".pptx": "deck", ".docx": "document", ".xlsx": "workbook", ".pdf": "PDF", ".html": "page", ".csv": "data",
+         ".md": "notes"}
+
+
+def work_title(paths: list) -> str:
+    """A chat title from the deliverables it made, oldest first. One file: its name ("Ridgeway PdM Client Deck").
+    Several that share their first words: those words and what each one is ("Ridgeway PdM: deck and memo"). Several
+    that share nothing: the newest one's name."""
+    names: list[tuple[str, str]] = []
+    for p in paths:
+        t = re.sub(r"\s*\((?:updated|edited|copy|\d+)\)$", "", deliverable_title(p), flags=re.I)
+        if t and t.lower() not in [n.lower() for n, _ in names]:
+            names.append((t, Path(str(p)).suffix.lower()))
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0][0]
+    words = [n.split() for n, _ in names]
+    common = []
+    for ws in zip(*words):
+        if len({w.lower() for w in ws}) != 1:
+            break
+        common.append(ws[0])
+    if not common or len(" ".join(common)) < 3:
+        return names[-1][0]
+    kinds = []
+    for ws, (_, ext) in zip(words, names):
+        rest = ws[len(common):]
+        k = rest[-1] if rest else _KIND.get(ext, "file")
+        k = k if k.isupper() and len(k) > 1 else k.lower()
+        if k not in kinds:
+            kinds.append(k)
+    kinds = kinds[:3]
+    tail = kinds[0] if len(kinds) == 1 else ", ".join(kinds[:-1]) + " and " + kinds[-1]
+    return (" ".join(common) + ": " + tail)[:80]
+
+
+def retitle_from_work(sid: str, root: Path, made: list, reset: bool = False) -> str:
+    """Title a chat after the work: once a turn makes a file, the chat is named for the newest deliverable, not for the
+    first sentence the user typed. Never over a name the user gave (rename), never from a message ("go ahead", a retry):
+    only a file's name is used. Returns the new title, or "" when nothing changed. `reset` (after Undo): with no
+    deliverable left, a title named after work goes back to the chat's first message."""
+    try:
+        meta = read_meta(sid)
+        if meta.get("renamed") or (meta.get("title") and not meta.get("auto_title")):
+            return ""
+        files = []
+        for o in made or []:
+            p = str(o.get("path") or "")
+            if p.lower().endswith(_DELIVERABLE):
+                try:
+                    files.append(((root / p).stat().st_mtime, p))
+                except OSError:
+                    continue
+        files.sort()
+        title = work_title([p for _, p in files])
+        if title and title != meta.get("title"):
+            write_meta(sid, title=title, auto_title=True)
+            return title
+        if not title and reset and meta.get("auto_title") and meta.get("title"):
+            # Maya, round 4: after Undo the chat was back on the invoice question but still read "Bouquet price list"
+            write_meta(sid, title="", auto_title=False)        # the view shows the first message's title again
+            return ""
+    except Exception:  # noqa: BLE001 - a title is never worth breaking the turn
+        pass
+    return ""
+
+
 def nice_title(text: str) -> str:
     """A short thread title from the first message: the first sentence, without greetings, skill names, links,
-    or the hidden notes Meshpool adds, capitalised and cut at a word under 48 characters."""
+    or the hidden notes Meshpool adds, capitalised and cut at a word under 48 characters. A path is never cut: it
+    becomes its file name."""
     t = str(text or "").split("\n\n\u200b")[0].replace("\u200b", "").strip()   # notes start with this separator
     if not t or t in ("New thread", "New chat", "Session"):
         return "New chat" if t in ("", "New thread") else t
-    t = t.splitlines()[0]
+    lines = [x.strip() for x in t.splitlines() if x.strip()]
+    t = lines[0]
+    g = _GREETING.match(t)
+    if g and g.end() == len(t) and len(lines) > 1:        # "Hi!" on a line of its own, the request below it
+        t = lines[1]
+    elif g and len(t[g.end():].split()) >= 2:              # "Hi! The file ..." -> "The file ..."
+        t = t[g.end():]
     t = re.sub(r"https?://\S+", "", t)
-    t = re.sub(r"(?<!\w)[$/][\w-]+", "", t)
+    t = _paths_to_names(t)
+    t = re.sub(r"(?<!\S)[$/][\w-]+(?![\w/\\.-])", "", t)
     t = re.split(r"(?<=[.!?])\s", t)[0].strip(" .!?:;,-")
     full = t
     for _ in range(3):
@@ -278,8 +540,16 @@ def nice_title(text: str) -> str:
     if not t:
         return "New chat"
     if len(t) > 48:
-        cut = t[:48].rsplit(" ", 1)[0]
-        t = (cut if len(cut) > 20 else t[:48]).rstrip(" ,;:") + "…"
+        words, cut = t.split(" "), ""
+        for w in words:
+            if len(cut) + len(w) + bool(cut) > 48:
+                break
+            cut += " " * bool(cut) + w
+        if len(cut) <= 20:                             # one long word after a short start
+            w = words[len(cut.split(" ")) if cut else 0]
+            cut = (cut + " " + w).strip() if _FILEISH.search(w.rstrip(".,;:!?")) and len(cut) + len(w) < 72 \
+                else t[:48]                            # a file name is kept whole
+        t = cut.rstrip(" ,;:") + ("…" if cut != t else "")
     return t[0].upper() + t[1:]
 
 
@@ -483,7 +753,7 @@ class Session:
                 if tr.get("running"):
                     last = next((e.get("text") for e in reversed(tr["events"]) if e.get("type") == "user"), "")
                     self.emit({"type": "interrupted", "restarted": True, "resend": last,
-                               "text": "Meshpool closed while this was running, so it stopped. Everything done so far "
+                               "text": "meshpool closed while this was running, so it stopped. Everything done so far "
                                        "is kept: press Continue to pick it up, or send your message again."})
                     self._persist(running=False)
             try:                                     # an approval, question or step left open when the app closed
@@ -519,7 +789,7 @@ class Session:
                            + (self.harness.get("settings_note") or "")})
         else:
             if legacy:
-                self.emit({"type": "status", "text": f"Meshpool no longer includes the agent this chat started with. "
+                self.emit({"type": "status", "text": f"meshpool no longer includes the agent this chat started with. "
                                                      f"It continues in {self.harness['name']}."})
                 self.agent.save()
             if no_mcp:                                   # the terminal's --no-mcp: no servers, ready at once
@@ -561,10 +831,10 @@ class Session:
                 out.append({"type": "approval_done", "id": e["id"], "decision": "stopped", "closed": True})
             elif t == "question" and e.get("timeout_s") and i not in done["question"]:
                 out.append({"type": "question_done", "id": e["id"], "source": "stopped", "answers": [],
-                            "text": "Meshpool closed before you answered.", "closed": True})
+                            "text": "meshpool closed before you answered.", "closed": True})
             elif t == "tool_start" and i not in done["tool"] and n > last_end:   # steps of finished turns stay as they were
                 out.append({"type": "tool_end", "id": e["id"], "name": e.get("name", ""), "ok": False,
-                            "stopped": True, "output": "Not run: Meshpool closed before this step finished."})
+                            "stopped": True, "output": "Not run: meshpool closed before this step finished."})
             else:
                 continue
             seen.add((t, i))
@@ -666,13 +936,71 @@ class Session:
             self.state = to
             return True
 
+    def _no_dead_links(self, ev: dict) -> dict:
+        """A reply that names a file in a folder the app cannot open (a model's own scratch folder: Sara's
+        "A copy ... is at /tmp/.../Budget_2026.backup.xlsx") says its name as plain text, not a link that opens on
+        "That folder is not one of your projects." (office_guard.unlink_dead_paths). Never raises."""
+        try:
+            from meshpool_harness import office_guard as OG
+            from meshpool_harness.ui import workbench as WB
+
+            def can_open(d):
+                WB.check_root(d)
+                return True
+            text = str(ev.get("text") or "")
+            new = OG.unlink_dead_paths(text, str(getattr(self, "workdir", "") or ""), can_open)
+            return dict(ev, text=new) if new != text else ev
+        except Exception:  # noqa: BLE001
+            return ev
+
     def emit(self, ev: dict):
         self._question_state(ev)
         t = ev.get("type")
+        if "down" not in ev:
+            self._last_ev_at = time.time()           # what the outside agent's endpoint watch counts quiet from
+        if t == "model_wait":                        # a note for the terminal (waiting for the model): not part of the chat,
+            for fn in list(self.listeners):          # and it must not reset the page's own quiet timer
+                try:
+                    fn(ev)
+                except Exception:  # noqa: BLE001
+                    pass
+            return
         if (t == "interrupted" and self._interrupting is not None and self._interrupting == self._turn_id
                 and getattr(self, "state", None) in _BUSY):
             self._interrupting = None                # the new message is being answered: do not say "send a message"
             ev = dict(ev, text="Stopped the previous request.")
+        if t == "error" and not ev.get("detail") and (getattr(self, "harness", None) or {}).get("type") in ("acp", "pi"):
+            # An outside engine's own error ("unexpected status 404 Not Found: ..., url: http://...") in plain words;
+            # its raw text goes in the Details fold (core/errtext.outside).
+            from meshpool_harness.core import errtext as ET
+            plain, raw = ET.outside(str(ev.get("text") or ""))
+            if raw:
+                ev = dict(ev, text=plain, detail=raw)
+        if t == "assistant" and "<" in str(ev.get("text") or ""):
+            # tool markup the model wrote as text (Maya, round 3: "<invoke_placeholder> </invoke_placeholder>" three
+            # times in a reply, kept in the transcript): never shown, never saved as the reply
+            from meshpool_harness.core import textcalls as TC
+            clean = TC.display_safe(str(ev["text"]))
+            if clean != ev["text"]:
+                ev = dict(ev, text=clean)
+        offer = False
+        if t == "assistant" and ev.get("text") and self._no_folder_chat():
+            from meshpool_harness import nofolder as NF          # "run this in a session that has a shell": a plain
+            made = self._turn_made_file()                         # offer and an "Add a folder" button instead,
+            offer = NF.wants_folder(ev["text"], made)             # unless this turn made a file
+            if offer:
+                ev = dict(ev, text=NF.plain(ev["text"], made))
+        if t == "assistant" and "/" in str(ev.get("text") or ""):
+            ev = self._no_dead_links(ev)
+        if t == "reply_trim":                         # the answer without its trailing promise (core): not a new bubble
+            with self.lock:
+                for e in reversed(self.events):
+                    if e.get("type") == "assistant" and not e.get("has_tools"):
+                        e["text"] = str(ev.get("text") or "")
+                        break
+            return
+        if t == "turn_end":
+            self._mark_retried_steps()               # failed steps a later step redid: not problems in the count
         if t == "status" and _RETRY_RE.search(str(ev.get("text") or "")):
             ev = dict(ev, retry=True)                # a transient notice: resolved by retry_ok once the call works
             self._retry_open = True
@@ -718,6 +1046,70 @@ class Session:
                 fn(ev)
             except Exception:  # noqa: BLE001 - a front end's drawing never breaks the turn
                 pass
+        if ev.get("type") == "user" and not ev.get("steer"):
+            after = self.__dict__.pop("_after_user", None)
+            if after:                                # the fallback line goes under the message it is about
+                self.emit(after)
+        if offer:                                    # the reply offered a folder: the app shows the button under it
+            self.emit({"type": "offer", "action": "add_folder", "label": "Add a folder"})
+
+    def _no_folder_chat(self) -> bool:
+        """True for a chat that works in its own private folder, not in one the user chose."""
+        try:
+            from meshpool_harness import project_store as PS
+            return bool(getattr(self, "workdir", "")) and PS.is_scratch(self.workdir)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _turn_made_file(self) -> bool:
+        """True when a step of this turn that writes files (make_*, write, edit, save...) worked."""
+        try:
+            with self.lock:
+                evs = list(self.events)
+            start = max((i for i, e in enumerate(evs) if e.get("type") == "user" and not e.get("steer")), default=0)
+            makers = set()
+            for e in evs[start:]:
+                if e.get("type") == "tool_start" and _MAKER.search(str(e.get("name") or "").split("__")[-1]):
+                    makers.add(e.get("id"))
+                elif e.get("type") == "tool_end" and e.get("id") in makers and e.get("ok"):
+                    return True
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+
+    def _mark_retried_steps(self):
+        """Before a turn_end: the failed steps of this turn that a later step redid (the same file worked on and the
+        later step worked) are marked "retried" ({"type": "steps_retried", "ids": [...]}), so the step count does not
+        call them problems. Priya: make_spreadsheet failed, ls and two checks then failed on the missing file, a
+        script made it and the check passed: "7 steps, 4 had a problem" for a task that worked."""
+        try:
+            with self.lock:
+                evs = list(self.events)
+            start = max((i for i, e in enumerate(evs) if e.get("type") == "user" and not e.get("steer")), default=0)
+            steps, order = {}, []
+            for e in evs[start:]:
+                if e.get("type") == "tool_start" and e.get("id") is not None:
+                    steps[e["id"]] = {"name": str(e.get("name") or ""), "about": _files_named(e), "ok": None}
+                    order.append(e["id"])
+                elif e.get("type") == "tool_end" and e.get("id") in steps:
+                    st = steps[e["id"]]
+                    st["ok"] = bool(e.get("ok")) or bool(e.get("denied"))
+            ids = []
+            for k, sid in enumerate(order):
+                st = steps[sid]
+                if st["ok"] is not False or not st["about"]:
+                    continue
+                maker = _MAKER.search(st["name"].split("__")[-1]) is not None
+                for later in order[k + 1:]:
+                    lt = steps[later]
+                    if lt["ok"] and st["about"] & lt["about"] and (
+                            not maker or _MAKER.search(lt["name"].split("__")[-1]) or _SHELL.search(lt["name"])):
+                        ids.append(sid)
+                        break
+            if ids:
+                self.emit({"type": "steps_retried", "ids": ids})
+        except Exception:  # noqa: BLE001 - a label never breaks a turn
+            pass
 
     def _fold_deltas(self, final: bool):
         """Under self.lock. A reply streams as many text_delta events (one per token or so); kept for the whole session
@@ -807,7 +1199,7 @@ class Session:
             self._persist_err = e.strerror or str(e) or "write failed"
             if first:                                # one notice per failure streak
                 self.emit({"type": "status", "save_error": True, "text": (
-                    f"Couldn't save this chat ({self._persist_err}). Free some disk space; Meshpool keeps trying.")})
+                    f"Couldn't save this chat ({self._persist_err}). Free some disk space; meshpool keeps trying.")})
         else:
             if getattr(self, "_persist_err", None):
                 self._persist_err = None
@@ -862,7 +1254,7 @@ class Session:
             if hasattr(self, "lock") and hasattr(self, "events"):   # a live chat: the card shows it, already closed
                 aid = "ap-" + uuid.uuid4().hex[:10]
                 self.emit({"type": "approval", "id": aid, "kind": kind, "title": title, "detail": detail,
-                           "options": options, "scope": scope})
+                           "options": options, "scope": scope, **_approval_view(kind, title, detail)})
                 self.emit({"type": "approval_done", "id": aid, "decision": "no", "reason": note})
             return "no", note
         auto = self._acp_always_pick(kind, detail, options, title)
@@ -878,8 +1270,14 @@ class Session:
         if running:
             self._set_state("waiting", token=tok, expect=_BUSY)
         from meshpool_harness.redact import redact
+        try:                                  # a chat with no folder of its own choosing: no "Always in this folder"
+            from meshpool_harness import project_store as _PS
+            folder = bool(getattr(self, "workdir", "")) and not _PS.is_scratch(self.workdir)
+        except Exception:  # noqa: BLE001
+            folder = True
         self.emit({"type": "approval", "id": aid, "kind": kind, "title": title, "detail": redact(detail),
-                   "options": options, "scope": scope})
+                   "options": options, "scope": scope, "folder": folder, **_approval_view(kind, title, detail, redact),
+                   "folder_name": os.path.basename(str(getattr(self, "workdir", "") or "").rstrip("/\\")) if folder else ""})
         if time.time() - getattr(self, "t_turn", time.time()) > 60:
             _notify(f"{self.agent.title or 'A task'} needs your approval", title)
         try:
@@ -1012,6 +1410,8 @@ class Session:
             self.scheduled = None
         if files:                                    # saved first: if it fails, nothing was emitted or started
             text = self._save_files(text, files)
+        if images:
+            self._last_images = [dict(im) for im in images if isinstance(im, dict)]     # Try again sends them again
         self.touched = time.time()
         acp = self.harness.get("type") == "acp"
         if interrupt:
@@ -1064,6 +1464,7 @@ class Session:
                 self._after_stop.append((text, images))
                 queued_as, n = "after", len(self._after_stop)
             elif hasattr(self.agent, "steer") and not acp and self._undo_token != self._turn_id:
+                self._attach_to_turn(getattr(self, "_turn_n", None))         # added to the running turn: its copies too
                 self.agent.steer(self._body(text, images), images=images)    # emits an event: the lock is re-entrant
                 from meshpool_harness import pace as PACE
                 if PACE.classify(text, bool(images)) != "quick":
@@ -1081,9 +1482,20 @@ class Session:
         self._start_turn(text, images, token)
         return {"queued": False}
 
+    def _attach_to_turn(self, n) -> None:
+        """The copies of attached files made for the message that starts (or joins) checkpoint turn n (OM-03)."""
+        made = self.__dict__.pop("_attach_made", None)
+        if made and n and self.cp:
+            try:
+                self.cp.note_attached(n, made)
+            except Exception:  # noqa: BLE001 - never stops a turn
+                pass
+
     def take_back(self) -> dict:
         """The last message sent while the agent worked, back to the user: from the queue, or from the running
-        turn when the agent has not read it yet. {"text": None} when there is nothing left to take back."""
+        turn when the agent has not read it yet. {"text": None} when there is nothing left to take back. The copies
+        made for that message belong to no turn now: a later turn's Undo must not remove them."""
+        self.__dict__.pop("_attach_made", None)
         with self.lock:
             if self.queue:
                 text, _ = self.queue.pop()
@@ -1092,23 +1504,50 @@ class Session:
         if hasattr(self.agent, "take_back"):
             return {"text": self.agent.take_back()}
         return {"text": None}
+    def attachments_dir(self) -> Path:
+        """Where files dropped into this chat from outside its folder are kept: meshpool's data, not the user's folder
+        (runs/_uploads, which the agent, the office tools and outside agents may read)."""
+        return C.runs_dir() / "_uploads" / f"chat-{self.id}"
+
     def _save_files(self, text: str, files: list) -> str:
-        """Attached files go into this chat's own folder; the message then names them."""
+        """Attached files: one already in this chat's folder (same name, same bytes) is used where it is (WF-02);
+        any other is kept in this chat's attachments in meshpool's data, never copied into the user's folder (Lina,
+        round 3: her 2.2 MB CSV was duplicated into LinaData, and not counted as a change). The message names them;
+        what the agent makes still goes to the folder."""
         import base64
         from meshpool_harness import project_store as PS
         from meshpool_harness.ui import workbench as W
         if not self.workdir:
             raise ValueError("This chat has no folder to save files in.")
-        saved = []
+        here, kept, notes = [], [], []
         for f in files:
             f = f if isinstance(f, dict) else {}
             try:
                 data = base64.b64decode(f.get("data", "") or "")
             except (ValueError, TypeError):
                 raise ValueError(f"Couldn't read {f.get('name') or 'the file'}.")
-            saved.append(W.attach_to(Path(self.workdir), f.get("name", ""), data)["path"])
+            name = Path(str(f.get("name") or "file")).name
+            same = W.find_same(Path(self.workdir), Path(name).name, data)
+            if same:
+                here.append(same)
+                notes.append({"name": name, "path": same, "reused": True})
+                continue
+            box = self.attachments_dir()
+            box.mkdir(parents=True, exist_ok=True)
+            r = W.attach_to(box, name, data)
+            p = str(box / r["path"])
+            kept.append(p)
+            notes.append({"name": name, "path": p, "attached": True})
+        self._attached = notes                       # the app says where each one is (session_action "attached")
         where = "this chat's folder" if PS.is_scratch(self.workdir) else "the project folder"
-        return text.rstrip() + f"\n\nAttached files (in {where}): {', '.join(saved)}"
+        out = text.rstrip()
+        if here:
+            out += f"\n\nAttached files (in {where}): {', '.join(here)}"
+        if kept:
+            out += f"\n\nAttached files (in meshpool's attachments for this chat): {', '.join(kept)}"
+            out += ("\n\n​[meshpool] The user attached these files; meshpool keeps them for this chat outside the "
+                    "project folder. Read them where they are. Save anything you make in the project folder.")
+        return out
 
     def _office_ready(self, edit_only: bool = False):
         """The office tools for this chat from this message on: an outside agent (Pi, Codex) gets its office server at
@@ -1131,12 +1570,31 @@ class Session:
                 while not ready.is_set() and time.time() < end and not getattr(self, "_stop_req", False):
                     ready.wait(0.25)                 # Stop ends the wait
 
+    def _office_to_own(self, text: str) -> None:
+        """An office deliverable (a deck, slides, a memo or document, a spreadsheet, a PDF, speaker notes, or an edit
+        to an existing .pptx, .docx or .xlsx) asked of an outside engine Auto chose moves the chat to meshpool's own
+        agent, which has the office tools, the forge engine and its checks (Daniel, round 3: after he added a folder
+        every deck, memo and notes turn went to Codex, which hand-wrote python-pptx on blank layouts with no checks).
+        An engine the user picked by hand keeps the work. Never raises."""
+        try:
+            if self.harness.get("type") not in ("acp", "pi") or not self._auto_engine():
+                return
+            from meshpool_harness.office_intent import office_work
+            if not office_work(text):
+                return
+            own = HR.builtin_for(self.kind) or "meshpool-code"
+            if own != self.harness.get("id"):
+                self.handoff(own, "office work goes to meshpool's own agent", quiet=True)
+        except Exception:  # noqa: BLE001 - the current agent still answers
+            pass
+
     def _capability_turn(self, text: str) -> list:
         """Before a message runs: what it asks Meshpool to make (capabilities.needs), and an agent that can make it.
         The chat keeps its agent when that agent can; otherwise it moves, with its history, to the agent Auto would
         pick among those that can; only when none can does it say so. Returns the capabilities the message needs,
         for the hidden note (empty when no agent can make them)."""
         from meshpool_harness import capabilities as CAP
+        self._office_to_own(text)
         try:
             caps = CAP.needs(text)
         except Exception:  # noqa: BLE001 - a check never blocks a message
@@ -1157,12 +1615,15 @@ class Session:
                 ranked = []
             target = CAP.pick(caps, cur, [*ranked, "meshpool-work", "meshpool-code"], ready)
             if target is None:
-                self.emit({"type": "status", "text": f"No agent in Meshpool can make {CAP.labels(caps)}."})
+                self.emit({"type": "status", "text": f"No agent in meshpool can make {CAP.labels(caps)}."})
                 return []
             if target != cur:
                 self.handoff(target, f"{self.harness.get('name', 'This agent')} cannot make {CAP.labels(caps)}")
         except Exception as e:  # noqa: BLE001 - the current agent still answers
-            self.emit({"type": "status", "text": f"Could not check which agent can do this: {e}"})
+            from meshpool_harness.core import errtext as ET
+            plain, raw = ET.outside(str(e))
+            self.emit({"type": "status", "text": f"Could not check which agent can do this: {plain}",
+                       **({"detail": raw} if raw else {})})
         self._office_ready()
         return caps
 
@@ -1178,8 +1639,9 @@ class Session:
         if h.get("unsupported"):
             raise ValueError(h["unsupported"])
         self.handoff(hid, f"You switched this chat to {h.get('name', hid)}")
+        write_meta(self.id, picked=hid)              # the user's pick: its failures are shown, never worked around
 
-    def handoff(self, hid: str, why: str = "") -> None:
+    def handoff(self, hid: str, why: str = "", quiet: bool = False) -> None:
         """Move this chat to another agent, keeping what was said: the new agent starts with the conversation so far
         (Meshpool's agents as messages, outside agents as context with the next message), under the same chat id,
         so the chat, its files and its history stay one thread. Used when the current agent cannot do what a message
@@ -1236,34 +1698,146 @@ class Session:
             threading.Thread(target=self._start_mcp, daemon=True).start()
         a.save()
         write_meta(self.id, routed=hid, handoff=hid)
+        if quiet:                                    # the caller says it in its own line: no "Using ..." line
+            self.emit({"type": "status", "using": True, "text": f"Using {_short_harness(new['name'])}",
+                       "moved": {"harness": hid, "reason": why}})
+            return
         self.emit({"type": "status", "using": True, "text": f"Using {_short_harness(new['name'])}",
                    "handoff": {"harness": hid, "reason": why}})
 
-    def _start_failed_handoff(self, text: str, ev0: int | None = None) -> bool:
-        """The first turn of an Auto-routed chat ended because its agent could not start (the agent recorded it in
-        hrouter/health.py, so Auto no longer offers it): move the chat to the agent Auto picks now and say so. True
-        when the chat moved and the caller should send the message again. Once per chat; never raises."""
+    FALLBACK_LINE = "That way of working failed, so meshpool used its own agent."
+
+    def _watch_outside(self, token) -> None:
+        """An outside agent's turn (Codex, Pi, Hermes on the key endpoint): meshpool does not see its model calls, so a
+        dead model service looked like a slow one ("Still waiting for the model (3 min)", Maya). When the agent has
+        said nothing for MH_OUTSIDE_PROBE_S (15 s), the endpoint's address is checked with a plain connection: nothing
+        answering (connection refused, a name that does not resolve) is the service-down line at once, the same line
+        meshpool's own agent shows, and it says so again when the service answers. Never through a proxy (a direct
+        connection there says nothing); never sends a request."""
         try:
-            err = getattr(self.agent, "start_error", None)
-            if (not err or getattr(self, "_start_retry_done", False) or not read_meta(self.id).get("routed")
-                    or any(e.get("type") == "assistant" for e in self.events)):
+            every = float(os.environ.get("MH_OUTSIDE_PROBE_S", "15") or 15)
+        except ValueError:
+            every = 15.0
+        if every <= 0 or self.harness.get("provider") != "key":
+            return
+        try:
+            from meshpool_harness import providers as PV
+            base = PV.key_base()
+        except Exception:  # noqa: BLE001
+            return
+        again = max(1, int(min(every, 10)))
+        down, last = False, 0.0
+        while (self._turn_id == token and getattr(self, "state", "idle") in _BUSY and not self._stop_req
+               and self.harness.get("type") in ("acp", "pi")):
+            time.sleep(min(0.5, every / 4))
+            now = time.time()
+            if (not down and now - getattr(self, "_last_ev_at", now) < every) or now - last < (again if down else every):
+                continue
+            last = now
+            why = _unreachable(base)
+            if why is None:
+                return                                 # behind a proxy or not a plain address: nothing to tell
+            if why and not down:
+                down = True
+                self.emit({"type": "status", "down": True, "text": f"The model endpoint isn't answering ({why}). "
+                                                                   f"Checking again in {again} s. Press Stop to end."})
+            elif not why and down:
+                down = False
+                self.emit({"type": "status", "down": False, "text": "The model endpoint is answering again."})
+
+    def _fallback_prepare(self, caps: list, token) -> None:
+        """meshpool's own agent took over a turn the outside engine failed (_engine_fallback): it gets what the turn
+        set up for the engine (office tools, connectors, lane, spending task), and the open checkpoint turn becomes
+        one its tools book, at the message it starts from, so Undo cuts its conversation there."""
+        a = self.agent
+        if hasattr(a, "usage_task"):
+            a.usage_task = getattr(self, "_usage_task", None)
+        if caps:
+            self._office_ready(edit_only=list(caps) == ["edit"])
+        self._wait_mcp(token)
+        rr = getattr(self, "_turn_route", None)
+        if rr is not None and hasattr(a, "lane"):
+            a.lane = rr.lane if rr.lane != "chat" else "task"
+        if hasattr(a, "_repair"):
+            a._expect_gen = getattr(a, "_gen", 0)
+        if self.cp and hasattr(a, "messages"):
+            try:
+                self.cp.to_journal(len(a.messages))
+            except Exception:  # noqa: BLE001 - a checkpoint never blocks the message
+                pass
+
+    def _engine_failure(self, ev0: int | None = None) -> str:
+        """The error that ended this turn of an outside engine (Codex, Pi, Hermes) before it did any work: it could not
+        start, or the AI service answered its first call with an HTTP 4xx or 5xx, or nothing answered. "" when the turn
+        did something (a step, a reply), was stopped, or did not fail that way."""
+        if self.harness.get("type") not in ("acp", "pi"):
+            return ""
+        from meshpool_harness.core import errtext as ET
+        with self.lock:
+            evs = list(self.events[ev0:]) if ev0 is not None else []
+        if any(e.get("type") in ("tool_start", "interrupted", "approval") or (
+                e.get("type") == "assistant" and str(e.get("text") or "").strip()) for e in evs):
+            return ""
+        err = getattr(self.agent, "start_error", None) or getattr(self.agent, "turn_failed", None)
+        if err:
+            return str(err)
+        for e in evs:
+            raw = str(e.get("detail") or e.get("text") or "") if e.get("type") == "error" else ""
+            if raw and ET.engine_failed(raw):
+                return raw
+        return ""
+
+    def _auto_engine(self) -> bool:
+        """This chat runs on the engine Auto chose (at the start, or when a message needed another agent), not on
+        one the user picked."""
+        m = read_meta(self.id)
+        hid = self.harness.get("id")
+        return bool(hid and m.get("routed") == hid and m.get("picked") != hid)
+
+    def _engine_fallback(self, text: str, ev0: int | None = None) -> bool:
+        """The outside engine Auto chose failed before doing any work (_engine_failure): the same message runs again on
+        meshpool's own agent, with one plain line in the chat and the details in its fold; no engine name, no URL
+        (Maya and Priya: "unexpected status 404 Not Found: ..., url: http://127.0.0.1:.../v1/responses", then a click
+        on "Use meshpool Code instead" to get anything done). True when the chat moved and the caller should send the
+        message again. Once per chat. An engine the user picked keeps its plain error and gets a one-click way to
+        meshpool's own agent instead. Never raises."""
+        try:
+            raw = self._engine_failure(ev0)
+            if not raw or self._stop_req or getattr(self, "_fallback_done", False):
                 return False
-            self._start_retry_done = True
-            from meshpool_harness import harness_router as HRT
-            nxt = HRT.route(text, self.kind).get("harness")
-            if not nxt or nxt == self.harness.get("id"):
+            own = HR.builtin_for(self.kind) or "meshpool-code"
+            failed = self.harness.get("id")
+            if own == failed:
                 return False
-            name = self.harness.get("name", "The first agent")
+            if not self._auto_engine():
+                self.emit({"type": "status", "using": True, "text": f"Using {_short_harness(self.harness['name'])}",
+                           "back": {"harness": own, "name": HR.get(own)["name"]}})
+                return False
+            self._fallback_done = True
+            from meshpool_harness.core import errtext as ET
+            plain, _ = ET.outside(raw)
+            if not ET.is_raw(raw) and plain:
+                plain = "It could not start."
+            line = {"type": "status", "fallback": True, "text": self.FALLBACK_LINE, "detail": plain,
+                    "raw": ET._redact(raw)[:2000]}
             if ev0 is not None:
-                # The failed attempt (its copy of the message, the error, its turn end) becomes one note, so the
-                # chat shows the message once, after the switch, and the next agent's history carries it once.
+                # The failed attempt (its copy of the message, the error, its turn end) goes: the chat shows the
+                # message once, then the line under it, and the next agent's history carries it once. The line that
+                # named the engine Auto chose stays where it is (positions never move) but no longer names it.
                 with self.lock:
-                    self.events = [dict(e, i=i) for i, e in enumerate(
-                        self.events[:ev0] + [{"type": "status", "t": time.time(),
-                                              "text": f"{name} could not start: {str(err)[:300]}"}])]
+                    kept = []
+                    for e in self.events[:ev0]:
+                        if e.get("using") and not e.get("handoff") and (
+                                (e.get("auto") or {}).get("harness") == failed or e.get("back")):
+                            e = dict({k: v for k, v in e.items() if k != "back"}, text="Using meshpool")
+                        kept.append(e)
+                    self.events = [dict(e, i=i) for i, e in enumerate(kept)]
+                    self._after_user = line
                 self.epoch += 1                      # the page reloads the transcript instead of appending to it
                 self._persist(running=True)
-            self.handoff(nxt, f"{name} could not start")
+            else:
+                self.emit(line)
+            self.handoff(own, "the engine Auto chose failed", quiet=True)
             return True
         except Exception:  # noqa: BLE001 - the failed turn already told the user; nothing new may break it
             return False
@@ -1322,9 +1896,23 @@ class Session:
                 from meshpool_harness import checks as CK
                 self._emit_checks(run)
                 CK.end(run)
-                line = CK.final_line(run)
-                if line:
-                    self.emit({"type": "checks_line", "text": line, "items": CK.summary(run).get("items", [])})
+                sm = CK.summary(run)
+                look = ""
+                ll = getattr(self.agent, "last_look", None)           # the look of this turn: in the footer, not the reply
+                if isinstance(ll, dict) and ll.get("turn") == getattr(self.agent, "_turn_no", 0) and ll.get("line") \
+                        and ll.get("shown") != self._turn_id:
+                    look = str(ll["line"]).split("\n\n")[0]
+                    ll["shown"] = self._turn_id
+                with self.lock:                              # the turn's own reply: an unsure one gets no "all good"
+                    said = next((str(e.get("text") or "") for e in reversed(self.events)
+                                 if e.get("type") == "assistant" and not e.get("look")
+                                 and str(e.get("text") or "").strip()), "")
+                short, full = CK.footer(look, sm, reply=[said, str(ll["line"]) if look else ""])
+                if short:
+                    # Lina, Priya (round 3): "Checked as ...: found nothing to fix." read as noise in the answer. One
+                    # short muted line in the turn's footer ("Checked · all good"), the sentence and items in its fold.
+                    self.emit({"type": "checks_line", "text": short, "summary": full, "items": sm.get("items", []),
+                               "details": sm.get("details", []), **({"look": look} if look else {})})
             except Exception:  # noqa: BLE001
                 pass
             self._ck_run = ""
@@ -1368,9 +1956,14 @@ class Session:
                 root = Path(self.workdir).resolve()
                 with self.lock:
                     evs = list(self.events[ev0:])
-                for o in W.outputs_from(evs, [], root):
+                made = W.outputs_from(evs, [], root)
+                for o in made:
                     if o["path"].lower().endswith((".pptx", ".xlsx", ".docx")):
-                        AR.register(str(root / o["path"]), self.id, incognito=self.incognito)
+                        try:
+                            AR.register(str(root / o["path"]), self.id, incognito=self.incognito)
+                        except Exception:  # noqa: BLE001 - one file the registry refuses never skips the title
+                            pass
+                self._retitle(None, evs)
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -1471,6 +2064,7 @@ class Session:
                         t = self.cp.begin_turn(text.strip().splitlines()[0] if text.strip() else "Images", idx,
                                                event_index=ev0)
                         self._turn_n = (t or {}).get("n")
+                        self._attach_to_turn(self._turn_n)
                         if t is None and self.cp.disabled and not getattr(self, "_cp_noted", False):
                             self._cp_noted = True          # say it once per thread, not on every turn
                             self.emit({"type": "status", "text": self.cp.disabled})
@@ -1511,6 +2105,10 @@ class Session:
                 elif hasattr(self.agent, "pace_deadline"):
                     self.agent.pace_deadline = 0
                 commits: list = []                   # what this turn used up: spent only once it really starts (M20-03)
+                try:                                 # Chat mode, not the Code tab: the agent reads office files with
+                    self.agent.chat_mode = read_meta(self.id).get("code_mode") is not True   # read_document
+                except Exception:  # noqa: BLE001
+                    pass
                 if self.ctx_pending:
                     try:
                         from meshpool_harness import assistant as AS
@@ -1528,6 +2126,7 @@ class Session:
                         body += "\n\n\u200b" + AS.context_block(
                             text, self.workdir, pid, chat_id=self.id, incognito=self.incognito, exclude=ex,
                             lookup=not m0.get("project_unbound"), rules=outside, tools=tools,
+                            chat=m0.get("code_mode") is not True,     # Chat mode: plain outcomes, not code
                             data_rule=outside or bool(getattr(self.agent, "_style", lambda: False)()),
                             # Pi: the office rules ride on the message that asks for a file (capabilities.note),
                             # not on every chat's first message
@@ -1554,6 +2153,13 @@ class Session:
                             commits.append(lambda pid=pid: write_meta(self.id, project_ctx=pid))
                     except Exception:  # noqa: BLE001
                         pass
+                try:                                    # what Undo did since the last message (note_undo)
+                    un = str(read_meta(self.id).get("undo_note") or "")
+                    if un:
+                        body += "\n\n\u200b" + un
+                        commits.append(lambda: write_meta(self.id, undo_note=""))
+                except Exception:  # noqa: BLE001
+                    pass
                 try:                                    # facts the user left out of this chat after its start
                     if not self.ctx_pending:
                         m1 = read_meta(self.id)
@@ -1589,11 +2195,14 @@ class Session:
                 self._turn_begin()
                 if self.harness.get("type") not in ("acp", "pi") and hasattr(self.agent, "_repair"):
                     self.agent._expect_gen = gen0     # a Stop since the message was taken ends this turn at once
+                elif self.harness.get("type") in ("acp", "pi"):
+                    threading.Thread(target=self._watch_outside, args=(token,), daemon=True).start()
                 if images:
                     self.agent.send(body, images=images)
                 else:
                     self.agent.send(body)
-                if self._start_failed_handoff(text, ev0):   # M29-02: the agent Auto picked could not start
+                if self._engine_fallback(text, ev0):   # the engine Auto picked failed before any work: run it here
+                    self._fallback_prepare(caps, token)
                     if images:
                         self.agent.send(body, images=images)
                     else:
@@ -1612,7 +2221,10 @@ class Session:
                         shown = any(x.get("type") == "user" for x in self.events[ev0:])
                     if not shown:
                         self.emit({"type": "user", "text": text.split("\u200b")[0].strip(), "images": []})
-                    self.emit({"type": "error", "text": f"This message could not run: {str(e)[:300]}"})
+                    from meshpool_harness.core import errtext as ET
+                    plain, raw = ET.outside(str(e)[:2000])
+                    self.emit({"type": "error", "text": f"This message could not run: {(plain or str(e))[:300]}",
+                               **({"detail": raw} if raw else {})})
                 except Exception:  # noqa: BLE001
                     pass
             finally:
@@ -1631,6 +2243,7 @@ class Session:
                 return fn(*a)
             except Exception:  # noqa: BLE001
                 return None
+        guard(self._finish_values)                   # before the checkpoint closes: the write is booked to this turn
         guard(self._turn_finish)
         with _ACTIVE_LOCK:
             _ACTIVE.get(root, set()).discard(self)
@@ -1735,6 +2348,27 @@ class Session:
         except Exception:  # noqa: BLE001
             pass
 
+    def _finish_values(self) -> int:
+        """meshpool's finish hook for every harness: workbooks this turn wrote whose formulas have no stored results
+        get them (xl_values.fill), booked to the turn like any write. meshpool's own agent already does it when it
+        answers (agent/core._cache_formula_values); an outside agent (Codex, Pi, Hermes) did not, and Priya's
+        Codex-made workbook was saved with no totals showing. Only files the turn wrote: one it only read is never
+        rewritten. Returns how many cells were filled."""
+        if os.environ.get("MH_CACHE_FORMULAS", "1") == "0" or not self.cp:
+            return 0
+        wrote = self.cp.turn_written()
+        if not wrote:
+            return 0
+        from meshpool_harness import xl_values
+        n = 0
+        for rel in wrote[:200]:
+            p = Path(self.cp.root) / rel
+            if p.suffix.lower() != ".xlsx" or p.name.startswith("~$") or not p.is_file():
+                continue
+            with self.cp.own_write(p):
+                n += xl_values.fill(p)
+        return n
+
     def _end_cp_turn(self):
         """Close the open checkpoint turn, remember the turn counter, and tell the page which turn it was."""
         if not self.cp:
@@ -1742,9 +2376,47 @@ class Session:
         try:
             self.cp.end_turn()
             write_meta(self.id, turn_seq=self.cp.seq)
-            self.emit({"type": "checkpoint", "turns": self.cp.turns()[-1:]})
+            from meshpool_harness.ui import workbench as W
+            turns = self.cp.turns()
+            ev = {"type": "checkpoint", "turns": W.own_changes(turns[-1:], self.cp.root)}
+            try:                                   # files the turn said it saved and then deleted: no card for them
+                with self.lock:
+                    evs = list(self.events[int((turns[-1] if turns else {}).get("event_index") or 0):])
+                gone = W.gone_files(evs, self.cp.root)
+                if gone:
+                    ev["gone"] = gone
+            except Exception:  # noqa: BLE001
+                pass
+            self.emit(ev)
+            self._retitle(turns)
         except Exception:  # noqa: BLE001
             pass
+
+    def _retitle(self, turns: list | None = None, evs: list | None = None, reset: bool = False) -> str:
+        """Name the chat after what it made, from every turn's checkpoint (the files really added) and this turn's
+        events. Daniel, 0.0.18: the chat kept "This is the Northfield bench...": the event scan missed "Saved as: X"
+        and "Files: - X", so retitle_from_work saw no deliverable."""
+        if self.incognito:
+            return ""
+        try:
+            from meshpool_harness.ui import workbench as W
+            root = Path(self.cp.root if self.cp else self.workdir).resolve()
+            made: dict = {}
+            if turns is None and self.cp:
+                turns = self.cp.turns()
+            for t in W.own_changes(turns or [], root):
+                for c in t.get("changed") or []:
+                    if c.get("status") == "added":
+                        made.setdefault(str(c["path"]), {"path": str(c["path"])})
+            for o in W.outputs_from(evs or [], [], root):
+                made.setdefault(o["path"], o)
+            with self.lock:                        # a file the user attached is theirs, not something this chat made
+                said = [str(e.get("text") or "") for e in self.events if e.get("type") == "user"]
+            attached = {x.strip() for t in said for line in re.findall(r"Attached files \(in [^)]*\): ([^\n]+)", t)
+                        for x in line.split(", ")}
+            return retitle_from_work(self.id, root, [o for k, o in made.items() if k not in attached], reset=reset)
+        except Exception:  # noqa: BLE001
+            return ""
 
     def _resume_steers(self):
         """Answer what the user added just as the turn ended, as a turn of its own: its file changes get their own
@@ -1780,7 +2452,7 @@ class Session:
         if self.state in _BUSY:
             raise ValueError(busy)
         if not hasattr(self.agent, "grade_now"):
-            raise ValueError("This agent cannot be checked by Meshpool's reviewer.")
+            raise ValueError("This agent cannot be checked by meshpool's reviewer.")
         token = self._claim_turn()
         if token is None:
             raise ValueError(busy)
@@ -1815,7 +2487,7 @@ class Session:
         write_meta(self.id, route=r.spec, route_label=r.label, route_profile=r.profile or None)
         self.emit({"type": "status", "route": r.to_dict(), "text": f"Harness: {r.label} (picked by you)."})
 
-    def set_model(self, model: str):
+    def set_model(self, model: str, check: bool = False):
         model = (model or "").strip()
         from meshpool_harness import providers as PV
         sup = self.harness.get("providers") or []
@@ -1828,6 +2500,15 @@ class Session:
                 and prov != self.harness["provider"] and self.agent.acp_session):
             raise ValueError(f"This chat runs {self.harness['name']} on {self.harness.get('runs_on')}. To use "
                              f"{PV.name(prov)}, start a new chat.")
+        # A pick in the model menu (check=True, the "model" action only) on an agent that uses the picker's models: a
+        # name the endpoint's list lacks is refused. Never when a chat is created or reopened: a chat saved on a model
+        # that is gone must still open (review, 0.0.18: get(sid) raised and the chat's history could not be shown).
+        # A variant suffix (OpenRouter's ":nitro", ":online") counts as its base model, which is what the list has.
+        if check and prov and self.harness.get("models") == "meshpool" and model != getattr(self.agent, "model", None):
+            known = _known_models(prov)
+            bare = PV.split(model)[1]
+            if known is not None and bare not in known and bare.split(":", 1)[0] not in known:
+                raise ValueError(f"The endpoint does not offer a model named {model}. Pick one from the model list.")
         if hasattr(self.agent, "set_model"):
             self.agent.set_model(model)
         else:
@@ -2007,6 +2688,12 @@ class Session:
 
     def _revert(self, turn: int) -> dict:
         cut = self._turn_cut(turn)
+        with self.lock:
+            had = (len(getattr(self.agent, "messages", None) or []), len(self.events))
+        try:
+            undone = sum(1 for t in self.cp.turns() if int(t.get("n") or 0) >= int(turn)) or 1
+        except Exception:  # noqa: BLE001
+            undone = 1
         r = self.cp.revert_to_before(int(turn))
         idx = r.get("message_index")
         built_in = self.harness["type"] not in ("acp", "pi")
@@ -2035,7 +2722,11 @@ class Session:
                     self.agent.events = [{k: v for k, v in e.items() if k not in ("i", "t")} for e in self.events]
                     self.agent.save()
         self.epoch += 1
+        with self.lock:                          # whether the conversation lost anything (undo_message says so)
+            r["conversation"] = (len(getattr(self.agent, "messages", None) or []), len(self.events)) != had
         self._persist(running=False)
+        if built_in:                             # the title follows the work that is left (never a name the user gave)
+            self._retitle(reset=True)
         try:                                     # Undo counts against every logged turn it removed; never breaks Undo
             from meshpool_harness.hrouter import outcomes as OUT
             logged = {x.get("turn") for x in OUT.rows(self.id) if isinstance(x.get("turn"), int)}
@@ -2043,23 +2734,24 @@ class Session:
                 OUT.mark(self.id, "undo", n)
         except Exception:
             pass
-        def _n(k, word):
-            n = len(r.get(k) or [])
-            return f"{n} file{'' if n == 1 else 's'} {word}"
-        parts = [s for s in (_n("restored", "restored") if r.get("restored") else "",
-                             _n("deleted", "removed") if r.get("deleted") else "") if s]
-        msg = "Undone. " + ("Files are back to how they were: " + ", ".join(parts) if parts else
-                            "No files had changed")
-        if r.get("notes"):                       # why each file was kept: changed later, never stored, a link...
-            msg += ". " + " ".join(r["notes"][:5]).rstrip(".") + (" ..." if len(r["notes"]) > 5 else "")
-        elif r.get("kept"):
-            names = ", ".join(r["kept"][:5]) + (" ..." if len(r["kept"]) > 5 else "")
-            msg += f". Kept as they are, because you changed them afterwards: {names}"
-        msg += "."
-        if r.get("backup"):
-            msg += f" Copies of the files Undo replaced are in {r['backup']}."
-        self.emit({"type": "status", "text": msg})
+        msg, detail = undo_message(r)
+        self.emit({"type": "status", "text": msg, **({"detail": detail} if detail else {}),
+                   "undo_files": {"deleted": list(r.get("deleted") or []), "restored": list(r.get("restored") or [])}})
+        if r.get("conversation") is not False or r.get("restored") or r.get("deleted"):
+            self.note_undo(undo_note(r, undone))
         return r
+
+    def note_undo(self, note: str) -> None:
+        """What Undo did, for the model: it rides, hidden, on the next message (see _start_turn), as the other notes
+        do. Without it the conversation was rewound with no trace, and "did my prices go back?" got a confused answer
+        (Maya). The undone messages stay gone."""
+        if not note:
+            return
+        try:
+            old = str(read_meta(self.id).get("undo_note") or "")
+            write_meta(self.id, undo_note=(old + " " + note).strip() if old else note)
+        except Exception:  # noqa: BLE001 - a note never breaks Undo
+            pass
 
     def rewind(self, event_index: int, files: bool = True) -> dict:
         """Go back to just before one of the user's messages (the event at `event_index`): the conversation, the
@@ -2070,16 +2762,83 @@ class Session:
             r = CR.rewind(self.id, CR.message_for_event(self, int(event_index)), files=bool(files), session=self,
                           held=True)
             if r.get("undo"):
-                msg = "Rewound. " + ("Files are back to how they were." if (r["undo"].get("restored") or
-                                                                             r["undo"].get("deleted")) else "")
-                if r["undo"].get("notes"):
-                    msg += " " + " ".join(r["undo"]["notes"][:5])
-                if r["undo"].get("backup"):
-                    msg += f" Copies of the files Undo replaced are in {r['undo']['backup']}."
-                self.emit({"type": "status", "text": msg.strip()})
+                msg, detail = undo_message(r["undo"])
+                u = r["undo"]
+                self.emit({"type": "status", "text": "Rewound. " + msg[len("Undone. "):],
+                           **({"detail": detail} if detail else {}),
+                           "undo_files": {"deleted": list(u.get("deleted") or []), "restored": list(u.get("restored") or [])}})
             return r
         finally:
             self._end_turn(token, notice=False)
+
+    def retry(self) -> dict:
+        """Try again (the page's line under a long wait): stop the turn if one runs, wait for it to end, then run the
+        user's last message again in place of that attempt, with the images it had. The attempt leaves the chat, so
+        the message shows once and no "Stopped. Send a message to continue." line is left behind (Maya: Try again
+        posted the message twice under "Stopped."). Files stay as they are.
+
+        A turn that is still running is waited for in the background: the request returns at once ({"retrying":
+        True}) and the new attempt streams in like any turn; a failure shows as an error line in the chat. Otherwise
+        returns what send returns."""
+        with self.lock:
+            pos = next((i for i in range(len(self.events) - 1, -1, -1) if self.events[i].get("type") == "user"
+                        and not self.events[i].get("steer") and str(self.events[i].get("text") or "").strip()), None)
+        if pos is None:
+            raise ValueError("There is no message to send again.")
+        if getattr(self, "state", "idle") not in _BUSY:
+            return self._retry_from(pos)
+        self.stop()
+
+        def later():
+            try:
+                end = time.time() + float(os.environ.get("MH_RETRY_STOP_S", "25"))
+                while getattr(self, "state", "idle") in _BUSY and time.time() < end:
+                    time.sleep(0.1)
+                if getattr(self, "state", "idle") in _BUSY:
+                    raise ValueError("It is still stopping. Press Try again in a moment.")
+                self._retry_from(pos)
+            except Exception as e:  # noqa: BLE001 - shown in the chat: the request has already returned
+                self.emit({"type": "error", "text": str(e) or "Try again did not work. Send the message again."})
+        threading.Thread(target=later, daemon=True, name=f"retry-{self.id}").start()
+        return {"retrying": True}
+
+    def _retry_images(self, pos: int) -> list | None:
+        """The images the message at events[pos] was sent with, read back from the model's copy of it (the event only
+        keeps their names), else the ones the last send had."""
+        with self.lock:
+            ev = dict(self.events[pos]) if 0 <= pos < len(self.events) else {}
+        names = list(ev.get("images") or [])
+        if not names:
+            return None
+        out = []
+        try:
+            from meshpool_harness import chat_rewind as CR
+            msg = (getattr(self.agent, "messages", None) or [])[CR.message_for_event(self, pos)]
+            parts = msg.get("content") if isinstance(msg, dict) else None
+            for part in (parts if isinstance(parts, list) else [])[1:]:
+                if not isinstance(part, dict) or part.get("type") != "image_url":
+                    break                            # figure pages follow with their own labels: not the user's
+                url = str((part.get("image_url") or {}).get("url") or "")
+                head, _, data = url.partition(";base64,")
+                if head.startswith("data:") and data:
+                    out.append({"name": names[len(out)] if len(out) < len(names) else "image", "mime": head[5:],
+                                "data": data})
+        except Exception:  # noqa: BLE001
+            out = []
+        if not out:
+            out = [dict(im) for im in (getattr(self, "_last_images", None) or [])]
+        return out[:len(names)] or None
+
+    def _retry_from(self, pos: int) -> dict:
+        with self.lock:
+            text = str(self.events[pos].get("text") or "")
+        images = self._retry_images(pos)
+        from meshpool_harness import chat_rewind as CR
+        r = CR.rewind(self.id, CR.message_for_event(self, pos), files=False, session=self)
+        if r.get("forked"):                           # an outside agent that cannot drop the attempt: send it as is
+            text = r.get("text") or text
+        self._was_stopped = False                    # the message itself runs again: no "I stopped" note with it
+        return self.send(text, images=images)
 
     def fork(self, event_index: int) -> str:
         """A new chat with the conversation up to the end of the exchange that starts at this message."""
@@ -2101,9 +2860,11 @@ class Session:
         for p in pend:
             p["ev"].set()
 
-    def set_mode(self, mode: str):
+    def set_mode(self, mode: str, save: bool = True):
+        """Change the access mode. save=False is for this run only: the chat's stored mode stays as it was."""
         self.agent.mode = self.mode = C.normalize_mode(mode, "ask")
-        write_meta(self.id, mode=self.mode)          # restored on resume: an Ask chat stays Ask
+        if save:
+            write_meta(self.id, mode=self.mode)      # restored on resume: an Ask chat stays Ask
         if hasattr(self.agent, "apply_mode"):
             try:
                 self.agent.apply_mode()
@@ -2116,6 +2877,7 @@ class Session:
             n = len(self.events)
             raw = self.events[since:]
         evs = [e for e in raw if not e.get("gone")]  # a folded reply's deltas: its assistant event shows the text
+        evs = [_with_plain(e) for e in evs]
         a = self.agent
         meta = read_meta(self.id)
         try:
@@ -2127,8 +2889,11 @@ class Session:
         return {"id": self.id, "workdir": self.workdir, "state": self.state, "mode": a.mode,
                 "open": {"approvals": open_ids, "question": oq},
                 "turn_started": getattr(self, "t_turn", None) if self.state in ("working", "waiting") else None,
+                # True while a model request is made or waited on, False when none is; None when the harness cannot say
+                "model_inflight": (getattr(a, "model_req_at", None) is not None) if hasattr(a, "model_req_at") else None,
                 "title": meta.get("title") or nice_title(a.title), "pinned": bool(meta.get("pinned")),
                 "project_id": _project_of(meta, self.workdir), "scratch": bool(meta.get("scratch")),
+                "code_mode": meta.get("code_mode"),       # False: a chat in a folder that was never started from the Code tab
                 "usage": a.usage, "context": getattr(a, "context", None), "kind": self.kind,
                 "harness": {k: self.harness.get(k) for k in ("id", "name", "type", "description", "models", "provider",
                                                              "providers", "runs_on")},
@@ -2138,7 +2903,7 @@ class Session:
                 "effort": self.effort,
                 "style": self.style_id() or _default_style(), "incognito": bool(self.incognito),
                 "worktree": meta.get("worktree") or None, "versions": meta.get("versions") or {},
-                "epoch": self.epoch, "turns": self.cp.turns() if self.cp else [],
+                "epoch": self.epoch, "turns": _own_turns(self.cp),
                 "checkpoints_note": self.cp.disabled if self.cp else "",
                 "events": evs, "total": since + len(raw) if since <= n else n,
                 "mcp": self.mcp.status() if self.mcp else None, "trust": _trust_note(self.workdir)}
@@ -2163,16 +2928,43 @@ def _default_style() -> str:
         return "normal"
 
 
+_TRUST_NOTES: dict = {}             # workdir -> (stamp of the files the note depends on, note)
+
+
+def _trust_stamp(workdir: str) -> tuple:
+    """What the trust note depends on: the trusted-folders files and the project's risky files (inode, mtime, size)."""
+    from meshpool_harness import trust as TR
+    w = Path(workdir)
+    out: list = [os.environ.get("MH_TRUST_PROJECT", ""), str(C.home())]
+    for f in (TR._store(), C.home() / "trusted_projects.json", w / ".meshpool" / "hooks.json",
+              w / ".meshpool" / "permissions.json", w / ".mcp.json", w / ".meshpool" / "mcp.json"):
+        try:
+            st = os.stat(f)
+            out.append((st.st_ino, st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append(None)
+    return tuple(out)
+
+
 def _trust_note(workdir: str) -> dict | None:
-    """When the folder has hooks or allow rules that are being ignored until the user trusts it."""
+    """When the folder has hooks or allow rules that are being ignored until the user trusts it. Every chat view asks,
+    so the answer is kept until one of the files it depends on changes."""
     if not workdir:
         return None
     try:
         from meshpool_harness import trust as TR
+        stamp = _trust_stamp(workdir)
+        hit = _TRUST_NOTES.get(workdir)
+        if hit and hit[0] == stamp:
+            return dict(hit[1], files=list(hit[1]["files"])) if hit[1] else None
         files = TR.needs_prompt(workdir)
+        note = {"files": files, "text": TR.message(workdir)} if files else None
     except Exception:  # noqa: BLE001 - a status line must never break the chat view
         return None
-    return {"files": files, "text": TR.message(workdir)} if files else None
+    if len(_TRUST_NOTES) > 200:
+        _TRUST_NOTES.clear()
+    _TRUST_NOTES[workdir] = (stamp, note)
+    return dict(note, files=list(files)) if note else None
 
 
 def create(body: dict) -> dict:
@@ -2220,6 +3012,15 @@ def _create(body: dict, made: list) -> dict:
         hr = None
     if (harness or HR.default_for(kind)) == "meshpool-auto":
         from meshpool_harness import harness_router as HRT
+        if not kind_given and kind == "code":
+            # Chat mode in a linked folder: office work is Work's (Priya: rooms.xlsx in her Studio folder went to Codex
+            # as "docs words in a Code chat"). The Code tab (kind given) keeps its own agents (S-04).
+            try:
+                from meshpool_harness.office_intent import office_work
+                if office_work(task, body.get("files") or []):
+                    kind = "cowork"
+            except Exception:  # noqa: BLE001
+                pass
         routed = HRT.route(task, kind, category=spec_of(hr.spec).backend if hr else None,
                            model=body.get("model") or None)
         harness = routed["harness"]
@@ -2260,7 +3061,7 @@ def _create(body: dict, made: list) -> dict:
             WT.discard(wt["id"])
         if isinstance(e, OSError) and e.errno in (errno.EMFILE, errno.ENFILE):
             # not "[Errno 24] Too many open files": say what to do (the page shows this text where Send was pressed)
-            raise ValueError("Meshpool cannot start another chat: this computer's limit of open files was reached. "
+            raise ValueError("meshpool cannot start another chat: this computer's limit of open files was reached. "
                              "Close the chats you are not using, then send again.") from e
         raise
     made.clear()                                    # the chat exists: it owns its folder now
@@ -2301,7 +3102,8 @@ def _create(body: dict, made: list) -> dict:
             s.emit({"type": "status", "using": True, "text": f"Using {_short_harness(HR.get(harness or HR.default_for(kind))['name'])}"})
         except (KeyError, ValueError):
             pass
-    write_meta(s.id, project_id=pid or "", scratch=bool(scratch))
+    write_meta(s.id, project_id=pid or "", scratch=bool(scratch),
+               code_mode=(kind_given == "code") if kind == "code" else None)     # made from the Code tab, or only in a folder
     if body.get("memory_exclude"):                  # facts left out before the first message (the context X-ray)
         write_meta(s.id, memory_exclude=[str(i) for i in body["memory_exclude"]][:200])
     if body.get("incognito"):                       # no memory read or written, no learning, nothing logged for insights
@@ -2363,9 +3165,47 @@ def worktree_users(folder: str, exclude: str = "") -> list:
     return out
 
 
+def _known_models(prov: str) -> set | None:
+    """Model ids (without the provider prefix) a provider is known to serve, from the lists already read; None when
+    no list is known, so a model picker that is offline never blocks a name. Never a network call."""
+    try:
+        if prov == "chatgpt":                  # its list leaves out hidden models that still work: no check
+            return None
+        from meshpool_harness.ui import workbench as W
+        return W.known_models()
+    except Exception:  # noqa: BLE001 - a check that cannot run allows the name
+        return None
+
+
+def _unreachable(base: str, timeout: float = 3.0):
+    """Why nothing answers at a model endpoint's address ("nothing answered at that address (connection refused)"),
+    "" when a connection opens, None when a direct connection says nothing (a proxy is in the way, no address)."""
+    import socket
+    import urllib.request
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(str(base or ""))
+        host, port = u.hostname, u.port or (443 if u.scheme == "https" else 80)
+    except ValueError:
+        return None
+    if not host or (urllib.request.getproxies().get(u.scheme or "http") and not urllib.request.proxy_bypass(host)):
+        return None
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return ""
+    except ConnectionRefusedError:
+        return "nothing answered at that address (connection refused)"
+    except socket.gaierror:
+        return "its name could not be found (DNS lookup failed)"
+    except OSError as e:
+        if getattr(e, "errno", None) in (101, 113, 10050, 10051, 10065):
+            return "this computer has no network route to it"
+        return ""                                    # a slow connection is not a dead one
+
+
 def _short_harness(name: str) -> str:
     """'Meshpool Work' and 'Meshpool Code' read as Meshpool; Codex, Pi, OpenCode and Hermes keep their names."""
-    return "Meshpool" if str(name).lower().startswith("meshpool") else str(name)
+    return "meshpool" if str(name).lower().startswith("meshpool") else str(name)
 
 
 _REAPER: list = []
@@ -2427,7 +3267,7 @@ def _claim(sid: str, write: bool = True) -> None:
         rec = {}
     pid = rec.get("pid")
     if isinstance(pid, int) and pid != os.getpid() and HR._pid_alive(pid):
-        where = "the terminal" if rec.get("frontend") == "terminal" else "the Meshpool app"
+        where = "the terminal" if rec.get("frontend") == "terminal" else "the meshpool app"
         raise ChatBusy(f"This chat is open in {where} (process {pid}). Close it there, or fork it: "
                        f"meshpool chats fork {sid}")
     if not write or not f.parent.is_dir():
@@ -2525,11 +3365,14 @@ def session_action(sid: str, act: str, b: dict) -> dict:
     s = get(sid)
     since = int(b.get("since", 10 ** 9))
     if act == "send":
+        s._attached = []
         r = s.send(b.get("text", ""), images=b.get("images") or None, interrupt=bool(b.get("interrupt")),
                    files=b.get("files") or None)
-        return dict(s.view(since), sent=r)
+        return dict(s.view(since), sent=r, attached=list(getattr(s, "_attached", None) or []))
     if act == "take_back":                          # a message sent while the agent worked, back to the box
         return dict(s.view(since), taken=s.take_back())
+    if act == "retry":                              # Try again: stop, then the last message again, shown once
+        return dict(s.view(since), sent=s.retry())
     if act == "stop":
         s.stop()
     elif act == "grade":
@@ -2544,7 +3387,7 @@ def session_action(sid: str, act: str, b: dict) -> dict:
     elif act == "mode":
         s.set_mode(b.get("mode", "ask"))
     elif act == "model":
-        s.set_model(b.get("model", ""))
+        s.set_model(b.get("model", ""), check=True)
     elif act == "harness":
         s.switch_harness(b.get("harness", ""))
     elif act == "route":
@@ -2558,17 +3401,25 @@ def session_action(sid: str, act: str, b: dict) -> dict:
     elif act == "effort":
         s.set_effort(b.get("effort", ""))
     elif act == "revert":
-        turn = int(b.get("turn", 0))
+        turn, undone = int(b.get("turn", 0)), None
         if str(b.get("what") or "both") == "chat":   # the conversation only: the files stay as they are
             pos = s._turn_cut(turn)
             if pos is None:
                 raise ValueError("That reply cannot be taken back without its files.")
+            try:
+                n = sum(1 for t in s.cp.turns() if int(t.get("n") or 0) >= turn) if s.cp else 1
+            except Exception:  # noqa: BLE001
+                n = 1
             s.rewind(pos, files=False)
+            s.note_undo(undo_note({}, n, files=False))
         else:
-            s.revert(turn)
+            u = s.revert(turn)
+            undone = {"deleted": list(u.get("deleted") or []), "restored": list(u.get("restored") or [])}
         if not b.get("keep_versions"):               # Undo or Edit: the earlier answers belonged to that message
             vs = {k: v for k, v in (read_meta(s.id).get("versions") or {}).items() if k.isdigit() and int(k) < turn}
             write_meta(s.id, versions=vs)
+        if undone is not None:                         # the app closes or refreshes a preview of these files
+            return dict(s.view(since), undone=undone)
     else:
         raise ValueError("Unknown chat action.")
     return s.view(since)
@@ -2581,7 +3432,7 @@ def view(sid: str, since: int) -> dict:
     except ProjectMissing as e:
         tr = _transcript(sid) or {}
         evs = tr.get("events") or events_from_messages(saved_messages(sid))
-        evs = [dict(x, i=i) for i, x in enumerate(evs)]
+        evs = [_with_plain(dict(x, i=i)) for i, x in enumerate(evs)]
         evs.append({"type": "error", "i": len(evs), "text": f"This chat's project folder ({e}) was moved or deleted, "
                     "so it can't continue here. Its history is below; start a new chat to keep working."})
         meta = read_meta(sid)
@@ -2605,6 +3456,27 @@ def _project_of(meta: dict, workdir: str, legacy: dict | None = None) -> str:
     return legacy.get(workdir or "", "")
 
 
+def _listed_project(meta: dict, workdir: str, legacy: dict, kind: str | None = None) -> str:
+    """The project a chat is listed under. A Code session whose folder is a project's linked folder is listed under
+    that project even when it was started outside it (Code mode, a folder pick): Lina's data question in a project
+    became a Code session that was no longer under the project. Listing only: the chat's own project, its
+    instructions and memory, stay as stored. A chat taken out of its project (project_unbound) stays out."""
+    pid = _project_of(meta, workdir, legacy)
+    if pid or meta.get("project_unbound") or (meta.get("kind") or kind) != "code" or not workdir:
+        return pid
+    return (legacy or {}).get(workdir) or ""          # both paths are stored resolved: no disk access per row
+
+
+def _list_project(r: dict, m: dict, legacy: dict, live_pids: set) -> None:
+    """Set a listed row's project_id (where the sidebar shows it) and project_linked: whether the chat's own project
+    is that one. A Code session listed under a project by its folder is not linked, so the menu does not tick it as
+    if it were."""
+    wd = r.get("workdir") or ""
+    pid = _listed_project(m, wd, legacy, r.get("kind"))
+    r["project_id"] = pid if pid in live_pids else ""
+    r["project_linked"] = bool(r["project_id"]) and _project_of(m, wd, legacy) == r["project_id"]
+
+
 _ROWS: dict = {}                    # session.json path -> (mtime, size, row): imported histories can be thousands
 
 
@@ -2624,11 +3496,10 @@ def _decorate(r: dict, m: dict, legacy: dict, live_pids: set) -> dict:
     r["unread"] = bool(m.get("unread")) and r.get("state") not in ("working", "waiting")
     r["scheduled"] = bool(m.get("scheduled"))
     r["pr"] = m.get("pr") or None                 # the pull request last seen for this session (the row's icon and card)
-    r["project_id"] = _project_of(m, r.get("workdir") or "", legacy)
-    if r["project_id"] and r["project_id"] not in live_pids:
-        r["project_id"] = ""
+    _list_project(r, m, legacy, live_pids)
     r["_m"] = m                                   # kept for the cached rows: projects are re-resolved on every call
     r["scratch"] = bool(m.get("scratch"))
+    r["code_mode"] = m.get("code_mode")           # False: a chat in a folder that was never started from the Code tab
     r["kind"] = m.get("kind") or r.get("kind") or "code"
     if m.get("worktree"):                         # a chat in an isolated copy is listed under the folder it came from
         r["worktree"] = m["worktree"].get("id")
@@ -2639,7 +3510,7 @@ def _decorate(r: dict, m: dict, legacy: dict, live_pids: set) -> dict:
 def _project_info() -> tuple:
     try:
         from meshpool_harness import project_store as PS
-        return PS.legacy_map(), {p["id"] for p in PS.list_projects()}
+        return PS.link_index()
     except Exception:  # noqa: BLE001
         return {}, set()
 
@@ -2685,6 +3556,14 @@ def _disk_rows() -> tuple:
         return res
 
 
+def _own_turns(cp) -> list:
+    """The checkpoint turns for the page: copies of unchanged files left out of "changed" (workbench.own_changes)."""
+    if not cp:
+        return []
+    from meshpool_harness.ui import workbench as W
+    return W.own_changes(cp.turns(), cp.root)
+
+
 def listing() -> list:
     base, _, _ = _disk_rows()
     legacy, live_pids = _project_info()           # projects change by their own store, so never from the cache
@@ -2693,8 +3572,7 @@ def listing() -> list:
         if sid not in DELETED:
             r = dict(r)
             m = r.pop("_m")
-            pid = _project_of(m, r.get("workdir") or "", legacy)
-            r["project_id"] = pid if pid in live_pids else ""
+            _list_project(r, m, legacy, live_pids)
             rows[sid] = r
     with LOCK:
         live = list(LIVE.items())
@@ -2797,7 +3675,15 @@ def _purge(sid: str, force: bool = False) -> None:
     d = SESSIONS / sid
     if d.is_dir() and d.parent == SESSIONS:
         shutil.rmtree(d, ignore_errors=True)
+    att = C.runs_dir() / "_uploads" / f"chat-{sid}"   # the files dropped into it go with it
+    if att.is_dir() and "/" not in sid and "\\" not in sid and sid not in ("", ".", ".."):
+        shutil.rmtree(att, ignore_errors=True)
     list_dirty()
+    try:                                              # the look's pictures of its pages go with it
+        from meshpool_harness.agent import look as LK
+        LK.forget(sid)
+    except Exception:  # noqa: BLE001
+        pass
     try:                                              # its checks records go with it
         from meshpool_harness import checks as CK
         for f in [CK._file(sid), *CK._dir().glob(f"{CK._safe(sid)}_*.jsonl")]:
@@ -2836,7 +3722,7 @@ def thread_action(sid: str, body: dict) -> dict:
     if not exists(sid):
         raise KeyError("That chat no longer exists. Refresh the list.")
     if act == "rename":
-        write_meta(sid, title=(body.get("title") or "").strip()[:120])
+        write_meta(sid, title=(body.get("title") or "").strip()[:120], renamed=True)    # the user's own name is never replaced
     elif act in ("pin", "unpin"):
         write_meta(sid, pinned=act == "pin")
     elif act in ("archive", "unarchive"):
@@ -2915,9 +3801,42 @@ _RAW_BYTES = [0]
 _RAW_CAP = 48 * 1024 * 1024          # characters x 2 copies; beyond it a file is read each time
 
 
+_MD_LINK = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+_MD_MARKS = re.compile(r"(\*\*|__|~~|`+)")
+
+
+def plain_markdown(text: str) -> str:
+    """Markdown as plain reading text: no **, `, #, list dashes or link targets (a search snippet is not the rendered reply)."""
+    t = _MD_LINK.sub(r"\1", str(text or ""))
+    t = re.sub(r"(?m)^\s{0,3}(#{1,6}|>|[-*+]|\d+[.)])\s+", "", t)
+    t = re.sub(r"(?m)^\s*\|?[\s:|-]{3,}\|?\s*$", " ", t)
+    t = _MD_MARKS.sub("", t)
+    t = re.sub(r"(?<![\w*])\*(?=\S)([^*\n]*?)\*(?![\w*])", r"\1", t)
+    t = t.replace("|", " ")
+    return " ".join(t.split())
+
+
+def _plain_snippet(text: str, q: str, words: list) -> str:
+    """About 160 characters of plain text around the first match, starting and ending at a whole word."""
+    plain = plain_markdown(text)
+    lo = plain.lower()
+    j = lo.find(q) if q in lo else min((lo.find(w) for w in words if w in lo), default=0)
+    a, b = max(0, j - 60), min(len(plain), j + 100)
+    if a > 0 and plain[a - 1] != " ":
+        k = plain.find(" ", a)
+        a = a if k < 0 or k >= j else k + 1
+    if b < len(plain) and plain[b] != " ":
+        k = plain.rfind(" ", j, b)
+        b = k if k > j else b
+    return ("…" if a > 0 else "") + plain[a:b].strip() + ("…" if b < len(plain) else "")
+
+
 def search(q: str) -> list:
+    """Chats that hold every word of q, in any order and anywhere in the chat ("dropped rows" finds "rows were
+    dropped"), newest first, with a snippet around the first place a word appears."""
     q = q.strip().lower()
-    if not q:
+    words = q.split()
+    if not words:
         return []
     hits = []
     quick = all(32 <= ord(c) < 127 for c in q) and not any(c in q for c in '"\\')     # plain ASCII text is never escaped in the saved JSON
@@ -2933,8 +3852,9 @@ def search(q: str) -> list:
                 if quick and not (p.parent / "session.journal").exists():
                     # P-07: a chat that cannot contain the words is skipped from its raw text (no parse, no re-dump)
                     try:
-                        if q not in p.read_text(encoding="utf-8", errors="replace").lower() \
-                                and q not in str(read_meta(p.parent.name).get("title") or "").lower():
+                        low0 = p.read_text(encoding="utf-8", errors="replace").lower() + "\n" + \
+                            str(read_meta(p.parent.name).get("title") or "").lower()
+                        if not all(w in low0 for w in words):
                             continue
                     except OSError:
                         continue
@@ -2949,8 +3869,8 @@ def search(q: str) -> list:
                     _RAW[str(p)] = (key, raw, low)
         except OSError:
             continue
-        i = low.find(q)
-        if i < 0 and q not in str(read_meta(p.parent.name).get("title") or "").lower():
+        named = str(read_meta(p.parent.name).get("title") or "").lower()
+        if not all(w in low or w in named for w in words):
             continue                                     # the name the person gave the chat counts too (F-07)
         try:
             d = json.loads(raw)
@@ -2972,12 +3892,13 @@ def search(q: str) -> list:
         for e in d.get("events") or []:
             if isinstance(e, dict) and e.get("type") in ("user", "assistant") and isinstance(e.get("text"), str):
                 texts.append(e["text"])
-        hit = next((s for s in texts if q in s.lower()), None)
-        if hit is None:
+        shown = "\n".join(texts).lower()
+        if not all(w in shown for w in words):
             continue
-        j = hit.lower().find(q)
-        snippet = " ".join(hit[max(0, j - 60): j + 100].split())
-        snippet = ("…" if j > 60 else "") + snippet + ("…" if j + 100 < len(hit) else "")
+        body = texts[1:] or texts                         # the words in the messages, not just in the title, make the snippet
+        hit = next((s for s in body if q in s.lower()), None) or \
+            max(body, key=lambda s: sum(w in s.lower() for w in words))
+        snippet = _plain_snippet(hit, q, words)
         hits.append({"id": d["id"], "title": title, "workdir": d.get("workdir"), "updated": d.get("updated", 0),
                      "snippet": snippet})
     return sorted(hits, key=lambda r: -r["updated"])[:50]
@@ -3116,7 +4037,7 @@ def run_scheduled(t: dict) -> str:
         late = ""
         if t.get("late"):
             h = float(t.get("late_s") or 0) / 3600
-            late = (f"This run was due {h:.0f} hours ago: Meshpool was closed or the computer was off. "
+            late = (f"This run was due {h:.0f} hours ago: meshpool was closed or the computer was off. "
                     "It ran as soon as it could.")
             s.emit({"type": "status", "text": late})
         write_meta(s.id, title=f"{t.get('name') or 'Scheduled task'} ({time.strftime('%d %b %H:%M')})"
@@ -3189,6 +4110,11 @@ def prune_old_chats(days: float | None = None, now: float | None = None) -> list
                 gone.append(sid)
             except Exception:  # noqa: BLE001
                 continue
+    try:                                              # and the look's pictures of chats that are gone, as old
+        from meshpool_harness.agent import look as LK
+        LK.prune(cutoff, keep=[d.name for d in SESSIONS.iterdir() if d.is_dir()])
+    except Exception:  # noqa: BLE001
+        pass
     return gone
 
 

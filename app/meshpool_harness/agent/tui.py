@@ -68,6 +68,7 @@ COMMANDS = [
     ("schedule", "[list|run ID|enable ID|disable ID|delete ID]", "scheduled tasks"),
     ("settings", "[KEY [VALUE]]", "show or change a setting"),
     ("checks", "", "what the checks found on the last piece of work"),
+    ("tips", "[on|off]", "show or hide tips and the example prompt (Settings, Show tips)"),
     ("worktree", "[list|diff ID|merge ID|discard ID]", "isolated copies of this folder"),
     ("doctor", "", "find problems in settings, hooks, rules, MCP servers, skills and sub-agents"),
     ("agents", "", "saved sub-agents (agents/*.md)"),
@@ -157,6 +158,11 @@ def _tilde(path: str) -> str:
     home = os.path.expanduser("~")
     return "~" + path[len(home):] if path == home or path.startswith(home + os.sep) else path
 
+
+
+# events that may arrive between a final answer and the review round that replaces it (print mode holds the answer)
+_HOLD_THROUGH = ("model_wait", "assistant", "review_round", "status", "usage", "model_start", "model_end", "text_delta", "thought",
+                 "stream_reset", "reply_trim")
 
 class Terminal:
     """Draws the session. `emit` takes the agent's events; `approve` and `ask_questions` take its questions.
@@ -291,21 +297,29 @@ class Terminal:
             self._write(self._clear_seq() + "\n".join(lines) + "\n" + self._paint_seq())
 
     # ---------- spinner ----------
+    LIVE_ROWS = 6                                  # rows of a streaming paragraph shown above the spinner
+
+    def _live_rows(self) -> list[str]:
+        """The paragraph being streamed, word-wrapped, its last LIVE_ROWS rows (OM-08: it was one clipped line that
+        could not be read while it streamed). Redrawn on every token, so only the open last row is wrapped again:
+        rows before it are final (R.word_wrap is greedy) and kept, which keeps a long paragraph O(n)."""
+        p, w = self._partial.replace("\t", " "), max(8, self.width - 4)
+        pw = self.__dict__.get("_pw")
+        if pw is None or pw["w"] != w or pw["start"] > len(p):
+            pw = self._pw = {"w": w, "start": 0, "rows": []}
+        seg = p[pw["start"]:]
+        starts = R.word_wrap(seg, w)
+        for a, b in zip(starts, starts[1:]):
+            pw["rows"].append(seg[a:b].rstrip())
+        pw["rows"] = pw["rows"][-self.LIVE_ROWS:]
+        pw["start"] += starts[-1]
+        return (pw["rows"] + [seg[starts[-1]:]])[-self.LIVE_ROWS:]
+
     def _turn_live(self):
-        lines = []
-        if self._partial:
-            # Redrawn on every streamed token: measure only the end of a long line. A model writes a paragraph as one
-            # line, and measuring all of it each token made a long paragraph cost O(n^2). The last 2w+8 characters
-            # already being wider than w means the whole line is (no character is narrower than 0 columns).
-            w = self.width - 4
-            p, k = self._partial, 2 * max(w, 1) + 8
-            tail = p[-k:].replace("\t", "    ")
-            if not (len(p) > k and R.vlen(tail) > w):
-                tail = p.replace("\t", "    ")
-            lines.append("  " + (tail if R.vlen(tail) <= w else "…" + tail[-(w - 1):]))
+        # the reply's rows already fit (word_wrap at width - 4): only the spinner line is measured on each redraw
+        lines = ["  " + r for r in self._live_rows()] if self._partial else []
         secs = int(self.clock() - self._busy_t0) if self._busy_t0 is not None else 0
-        lines.append(" " + R.spinner_line(self.st, self._frame, self._label or "Working", secs))
-        lines = [R.clip(x, self.width - 1) for x in lines]
+        lines.append(R.clip(" " + R.spinner_line(self.st, self._frame, self._label or "Working", secs), self.width - 1))
         return lines, (len(lines) - 1, 0)
 
     def turn_begin(self):
@@ -344,6 +358,8 @@ class Terminal:
                                 self._esc_pressed()
                                 return
                             self.typeahead.extend(K.parse_keys(ch))
+                            if self._typed_exit():
+                                return
                         else:
                             time.sleep(0.05)
                 else:
@@ -355,12 +371,34 @@ class Terminal:
                                 return
                             if k is not None:             # typed ahead: kept for the next prompt
                                 self.typeahead.append(k)
+                                if self._typed_exit():
+                                    break
                         self.typeahead.extend(keys.pending)    # keys read together with the last one
                         keys.pending = []
+                    if self.stopping:                 # /exit typed: the turn is stopping, the keys wait for the prompt
+                        return
             except Exception:  # noqa: BLE001 - no usable terminal: Ctrl+C still stops
                 return
             finally:
                 self.keys_free.set()
+
+    def _typed_exit(self) -> bool:
+        """OM-06: /exit (or /quit, /q) typed while the agent works stops the turn; the typed line stays ahead, so the
+        prompt that follows runs it and the program ends. Anything else typed ahead waits for the next prompt."""
+        keys = self.typeahead
+        if not keys or keys[-1] != "enter":
+            return False
+        line: list = []
+        for k in reversed(keys[:-1]):
+            if k == "enter":
+                break
+            if not (isinstance(k, str) and len(k) == 1):
+                return False                    # an arrow, a paste or a deletion: not a plain /exit line
+            line.append(k)
+        if "".join(reversed(line)).strip() not in ("/exit", "/quit", "/q"):
+            return False
+        self._esc_pressed()
+        return True
 
     def _kb(self):
         """The lock that makes "is a question open?" and "take the keyboard" one step for the Esc watcher (FL-L1)."""
@@ -436,6 +474,7 @@ class Terminal:
         while "\n" in self._partial:
             line, self._partial = self._partial.split("\n", 1)
             done += R.markdown(line, self.width - 2, self.st, self._md)
+            self._pw = None                            # a new paragraph: its rows start again
         if done:
             self.scroll(["  " + x if x else "" for x in done])
         elif self._live_fn:
@@ -443,21 +482,48 @@ class Terminal:
 
     def _flush_text(self):
         if self.interactive:
+            self._pw = None
             if self._partial:
                 rest, self._partial = self._partial, ""
                 self.scroll(["  " + x if x else "" for x in R.markdown(rest, self.width - 2, self.st, self._md)])
         elif self._text_open:
-            if self.print_mode and getattr(self, "_pbuf", ""):
-                self._write(self._pbuf, self.out)
-            self._pbuf = ""
-            self._write("\n", self.out)
+            if self.print_mode:
+                # -p: text that is not the final answer is narration ("Let me look at the project first."). It goes
+                # to stderr when that is a terminal and nowhere otherwise, so stdout holds the final answer alone.
+                nar = getattr(self, "_pbuf", "")
+                self._pbuf = ""
+                if nar.strip() and getattr(self.info, "isatty", lambda: False)():
+                    self._write(nar.rstrip("\n") + "\n", self.info)
+            else:
+                self._write("\n", self.out)
         self._text_open = False
         self._md = R.MdState()
+
+    def _release_held(self):
+        h, self._held = getattr(self, "_held", None), None
+        if h is not None:
+            self._write(h, self.out)
+            self._write("\n", self.out)
+
+    def flush_held(self):
+        """-p: the last answer is held until the turn shows no review round follows it (turn_end and the like release
+        it). The run calls this when send() returns, so the answer is written even if no later event came."""
+        self._release_held()
 
     # ---------- agent events ----------
     def emit(self, ev: dict):
         ev = {k: (R.safe_text(v) if isinstance(v, str) else v) for k, v in ev.items()}   # model text never drives the tty
         t, st = ev.get("type"), self.st
+        if getattr(self, "_held", None) is not None and t not in _HOLD_THROUGH:
+            self._release_held()                       # something else came after it: it was the last answer
+        if t == "model_wait":                          # the model has said nothing for a while: -p says so on stderr
+            secs = int(ev.get("secs") or 0)
+            say = f"waiting for the model ({secs // 60} min)" if secs >= 60 else f"waiting for the model ({secs} s)"
+            if self.print_mode:
+                print(say, file=self.info, flush=True)
+            else:
+                self._label = say[0].upper() + say[1:]      # the spinner line shows it
+            return
         if t == "model_start":
             if self.interactive and not self._turn:
                 self.turn_begin()
@@ -478,6 +544,37 @@ class Terminal:
                     self._pbuf, self._text_open = "", False
                 self._flush_text()
                 self.p(st.dim("[connection dropped; the reply restarts below]"))
+        elif t == "review_round":
+            if self.print_mode:
+                self._held = None                      # the answer above was written before the check: only the last prints
+            else:
+                self._flush_text()
+                self.p(st.dim("  (that was a first answer. meshpool is checking it, and the final answer follows)"))
+        elif t == "look_line":                         # the turn's "Checked:" line (agent/look.py), not part of the answer
+            if self.print_mode:
+                self._write(str(ev.get("text") or "") + "\n", self.info)
+            else:
+                self._flush_text()
+                self.p(st.dim("  " + str(ev.get("text") or "")))
+        elif t == "assistant" and self.print_mode and ev.get("look"):
+            # -p: the "Checked:" line goes to stderr, so a script that reads the answer from stdout gets the answer
+            # alone (the JSON result has it as "checked")
+            self._write(str(ev.get("text") or "") + "\n", self.info)
+        elif t == "reply_trim":
+            # the answer without its trailing promise (core._without_trailing_promise): -p swaps the held text; what a
+            # terminal already streamed stays on screen
+            if self.print_mode and getattr(self, "_held", None) is not None:
+                self._held = str(ev.get("text") or "")
+        elif t == "assistant" and self.print_mode and not ev.get("has_tools"):
+            if ev.get("append") and getattr(self, "_held", None) is not None:
+                self._held += "\n\n" + str(ev.get("text") or "")      # the Checked line joins the answer it ends
+            else:
+                self._release_held()
+                text = str(ev.get("text") or "") or getattr(self, "_pbuf", "")
+                self._pbuf, self._text_open = "", False
+                self._md = R.MdState()
+                if text.strip():
+                    self._held = text                   # written when the turn goes on without a review round
         elif t == "assistant":
             if not ev.get("streamed") and ev.get("text"):
                 if self.interactive:
@@ -511,10 +608,11 @@ class Terminal:
         elif t == "receipt":
             self._flush_text()
             lines = [ln for ln in str(ev.get("text", "")).splitlines() if ln.strip()]
-            self.scroll([""] + ["  " + st.dim(R.clip(ln, self.width - 4)) for ln in lines])
+            self.scroll([""] + ["  " + R.receipt_line(ln, st, self.width - 4) for ln in lines])
         elif t == "checks_line":
             self._flush_text()
-            self.p(st.dim("  Checked: " + str(ev.get("text", ""))))
+            tx = str(ev.get("text", ""))
+            self.p(st.dim("  " + (tx if tx.startswith("Checked") else "Checked: " + tx)))
         elif t == "task_receipt":
             self._flush_text()
             from meshpool_harness import receipts as RC
@@ -528,7 +626,9 @@ class Terminal:
             self.failed = True
             self._flush_text()
             paint = st.red if t == "error" else st.amber
-            self.scroll([""] + ["  " + paint(x) for x in R.wrap_inline(ev["text"], self.width - 4, Style(0))])
+            from meshpool_harness.core import errtext as ET        # no Settings page here; -p has no "continue"
+            text = ET.for_terminal(str(ev.get("text") or ""), bool(self.print_mode))
+            self.scroll([""] + ["  " + paint(x) for x in R.wrap_inline(text, self.width - 4, Style(0))])
         elif t == "turn_end":
             self.turn_finish()
 
@@ -603,9 +703,10 @@ class Terminal:
             return
         ok = bool(ev.get("ok"))
         if name in R.SHELL_TOOLS:
+            out = R.exec_output(out).rstrip()
             meta = f"(timeout {info['timeout']}s)" if info.get("timeout") else ""
             lines, hidden = R.guard(R.shell_block, st, info["summary"], out, took, st, self.width, meta=meta,
-                                    limit=self.output_limit, ok=ok)
+                                    limit=self.output_limit, ok=ok, expand=self.interactive)
             self.last_block = {"command": info["summary"], "output": out, "took": took, "meta": meta, "ok": ok,
                                "hidden": hidden}
             self.scroll(lines)
@@ -635,6 +736,7 @@ class Terminal:
         from meshpool_harness import __version__
         from meshpool_harness import providers as PV
         self.version = __version__
+        self._login_at = None                   # a sign-in or a new chat: look at the key and sign-in again
         model = agent.current_model() if hasattr(agent, "current_model") else ""
         prov, bare = PV.split(model)
         self.model = bare or model
@@ -673,13 +775,19 @@ class Terminal:
         if self.status_fn:
             return self.status_fn()
         items = []
-        try:
-            from meshpool_harness import providers as PV
-            if not (PV.key() or os.environ.get("MH_PROVIDER") == "chatgpt" or PV.ready("chatgpt")) \
-                    and not hasattr(self.agent, "manifest"):
-                items += [("err", "Not logged in"), ("err", "Run /login")]
-        except Exception:  # noqa: BLE001
-            pass
+        # The box is redrawn on every key. Whether there is a key or a ChatGPT sign-in means reading the settings
+        # file and the sign-in file, so the answer is kept for a few seconds instead of read again per key.
+        now = self.clock()
+        if getattr(self, "_login_at", None) is None or now - self._login_at > 5:
+            out = True
+            try:
+                from meshpool_harness import providers as PV
+                out = bool(PV.key() or os.environ.get("MH_PROVIDER") == "chatgpt" or PV.ready("chatgpt"))
+            except Exception:  # noqa: BLE001
+                pass
+            self._logged_in, self._login_at = out, now
+        if not self._logged_in and not hasattr(self.agent, "manifest"):
+            items += [("err", "Not logged in"), ("err", "Run /login")]
         try:
             from meshpool_harness import autoupdate as AU
             s = AU._ST.get("state")
@@ -828,7 +936,7 @@ class Terminal:
                 row = row[idx:] if idx else row
                 ccol = 2 + R.vlen(ctext[idx:])
             if not buf and i == 0:
-                lines.append(lead + st.dim(f'Try "{s["hint"]}"'))
+                lines.append(lead + (st.dim(f'Try "{s["hint"]}"') if C.tips_on() else ""))     # a tip: Settings, Show tips
             else:
                 lines.append(lead + R.clip(row, avail, ""))
         lines.append(self.rule_line())
@@ -1528,6 +1636,18 @@ class Session(SharedCommands):
         rows = [""] + ["  " + st.cmd(lab) + " " * (w - len(lab)) + st.dim(d) for lab, (_, _, d) in zip(labels, COMMANDS)]
         t.scroll(rows + [""] + ["  " + st.dim(x) for x in HELP_TIPS])
 
+    def cmd_tips(self, arg):
+        """/tips off and /tips on save the "Show tips" setting (MH_TIPS); /tips alone says which it is."""
+        t, st = self.term, self.term.st
+        want = arg.strip().lower()
+        if want not in ("", "on", "off"):
+            return t.p(st.amber("  Use /tips on or /tips off."))
+        if want:
+            val = "1" if want == "on" else "0"
+            C.update(lambda cur: {"MH_TIPS": val})
+            os.environ["MH_TIPS"] = val               # this run too: an environment value would win over the file
+        t.p(st.dim("  Tips are " + ("on." if C.tips_on() else "off. /tips on brings them back.")))
+
     def cmd_clear(self, arg):
         if self.s is not None:
             return SharedCommands.cmd_clear(self, arg)
@@ -1752,7 +1872,7 @@ class Session(SharedCommands):
         from meshpool_harness import providers as PV
         t.refresh_facts(a)
         key = PV.key()
-        mode = {"ask": "ask before changes", "edits": "accept edits", "auto": "full access"}.get(t.mode, t.mode)
+        mode = C.MODE_INFO.get(t.mode, (t.mode, ""))[0]            # the same names and words as the web app
         window = R.context_window(t.model, t.windows)
         rows = [("Version", t.version), ("Model", f"{t.model} · {t.provider}"),
                 ("Endpoint", PV.host(PV.key_base()) or "-"),
@@ -1765,6 +1885,10 @@ class Session(SharedCommands):
         if self.mcp:
             ok = [s for s in self.mcp.status() if s["status"] == "connected"]
             rows.append(("MCP", f"{len(ok)} server{'s' if len(ok) != 1 else ''} connected"))
+        import textwrap
+        info = textwrap.wrap(C.MODE_INFO.get(t.mode, ("", ""))[1], max(30, t.width - 13))
+        at = next((i for i, r in enumerate(rows) if r[0] == "Access"), len(rows) - 1) + 1
+        rows[at:at] = [("", x) for x in info]
         t.scroll([""] + [f"  {st.dim(R.pad(k, 9))}{v}" for k, v in rows])
 
     def _model_options(self) -> tuple[list[str], str]:
@@ -1905,6 +2029,27 @@ def _trust_step(term: "Terminal", wd: str, interactive: bool) -> None:
         term.p(st.dim("  Trusted. Its hooks and rules are on. Undo with: meshpool trust --revoke"))
     else:
         term.p(st.dim("  Its hooks and allow rules are off. Trust it later with: meshpool trust"))
+def _resume_access(term, s, mode: str | None, model: str | None) -> None:
+    """OM-09: -c and --resume take the access mode and model given on the command line. Without a mode flag the chat
+    resumes in the default mode, never in full access without a word: a chat left in full access comes back asking,
+    and a default of full access (set in Settings) is said on screen."""
+    st = term.st
+    before = getattr(s, "mode", None) or getattr(s.agent, "mode", None)
+    want = mode or C.permission_mode()
+    if want != before:
+        s.set_mode(want, save=False)              # for this run only: the chat keeps the mode it was saved with
+    if want == "auto" and not mode:
+        term.p(st.amber("  Full access is on: it is your default access mode in Settings."))
+    elif before == "auto" and want != "auto":
+        term.p(st.dim(f"  This chat was in full access. It resumes in {_MODE_NAMES.get(want, want)}; add --auto for "
+                      "full access."))
+    if model:
+        s.set_model(model)
+
+
+_MODE_NAMES = {"ask": "Ask", "edits": "Accept edits", "auto": "Full access"}       # config.MODE_INFO's names
+
+
 def _resume_target(wd: str, session: str | None) -> str | None:
     """The chat -c / --resume means: the id given, or the newest chat of this folder (the app's own listing)."""
     from pathlib import Path
@@ -1913,7 +2058,11 @@ def _resume_target(wd: str, session: str | None) -> str | None:
     if session:
         return session
     root = str(Path(wd).expanduser().resolve())
-    return next((r["id"] for r in chats.listing() if r.get("workdir") == root), None)
+    here = [r["id"] for r in chats.listing() if r.get("workdir") == root]
+    # A session opened and left without a word is saved too. -c must not land in that empty chat and leave the last
+    # real conversation behind it: the newest chat with a message wins, an empty one only when there is nothing else.
+    from meshpool_harness.ui import agent_api as A
+    return next((sid for sid in here if A._has_user_message(sid)), here[0] if here else None)
 
 
 _KINDS = {"code": "code", "work": "cowork", "cowork": "cowork", "auto": None}
@@ -1978,11 +2127,14 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
                     old, sid = sid, CRW.fork(sid, None)
                     term.p(st.dim(f"Continuing {old} as a new session, {sid}."))
                 s = chats.get(sid, no_mcp=no_mcp)
+                _resume_access(term, s, body.get("mode"), model)
         if sid is None:
             s = chats.get(chats.create(body)["id"], no_mcp=no_mcp)
     except (ValueError, KeyError) as e:           # a missing folder, an agent that cannot run, a chat open elsewhere
         term.p(st.red(str(e).strip("'\"")))
         return 1
+    if model:
+        s.agent.model_named = True                # --model: a name the endpoint lacks stops the run (OM-04)
     if not s.harness.get("ready", True):
         term.p(st.red(f"{s.harness['name']} cannot run yet. {s.harness.get('setup') or ''} Run: meshpool setup"))
         return 1
@@ -2014,13 +2166,14 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
             import contextlib
             with contextlib.redirect_stdout(sys.stderr) if json_out else contextlib.nullcontext():
                 front.send(text, images)
+                term.flush_held()
             failed = bool(term.failed)
             note = front.denial_note()
             if note:
                 print(note, file=sys.stderr)
             if output_last_message:
                 from pathlib import Path
-                Path(output_last_message).expanduser().write_text(front.reply(), encoding="utf-8")
+                Path(output_last_message).expanduser().write_text(front.answer(), encoding="utf-8")
             if json_out:
                 sys.__stdout__.write(json.dumps(front.result(failed), ensure_ascii=False, default=str) + "\n")
                 sys.__stdout__.flush()            # a piped stdout is block buffered: the caller must see the result now

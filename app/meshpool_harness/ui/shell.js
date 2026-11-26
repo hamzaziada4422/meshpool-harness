@@ -9,6 +9,8 @@ async function loadAccount() {
   paintDots();
 }
 const firstName = () => S.acct?.first_name || "";
+// The product name as people see it: always "meshpool", also in names that come from the server ("Meshpool Work").
+const lowBrand = s => typeof s === "string" ? s.replace(/\bMeshpool\b/g, "meshpool") : s;
 // The dots that say "something needs you": on the Code button, on Scheduled, and on the toggle of a hidden sidebar.
 function paintDots() {
   const a = S.acct || {}, code = $("#modeCode");
@@ -29,7 +31,7 @@ function shell() {
      <div class="side-in">
       <div class="side-head">
         <button class="iconbtn" id="hideSide" data-tip="Hide sidebar" data-kbd="${MOD}B" data-tip-pos="below" aria-label="Hide sidebar">${ICON.side}</button>
-        <span class="wm" id="wordmark"><img class="mlogo" src="${logoSrc()}" alt="Meshpool" width="102" height="20"><span class="wmode" id="wmode"></span></span>
+        <span class="wm" id="wordmark"><img class="mlogo" src="${logoSrc()}" alt="meshpool" width="102" height="20"><span class="wmode" id="wmode"></span></span>
         <span class="modesw" role="tablist" aria-label="Mode">
           <button id="modeChat" role="tab" data-tip="Chat" data-tip-pos="below" aria-label="Chat">${ICON.chat}</button>
           <button id="modeCode" role="tab" data-tip="Code" data-tip-pos="below" aria-label="Code">${ICON.codebr}<i class="odot"></i></button>
@@ -52,7 +54,7 @@ function shell() {
         <div class="composer" id="composer">
           <div class="attach-row" id="attachRow"></div>
           <label class="sr" for="input">Message</label>
-          <textarea id="input" dir="auto" rows="1" placeholder="Message Meshpool"></textarea>
+          <textarea id="input" dir="auto" rows="1" placeholder="Message meshpool"></textarea>
           <div class="cbar" id="cbar"></div>
           <input type="file" id="fileIn" multiple hidden>
         </div>
@@ -72,6 +74,9 @@ function shell() {
   setupComposer();
   setupPanelResize();
   document.addEventListener("keydown", globalKeys);
+  // Keyboard or pointer: a field reached with Tab shows a focus ring that a click into it does not (.kbdnav in shell.css).
+  document.addEventListener("keydown", e => { if (e.key === "Tab") document.documentElement.classList.add("kbdnav"); }, true);
+  document.addEventListener("pointerdown", () => document.documentElement.classList.remove("kbdnav"), true);
   if (store("sidehidden")) $("#app").classList.add("noside");
   $("#app").classList.toggle("steps", !!S.steps);
   syncMode();
@@ -96,7 +101,7 @@ function setAppMode3(m) {
   const kind = S.cur && (S.cur.view?.kind === "code" && !S.cur.view?.scratch ? "code" : "chat");
   if (S.view === "page" || !S.cur || kind !== m) newThread(); else { renderSide(); renderBar(); }
 }
-const isCodeThread = t => t && t.kind === "code" && !t.scratch;
+const isCodeThread = t => t && t.kind === "code" && !t.scratch && t.code_mode !== false;   // code_mode false: a chat in a folder, never started from the Code tab
 function toggleSteps() {
   S.steps = !S.steps; store("steps", S.steps);
   $("#app").classList.toggle("steps", S.steps);
@@ -106,9 +111,9 @@ function toggleSteps() {
 }
 function toggleSide() {
   const a = $("#app");
-  if (a.classList.contains("autoside")) { S.keepSide = true; a.classList.remove("autoside"); renderTop(); return; }
+  if (a.classList.contains("autoside")) { S.keepSide = true; flipLayout(() => { a.classList.remove("autoside"); renderTop(); }); return; }
   if (narrow()) { a.classList.toggle("sideopen"); return; }
-  a.classList.toggle("noside"); store("sidehidden", a.classList.contains("noside")); renderTop();
+  flipLayout(() => { a.classList.toggle("noside"); store("sidehidden", a.classList.contains("noside")); renderTop(); });
 }
 function globalKeys(e) {
   const m = isMac ? e.metaKey : e.ctrlKey;
@@ -141,12 +146,37 @@ async function loadModels(refresh) {
 async function loadProjects() { const r = await api("/api/projects"); S.projects = r.projects; S.defaultProject = r.default; }
 async function loadPj() { try { S.pj = (await api("/api/pj")).projects; } catch (e) { S.pj = S.pj || []; } }
 // Settings > Permissions: add a folder to the list Meshpool may open (a project's linked folder does not need this).
-async function pickProject() {
+// opts.project: the folder also becomes a project (pinned in the sidebar, in the project picker), and new chats start
+// in it. opts.noHome: the in-app picker never offers the whole home folder as its default. Returns the answer, or null.
+async function pickProject(opts = {}) {
   try {
-    let r = await post("/api/projects", {action: "pick"});
-    if (r.no_picker) { const path = await browseFolder(); if (!path) return; r = await post("/api/projects", {action: "add", path}); }
-    S.projects = r.projects; renderSide();
-  } catch (e) { toast(e.message); }
+    const as = opts.project ? {project: true} : {};
+    let r = await post("/api/projects", {action: "pick", ...as});
+    if (r.no_picker) { const path = await browseFolder("", {noHome: !!opts.noHome}); if (!path) return null; r = await post("/api/projects", {action: "add", path, ...as}); }
+    S.projects = r.projects;
+    if (r.pid) { await loadPj(); rememberWhere({pid: r.pid}); }
+    renderSide();
+    return r;
+  } catch (e) { toast(e.message); return null; }
+}
+// Where new chats start, kept across reloads: in Work, the project the last new chat was in (a folder picked in
+// onboarding or with "Add a folder" is a project); in Code, the folder or repository the last session used. A one-off
+// "Work in a folder" chat is not remembered: the next chat gets its own folder again. A deleted project, or a folder
+// no longer in the list, is not used.
+function rememberWhere(w) { const code = S.mode === "code"; store("where_" + (code ? "code" : "chat"), {project: code ? w.project || "" : "", pid: code ? "" : w.pid || ""}); }
+function lastWhere() {
+  const w = store("where_" + (S.mode === "code" ? "code" : "chat")) || {};
+  if (w.pid && (S.pj || []).some(p => p.id === w.pid && !p.link?.missing)) return {project: "", pid: w.pid};
+  if (w.project && (S.projects || []).some(p => p.path === w.project && p.exists !== false)) return {project: w.project, pid: ""};
+  return {project: "", pid: ""};
+}
+// The sidebar's "Add a folder": the folder becomes a project and the next new chat works in it.
+async function addFolderProject() {
+  const r = await pickProject({project: true, noHome: true});
+  if (!r || !r.pid) return;
+  const p = S.pj.find(x => x.id === r.pid);
+  newThread();
+  toast(`${p ? p.name : "The folder"} is in the sidebar. New chats work in it.`, 4000);
 }
 async function loadThreads() {
   const was = new Map((S.threads || []).map(t => [t.id, t.state]));
@@ -163,9 +193,9 @@ async function loadThreads() {
   const t = S.cur?.view && S.threads.find(x => x.id === S.cur.id);
   if (t && t.title && t.title !== S.cur.view.title && !$("#ttl[contenteditable=true]")) { S.cur.view.title = t.title; renderTop(); }
 }
-async function loadHarnesses() { const r = await api("/api/harnesses"); S.harnesses = r.harnesses; S.defaults = r.defaults; S.hInfo = r; }
+async function loadHarnesses() { const r = await api("/api/harnesses"); S.harnesses = (r.harnesses || []).map(h => ({...h, name: lowBrand(h.name)})); S.defaults = r.defaults; S.hInfo = r; }
 async function loadSkills() { try { S.skills = (await api("/api/skills")).skills; } catch (e) { S.skills = []; } }
-const harness = id => S.harnesses.find(h => h.id === id) || S.harnesses[0] || {id: "meshpool-code", name: "Meshpool Code", models: "meshpool"};
+const harness = id => S.harnesses.find(h => h.id === id) || S.harnesses[0] || {id: "meshpool-code", name: "meshpool Code", models: "meshpool"};
 // ChatGPT sign-in runs Codex's login, which the installed app does not carry (server: codex row has `unsupported`)
 const chatgptSignInGone = () => { const c = (S.harnesses || []).find(h => h.id === "codex"); return !!(c && c.unsupported) && !S.settings?.signed_in?.chatgpt; };
 const projName = p => (S.projects.find(x => x.path === p) || {}).name || (p || "").split(/[\\/]/).filter(Boolean).pop() || p;
@@ -175,19 +205,20 @@ const NAV = {
   chat: [["new", "New", "plus"], ["search", "Search", "search"], ["projects", "Projects", "stack"], ["artifacts", "Artifacts", "cube"], ["scheduled", "Scheduled", "clock"], ["memory", "Memory", "brain"], ["work", "Your work", "star"], ["plugins", "Plugins", "plug"]],
   code: [["new", "New", "plus"], ["search", "Search", "search"], ["artifacts", "Artifacts", "cube"], ["plugins", "Plugins", "plug"], ["more", "More", "more"]],
 };
-// A chat's state as the sidebar draws it: running (brand dot), waiting for you (amber), finished and unread (blue).
+// A chat's state as the sidebar draws it: running (a pool blue dot that fades), waiting for you (amber), finished and unread (pool blue).
 const stateOf = t => t.state === "working" ? "run" : t.state === "waiting" ? "wait" : t.unread && !(S.cur?.id === t.id && S.view === "chat") ? "done" : "";
 const pinnedPj = () => S.pj.filter(p => p.pinned).sort((a, z) => (z.updated || 0) - (a.updated || 0));
 const chatList = () => S.threads.filter(t => !t.archived && !S.pendingDelete?.has(t.id)).sort((a, z) => (Number(z.updated) || 0) - (Number(a.updated) || 0));
 function navHTML() {
   const a = S.acct || {};
   return `<div class="nav">${NAV[S.mode === "code" ? "code" : "chat"].map(([id, label, ic]) => {
-    const on = id === "new" ? S.view === "chat" && !S.cur : S.view === "page" && S.page === id;
+    const on = id !== "new" && S.view === "page" && S.page === id;   // "New" is an action, never drawn as the current page
     const dot = id === "scheduled" && a.scheduled_unread ? `<i class="bdot" aria-label="Unread"></i>` : "";
     return `<button class="nv ${on ? "on" : ""}" data-nv="${id}" ${id === "new" ? `id="newThread"` : ""} ${id === "search" ? `id="navSearch" data-kbd="${MOD}K"` : ""} ${id === "new" ? `data-kbd="${MOD}N"` : ""}>${ICON[ic]}<span>${label}</span>${dot}${id === "artifacts" ? `<span class="nvplus" data-nv-add="artifacts" aria-hidden="true">${ICON.plus}</span>` : ""}</button>`;
   }).join("")}</div>`;
 }
 const secHead = (k, label, extra = "") => `<div class="sec"><button class="sechd" data-sec="${k}" aria-expanded="${!S.collapsed.has(k)}"><span>${label}</span><span class="chev">${ICON.chev}</span></button><span class="sp"></span>${extra}</div>`;
+// A project lists all its chats, Chat or Code: one started on the project's page and routed to Code is still its chat.
 function pjRowHTML(p, threads) {
   const open = S.pjOpen.has(p.id), mine = threads.filter(t => t.project_id === p.id);
   const unread = mine.some(t => stateOf(t) === "done");
@@ -198,7 +229,7 @@ const PR_LABEL = {open: "Open", draft: "Draft", merged: "Merged", closed: "Close
 function thHTML(t, o = {}) {
   const st = stateOf(t), code = isCodeThread(t);
   const pj = t.project_id && S.pj.find(p => p.id === t.project_id);
-  const icons = code ? `${t.pr ? `<span class="si pr" data-prtip="${esc(t.id)}" aria-label="Pull request #${t.pr.number}">${ICON.pr}</span>` : ""}${isMgd(t.workdir) ? `<span class="si" title="GitHub workspace">${ICON.cloud}</span>` : ""}${t.state === "waiting" ? `<span class="si warn" title="Waiting for you">${ICON.warn}</span>` : ""}` : "";
+  const icons = code ? `${t.pr ? `<span class="si pr" data-prtip="${esc(t.id)}" aria-label="Pull request #${t.pr.number}">${ICON.pr}</span>` : ""}${isMgd(t.workdir) ? `<span class="si" title="GitHub workspace">${ICON.cloud}</span>` : ""}` : "";   // waiting shows as the row's one amber dot, not a second warning icon
   return `<li class="th ${S.view === "chat" && S.cur?.id === t.id ? "on" : ""}" data-id="${esc(t.id)}" data-nav tabindex="0" title="${esc(t.title + (pj ? " · " + pj.name : ""))}">${t.scheduled ? `<span class="pi bolt" title="Started by a scheduled task">${ICON.bolt}</span>` : ""}<span class="tt">${esc(t.title)}${false && pj ? `<small class="tf">${esc(pj.name)}</small>` : ""}</span><span class="end">${icons}<span class="dot ${st}"></span><button class="iconbtn more" data-tmenu="${esc(t.id)}" aria-label="Options for ${esc(t.title)}" aria-haspopup="menu">${ICON.more}</button></span></li>`;
 }
 
@@ -245,10 +276,12 @@ function renderSide() {
     const pjs = pinnedPj(), pinnedChats = mine.filter(t => t.pinned), rest = mine.filter(t => !t.pinned);
     if (pjs.length || pinnedChats.length) {
       html += secHead("pinned", "Pinned");
-      if (open("pinned")) html += `<ul class="threads prj">${pjs.map(p => pjRowHTML(p, all.filter(t => !isCodeThread(t)))).join("")}${pinnedChats.map(t => thHTML(t, {})).join("")}</ul>`;
+      // a project's row lists all its chats, Code sessions too: a question Auto turned into a Code session stays under it
+      if (open("pinned")) html += `<ul class="threads prj">${pjs.map(p => pjRowHTML(p, all)).join("")}${pinnedChats.map(t => thHTML(t, {})).join("")}</ul>`;
     }
+    html += `<button class="linkbtn addfolder" id="sideAddFolder" title="Work in a folder on this computer: it becomes a project here">${ICON.folder}<span>Add a folder</span></button>`;
     html += secHead("recents", "Recents");
-    if (open("recents")) html += rest.length ? `<ul class="threads">${(S.allRecents ? rest : rest.slice(0, 40)).map(t => thHTML(t, {})).join("")}</ul>${rest.length > 40 ? `<button class="linkbtn moreproj" id="moreRecents">${S.allRecents ? "Show fewer" : `Show all ${rest.length}`}</button>` : ""}` : `<div class="empty-side">Your chats show up here. Start one with New.</div>`;
+    if (open("recents")) html += rest.length ? `<ul class="threads">${(S.allRecents ? rest : rest.slice(0, 40)).map(t => thHTML(t, {})).join("")}</ul>${rest.length > 40 ? `<button class="linkbtn moreproj" id="moreRecents">${S.allRecents ? "Show fewer" : `Show all ${rest.length}`}</button>` : ""}` : `<div class="empty-side">${all.some(t => !isCodeThread(t) || t.project_id) ? "Everything is pinned or inside a project above." : "Your chats show up here. Start one with New."}</div>`;   // the start-one hint only when there are no chats at all (priya018)
   }
   const arch = S.threads.filter(t => t.archived && (code ? isCodeThread(t) : !isCodeThread(t)));
   if (arch.length) {
@@ -273,7 +306,7 @@ function renderSide() {
   }
   const had = document.activeElement?.closest?.("#sideList") ? (document.activeElement.dataset.id || document.activeElement.dataset.pid) : "";
   const st = el.scrollTop;
-  el._html = html; el._shape = shape; el.innerHTML = html; el.scrollTop = st;
+  el._html = html; el._shape = shape; morph(el, html); if (el.scrollTop !== st) el.scrollTop = st;   // rows that stay keep hover, focus and their dot
   if (had) { const back = $(`[data-id="${CSS.escape(had)}"], [data-pid="${CSS.escape(had)}"]`, el); back?.focus({preventScroll: true}); }
   paintAccount();
 }
@@ -301,6 +334,7 @@ function bindSide() {
     const sec = e.target.closest("[data-sec]"); if (sec) { const k = sec.dataset.sec; S.collapsed.has(k) ? S.collapsed.delete(k) : S.collapsed.add(k); store("collapsed", [...S.collapsed]); return renderSide(); }
     if (e.target.closest("#codeFilter")) return codeFilterMenu(e.target.closest("#codeFilter"));
     if (e.target.closest("#togArch")) { S.showArchived = !S.showArchived; return renderSide(); }
+    if (e.target.closest("#sideAddFolder")) return addFolderProject();
     if (e.target.closest("#moreThreads")) { S.threadLimit = (S.threadLimit || 300) + 300; S.allRecents = true; loadThreads(); return; }
     if (e.target.closest("#moreRecents")) { S.allRecents = !S.allRecents; return renderSide(); }
     const va = e.target.closest("[data-vall]"); if (va) return openProject(va.dataset.vall);
@@ -388,27 +422,42 @@ function goPage(name) {
 }
 
 /* ================================== search dialog ================================== */
-const SRCH_TABS = [["all", "All"], ["artifacts", "Artifacts"], ["sessions", "Sessions"], ["code", "Code"], ["projects", "Projects"], ["scheduled", "Scheduled"]];
+const SRCH_TABS = [["all", "All"], ["artifacts", "Artifacts"], ["sessions", "Chats"], ["code", "Code"], ["projects", "Projects"], ["scheduled", "Scheduled"]];
 function closeSearch() { const s = $("#srch"); if (!s) return; s.remove(); document.removeEventListener("keydown", s._key, true); }
 function srchIcon(it) {
   const ic = {chat: ICON.chat, code: ICON.codebr, project: ICON.stack, artifact: ICON.cube, scheduled: ICON.clock, action: it.id === "new_session" ? ICON.codebr : it.id === "settings" ? ICON.gear : ICON.plus}[it.kind] || ICON.chat;
   return `<span class="sic">${ic}${it.unread || it.waiting ? `<i class="bdot ${it.waiting ? "wait" : ""}"></i>` : ""}</span>`;
 }
+// The date of the chat a snippet is from: "Mar 4", with the year when it is not this year.
+function srchDate(t) {
+  const d = new Date(t * 1000);
+  return d.toLocaleDateString("en", {month: "short", day: "numeric", ...(d.getFullYear() !== new Date().getFullYear() ? {year: "numeric"} : {})});
+}
+// The match in a snippet, marked (the words of the query, in any order). Matched on the text itself and escaped
+// piece by piece: matching the escaped HTML marked inside "&amp;" and "&lt;" for a search for "amp" or "lt".
+function srchMark(text, q) {
+  const t = String(text ?? "");
+  const words = String(q || "").toLowerCase().split(/\s+/).filter(w => w.length > 1).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (!words.length) return esc(t);
+  return t.split(new RegExp("(" + words.join("|") + ")", "gi")).map((part, i) => i % 2 ? `<mark>${esc(part)}</mark>` : esc(part)).join("");
+}
 function openSearch(tab = "all", q0 = "") {
   closePop(); closeCtx(); closeSearch(); $(".scrim:not(.dlg-scrim)")?.remove();
+  const dev = S.mode === "code" || (S.threads || []).some(isCodeThread);      // the Alt+Enter and Tab hints are for people who use Code
   const sc = document.createElement("div"); sc.className = "scrim srch-scrim"; sc.id = "srch";
   sc.innerHTML = `<div class="srch" role="dialog" aria-modal="true" aria-label="Search">
     <div class="srch-top"><input id="srchIn" placeholder="Search" aria-label="Search" autocomplete="off" spellcheck="false" value="${esc(q0)}"><span class="spin" id="srchSpin" hidden></span><button class="iconbtn" id="srchX" aria-label="Close search">${ICON.x}</button></div>
-    <div class="srch-tabs" role="tablist">${SRCH_TABS.map(([k, l]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${l}</button>`).join("")}</div>
+    <div class="srch-tabs" role="tablist">${SRCH_TABS.filter(([k]) => k !== "code" || (S.threads || []).some(isCodeThread) || tab === "code").map(([k, l]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${l}</button>`).join("")}</div>
     <div class="srch-list" id="srchList" role="listbox"></div>
-    <div class="srch-keys"><span>Close <kbd>Esc</kbd></span><span>Change type <kbd>←</kbd><kbd>→</kbd></span><span>Open <kbd>↵</kbd></span><span>Actions <kbd>${isMac ? "⌥" : "Alt+"}↵</kbd></span><span class="sp"></span><span>Compose <kbd>Tab</kbd></span></div></div>`;
+    <div class="srch-keys"><span>Close <kbd>Esc</kbd></span><span>Change type <kbd>←</kbd><kbd>→</kbd></span><span>Open <kbd>↵</kbd></span>${dev ? `<span>Actions <kbd>${isMac ? "⌥" : "Alt+"}↵</kbd></span><span class="sp"></span><span>Compose <kbd>Tab</kbd></span>` : ""}</div></div>`;
   document.body.appendChild(sc);
   const inp = $("#srchIn", sc), list = $("#srchList", sc);
   let items = [], act = 0, seq = 0, timer = null;
   const mark = n => { const rows = $$(".sres", list); if (!rows.length) return; act = (n + rows.length) % rows.length; rows.forEach((r, i) => r.classList.toggle("act", i === act)); rows[act].scrollIntoView({block: "nearest"}); };
   const draw = r => {
     items = [];
-    list.innerHTML = (r.groups || []).map(g => `<div class="sgrp">${esc(g.label)}</div>` + g.items.map(it => { const i = items.push(it) - 1; return `<div class="sres ${i === 0 ? "act" : ""}" role="option" data-i="${i}">${srchIcon(it)}<span class="stt">${esc(it.title)}</span><span class="ssub">${esc(it.sub || "")}</span><button class="iconbtn smore" aria-label="Actions" tabindex="-1">${ICON.more}</button><span class="sret">↵</span></div>`; }).join("")).join("")
+    if (S.mode !== "code") for (const g of r.groups || []) g.items = g.items.filter(it => it.id !== "new_session");     // Chat mode says "New chat" only
+    list.innerHTML = (r.groups || []).filter(g => g.items.length).map(g => `<div class="sgrp">${esc(g.label)}</div>` + g.items.map(it => { const i = items.push(it) - 1; return `<div class="sres ${i === 0 ? "act" : ""}" role="option" data-i="${i}">${srchIcon(it)}${it.snippet ? `<span class="sbody"><span class="stt">${esc(it.title)}${it.updated ? `<span class="sdate">${esc(srchDate(it.updated))}</span>` : ""}</span><span class="ssn">${srchMark(it.snippet, inp.value)}</span></span>` : `<span class="stt">${esc(it.title)}</span><span class="ssub">${esc(it.sub || "")}</span>`}<button class="iconbtn smore" aria-label="Actions" tabindex="-1">${ICON.more}</button><span class="sret">↵</span></div>`; }).join("")).join("")
       || `<div class="sempty">${inp.value.trim() ? `Nothing matches “${esc(inp.value.trim())}”. Try fewer words, or another type.` : "Nothing here yet."}</div>`;
     act = 0;
   };
@@ -424,7 +473,7 @@ function openSearch(tab = "all", q0 = "") {
     if (!it) return;
     if (alt && (it.kind === "chat" || it.kind === "code")) { const row = $(`.sres[data-i="${items.indexOf(it)}"] .smore`, sc); return threadMenu({type: "click", currentTarget: row}, it.id); }
     closeSearch();
-    if (it.kind === "chat" || it.kind === "code") { S.mode = it.kind === "code" ? "code" : "chat"; store("appmode", S.mode); syncMode(); openThread(it.id); }
+    if (it.kind === "chat" || it.kind === "code") { S.mode = it.kind === "code" ? "code" : "chat"; store("appmode", S.mode); syncMode(); openThread(it.id, false, inp.value.trim()); }
     else if (it.kind === "project") { S.mode = "chat"; syncMode(); openProject(it.id); }
     else if (it.kind === "artifact") openPreview(it.root, it.path);
     else if (it.kind === "scheduled") goPage("scheduled");
@@ -457,18 +506,51 @@ function openSearch(tab = "all", q0 = "") {
 function appsMenu(e) {
   const a = S.acct || {};
   ctxMenu({type: "click", currentTarget: e.currentTarget}, [
-    {head: "Meshpool on this computer"},
+    {head: "meshpool on this computer"},
     {label: "Install the command line tool", icon: ICON.term, fn: async () => { try { const r = await post("/api/install-cli", {}); toast(r.message || "Installed. Open a new terminal and type meshpool.", 5000); } catch (err) { toast(err.message, 5000); } }},
-    {label: "Download Meshpool apps", icon: ICON.dl, fn: () => openExternal(a.billing_url || "https://meshpool.ai")},
+    {label: "Download meshpool apps", icon: ICON.dl, fn: () => openExternal(a.billing_url || "https://meshpool.ai")},
     {label: "Check for updates", icon: ICON.refresh, fn: () => openSettings("about")},
-    ...(MP.desktop && !S.settings?.native ? [{sep: true}, {label: "Quit Meshpool", icon: ICON.logout, fn: () => post("/api/quit").then(() => document.body.innerHTML = `<div class="onb"><div class="onb-card"><h1>Meshpool has stopped</h1><p>You can close this window.</p></div></div>`)}] : []),
+    ...(MP.desktop && !S.settings?.native ? [{sep: true}, {label: "Quit meshpool", icon: ICON.logout, fn: () => post("/api/quit").then(() => document.body.innerHTML = `<div class="onb"><div class="onb-card"><h1>meshpool has stopped</h1><p>You can close this window.</p></div></div>`)}] : []),
   ], {cls: "acctmenu", up: true});
 }
 
 /* ================================== top bar ================================== */
 // Set an element's HTML only when it differs from what is there: a header or bar that did not change is not rebuilt,
 // so nothing flashes, loses hover or focus, or does layout work during a run.
-function setHTML(el, html, tight) { if (tight) html = html.replace(/>\s+</g, "><").trim(); if (!el || el._h === html) return false; el._h = html; el.innerHTML = html; return true; }
+/* Patch a part of the page to new HTML, keeping every element that is still there. Rewriting innerHTML replaced every
+   button and row each time one word changed: hover and focus dropped, running dots restarted their animation, and the
+   header, the composer bar and the sidebar flashed while a reply streamed (UX audit 0.0.18). Elements match by id,
+   data-id, data-pid or data-nv when they have one, else by tag in order; only what differs is written. Handlers set
+   with onclick on a kept element stay, so callers bind with onclick, never addEventListener, after a patch. */
+const morphKey = n => n.nodeType === 1 ? (n.id || n.getAttribute("data-id") || n.getAttribute("data-pid") || n.getAttribute("data-nv") || "") : "";
+function morphNode(a, b) {
+  if (a.nodeType !== 1) {                          // text that only grew is appended: a selection in it stays put
+    const x = a.nodeValue, y = b.nodeValue;
+    if (x !== y) { if (a.nodeType === 3 && y.startsWith(x)) a.appendData(y.slice(x.length)); else a.nodeValue = y; }
+    return;
+  }
+  if (a.isEqualNode(b)) return;                    // native and quick: most kept elements did not change at all
+  const aa = a.attributes, ba = b.attributes;
+  for (let i = aa.length - 1; i >= 0; i--) if (!b.hasAttribute(aa[i].name)) a.removeAttribute(aa[i].name);
+  for (let i = 0; i < ba.length; i++) { const at = ba[i]; if (a.getAttribute(at.name) !== at.value) a.setAttribute(at.name, at.value); }
+  if (a.nodeName === "TEXTAREA" || a.isContentEditable) return;        // what the user is typing is theirs
+  morphKids(a, b);
+}
+function morphKids(to, from) {
+  let cur = to.firstChild;
+  for (let nw = from.firstChild; nw;) {
+    const next = nw.nextSibling, k = morphKey(nw);
+    let match = null;
+    if (k) { for (let c = cur; c; c = c.nextSibling) if (c.nodeName === nw.nodeName && morphKey(c) === k) { match = c; break; } }
+    else if (cur && cur.nodeName === nw.nodeName && !morphKey(cur)) match = cur;
+    if (match) { if (match !== cur) to.insertBefore(match, cur); morphNode(match, nw); cur = match.nextSibling; }
+    else to.insertBefore(nw, cur);
+    nw = next;
+  }
+  while (cur) { const n = cur.nextSibling; to.removeChild(cur); cur = n; }
+}
+function morph(el, html) { const t = document.createElement("template"); t.innerHTML = html; morphKids(el, t.content); }
+function setHTML(el, html, tight) { if (tight) html = html.replace(/>\s+</g, "><").trim(); if (!el || el._h === html) return false; el._h = html; morph(el, html); return true; }
 function stepLabel() { const pd = planData(); return pd ? `Step ${Math.min(pd.current + 1, pd.total)} of ${pd.total}` : "Progress"; }
 function updateStep() { const el = $("#stepLbl"); if (el) setTxt(el, stepLabel()); }
 function renderTop() {
@@ -479,11 +561,12 @@ function renderTop() {
   const pj = pid && S.pj.find(p => p.id === pid);
   const folderChat = !onProject && !onPage && !!root && (v ? !v.scratch && !pj : !!S.draft.project);
   const title = onProject ? (pj?.name || "Project") : v ? (v.title || "New chat") : "";
-  const open = !!S.panel && !$("#panel")?.hidden;
+  const open = !!S.panel && !$("#panel")?.hidden && !(typeof PVX !== "undefined" && PVX.open);      // under an open preview the panel is not shown
   const a = $("#app"); a.classList.toggle("pageview", onPage); a.classList.toggle("homeview", !v && !onProject && !onPage);
   $("#topbar").classList.toggle("newt", !v);
   const topHTML = `
     ${hidden ? `<button class="tbtn showside" id="showSide" data-tip="Show sidebar" data-kbd="${MOD}B" data-tip-pos="below" aria-label="Show sidebar">${ICON.side}<i class="ndot" ${attention() ? "" : "hidden"}></i></button>` : ""}
+    ${hidden && (v || onProject || onPage) ? `<button class="tbtn topnew" id="topNew" data-tip="New chat" data-kbd="${MOD}N" data-tip-pos="below" aria-label="New chat">${ICON.plus}<span>New chat</span></button>` : ""}
     ${pj && !onProject && v ? `<button class="chip" id="pjChip" data-tip="Open project" data-tip-pos="below">${ICON.stack}<span class="cl">${esc(pj.name)}</span></button><span class="crumb" aria-hidden="true">/</span>` : ""}
     ${!v && !onProject && !onPage && S.mode === "code" ? `<span class="toplabel">New session</span>` : ""}
     ${v || onProject ? `<span class="title" id="ttl" data-id="${esc(v?.id || "")}" ${v ? `role="button" tabindex="0" aria-haspopup="menu" data-tip="Chat options" data-tip-pos="below"` : ""}>${esc(title)}</span>${v ? `<button class="tbtn ttlchev" id="ttlChev" aria-label="Chat options" aria-haspopup="menu">${ICON.chev}</button>` : ""}` : ""}
@@ -494,13 +577,15 @@ function renderTop() {
     ${v ? `<button class="tbtn stepbtn" id="panelBtn" aria-label="${open ? "Hide" : "Show"} progress" aria-pressed="${open}" data-tip="${open ? "Hide" : "Show"} progress" data-kbd="${MOD}." data-tip-pos="below">${ICON.list}<span id="stepLbl">${esc(stepLabel())}</span></button><button class="tbtn" id="shareBtn" aria-label="Export chat" data-tip="Copy or save this chat" data-tip-pos="below" aria-haspopup="menu">${ICON.share}<span>Export</span></button>` : ""}
     ${!v && !onPage && !onProject ? `<button class="tbtn" id="flagBtn" data-tip="Report a problem" data-tip-pos="below" aria-label="Report a problem">${ICON.flag}</button>` : ""}`;
   if (!setHTML($("#topbar"), topHTML, true)) { renderBranch(); return; }      // nothing changed: leave the header alone
-  $("#showSide")?.addEventListener("click", toggleSide);
-  $("#panelBtn")?.addEventListener("click", () => togglePanel(S.panel || (panelSet().includes("progress") ? "progress" : panelSet()[0]), !S.panel));
-  $("#shareBtn")?.addEventListener("click", e => exportMenu(e));
-  $("#devBtn")?.addEventListener("click", e => devPop(e));
-  $("#flagBtn")?.addEventListener("click", () => reportProblem());
-  $("#pjChip")?.addEventListener("click", () => openProject(pid));
-  $("#projChip")?.addEventListener("click", () => { if (!v) chooseDraftFolder(); else if (isMgd(root)) togglePanel("session", true); else openFolderInApp(root, ""); });
+  const on = (id, fn) => { const b = $("#" + id); if (b) b.onclick = fn; };      // onclick: a kept button is bound once
+  on("showSide", toggleSide);
+  on("topNew", () => newThread());
+  on("panelBtn", () => togglePanel(S.panel || (panelSet().includes("progress") ? "progress" : panelSet()[0]), !S.panel));
+  on("shareBtn", e => exportMenu(e));
+  on("devBtn", e => devPop(e));
+  on("flagBtn", () => reportProblem());
+  on("pjChip", () => openProject(pid));
+  on("projChip", () => { if (!v) chooseDraftFolder(); else if (isMgd(root)) togglePanel("session", true); else openFolderInApp(root, ""); });
   const ttl = $("#ttl");
   if (v) {
     ttl.ondblclick = renameTop; ttl.onclick = e => { if (ttl.contentEditable !== "true") chatMenu({type: "click", currentTarget: ttl}); };
@@ -551,8 +636,8 @@ function devPop(e) {
   const a = S.acct || {}, v = S.cur?.view || {}, root = curRoot();
   const own = !!v.scratch;
   ctxMenu({type: "click", currentTarget: e.currentTarget}, [
-    {head: `<b>${esc(a.device?.name || "This computer")}</b><span class="conn"><i class="gdot"></i>Connected</span><small>${own ? "This chat works in its own private folder on this computer." : `Meshpool can read and change files in ${esc(shortPath(root))} on this computer.`}</small>`, html: true},
-    {label: own ? "Browse the chat's folder" : "Open in Meshpool editor", icon: ICON.folderopen, fn: () => root && openFolderInApp(root, "")},
+    {head: `<b>This computer</b><small>${own ? "This chat works in its own private folder on this computer." : `meshpool can read and change files in ${esc(shortPath(root))} on this computer.`}</small>`, html: true},
+    {label: own ? "See the chat's files" : "See the files in this folder", icon: ICON.folderopen, fn: () => root && openFolderInApp(root, "")},
   ], {cls: "devmenu"});
 }
 // What the chat says, as Markdown: copied, or saved as a file.
@@ -560,7 +645,7 @@ function chatMarkdown() {
   const out = [`# ${S.cur?.view?.title || "Chat"}`];
   for (const e of S.cur?.log || []) {
     if (e.type === "user" && !e.steer && !/^Continue (working|where)/.test(e.text || "")) out.push(`**You**\n\n${e.text}`);
-    else if (e.type === "assistant" && e.text) out.push(`**Meshpool**\n\n${stripGoal(e.text)}`);
+    else if (e.type === "assistant" && e.text) out.push(`**meshpool**\n\n${stripGoal(e.text)}`);
   }
   return out.join("\n\n---\n\n") + "\n";
 }
@@ -571,9 +656,22 @@ function exportMenu(e) {
     {label: "Save as a file", icon: ICON.dl, fn: () => { const a = Object.assign(document.createElement("a"), {href: URL.createObjectURL(new Blob([chatMarkdown()], {type: "text/markdown"})), download: ((S.cur.view.title || "chat").replace(/[\\/:*?"<>|\x00-\x1f]+/g, "").trim().slice(0, 60) || "chat") + ".md"}); document.body.appendChild(a); a.click(); a.remove(); }},
   ]);
 }
-async function renderBranch() {
+// The branch chip: every header redraw used to run git status on the server. A fresh answer is reused for 15 s, and
+// one request at a time per folder; renderBranch(true) after a turn ends or files are rewound asks again at once.
+async function renderBranch(force) {
   const root = curRoot(); const el = $("#branchChip"); if (!el || !root) return;
   if (curMode() === "cowork" || S.cur?.view?.scratch) { el.innerHTML = ""; return; }
+  S.branchAt = S.branchAt || {}; S.branchBusy = S.branchBusy || {};
+  if (!force && S.branchHTML && root in S.branchHTML && Date.now() - (S.branchAt[root] || 0) < 15000) {
+    if (!el.querySelector("#brChip") && S.branchHTML[root]) {
+      el.innerHTML = S.branchHTML[root];
+      $("#brChip")?.addEventListener("click", () => togglePanel("git", true));
+      if (S.git?.repo && S.git?.github) ciChip(root);
+    }
+    return;
+  }
+  if (S.branchBusy[root]) return;
+  S.branchBusy[root] = true; S.branchAt[root] = Date.now();
   try {
     const g = await api("/api/git?root=" + encodeURIComponent(root));
     S.git = g;
@@ -582,7 +680,8 @@ async function renderBranch() {
     if (curRoot() === root && el.innerHTML !== html) el.innerHTML = html;
     $("#brChip")?.addEventListener("click", () => togglePanel("git", true));
     if (g.repo && g.github) ciChip(root);
-  } catch (e) { el.innerHTML = ""; }
+  } catch (e) { el.innerHTML = ""; S.branchAt[root] = 0; }
+  finally { S.branchBusy[root] = false; }
 }
 const CI_TEXT = {passing: "Checks passing", failing: "Checks failing", running: "Checks running"};
 async function ciChip(root, fresh) {
@@ -598,7 +697,14 @@ const PANELS = {cowork: ["session", "progress", "outputs", "browser"], code: ["s
 function curMode() { return S.cur?.view?.kind || "cowork"; }
 // A chat with its own private folder has no repository, so it gets the simple tabs; a chat in a real folder gets
 // the developer tabs when it is a code chat.
-function panelSet() { const v = S.cur?.view; return !v || v.scratch ? PANELS.cowork : v.worktree ? ["worktree", ...PANELS[curMode()]] : PANELS[curMode()]; }
+// Chat mode (a chat that was not started from the Code tab, even one in a folder) never gets the developer tabs
+// (Changes, Files, Terminal, Git and CI): it gets Session, Progress, Artifacts and Browser, in plain words.
+function chatMode() {
+  const v = S.cur?.view; if (!v) return S.mode !== "code";
+  const row = v.code_mode === undefined ? (S.threads || []).find(t => t.id === v.id) : null;     // an older view lacks the flag: the list has it
+  return !isCodeThread(row ? Object.assign({}, v, {code_mode: row.code_mode}) : v);
+}
+function panelSet() { const v = S.cur?.view; return !v || v.scratch || chatMode() ? PANELS.cowork : v.worktree ? ["worktree", ...PANELS[curMode()]] : PANELS[curMode()]; }
 function linkOf(pid) { return (S.pj.find(p => p.id === pid) || {}).link || null; }
 function curRoot() { return S.cur?.view?.workdir || S.draft.project || linkOf(S.draft.pid)?.path || ""; }
 

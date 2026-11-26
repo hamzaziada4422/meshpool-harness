@@ -207,7 +207,7 @@ def speech_status() -> dict:
             pass
         return {"ok": True, "detail": f"{ver}model {model.name} ({model}), works offline", "fix": ""}
     if packaged():
-        return {"ok": False, "detail": "missing from this install", "fix": "Missing from this install; reinstall Meshpool."}
+        return {"ok": False, "detail": "missing from this install", "fix": "Missing from this install; reinstall meshpool."}
     what = "the faster-whisper package" if not pkg else "the speech model"
     return {"ok": False, "detail": f"{what} is not here",
             "fix": "The desktop app includes speech to text. In a terminal install: pip install faster-whisper, then set "

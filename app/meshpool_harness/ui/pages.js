@@ -2,7 +2,7 @@
    optional banner, then a grid of cards. Loaded before app.js; each page draws into #col when it is opened. */
 "use strict";
 
-const PAGE_TITLE = {projects: "Projects", artifacts: "Artifacts", scheduled: "Scheduled tasks", plugins: "Plugins", memory: "What Meshpool knows", work: "Your work"};
+const PAGE_TITLE = {projects: "Projects", artifacts: "Artifacts", scheduled: "Scheduled tasks", plugins: "Plugins", memory: "What meshpool knows", work: "Your work"};
 function relDate(t) {
   t = Number(t) > 1e12 ? Number(t) / 1000 : Number(t); if (!t) return "";
   const d = Math.floor((Date.now() / 1000 - t) / 86400);
@@ -70,10 +70,10 @@ async function pageArtifacts() {
     const tab = G.tab.artifacts || "all", q = (G.q.artifacts || "").toLowerCase();
     const types = Object.keys(d.types);
     const list = d.artifacts.filter(a => (tab === "all" || a.type === tab) && (!q || a.name.toLowerCase().includes(q) || a.session_title.toLowerCase().includes(q)));
-    const banner = store("art_banner_off") ? "" : `<div class="gbanner"><div><b>Everything Meshpool makes lands here</b><span>Documents, sheets, decks and images from all your chats are collected on this page. Open one to see it in its own app.</span></div><button class="iconbtn" id="gbX" aria-label="Dismiss">${ICON.x}</button></div>`;
+    const banner = store("art_banner_off") ? "" : `<div class="gbanner"><div><b>Everything meshpool makes lands here</b><span>Documents, sheets, decks and images from all your chats are collected on this page. Open one to see it in its own app.</span></div><button class="iconbtn" id="gbX" aria-label="Dismiss">${ICON.x}</button></div>`;
     const tiles = MAKE.map(([n, tint, ext, prompt]) => `<button class="mk ${tint}" data-mk="${esc(prompt)}"><span class="mkt">${ICON[TYPE_IC[n] || "file"]}</span><span class="mkl">${n}</span></button>`).join("");
-    const card = a => `<div class="gcard art ${G.view}" tabindex="0" data-open="${esc(a.id)}"><div class="gth ${a.tint}">${/^(png|jpe?g|gif|svg)$/.test(a.ext) ? `<img alt="" loading="lazy" src="/raw?t=${encodeURIComponent(MP.token)}&root=${encodeURIComponent(a.root)}&path=${encodeURIComponent(a.path)}">` : `<span class="gx">${ICON[TYPE_IC[a.type] || "file"]}<b>.${esc(a.ext)}</b></span>`}</div><div class="gm"><b title="${esc(a.name)}">${esc(a.name)}</b><small>${esc(a.type)} · ${esc(relDate(a.updated))}</small></div></div>`;
-    const body = list.length ? `<div class="ggrid ${G.view === "list" ? "c1" : "c3"}">${list.map(card).join("")}</div>` : `<div class="gempty"><b>${d.artifacts.length ? "No artifacts match." : "Nothing made yet."}</b><span>${d.artifacts.length ? "Try another type or fewer words." : "Ask Meshpool for a document, a sheet or a deck. Files it makes show up here."}</span></div>`;
+    const card = a => `<div class="gcard art ${G.view}" tabindex="0" data-open="${esc(a.id)}"><div class="gth ${a.tint}">${/^(png|jpe?g|gif|svg)$/.test(a.ext) ? `<img alt="" loading="lazy" src="/raw?t=${encodeURIComponent(MP.token)}&root=${encodeURIComponent(a.root)}&path=${encodeURIComponent(a.path)}">` : `<span class="gx">${ICON[TYPE_IC[a.type] || "file"]}<b>.${esc(a.ext)}</b></span>`}</div><div class="gm"><b title="${esc(a.name)}">${esc(a.name)}</b><small>${esc(a.type)} · ${esc(relDate(a.updated))}</small><small class="gwhere" title="${esc(a.root + "/" + a.path)}">in ${esc(a.path.includes("/") ? a.path.slice(0, a.path.lastIndexOf("/")) : projName(a.root))}</small></div></div>`;
+    const body = list.length ? `<div class="ggrid ${G.view === "list" ? "c1" : "c3"}">${list.map(card).join("")}</div>` : `<div class="gempty"><b>${d.artifacts.length ? "No artifacts match." : "Nothing made yet."}</b><span>${d.artifacts.length ? "Try another type or fewer words." : "Ask meshpool for a document, a sheet or a deck. Files it makes show up here."}</span></div>`;
     shell0(gHead("artifacts", {tabs: [["all", "All"], ...types.map(t => [t, t])], tools: `${gBtn("gSearch", "search", "Search", G.find.artifacts)}${gBtn("gView", G.view === "list" ? "grid" : "lines", G.view === "list" ? "Grid view" : "List view")}${gBtn("gPlus", "plus", "New artifact")}`}) + banner + `<h2 class="gsub">Make something new</h2><div class="mkrow">${tiles}</div><div id="gart">${body}</div>`);
     bindHead("artifacts", () => draw());
     $("#gbX")?.addEventListener("click", () => { store("art_banner_off", true); draw(); });
@@ -81,6 +81,8 @@ async function pageArtifacts() {
     $("#gPlus").onclick = e => newArtifact(e.currentTarget);
     $$("[data-mk]").forEach(b => b.onclick = () => { newThread(); const i = $("#input"); i.value = b.dataset.mk; i.focus(); i.dispatchEvent(new Event("input")); });
     const open = id => { const a = d.artifacts.find(x => x.id === id); if (a) openPreview(a.root, a.path); };
+    // the file's own first page, not a generic icon (documents, decks, PDFs); so three versions can be told apart
+    $$(".gcard.art[data-open]").forEach(c => { const a = d.artifacts.find(x => x.id === c.dataset.open); if (a && PV_THUMB_RX.test(a.path)) pvThumb(a.root, a.path, $(".gth", c)); });
     $$("[data-open]").forEach(c => { c.onclick = () => open(c.dataset.open); c.onkeydown = e => { if (e.key === "Enter") open(c.dataset.open); }; c.oncontextmenu = e => { e.preventDefault(); const a = d.artifacts.find(x => x.id === c.dataset.open); ctxMenu(e, [{label: "Open", icon: ICON.files, fn: () => open(a.id)}, {label: "Open the chat", icon: ICON.chat, fn: () => openThread(a.session_id)}]); }; });
   };
   draw();
@@ -97,7 +99,7 @@ function taskDialog(t = {}) {
     const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
     sc.innerHTML = `<div class="dlg wide" role="dialog" aria-modal="true" aria-label="${t.id ? "Edit task" : "New task"}"><h3>${t.id ? "Edit task" : "New task"}</h3>
       <label class="field"><span>Name</span><input id="tkName" value="${esc(t.name || "")}" placeholder="Morning briefing" maxlength="80"></label>
-      <label class="field"><span>What should Meshpool do?</span><textarea id="tkPrompt" rows="4" placeholder="Describe the task as you would to a colleague.">${esc(t.prompt || "")}</textarea></label>
+      <label class="field"><span>What should meshpool do?</span><textarea id="tkPrompt" rows="4" placeholder="Describe the task as you would to a colleague.">${esc(t.prompt || "")}</textarea></label>
       <div class="tkrow"><label class="field"><span>Repeat</span><select id="tkWhen">${WHENS.map(([k, l]) => `<option value="${k}" ${k === (t.when || "daily") ? "selected" : ""}>${l}</option>`).join("")}</select></label>
       <label class="field" id="tkDayF"><span>Day</span><select id="tkDay">${DAYS.map(([k, l]) => `<option value="${k}" ${k === (t.day || "mon") ? "selected" : ""}>${l}</option>`).join("")}</select></label>
       <label class="field" id="tkTimeF"><span>Time</span><input id="tkTime" type="time" value="${esc(t.time || "09:00")}"></label>
@@ -146,7 +148,7 @@ async function pageScheduled() {
     const tasks = d.tasks.filter(t => !q || t.name.toLowerCase().includes(q) || t.prompt.toLowerCase().includes(q));
     const card = t => gcard(t.id, `<div class="gt"><b>${esc(t.name)}</b>${t.unread ? `<i class="bdot" aria-label="Unread result"></i>` : ""}<p class="clip2">${esc(t.prompt)}</p><small class="st ${t.enabled ? "on" : ""}">${esc(t.status)} · ${esc(t.schedule)}</small>${t.error ? `<small class="st bad">Could not start: ${esc(t.error)}</small>` : ""}${t.invalid ? `<small class="st bad">${esc(t.invalid)}</small>` : ""}${t.skipped ? `<small>Skipped a run: ${esc(t.skipped)}</small>` : ""}${t.running ? `<small>Running now</small>` : ""}</div>${t.project ? `<span class="gchip">${ICON.stack}${esc(t.project)}</span>` : ""}<button class="iconbtn more" data-tk="${esc(t.id)}" aria-label="Options for ${esc(t.name)}">${ICON.more}</button>`, "task");
     const tpl = (t, i) => gcard("t" + i, `<div class="gt"><b>${esc(t.name)}</b><p class="clip2">${esc(t.prompt)}</p><small>${esc(WHENS.find(w => w[0] === t.when)?.[1] || "")}${t.time ? " at " + t.time : ""}</small></div>`, "task tpl");
-    const body = tab === "templates" ? `<div class="ggrid c2">${d.templates.map(tpl).join("")}</div>` : tasks.length ? `<div class="ggrid c2">${tasks.map(card).join("")}</div>` : `<div class="gempty"><b>${q ? "No tasks match." : "No scheduled tasks yet."}</b><span>${q ? "Try fewer words." : "Have Meshpool do something for you on a schedule: a daily briefing, a weekly recap, a repository check."}</span>${q ? "" : `<button class="btn primary" id="tkNew2">New task</button>`}</div>`;
+    const body = tab === "templates" ? `<div class="ggrid c2">${d.templates.map(tpl).join("")}</div>` : tasks.length ? `<div class="ggrid c2">${tasks.map(card).join("")}</div>` : `<div class="gempty"><b>${q ? "No tasks match." : "No scheduled tasks yet."}</b><span>${q ? "Try fewer words." : "Have meshpool do something for you on a schedule: a daily briefing, a weekly recap, a repository check."}</span>${q ? "" : `<button class="btn primary" id="tkNew2">New task</button>`}</div>`;
     shell0(gHead("scheduled", {tabs: [["yours", "Yours"], ["templates", "Templates"]], tools: `${gBtn("gSearch", "search", "Search", G.find.scheduled)}<button class="btn primary split" id="tkNew">New task<span class="sd">${ICON.chev}</span></button>`}) + (d.problem ? `<div class="gempty"><b>Your scheduled tasks could not be read.</b><span>${esc(d.problem)}</span><button class="btn" id="tkReset">Start fresh</button></div>` : "") + `<div id="gtk">${body}</div>`);
     $("#tkReset")?.addEventListener("click", async () => { try { await post("/api/assistant", {action: "tasks_reset"}); pageScheduled(); } catch (err) { toast(err.message); } });
     bindHead("scheduled", () => draw());
@@ -183,7 +185,7 @@ async function pagePlugins() {
   const draw = () => {
     const {conns, skills, plugins} = G.plg, tab = G.tab.plugins || "all", q = (G.q.plugins || "").toLowerCase();
     const mine = [
-      ...(tab !== "skills" ? conns.filter(c => c.connected).map(c => ({kind: "connector", id: c.id, name: c.name, by: c.custom ? (() => { try { return new URL(c.url || "https://custom.local").host; } catch { return c.name || "Custom"; } })() : "Meshpool directory", on: c.enabled, desc: c.description})) : []),
+      ...(tab !== "skills" ? conns.filter(c => c.connected).map(c => ({kind: "connector", id: c.id, name: c.name, by: c.custom ? (() => { try { return new URL(c.url || "https://custom.local").host; } catch { return c.name || "Custom"; } })() : "meshpool directory", on: c.enabled, desc: c.description})) : []),
       ...(tab !== "connectors" ? skills.filter(s => s.enabled).map(s => ({kind: "skill", id: s.id, name: s.name, by: "On this computer", on: true, desc: s.description})) : []),
       ...(tab === "all" ? plugins.map(p => ({kind: "plugin", id: p.name, name: p.name, by: p.version ? "v" + p.version : "Installed", on: p.enabled, desc: p.description || ""})) : []),
     ].filter(x => !q || (x.name + x.desc).toLowerCase().includes(q));
@@ -193,7 +195,7 @@ async function pagePlugins() {
     shell0(`<header class="gh"><h1>Plugins</h1><button class="iconbtn" id="plMore" aria-label="More" aria-haspopup="menu">${ICON.more}</button></header>
       <div class="gbar"><label class="gsearch">${ICON.search}<input id="gq" placeholder="Search plugins" value="${esc(G.q.plugins || "")}" aria-label="Search plugins" autocomplete="off"></label><div class="gtabs pills" role="tablist">${[["all", "All"], ["connectors", "Connectors"], ["skills", "Skills"]].map(([k, l]) => `<button role="tab" data-gtab="${k}" aria-selected="${tab === k}">${l}</button>`).join("")}</div><button class="btn split" id="plAdd">Add<span class="sd">${ICON.chev}</span></button></div>
       <div class="gline"><h2 class="gsub">Your plugins</h2>${mine.length > 6 ? `<button class="linkbtn" id="plAll">${G.plgAll ? "Show fewer" : "Show all"} ${ICON.chevR}</button>` : ""}</div>
-      ${mine.length ? `<ul class="plist">${shown.map(row).join("")}${mine.length > 6 && !G.plgAll ? `<li class="prow sum"><span class="pt"><small>${esc(mine.slice(0, 3).map(x => x.name).join(", "))} and ${mine.length - 3} more</small></span></li>` : ""}</ul>` : `<div class="gempty"><b>Nothing turned on yet.</b><span>Connect a service or add a skill to give Meshpool more to work with.</span></div>`}
+      ${mine.length ? `<ul class="plist">${shown.map(row).join("")}${mine.length > 6 && !G.plgAll ? `<li class="prow sum"><span class="pt"><small>${esc(mine.slice(0, 3).map(x => x.name).join(", "))} and ${mine.length - 3} more</small></span></li>` : ""}</ul>` : `<div class="gempty"><b>Nothing turned on yet.</b><span>Connect a service or add a skill to give meshpool more to work with.</span></div>`}
       ${more.length ? `<div class="gline"><h2 class="gsub">Available to connect</h2></div><ul class="pcols">${more.slice(0, 12).map(c => `<li class="pcard" data-conn="${esc(c.id)}"><span class="plogo">${esc(c.name.slice(0, 1).toUpperCase())}</span><span class="pt"><b>${esc(c.name)}</b><small>${esc(clip(c.description || "", 90))}</small></span></li>`).join("")}</ul>` : ""}`);
     $$("[data-gtab]").forEach(b => b.onclick = () => { G.tab.plugins = b.dataset.gtab; draw(); });
     $("#gq").oninput = e => { const pos = e.target.selectionStart; G.q.plugins = e.target.value; clearTimeout(G.qT); G.qT = setTimeout(() => { draw(); const i = $("#gq"); i.focus(); i.setSelectionRange(pos, pos); }, 150); };
@@ -220,7 +222,7 @@ async function closedApp011() {
   const host = $(".ggrid, .gempty")?.parentElement;
   if (!host) return;
   const row = document.createElement("div"); row.id = "closedApp"; row.className = "closedapp";
-  row.innerHTML = `<label class="switchrow"><input type="checkbox" ${st.installed ? "checked" : ""}> Also run tasks when Meshpool is closed</label><small>${st.installed ? "On. Your computer checks every 10 minutes." : "Off. Tasks run only while Meshpool is open."}</small>`;
+  row.innerHTML = `<label class="switchrow"><input type="checkbox" ${st.installed ? "checked" : ""}> Also run tasks when meshpool is closed</label><small>${st.installed ? "On. Your computer checks every 10 minutes." : "Off. Tasks run only while meshpool is open."}</small>`;
   host.appendChild(row);
-  $("input", row).onchange = async e => { try { const r = await post("/api/scheduler", {on: e.target.checked}); toast(r.message || "Saved"); $("small", row).textContent = r.installed ? "On. Your computer checks every 10 minutes." : "Off. Tasks run only while Meshpool is open."; } catch (err) { toast(err.message); e.target.checked = !e.target.checked; } };
+  $("input", row).onchange = async e => { try { const r = await post("/api/scheduler", {on: e.target.checked}); toast(r.message || "Saved"); $("small", row).textContent = r.installed ? "On. Your computer checks every 10 minutes." : "Off. Tasks run only while meshpool is open."; } catch (err) { toast(err.message); e.target.checked = !e.target.checked; } };
 }

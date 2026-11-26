@@ -78,11 +78,11 @@ def describe() -> dict:
     """For the doctor row: {path, source, note}."""
     path, source = resolve()
     if path:
-        note = {"bundled": "the copy that ships with Meshpool", "MH_SOFFICE": "set by MH_SOFFICE"}.get(source, source)
+        note = {"bundled": "the copy that ships with meshpool", "MH_SOFFICE": "set by MH_SOFFICE"}.get(source, source)
         return {"path": path, "source": source, "note": note}
     if is_packaged():
         return {"path": None, "source": "", "note": "missing from this install (Meshpool never uses a LibreOffice "
-                "installed on your computer); reinstall Meshpool"}
+                "installed on your computer); reinstall meshpool"}
     return {"path": None, "source": "", "note": "not found (source checkout: set MH_SOFFICE, or "
             "MH_ALLOW_SYSTEM_SOFFICE=1 to use the system copy)"}
 

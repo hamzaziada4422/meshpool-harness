@@ -1,4 +1,5 @@
 """A key only ever goes to the endpoint it was set for (S-01, M15-01) and the wording names that endpoint (F-16)."""
+import re
 import json
 import shutil
 import threading
@@ -213,13 +214,14 @@ def test_wording_names_custom_endpoint(home, monkeypatch, capsys):  # noqa: F811
                                      "MESHPOOL_BASE_URL": "https://res.openai.azure.com/openai/v1"})
     monkeypatch.setattr(C, "_INJECTED", set())
     s = PV.setup("key")
-    assert "res.openai.azure.com" in s and "Meshpool" not in s
+    name = re.compile(r"\bmeshpool\b", re.I)      # the product name, in any case (0.0.18 writes it in lowercase)
+    assert "res.openai.azure.com" in s and not name.search(s)
     cli._check(False)
     line = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("API key")][0]
-    assert "res.openai.azure.com" in line and "Meshpool" not in line
+    assert "res.openai.azure.com" in line and not name.search(line)
     assert "res.openai.azure.com" in onboard._checking_text("https://res.openai.azure.com/openai/v1", True)
-    assert "Meshpool" not in onboard._key_title(True) and "Meshpool" in onboard._key_title(False)
+    assert not name.search(onboard._key_title(True)) and name.search(onboard._key_title(False))
     # the Meshpool endpoint keeps its own wording
     monkeypatch.setattr(C, "SHELL", {})
     monkeypatch.delenv("MESHPOOL_BASE_URL")
-    assert "Meshpool" in PV.setup("key")
+    assert re.search(r"\bmeshpool\b", PV.setup("key"), re.I)

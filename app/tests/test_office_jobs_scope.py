@@ -68,7 +68,8 @@ def test_same_request_while_running_is_one_process(tmp_path, fast):
     time.sleep(0.4)
     ts[1].start()
     [t.join(60) for t in ts]
-    assert len(fast.starts) == 1 and len(list((tmp_path / "Meshpool outputs").iterdir())) == 1
+    assert len(fast.starts) == 1 and len(list(OJ.scratch_root("chat-A").iterdir())) == 1
+    assert not (tmp_path / "Meshpool outputs").exists()                 # the job works in meshpool's own data
     assert len(got) == 2 and got[0][0] == got[1][0] and {g[1] for g in got} == {"", "running"}
     assert got[0][2] == got[1][2]
 

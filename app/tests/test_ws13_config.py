@@ -85,7 +85,7 @@ def test_C_21_install_ps1_app_switch():
 
 # ---- C-23 (already fixed): every third-party import in app/ is declared ----------------------------------------------
 # Imports that may be missing on purpose: each must only ever be imported lazily (in a function or a try block).
-OPTIONAL = {"AppKit", "Quartz", "mss", "webview", "fastembed", "pbixray", "rapidocr", "pymupdf", "defusedxml",
+OPTIONAL = {"AppKit", "Foundation", "Quartz", "mss", "webview", "fastembed", "pbixray", "rapidocr", "pymupdf", "defusedxml",
             "certifi", "eval", "ddgs", "pillow_heif", "onnxruntime"}
 DIST = {"PIL": "pillow", "docx": "python-docx", "pptx": "python-pptx", "yaml": "pyyaml", "pdfminer": "pdfminer.six",
         "cairosvg": "cairosvg", "lxml": "lxml", "openpyxl": "openpyxl", "pandas": "pandas", "playwright": "playwright",
@@ -110,6 +110,8 @@ def test_C_23_requirements_cover_imports():
     for d in ("meshpool_harness", "engines"):
         for p in (APP / d).rglob("*.py"):
             if p.name == "build_bundles.py":                  # a build-time tool, not shipped code
+                continue
+            if p.name == "lo_worker.py":                      # runs in LibreOffice's own Python (uno), not meshpool's
                 continue
             try:
                 tree = ast.parse(p.read_text(encoding="utf-8"))

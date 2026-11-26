@@ -92,7 +92,7 @@ def test_doctor_row_says_which_copy(env, monkeypatch):
     _fake_exe(env["bundled"], env["key"])
     monkeypatch.setattr("shutil.which", lambda *a, **k: None)      # sys.platform is faked: keep the rest off the OS
     row = next(r for r in config.system_check() if r["name"] == "LibreOffice")
-    assert row["ok"] and "ships with Meshpool" in row["detail"]
+    assert row["ok"] and "ships with meshpool" in row["detail"]
 
 
 

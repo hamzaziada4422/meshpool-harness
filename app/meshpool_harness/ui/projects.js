@@ -86,22 +86,36 @@
         <aside class="pjside">
           <section class="card" id="pjBrief" aria-label="Project brief"></section>
           <section class="card" aria-label="Instructions"><div class="chd"><span class="ci">${ICON.pencil}</span><h3>Instructions</h3><button class="linkbtn" id="pjInsEdit">${d.instructions ? "Edit" : "Add"}</button></div>
-            ${d.instructions ? `<p class="clamp">${esc(d.instructions)}</p>` : `<p class="muted">Tell Meshpool how to work here: the tone, the format, what to avoid. Every chat in this project follows it.</p>`}</section>
+            ${d.instructions ? `<p class="clamp">${esc(d.instructions)}</p>` : `<p class="muted">Tell meshpool how to work here: the tone, the format, what to avoid. Every chat in this project follows it.</p>`}</section>
           <section class="card" aria-label="Files"><div class="chd"><span class="ci">${ICON.book}</span><h3>Files</h3><span class="cnt">${d.knowledge.length || ""}</span><button class="linkbtn" id="pjAddFiles">Add files</button></div>
             <input type="file" id="pjFileIn" multiple hidden>
-            ${d.knowledge.length ? `<ul class="klist">${d.knowledge.map(k => `<li><span class="ki">${ICON.file}</span><span class="kn" title="${esc(k.name)}">${esc(k.name)}<small>${fmtSize(k.size)}${k.readable ? "" : " · Meshpool can’t read the text in this file"}</small></span><button class="iconbtn" data-kdel="${esc(k.name)}" data-tip="Remove" aria-label="Remove ${esc(k.name)}">${ICON.x}</button></li>`).join("")}</ul>`
+            ${d.knowledge.length ? `<ul class="klist">${d.knowledge.map(k => `<li><span class="ki">${ICON.file}</span><span class="kn" title="${esc(k.name)}">${esc(k.name)}<small>${fmtSize(k.size)}${k.readable ? "" : " · meshpool can’t read the text in this file"}</small></span><button class="iconbtn" data-kdel="${esc(k.name)}" data-tip="Remove" aria-label="Remove ${esc(k.name)}">${ICON.x}</button></li>`).join("")}</ul>`
               : `<p class="muted">Add briefs, style guides or data that every chat here should know. You can also drop files on this page.</p>`}</section>
           <section class="card" aria-label="Memory"><div class="chd"><span class="ci">${ICON.brain}</span><h3>Memory</h3>${d.memory ? `<button class="linkbtn" id="pjMemEdit">Edit</button>` : ""}</div>
             ${d.memory ? `<ul class="mem">${d.memory.split("\n").map(l => `<li>${esc(l)}</li>`).join("")}</ul><button class="linkbtn danger" id="pjMemClear">Clear memory</button>`
-              : `<p class="muted">Nothing yet. Meshpool saves lasting facts about this project here as you work. It is separate from your general memory.</p>`}</section>
+              : `<p class="muted">Nothing yet. meshpool saves lasting facts about this project here as you work. It is separate from your general memory.</p>`}</section>
           <section class="card" aria-label="Folder"><div class="chd"><span class="ci">${ICON.link}</span><h3>${link?.type === "github" ? "GitHub repository" : "Folder"}</h3></div>
-            ${link ? `<p class="linked"><b title="${esc(link.path)}">${esc(link.type === "github" && link.repo ? link.repo : projName(link.path))}</b>${link.branch ? `<small>${esc(link.branch)}</small>` : ""}${link.missing ? `<small class="bad">This folder was moved or deleted.</small>` : `<small>${esc(shortPath(link.path))}</small>`}</p><p class="muted">Chats here read and change these files. The side panel shows the branch and changes.</p><div class="row"><button class="btn" id="pjLinkFolder">Change folder</button><button class="btn" id="pjUnlink">Unlink</button></div>`
+            ${link ? `<p class="linked"><b title="${esc(link.path)}">${esc(link.type === "github" && link.repo ? link.repo : projName(link.path))}</b>${link.branch ? `<small>${esc(link.branch)}</small>` : ""}${link.missing ? `<small class="bad">This folder was moved or deleted.</small>` : `<small>${esc(shortPath(link.path))}</small>`}</p><p class="muted">Chats here read and change these files.${link.type === "github" ? " The side panel shows the branch and changes." : ""}</p>${link.missing ? "" : `<ul class="pjfiles" id="pjFiles" aria-label="Files in the folder"><li class="muted">Looking at the folder...</li></ul>`}<div class="row">${link.missing ? "" : `<button class="btn" id="pjBrowse">Browse the folder</button>`}<button class="btn" id="pjLinkFolder">Change folder</button><button class="btn" id="pjUnlink">Unlink</button></div>`
               : `<p class="muted">Optional. Link a folder or a GitHub repository so chats here can work on your files and code.</p><div class="row"><button class="btn" id="pjLinkFolder">${ICON.dir} Link a folder</button><button class="btn" id="pjLinkGh">${ICON.pr} Link a repository</button></div>`}</section>
         </aside>
       </div></div>`;
     $("#conv").scrollTop = 0; $(".jumpdown")?.setAttribute("hidden", "");
     bindProject(pid, d);
+    fillProjectFiles(d.link);
   };
+
+  // The folder's own top-level files, a click opens one in the preview; "Browse the folder" opens the in-app file list.
+  async function fillProjectFiles(link) {
+    const ul = $("#pjFiles"); if (!ul || !link) return;
+    $("#pjBrowse")?.addEventListener("click", () => edFolderPane(link.path, ""));
+    try {
+      const r = await api(`/api/fs/list?root=${encodeURIComponent(link.path)}&path=`);
+      const files = (r.entries || []).filter(e => !e.dir && !String(e.name).startsWith(".")), more = files.length - 12;
+      if (!$("#pjFiles")) return;
+      ul.innerHTML = files.length ? files.slice(0, 12).map((e, i) => `<li><button type="button" class="linkbtn pjf" data-i="${i}" title="${esc(e.path)}">${ICON.file}<span>${esc(e.name)}</span></button></li>`).join("") + (more > 0 ? `<li class="muted">and ${more} more. Use Browse the folder.</li>` : "") : `<li class="muted">No files at the top of this folder yet.</li>`;
+      $$(".pjf", ul).forEach(b => b.onclick = () => openPreview(link.path, files[+b.dataset.i].path));
+    } catch (e) { if ($("#pjFiles")) ul.innerHTML = `<li class="muted">${esc(e.message)}</li>`; }
+  }
 
   function bindProject(pid, d) {
     const refresh = async () => { await loadPj(); renderSide(); renderTop(); await drawProject(pid); };
@@ -142,12 +156,12 @@
       try { await post(`/api/pj/${pid}`, {action: "knowledge_remove", name: b.dataset.kdel}); await refresh(); toast("File removed"); } catch (e) { toast(e.message); }
     });
     $("#pjMemEdit")?.addEventListener("click", async () => {
-      const v = await editText({title: "Project memory", text: "One fact per line. Meshpool reads these at the start of every new chat in this project.", value: d.memory, rows: 11, max: 6000});
+      const v = await editText({title: "Project memory", text: "One fact per line. meshpool reads these at the start of every new chat in this project.", value: d.memory, rows: 11, max: 6000});
       if (v === null) return;
       try { await post(`/api/pj/${pid}`, {action: "memory_set", text: v}); await refresh(); } catch (e) { toast(e.message); }
     });
     $("#pjMemClear")?.addEventListener("click", async () => {
-      if (!await ask({title: "Clear this project’s memory?", text: "Meshpool forgets everything it learned in this project. Your general memory is not affected.", ok: "Clear memory", cancel: "Keep it", danger: true})) return;
+      if (!await ask({title: "Clear this project’s memory?", text: "meshpool forgets everything it learned in this project. Your general memory is not affected.", ok: "Clear memory", cancel: "Keep it", danger: true})) return;
       try { await post(`/api/pj/${pid}`, {action: "memory_clear"}); await refresh(); toast("Memory cleared"); } catch (e) { toast(e.message); }
     });
     // link a folder or repository

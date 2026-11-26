@@ -35,7 +35,7 @@ def connect(cid: str):
     from meshpool_harness.agent import mcp as M
     spec = CN.servers().get(cid)
     if not spec:
-        raise RuntimeError(f"The {cid} connector is not connected in Meshpool.")
+        raise RuntimeError(f"The {cid} connector is not connected in meshpool.")
     server = M.Server(cid, spec, C.runs_dir() / "mcp-logs", [])
     server.start(timeout=60)
     if server.status != "connected":

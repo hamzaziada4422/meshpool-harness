@@ -217,8 +217,9 @@ def test_an_overlong_source_line_is_shortened_by_clause_and_noted(tmp_path):
          "blocks": [{"text": "Costs fall", "bullets": ["Diesel costs more per mile", "Maintenance fell"]}],
          "source": {"text": long}}
     out = tmp_path / "d.pptx"
-    R.render([s], str(out), carry=False, fix_labels=False)
+    r = R.render([s], str(out), carry=False, fix_labels=False)
     sl = Presentation(str(out)).slides[0]
     src = next(sh for sh in sl.shapes if sh.name == "Source").text_frame.text
-    assert src.endswith("and others") and len(src) < len(long) and "Company fleet data" in src
-    assert "Source line shortened" in sl.notes_slide.notes_text_frame.text
+    # whole clauses, never "... and others" (Daniel, 0.0.19); the rest is a remark for the checks, not a note
+    assert not src.endswith("and others") and len(src) < len(long) and "Company fleet data" in src
+    assert any("Source line shortened" in m for m in r["remarks"])

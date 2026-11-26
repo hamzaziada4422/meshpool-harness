@@ -100,3 +100,32 @@ def test_the_session_adds_no_office_notes_to_a_codex_request():
     assert Session._codex_office(s, "Summarise notes.txt") is False
     s.harness = {"type": "pi"}
     assert Session._codex_office(s, "Sort data.xlsx") is False
+
+
+def test_an_office_panel_chat_keeps_the_work_route_and_ask_user(tmp_path):
+    # The Office add-in's first message says where it comes from ("I am in Excel, using the meshpool panel"). Those
+    # chats answer about the selection and may ask the user; Codex 0.171's request has no ask_user, so they stay on
+    # the Work route for every message, not only the first (0.0.17: the panel's questions stopped working).
+    js = (Path(core.__file__).resolve().parents[1] / "office" / "taskpane.js").read_text()
+    assert core.Agent._PANEL in js
+    a = _work(tmp_path)
+    first = ("[I am in Excel, using the meshpool panel. Answer in this chat; do not create files unless I ask.]\n"
+             "Selected range Sheet1!A1:B2:\n<selection>\nName\tQty\napple\t3\n</selection>\nSort this by Qty")
+    assert not a.office_c171_for(first)
+    body = _turn(a, first)
+    assert body["messages"][0]["content"] != core._c171_prompt() and not a._c171()
+    assert not a.office_c171_for("Now make it an xlsx table")           # a later message in the same panel chat
+    names = [t["function"]["name"] for t in body["tools"]]
+    assert names.count("ask_user") == 1                                 # the panel shows its questions
+
+
+def test_a_panel_chat_offers_and_accepts_ask_user(tmp_path):
+    a = _work(tmp_path)
+    assert "ask_user" not in [t["function"]["name"] for t in a.tool_schemas()]     # a plain Work chat: as before
+    body = _turn(a, "[I am in PowerPoint, using the meshpool panel. Answer in this chat.]\nMake slide text from this")
+    assert [t["function"]["name"] for t in body["tools"]].count("ask_user") == 1
+    assert "ask_user" in a._tool_names()                     # the list a call is checked against (core/tools.validate)
+    (tmp_path / "b").mkdir()
+    b = _work(tmp_path / "b")
+    assert b.office_c171_for("Sort data.xlsx by date")                  # an ordinary Work chat is unchanged
+    assert "ask_user" not in b._tool_names()

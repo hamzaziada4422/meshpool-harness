@@ -202,6 +202,25 @@ def create(name: str, description: str = "", instructions: str = "", link=None, 
         return detail(pid)
 
 
+def for_folder(path: str, name: str = "") -> dict:
+    """The project linked to this folder, made (and pinned, so it shows in the sidebar) when there is none. A folder
+    picked in onboarding or with the sidebar's "Add a folder" becomes a project: new chats in it work in the folder
+    itself, not in a private chat folder."""
+    link = _clean_link({"type": "folder", "path": path})
+    with _LOCK:
+        try:
+            dirs = [p for p in root().iterdir() if p.is_dir() and ID_RX.fullmatch(p.name)]
+        except OSError:
+            dirs = []
+        for d in dirs:
+            m = _meta(d)
+            got = m.get("link")
+            if m.get("id") == d.name and isinstance(got, dict) and got.get("path") == link["path"]:
+                return update(d.name, pinned=True)
+        made = create(name or Path(link["path"]).name or link["path"], link=link)
+        return update(made["id"], pinned=True)
+
+
 def detail(pid: str) -> dict:
     d = _exists(pid)
     m = _meta(d)
@@ -267,12 +286,38 @@ def touch(pid: str) -> None:
 
 def legacy_map() -> dict:
     """{linked folder path: project id}: how chats made before projects existed find their project."""
-    out = {}
-    for r in list_projects():
-        for k in (r.get("legacy_path"), (r.get("link") or {}).get("path")):
+    return link_index()[0]
+
+
+def _record(raw: bytes) -> dict:
+    try:
+        m = json.loads(raw.decode("utf-8"))
+    except ValueError:
+        return {}
+    return m if isinstance(m, dict) else {}
+
+
+def link_index() -> tuple[dict, set]:
+    """(legacy_map(), the ids of the projects that exist), from project.json alone. The sidebar asks every few
+    seconds; it used to build both from list_projects, which reads four files of every project, twice per call. Each
+    project.json's parse is kept while the file is unchanged."""
+    try:
+        dirs = [p for p in root().iterdir() if ID_RX.fullmatch(p.name) and p.is_dir()]
+    except OSError:
+        dirs = []
+    rows = []
+    for d in dirs:
+        m = fsio.parse_cached(d / "project.json", _record, "project-json", missing={})
+        if m.get("id") == d.name:
+            rows.append(m)
+    rows.sort(key=lambda m: -float(m.get("updated") or 0))
+    out: dict = {}
+    for m in rows:
+        link = m.get("link")
+        for k in (m.get("legacy_path", ""), link.get("path", "") if isinstance(link, dict) else ""):
             if k:
-                out.setdefault(k, r["id"])
-    return out
+                out.setdefault(k, m["id"])
+    return out, {m["id"] for m in rows}
 
 
 # ---------- memory ---------------------------------------------------------------------------------------------------

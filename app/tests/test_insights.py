@@ -297,7 +297,8 @@ def test_a_turn_end_has_chips_plus_at_most_one_other_card(monkeypatch):
     t = "Pull the vendor invoices from the folder and match them to purchase orders and flag mismatches"
     cs = [chat(f"s{i}", NOW - d * DAY, t, steps=5, outputs=["x.xlsx"] if i == 2 else []) for i, d in enumerate((30, 26, 1))]
     cs += [chat(f"j{i}", NOW - i * DAY, f"Look at https://acme.atlassian.net/browse/OPS-{i}0") for i in range(2)]
-    cs[2] = dict(cs[2], texts=[t] + ["See https://x.slack.com/archives/C1/p1700000000"])
+    cs[2] = dict(cs[2], texts=[t] + ["See https://x.slack.com/archives/C1/p1700000000"],
+                 reply="Totals by month and the budget trend are in x.xlsx.")      # a reply the workbook chips relate to
     use(monkeypatch, corp(cs))
     got = I.cards_for("turn:s2", now=NOW)
     others = [c for c in got if c["type"] != "followup"]

@@ -4,8 +4,8 @@
 
 The model writes only JSON: a storyline (ghost deck), then slide content in schemas/slide.schema.json. The renderer
 owns layout. validate_pptx decides; its content-scope failures go back to the model slide by slide. Anything still
-failing after the last round is written into the slide notes as [QA] lines and into qa.json. Nothing passes
-silently.
+failing after the last round is written into qa.json and the engine's answer (never into the speaker notes, which
+hold presenter prose only: engines/forge/notes.py). Nothing passes silently.
 """
 from __future__ import annotations
 
@@ -30,13 +30,13 @@ from meshpool_harness.providers import configured_model  # noqa: E402
 MODEL = os.environ.get("FORGE_MODEL") or configured_model()
 STORY_MODEL = os.environ.get("FORGE_STORY_MODEL", MODEL)
 
-_COVER_LINE = """"date" (the occasion and today's month and year, e.g. "Board meeting, " + the month)."""
+_COVER_LINE = """"date" (today's month and year; an occasion only when the brief names one)."""
 _COVER_METRICS = """
   "metrics": 2-3 of {"value", "label" (<= 6 words), "prov"}: the figures that size the decision, shown on the cover."""
 
 _ARCH = """Archetypes (pick the one that best PROVES the title; never more than 3 of the same in a row). The
 renderer applies a strict consulting design; you only fill fields.
-- cover: title, subtitle, "date" (the occasion and today's month and year, e.g. "Board meeting, " + the month).
+- cover: title, subtitle, "date" (today's month and year; an occasion only when the brief names one).
 - grid: a slide assembled from PARTS on a grid when one exhibit is not enough (or too much). "layout": full, halves,
   halves_v, thirds, quarters, main_side (2/3 + 1/3), side_main, main_stack (left half + two stacked quarters right),
   stack_main; "look": editorial | boxed | minimal | bold; "parts": one per region, each {"type", "heading", ...}:
@@ -68,8 +68,10 @@ renderer applies a strict consulting design; you only fill fields.
   decision, shown large in a panel beside the points (always give them when the answer has a size).
 - closing: the last slide when the deck ends on action. "title" (the call to action, with a verb), "steps": 3-5 of
   {"action": imperative, <= 8 words, "detail": what it involves and why, <= 25 words, with its numbers,
-  "milestones": 1-3 short lines (first milestones, decision gates, the measure of success), "owner": who,
-  "timing": when, "prov": [fact ids]}.
+  "milestones": 1-3 short lines (first milestones, decision gates, the measure of success), "owner": who, only
+  when the brief or the facts name the owner, "timing": when, only a date the brief or the facts give (leave
+  owner and timing out otherwise: never invent them, and a "proposed" footnote does not make them sourced),
+  "prov": [fact ids]}.
 - challenge_matrix: numbered rows x two lenses. "columns": [row header, lens A, lens B] (e.g. ["Challenge",
   "A - Today", "B - Outlook"]); "rows": 3-5 of {"icon": one word meaning (e.g. money, congestion, store, people,
   safety, growth, risk, time), "label": "**Key word** rest of label" (<= 6 words), "cells": [A, B]} where each
@@ -92,7 +94,8 @@ renderer applies a strict consulting design; you only fill fields.
   the table (required when it has fewer than 12 rows: a short table sits beside them).
 - bar_takeaway / column_trend / line_trend / waterfall_bridge: "subtitle" (measure, unit, period), one "chart"
   {kind, categories, series[{name, values}], unit, decimals, highlight_categories, "target": a goal value drawn as a
-  dashed line, "delta": {"from": category, "to": category, "label": optional, e.g. "25-35x"} drawn as an arrow
+  dashed line, only a target the facts or the brief state as one (a reference such as an average takes
+  "target_label": "Average 47%"), "delta": {"from": category, "to": category, "label": optional, e.g. "25-35x"} drawn as an arrow
   with the multiple or gap in a pill, "descriptors": [one short line per category saying what it is]} on the left
   2/3, a "takeaway"
   {"text"} (bold lead) and "bullets" [2-3 {"text","prov"}] interpreting it on the right 1/3.
@@ -146,8 +149,11 @@ def arch_help(density: str = "read") -> str:
 ARCH_HELP = arch_help("read")                     # the dense send-ahead guide (kept for callers that import it)
 
 SLIDE_SHAPE = """Slide JSON: {"id","node" (from the storyline),"archetype","title","title_prov":[fact ids],
- ...archetype fields..., "source": {"text": original sources, "prov": [ids]}, "footnotes": [...], "tags": optional
- ["Preliminary", "Non-exhaustive"], "notes": detail that did not fit}.
+ ...archetype fields..., "source": {"text": the report's title or the file's name, "prov": [ids]}, "footnotes": [...],
+ "tags": optional ["Non-exhaustive"] (a stamp such as "Preliminary" or "Draft" only when the brief asks for one),
+ "notes": 40 to 120 words, plain sentences the presenter reads aloud}.
+Notes are for the presenter only: no fact, calc or option ids, no "prov", no JSON, no remarks about the brief, the
+storyline, the facts or corrections, no instructions to yourself.
 Every text element that holds numbers carries "prov": [fact ids] (bullets as {"text","prov"}; cells as
 {"lead","bullets":[{"text","prov"}],"prov"}). Use ONLY fact values; if a number is missing write [GAP: what].
 Titles: one sentence stating the takeaway, with a verb, <= 15 words, no full stop. Every data slide has a source.
@@ -183,7 +189,10 @@ CONSULTING = """House style (always, whatever the brief says about look):
   return = EPS / share price; idle cash earns the Treasury yield), and any score in a grid follows from numbers shown
   on the page, never asserted. One recommendation, the same amount on every slide.
 - Fact, calc and option ids (F7, S2O1) go in prov only, never in the words the reader sees.
-- Never invent a number. Missing evidence is [GAP: what], shown as N/A.
+- Never invent a number. Missing evidence is marked [GAP: what] for the checks and is not worded as N/A on the slide.
+- Write no caveats about anything the request did not ask about (how many plants a board member oversees, what the
+  report does not cover). Never write "N/A", "not available" or "not stated" on a slide. Missing data is left
+  out of the slide, or said once in plain words ("The report gives no 2019 figure.") where the decision rests on it.
 - Titles: 15 words or fewer, two lines at most, no full stop; the number in the title when the point is a number;
   an active verb that carries the point (falls, drives, pays back, doubles); not the same title pattern twice.
 - The most important number is a big number with a short label, never buried in a sentence.
@@ -194,9 +203,11 @@ CONSULTING = """House style (always, whatever the brief says about look):
 - One exhibit across the page with its so-what under it is the norm. Put an argument beside the exhibit only when it
   has 3-4 points of its own; give each point a 2-4 word header. Blocks side by side share their top and bottom
   edges: never a column that stops short of the one beside it.
-- The last slide is the decision and the next steps, each with an owner and a date.
+- The last slide is the decision and the next steps. An owner, a date, a target or a meeting appears only where
+  the brief or the facts give it; never invent one.
+- Source lines name the report's title or the file's name, never "fact base", "dossier" or fact ids.
 - Never write about the evidence on the page ("not stated", "the sources do not say", "not a stated fact"): a gap in
-  a table is N/A; what a number rests on goes in one short footnote or in the notes.
+  a table is left out (no row or column of N/A); what a number rests on goes in one short footnote or in the notes.
 - At most four big numbers on a slide; the most important one comes first and the rest support it. Two figures
   compared with each other (renewal +22% against new quotes +9%, before and after, ours against a peer) are a chart
   with the gap drawn on it ("delta"), never two big numbers side by side.
@@ -561,7 +572,7 @@ def _user_prefs() -> str:
 def today_line() -> str:
     d = _today()
     return (f"- Today is {d.day} {d:%B %Y}. The cover date is {d:%B %Y} (or the meeting date the brief gives); every date "
-            f"in a plan, roadmap or next step is after today.")
+            f"in a plan, roadmap or next step is after today, and only a date the brief or the facts give.")
 
 
 _MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov",
@@ -1869,6 +1880,15 @@ Return ONLY JSON: {{"slides": [the full slide JSON for every slide, in order]}}.
     return changed
 
 
+def _stage(text: str) -> None:
+    """What the deck build is doing now, for the chat's working line (checks.stage; a no-op outside a chat)."""
+    try:
+        from meshpool_harness import checks as CK
+        CK.stage("Deck: " + text)
+    except Exception:  # noqa: BLE001 - a progress line never breaks a build
+        pass
+
+
 def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=None, task_id="forge",
           theme=None, density: str | None = None, fixed_pages: list | None = None,
           extra_facts: list | None = None, template: str | None = None, brand: dict | None = None,
@@ -1986,6 +2006,8 @@ supports it. Choose varied archetypes that prove each title.
     frame_txt = frame_block(frame)
     (out / "frame.json").write_text(json.dumps(frame, indent=1))
     story, why = (start_story if start else {}), ""
+    if not start:
+        _stage("planning the storyline")
     for budget in (() if start else (8000, 16000)):   # once more with room when a reasoning model ran out of tokens
         try:
             story = _call(client, STORY_MODEL, story_sys, f"{frame_txt}\n\nBrief:\n{brief[:14000]}\n\nFacts (cite by id):\n{fact_txt}"
@@ -2036,6 +2058,7 @@ supports it. Choose varied archetypes that prove each title.
     if panel_on and not start:                         # a resumed run keeps its storyline; the deck panel still runs
         max_sb = _cap(max(1, int(os.environ.get("MH_STORYBOARD_ROUNDS") or cfg["max_storyboard_rounds"])))
         for rnd in range(1, max_sb + 1):
+            _stage(f"reviewers read the storyline (round {rnd})")
             mat = critics.storyboard_material(story, facts, brief, narrative_n, agenda=agenda)
             pn = critics.run_panel(client, "storyboard", mat, critics.text_models(cfg), bar=cfg["bar"],
                                    timeout=float(cfg["timeout_s"]), task_id=f"{task_id}-sb{rnd}", who=cfg["who"])
@@ -2118,7 +2141,7 @@ supports it. Choose varied archetypes that prove each title.
         try:
             from meshpool_harness.assistant import HONESTY
             return _call(client, MODEL, f"""You write ONE consulting slide as JSON for a renderer that owns all
-design. {HONESTY} A number that is not in the facts is written [GAP: what is missing] (it shows as N/A).
+design. {HONESTY} A number that is not in the facts is written [GAP: what is missing] (a marker for the checks; do not word it as N/A on the slide).
 {CONSULTING}
 {WRITE[density]}
 {SLIDE_SHAPE}
@@ -2126,8 +2149,12 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
                 + f"\n\nThis slide: {json.dumps(x)}\n\nFacts (cite by id):\n"
                 + "\n".join(f"{f['id']}: {f['text']}" for f in rel), f"{task_id}-c{x.get('node')}", 6000)
         except Exception as e:
-            return {"archetype": "cover", "node": x.get("node"), "title": x.get("title", ""), "notes": f"content failed: {e}"}
-    retried = []
+            # the model's error is for the log and the chat, never for the user's file (a live deck carried
+            # "content failed: claude-sonnet returned no JSON ..." in slide 1's speaker notes)
+            content_failed.append({"node": x.get("node"), "title": x.get("title", ""), "error": str(e)[:300]})
+            print(f"slide {x.get('node')} content failed: {e}", file=sys.stderr)
+            return {"archetype": "cover", "node": x.get("node"), "title": x.get("title", "")}
+    retried, content_failed = [], []
 
     def one_as_planned(x):
         """The slide as the storyline planned it: a body slide that comes back as a cover or divider (a live build
@@ -2144,6 +2171,7 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
     if start:
         content = {"slides": [dict(x) for x in start_slides]}
     else:
+        _stage(f"writing {len(plan)} slides")
         with ThreadPoolExecutor(6) as ex:
             content = {"slides": list(ex.map(one_as_planned, plan))}
         calls += len(plan) + len(retried)
@@ -2157,6 +2185,7 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
     fill_agenda(slides, plan)
     is_fixed = lambda i: bool(slides[i].get("fixed")) or slides[i].get("archetype") in ("agenda", "section_divider")  # noqa: E731
     from engines.forge import clarity                          # a second, smaller model reads every line once
+    _stage("checking that every line reads clearly")
     clear = [clarity.review(slides, client, main_model=MODEL, task_id=task_id + "-clarity")]
     calls += 1
     def collect(r, res):                                   # every content check, after a render
@@ -2236,19 +2265,65 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             res["rules"]["P22"] = "fail" if bad else "pass"
         return res
 
+    from engines.forge import requested as RQ
+    asked = (brand or {}).get("asked") or None              # brand items the request spells out (requested.py)
+    stamps_ok = sorted(RQ.allowed_stamps(brief.split("\n--- ", 1)[0]))   # the request, not the attached files
+    from engines.forge import notes as _NT
+    notes_words = _NT.limit_for(brief.split("\n--- ", 1)[0])           # notes of about 40 to 120 words a slide
+
+    from engines.forge import grounded as GR
+    grounded_log: list[str] = []
+
+    def tidy():
+        """What the brief did not ask for never reaches the page: a "Preliminary" or "Draft" stamp the brief does not
+        use, and section numbers on slides added to a deck that has its own (Daniel, 0.0.19); a target line, owners,
+        dates and an occasion the sources and the request do not give (Daniel, round 2: grounded.py); a source line
+        that names the working files instead of the report."""
+        try:
+            grounded_log[:] = GR.ground(slides, GR.sources(brief, facts), GR.request_of(brief), _today())
+        except Exception as e:  # noqa: BLE001 - the check after rendering still reports what is left
+            grounded_log[:] = [f"grounding skipped: {type(e).__name__}"]
+        try:
+            from engines.forge.render import plain_sources
+            plain_sources(slides, brief)
+        except Exception:  # noqa: BLE001
+            pass
+        try:                                  # notes by default (40 to 120 words a slide); "no notes" turns them off
+            _NT.ensure(slides, brief.split("\n--- ", 1)[0], notes_words)
+        except Exception:  # noqa: BLE001
+            pass
+        for s_ in slides:
+            if isinstance(s_.get("tags"), list):
+                s_["tags"] = [t for t in s_["tags"] if not isinstance(t, str) or RQ.stamp_ok(t, set(stamps_ok))]
+            if insert:
+                for k in ("section", "section_no", "tracker"):
+                    s_.pop(k, None)
+
     def draw():
+        _stage("drawing and checking the slides")
         try:                                  # one value per figure across the deck, fixed in code where mechanical
             unified.extend(unify_figures(slides, client, critics.text_models(critics.settings(rules)),
                                          f"{task_id}-consistency"))
         except Exception:  # noqa: BLE001 - a checker that cannot run changes nothing
             pass
+        tidy()
+        qbrief = {"slide_count": len(slides) if fixed else slides_wanted, **ends, "stamps": stamps_ok,
+                  **({"brand": asked} if asked else {}), "corpus": GR.sources(brief, facts),
+                  "request": GR.request_of(brief), "today": _today().isoformat()}
         for _ in range(3):                    # a designed page that fails its checks is redrawn by its archetype
             specs, view_ = designed()
             r = render(view_, str(pptx), carry=False, theme=theme, density=density, template=template,
-                       brand=brand)          # the brief's slide count is a hard limit
+                       brand=brand, notes_words=notes_words)   # the brief's slide count is a hard limit
+            r.setdefault("remarks", []).extend(grounded_log)
             prov = json.loads(Path(r["provenance"]).read_text())
-            res = validate(str(pptx), rules, brief={"slide_count": len(slides) if fixed else slides_wanted, **ends},
-                           provenance=prov, storyline={"nodes": nodes}, render=True, density=density)
+            res = validate(str(pptx), rules, brief=qbrief, provenance=prov, storyline={"nodes": nodes}, render=True,
+                           density=density)
+            if asked and res["rules"].get("P28") == "fail":   # the request's brand did not hold: fixed in this job,
+                done = RQ.enforce(str(pptx), asked)            # then checked again
+                if done:
+                    r.setdefault("remarks", []).extend(f"brand fixed after rendering: {d}" for d in done)
+                    res = validate(str(pptx), rules, brief=qbrief, provenance=prov, storyline={"nodes": nodes},
+                                   render=True, density=density)
             content_check(res, pptx)
             if not specs or not designer.check(str(pptx), r, res, slides, specs):
                 break
@@ -2256,6 +2331,7 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
 
     def repair(fails, tag):                                    # one call per failing slide, all in parallel
         nonlocal calls
+        _stage(f"fixing {len(fails)} flagged slide{'s' if len(fails) != 1 else ''}")
 
         def fix_one(item):
             n, msgs = item
@@ -2478,6 +2554,7 @@ choice or the number of items; never layout. Keep node and keep the point of the
         stall = 0
         max_rv = _cap(max(1, int(os.environ.get("MH_REVIEW_ROUNDS") or cfg["max_review_rounds"])))
         for rnd in range(1, max_rv + 1):
+            _stage(f"reviewers read the deck (round {rnd})")
             n_samples = max(1, int(os.environ.get("MH_DECK_REVIEW_SAMPLES") or 1))
             if n_samples == 1:                                # the default: one panel, exactly as before
                 pn = critics.deck_panel(client, str(pptx), slides, str(out / ".review" / f"r{rnd}"), cfg,
@@ -2541,6 +2618,7 @@ choice or the number of items; never layout. Keep node and keep the point of the
         # writer once, then the deck is reviewed again for the verdict (engines/forge/review.py)
         from engines.forge import review as RV
         ref_on, ref_k = RV.references_on(rules)             # golden library pictures beside each slide (off)
+        _stage("partner review")
         rv = RV.review_deck(str(pptx), slides=slides, client=client, out_dir=str(out / ".review"),
                             task_id=f"{task_id}-review", references=ref_k if ref_on else 0)
         reviews.append(rv)
@@ -2561,21 +2639,15 @@ choice or the number of items; never layout. Keep node and keep the point of the
         for n, msgs in RV.as_failures(rv, severities=("high",)).items():   # what is still high goes to the notes
             fails.setdefault(n, []).extend(m for m in msgs if m not in fails.get(n, []))
         (out / "review.json").write_text(json.dumps(reviews, indent=1, default=str))
-    # freeze what is left into the notes: nothing passes silently
+    # what is left goes to qa.json, slides.json and the engine's answer: nothing passes silently, and nothing of it
+    # goes into the speaker notes, which are for the presenter only (engines/forge/notes.py)
     left = fails
     open_review = critics.review_notes(panel_final, len(slides)) if panel_final else {}
-    if (left or open_review) and rules["repair"]["flag_in_file"]:
-        for n, msgs in left.items():
-            if n - 1 < len(slides):
-                slides[n - 1]["notes"] = (slides[n - 1].get("notes", "") + "\n" + "\n".join("[QA] " + m for m in msgs)).strip()
-        for n, msgs in open_review.items():                  # the reviewers' blocking and major issues still open
-            slides[n - 1]["notes"] = (slides[n - 1].get("notes", "") + "\n" + "\n".join(msgs)).strip()
-        r = render(designed()[1], str(pptx), carry=False, theme=theme, density=density, template=template,
-                   brand=brand)          # the brief's slide count is a hard limit
-        prov = json.loads(Path(r["provenance"]).read_text())
-        res = validate(str(pptx), rules, brief={"slide_count": slides_wanted, **ends}, provenance=prov,
-                       storyline={"nodes": nodes}, render=True, density=density)
-        content_check(res, pptx)
+    if left or open_review:
+        from engines.forge.notes import QA_KEY
+        for n, msgs in list(left.items()) + list(open_review.items()):
+            if 0 < n <= len(slides):
+                slides[n - 1][QA_KEY] = list(dict.fromkeys(list(slides[n - 1].get(QA_KEY) or []) + list(msgs)))
     (out / "slides.json").write_text(json.dumps(slides, indent=1))
     (out / "facts.json").write_text(json.dumps(facts + [f for v in verify_calcs(slides, facts, rules)[0].values()
                                                          for f in v], indent=1))
@@ -2596,7 +2668,9 @@ choice or the number of items; never layout. Keep node and keep the point of the
     (out / "qa.json").write_text(json.dumps(qa, indent=1, default=str))
     return {"pptx": str(pptx), "calls": calls, "rounds": rounds, "rules": res["rules"], "density": density,
             "unresolved": {k: v for k, v in left.items()}, "review": verdict, "panel": panel,
-            "slides": len(slides), "design": dz}
+            "slides": len(slides), "design": dz,
+            "content_failed": [f"slide {c['node']} ({c['title']}): the model's answer could not be used, so it is a "
+                               "title-only slide" for c in content_failed]}
 
 
 if __name__ == "__main__":

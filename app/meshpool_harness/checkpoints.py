@@ -4,7 +4,8 @@ No Git needed. Content is kept in ONE deduplicated, compressed store per folder 
 ``<runs>/checkpoints/<hash of folder>/objects``, plus a persisted stat cache (``stat.json``) so a restart does not
 re-read unchanged files. Each chat keeps only a small ``turns.json`` listing, per turn, the paths that turn changed
 with their value before (``pre``) and after (``post``). Values: ``"<sha>:<octal mode>"`` for a stored file, a ``"!..."``
-marker for a path that exists but whose contents are not stored (ignored, over 2 MB, a link), ``None`` for absent.
+marker for a path that exists but whose contents are not stored (ignored, a link; a file too big to copy keeps its
+hash, ``"!sha:<sha>:<mode>"``, so Undo can still remove it when a turn made it), ``None`` for absent.
 
 Modes (``Checkpoints(root, store, mode=...)``)
 - ``"scan"`` (default; outside agents such as Codex or Pi): ``begin_turn`` scans the folder, ``end_turn`` scans again
@@ -25,14 +26,16 @@ Modes (``Checkpoints(root, store, mode=...)``)
 
 Undo (``revert_to_before(turn)``) only touches paths the turns changed, and only while they still hold what the agent
 left. Before it deletes or overwrites a file it copies it to ``<store>/undone/<time>/<path>`` (the newest 20 folders
-are kept) and returns that folder as ``"backup"``. Paths changed while another chat worked in the same folder are
+are kept) and returns that folder as ``"backup"``. Folders the turns made are removed once empty (``"removed_folders"``);
+one that has files in it stays, with a note. Paths changed while another chat worked in the same folder are
 marked ``ambiguous`` and left alone (reported in ``kept`` with a note). The last ``MH_UNDO_TURNS`` (default 100) turns
 stay undoable; older turns keep their file list but not their contents (``pruned``). Turn numbers only ever grow
 (``seq``; pass ``seq_floor=`` from chat metadata). ``turns.json`` is written atomically with a ``.bak`` copy and a
 damaged one is quarantined and recovered, never treated as empty.
 
 Skipped: .git and other tool folders, dependency and build folders, anything the project's .gitignore lists (simple
-patterns), files over 2 MB, and projects with more than 20,000 files. Ignored, too-big and unreadable files, links and
+patterns), copies of files over 2 MB beyond MAX_BIG (200 MB) or BIG_BUDGET (1 GB a chat), whose hash alone is kept,
+and projects with more than 20,000 files. Ignored, too-big and unreadable files, links and
 ignored folders are still listed with a "not stored" marker, so a file that only became visible during a turn is never
 mistaken for one the agent created, and Undo never deletes or overwrites a path whose earlier (or current) contents it
 did not store.
@@ -61,7 +64,10 @@ SKIP_DIRS = {".git", ".hg", ".svn", "node_modules", ".venv", "venv", "__pycache_
              ".next", ".nuxt", "dist", "build", ".cache", ".turbo", ".gradle", "target", ".idea", ".DS_Store",
              "Pods", ".terraform", ".tox", "coverage"}
 SKIP_FILES = {".DS_Store"}
-MAX_FILE = 2_000_000
+MAX_FILE = 2_000_000             # files up to this always get a saved copy
+MAX_BIG = int(float(os.environ.get("MH_UNDO_BIG_MB", "200") or 200) * 1_000_000)   # bigger ones too, up to this size,
+BIG_BUDGET = int(float(os.environ.get("MH_UNDO_BIG_BUDGET_MB", "1000") or 1000) * 1_000_000)  # this much per chat;
+MAX_HASH = int(float(os.environ.get("MH_UNDO_HASH_MB", "4000") or 4000) * 1_000_000)  # beyond it only their hash
 MAX_FILES = 20_000
 WRITE_TOOLS = {"write_file", "edit", "notebook_edit"}
 RACY_NS = 2_000_000_000          # a file modified this recently is re-hashed next time (same-size, same-mtime edits)
@@ -71,6 +77,7 @@ BACKUPS_KEEP = 20
 FOREIGN_KEEP = 5000
 FOREIGN_AGE = 24 * 3600
 AMBIGUOUS_NOTE = "another chat was working in this folder at the same time, so it was left as is"
+CHANGED_AFTER = "it changed after the agent's edit (by you or another app), so it was left as is"
 
 
 class MissingObject(OSError):
@@ -111,9 +118,13 @@ def _ignored(rel: str, is_dir: bool, rules) -> bool:
     return False
 
 
-# Manifest values: "<sha>:<octal mode>" for a stored file (old manifests: "<sha>"), or a "!..." marker for a path that
-# exists but whose contents were not stored. Keys ending in "/" are folders that were not walked (ignored or a link):
-# everything under them existed, contents unknown.
+# Manifest values: "<sha>:<octal mode>" for a stored file (old manifests: "<sha>"), "!sha:<sha>:<octal mode>" for a
+# file too big to keep a copy of whose hash is known (Undo can remove it when a turn made it, not put back an earlier
+# version), or a "!..." marker for a path that exists but whose contents are unknown. Keys ending in "/" are folders that
+# were not walked (ignored or a link): everything under them existed, contents unknown.
+HASHED = "!sha:"
+
+
 def _stored(v) -> bool:
     return isinstance(v, str) and not v.startswith("!")
 
@@ -122,19 +133,58 @@ def _sha(v) -> str | None:
     return v.partition(":")[0] if _stored(v) else None
 
 
+def _hashed(v) -> str | None:
+    """The file's hash, stored or not: what tells whether it still holds what the agent left."""
+    if _stored(v):
+        return _sha(v)
+    if isinstance(v, str) and v.startswith(HASHED):
+        return v[len(HASHED):].partition(":")[0] or None
+    return None
+
+
 def _mode(v) -> int | None:
-    m = v.partition(":")[2] if _stored(v) else ""
+    m = v.partition(":")[2] if _stored(v) else v[len(HASHED):].partition(":")[2] if _hashed(v) else ""
     return int(m, 8) if m else None
 
 
 def _same(x, y) -> bool:
-    """Same recorded state. Unstored contents are never "the same" as anything."""
+    """Same recorded state. Unknown contents are never "the same" as anything; a hash is enough to compare."""
     if x is None or y is None:
         return x is None and y is None
-    if not (_stored(x) and _stored(y)):
+    if not (_hashed(x) and _hashed(y)):
         return False
     mx, my = _mode(x), _mode(y)
-    return _sha(x) == _sha(y) and (mx is None or my is None or mx == my)
+    return _hashed(x) == _hashed(y) and (mx is None or my is None or mx == my)
+
+
+def _hash_file(p: Path) -> str:
+    h = hashlib.sha1()
+    with open(p, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _why_untracked(v) -> str:
+    """Why Undo cannot tell what a file holds now, in plain words."""
+    if v == "!ignored":
+        return "your .gitignore leaves it out, so Undo does not track it and left it as is"
+    if v == "!link":
+        return "it is a link, so Undo left it as is"
+    if isinstance(v, str) and v.startswith("!big"):
+        return f"it is over {MAX_HASH // 1_000_000} MB, too large for Undo to track, so it was left as is"
+    return "Undo could not read it, so it was left as is"
+
+
+def _why_unsaved(v) -> str:
+    """Why Undo has no earlier version of a file to put back, in plain words."""
+    if _hashed(v) or (isinstance(v, str) and v.startswith("!big")):
+        return "Undo can't put back its earlier version: the file is too large to keep a copy of, so it was left as is"
+    if v == "!ignored":
+        return "your .gitignore left it out, so Undo kept no earlier version and left it as is"
+    if v == "!link":
+        return "it was a link before, so Undo left it as is"
+    return "its earlier version wasn't saved, so it was left as is"
 
 
 def _unknown(path: str, manifest: dict) -> bool:
@@ -600,8 +650,9 @@ class Checkpoints:
             pass
 
     # ---------- reading the folder -----------------------------------------------------------------------------------
-    def _scan(self, store: bool = True, persist: bool = True) -> dict | None:
-        """Walk the folder (stat only; hash just the files whose size or mtime changed). -> manifest or None."""
+    def _scan(self, store: bool = True, persist: bool = True, dirs: set | None = None) -> dict | None:
+        """Walk the folder (stat only; hash just the files whose size or mtime changed). -> manifest or None.
+        `dirs`, when given, collects the folders walked (so a window can tell which ones a turn made)."""
         if self.disabled:
             return None
         cache = self._load_cache()
@@ -636,6 +687,8 @@ class Checkpoints:
                         return None
                     continue
                 keep.append(n)
+                if dirs is not None:
+                    dirs.add(rel)
             dirnames[:] = keep
             for n in filenames:
                 rel = f"{rel_d}/{n}" if rel_d else n
@@ -649,7 +702,7 @@ class Checkpoints:
                         return None
                     continue
                 marker = ("!link" if stat.S_ISLNK(st.st_mode) else "!special" if not stat.S_ISREG(st.st_mode)
-                          else "!ignored" if _ignored(rel, False, rules) else _big(st) if st.st_size > MAX_FILE else "")
+                          else "!ignored" if _ignored(rel, False, rules) else _big(st) if st.st_size > MAX_HASH else "")
                 if marker:
                     if not note(rel, marker):
                         return None
@@ -662,10 +715,7 @@ class Checkpoints:
                         return None
                     continue
                 try:
-                    data = p.read_bytes()
-                    sha = hashlib.sha1(data).hexdigest()
-                    if store:
-                        self._put(sha, data)
+                    sha = self._file_sha(p, st.st_size, store)
                 except OSError:
                     sha = ""
                 if not note(rel, sha + mode if sha else "!unreadable"):
@@ -712,42 +762,60 @@ class Checkpoints:
             return "!special"
         if _ignored(rel, False, rules):
             return "!ignored"
-        if st.st_size > MAX_FILE:
+        if st.st_size > MAX_HASH:
             return _big(st)
         mode = f":{stat.S_IMODE(st.st_mode):o}"
         cache = self._load_cache()
         prev = cache.get(rel)
-        if prev and prev[0] == st.st_size and prev[1] == st.st_mtime_ns and (not store or self._has(prev[2])):
+        if prev and prev[0] == st.st_size and prev[1] == st.st_mtime_ns and (
+                not store or str(prev[2]).startswith(HASHED) or self._has(prev[2])):
             return prev[2] + mode
         try:
-            data = p.read_bytes()
+            sha = self._file_sha(p, st.st_size, store, durable=durable)
         except OSError:
             return "!unreadable"
-        sha = hashlib.sha1(data).hexdigest()
         if store:
-            self._put(sha, data, durable=durable)
             if st.st_mtime_ns < time.time_ns() - RACY_NS:
                 cache[rel] = [st.st_size, st.st_mtime_ns, sha]
                 self._cache_dirty = True
         return sha + mode
 
+    def _file_sha(self, p: Path, size: int, store: bool, durable: bool = False) -> str:
+        """What a file's value starts with: its sha, after saving a copy (store) when it is small, or big but within
+        MAX_BIG and this chat's BIG_BUDGET; else "!sha:<sha>", the hash alone (Lina: a 50,000-row workbook the turn
+        made was over 2 MB, untracked, and Undo kept it). Raises OSError when it cannot be read."""
+        big = size > MAX_FILE
+        if big and (not store or size > MAX_BIG or getattr(self, "_big_used", 0) + size > BIG_BUDGET):
+            return HASHED + _hash_file(p)
+        data = p.read_bytes()
+        sha = hashlib.sha1(data).hexdigest()
+        if store:
+            self._put(sha, data, durable=durable)
+            if big:
+                self._big_used = getattr(self, "_big_used", 0) + size
+        return sha
+
     # ---------- windows (scan-mode turns, journal opaque tools) -----------------------------------------------------
     def _begin_window(self) -> dict | None:
         w = _win_open(str(self.root), str(self.store.resolve()), self.shared)
-        w["before"] = self._scan()
+        w["dirs"] = set()
+        w["before"] = self._scan(dirs=w["dirs"])
         if w["before"] is None:
             _win_close(w)
             return None
         return w
 
     def _end_window(self, w) -> tuple:
-        """-> (pre, post, ambiguous paths) for what changed since the window began."""
+        """-> (pre, post, ambiguous paths, folders made) for what changed since the window began. Folders are only
+        booked when no other chat worked in the folder at the same time (it may have made them)."""
         if not w:
-            return {}, {}, set()
-        after = self._scan()
+            return {}, {}, set(), set()
+        dirs = set()
+        after = self._scan(dirs=dirs)
         over = _win_close(w) if "id" in w else w.get("over", False)
         if after is None:
-            return {}, {}, set()
+            return {}, {}, set(), set()
+        made = set() if over or w.get("dirs") is None else dirs - w["dirs"]
         before = w["before"]
         fw = _foreign_since(self.root, self.shared, w["start"])
         pre, post, amb = {}, {}, set()
@@ -760,9 +828,14 @@ class Checkpoints:
             pre[path], post[path] = _val(before, path), va
             if over:
                 amb.add(path)
-        return pre, post, amb
+        made = {d for d in made if not any(p.startswith(d + "/") for p in fw)}   # Meshpool's own writes made them
+        return pre, post, amb, made
 
-    def _book(self, t: dict, pre: dict, post: dict, amb=()) -> None:
+    def _book(self, t: dict, pre: dict, post: dict, amb=(), made=()) -> None:
+        if made:
+            with self._lk:
+                t["dirs"] = sorted(set(t.get("dirs") or []) | set(made))
+                self._dirty = True
         if not post:
             return
         with self._lk:
@@ -845,6 +918,26 @@ class Checkpoints:
         self._save_cache(True)
         self.gc()
 
+    def to_journal(self, message_index: int | None = None) -> None:
+        """The chat moved mid-turn from an outside agent (booked by scanning the folder) to meshpool's own (whose tools
+        book their writes): what the scan window saw so far is booked, the window closes, and the open turn goes on
+        in journal mode from `message_index` (the conversation position Undo cuts back to)."""
+        with self._lk:
+            t = self._open_turn()
+            if t is not None and self.mode == "scan":
+                w, self._win, self._begin = self._win, None, None
+                if w is not None:
+                    self._book(t, *self._end_window(w))
+                with contextlib.suppress(OSError):
+                    (self.store / "open.json").unlink()
+            self.mode = "journal"
+            if t is not None:
+                t["mode"] = "journal"
+                if message_index is not None:
+                    t["message_index"] = message_index
+                self._dirty = True
+                self._flush()
+
     def _begin_manifest(self, t: dict):
         if self._begin is not None:
             return self._begin
@@ -860,7 +953,7 @@ class Checkpoints:
         turns = self._load()["turns"]
         live = [t for t in turns if not t.get("pruned") and self._done(t)]
         for t in live[:max(0, len(live) - undo_turns())]:
-            for k in ("pre", "post", "before", "after"):
+            for k in ("pre", "post", "before", "after", "dirs"):
                 t.pop(k, None)
             t["pruned"] = True
             t["done"] = True
@@ -874,12 +967,37 @@ class Checkpoints:
             if d.exists():
                 shutil.rmtree(d, ignore_errors=True)
 
+    def note_attached(self, n: int, paths: list) -> None:
+        """OM-03: files the user attached to turn `n` that meshpool copied into the folder ("sample (2).csv"). They
+        were written before the turn began, so its scan does not count them; Undo of the turn removes them while they
+        still hold what was attached."""
+        with self._lk:
+            t = next((x for x in self._load()["turns"] if x.get("n") == n), None)
+            if t is None:
+                return
+            for p in paths:
+                rel = _rel_in_root(self.root, p)
+                if rel:
+                    t.setdefault("attached", []).append({"path": rel, "sha": _plain_sha(self.root, rel)})
+            self._dirty = True
+            self._flush()
+
     def turns(self) -> list:
         return [{"n": t.get("n"), "title": t.get("title"), "time": t.get("time"), "changed": t.get("changed"),
                  "done": self._done(t), "pruned": bool(t.get("pruned")), "message_index": t.get("message_index"),
                  "event_index": t.get("event_index")} for t in self._load()["turns"]]
 
     # ---------- journal: tool calls ------------------------------------------------------------------------------------
+    def _missing_parents(self, rel: str) -> list:
+        """The folders on the way to `rel` that do not exist yet."""
+        parts = rel.split("/")[:-1]
+        out = []
+        for i in range(len(parts)):
+            d = "/".join(parts[:i + 1])
+            if out or not os.path.lexists(self.root / d):
+                out.append(d)
+        return out
+
     def _targets(self, name: str, args: dict) -> list:
         if name == "apply_patch":
             raw = _patch_paths(args)
@@ -902,21 +1020,9 @@ class Checkpoints:
             return
         args = args if isinstance(args, dict) else {}
         if name in WRITE_TOOLS or name == "apply_patch":
-            rels = self._targets(name, args)
-            rules = _ignore_rules(self.root)
-
-            def val(r, durable=False):
-                try:
-                    return self._value_of(r, rules, durable=durable)
-                except Exception:
-                    return "!unreadable"
-            pre = {r: val(r, True) for r in rels if r not in (t.get("pre") or {})}
-            try:
+            self._note_outside(t, name, args)
+            with self._journal_paths(t, self._targets(name, args)):
                 yield
-            finally:
-                post = {r: val(r) for r in rels}
-                self._book(t, pre, post)
-                self._flush()
             return
         w = self._begin_window()
         try:
@@ -925,6 +1031,90 @@ class Checkpoints:
             self._book(t, *self._end_window(w))
             self._flush()
             self._save_cache()
+
+    @contextlib.contextmanager
+    def _journal_paths(self, t: dict, rels: list):
+        """Book the writes to `rels` made inside this block to turn `t`: the value before (unless the turn already
+        has one for that path) and the value after."""
+        rules = _ignore_rules(self.root)
+
+        def val(r, durable=False):
+            try:
+                return self._value_of(r, rules, durable=durable)
+            except Exception:
+                return "!unreadable"
+        pre = {r: val(r, True) for r in rels if r not in (t.get("pre") or {})}
+        missing = {d for r in rels for d in self._missing_parents(r)}     # folders the write may make
+        try:
+            yield
+        finally:
+            post = {r: val(r) for r in rels}
+            made = {d for d in missing if (self.root / d).is_dir() and not (self.root / d).is_symlink()}
+            self._book(t, pre, post, made=made)
+            self._flush()
+
+    def turn_written(self) -> list[str] | None:
+        """The files (relative paths) the open turn wrote so far: booked by its tools (journal) or seen changed since
+        it began (scan). None when no turn is open or it cannot tell (Undo off). meshpool's own end-of-turn writes
+        (xl_values.fill) touch only these: a workbook the turn only read is never rewritten (Lina, round 3: a pandas
+        check turn left region_summary.xlsx with a new size and md5, and no "file changed")."""
+        with self._lk:
+            t = self._open_turn()
+            if t is None:
+                return None
+            if self.mode == "journal":
+                pre, post = t.get("pre") or {}, dict(t.get("post") or {})
+                w = getattr(self, "_bg", None)
+                out = [p for p, v in post.items() if pre.get(p) != v and v is not None]
+                if w is None:
+                    return out
+                before = w.get("before") or {}
+            else:
+                w = getattr(self, "_win", None)
+                before = (w or {}).get("before") if w else self._begin_manifest(t)
+                out = []
+            if before is None:
+                return out if self.mode == "journal" else None
+            after = self._scan(store=False, persist=False)
+        if after is None:
+            return None
+        return list(dict.fromkeys(out + [p for p, v in after.items()
+                                         if not p.endswith("/") and before.get(p) != v and not v.startswith("!")]))
+
+    @contextlib.contextmanager
+    def own_write(self, paths):
+        """Wrap a write Meshpool itself makes to files in the folder during a turn, outside any tool call: the
+        formula results written into a workbook at the end of a turn (xl_values.fill), a recalculation saved back.
+        It is booked to the open turn like a tool's write, so Undo puts back what the file held before the turn and
+        never takes Meshpool's own write for a change the user made. Scan mode needs nothing: the turn's closing scan
+        books it. A no-op when no turn is open."""
+        t = self._open_turn() if self.mode == "journal" else None
+        rels = []
+        for p in ([paths] if isinstance(paths, (str, os.PathLike)) else list(paths or [])):
+            r = _rel_in_root(self.root, p)
+            if r and r not in rels:
+                rels.append(r)
+        if t is None or not rels:
+            yield
+            return
+        with self._journal_paths(t, rels):
+            yield
+
+    def _note_outside(self, t: dict, name: str, args: dict) -> None:
+        """A write to a file outside this folder: Undo cannot put it back, so the turn keeps its path and Undo names it
+        (WF-C: Undo said "Files are back to how they were" while the user's own file outside the chat's folder still
+        had the agent's change)."""
+        raw = _patch_paths(args) if name == "apply_patch" else next(
+            ([args[k]] for k in ("path", "file_path", "notebook_path") if isinstance(args.get(k), str) and args[k]), [])
+        out = []
+        for p in raw:
+            if _rel_in_root(self.root, p) is None and Path(str(p)).is_absolute():
+                out.append(str(p))
+        if out:
+            with self._lk:
+                have = t.setdefault("outside", [])
+                have += [p for p in out if p not in have][:50]
+                self._dirty = True
 
     def window_open(self) -> None:
         """Keep a scan window open (journal mode): a background process the chat started may still change files."""
@@ -1054,7 +1244,8 @@ class Checkpoints:
         """Undo the file changes the agent made in `turn` and every later turn. Only files those turns changed are
         touched, and only while they still hold what the agent left: files the user (or another tool) created or
         edited since stay as they are and are listed in "kept". Whatever Undo deletes or overwrites is first copied to
-        "backup". Returns what changed on disk."""
+        "backup". Folders those turns made go too once empty ("removed_folders"); one with files in it is left, with a
+        note. Returns what changed on disk."""
         turn = int(turn)
         with self._lk:
             idx = self._load()
@@ -1071,7 +1262,11 @@ class Checkpoints:
             agent_left: dict = {}      # path -> value the agent's last change left
             target: dict = {}          # path -> value before the agent's first change
             amb: set = set()
+            made: set = set()          # folders those turns made
+            outside: list = []         # files those turns wrote outside this folder: Undo cannot restore them
             for x in sorted((x for x in later if self._done(x)), key=lambda x: x["n"]):
+                made.update(x.get("dirs") or [])
+                outside += [p for p in x.get("outside") or [] if p not in outside]
                 pre, post = self._pre_post(x)
                 for ch in x.get("changed") or []:
                     p = ch["path"]
@@ -1094,12 +1289,12 @@ class Checkpoints:
                 cur, tgt = now[path], target.get(path)
                 if path in amb:
                     keep(path, AMBIGUOUS_NOTE)
-                elif cur is not None and not _stored(cur):      # can't tell what it holds now
-                    keep(path, "its current contents aren't tracked (ignored, over 2 MB or a link), so it was left as is")
+                elif cur is not None and not _hashed(cur):      # can't tell what it holds now
+                    keep(path, _why_untracked(cur))
                 elif not _same(cur, left):                      # changed after the agent: not ours to undo
-                    keep(path)
+                    keep(path, CHANGED_AFTER)
                 elif tgt is not None and not _stored(tgt):      # its earlier state was never stored
-                    keep(path, "its earlier version wasn't saved (ignored or over 2 MB), so it was left as is")
+                    keep(path, _why_unsaved(tgt))
                 elif tgt is not None:
                     if not _same(cur, tgt):
                         writes.append(path)
@@ -1182,6 +1377,39 @@ class Checkpoints:
                     restored.append(path)
                 except OSError as e:
                     keep(path, f"couldn't put it back ({getattr(e, 'strerror', None) or e})")
+            # 2b. copies of files the user attached in those turns (OM-03), while they hold what was attached
+            for a in [a for x in later for a in (x.get("attached") or []) if isinstance(a, dict)]:
+                path = str(a.get("path") or "")
+                p = self.root / path
+                if not path or path in deleted or p.is_symlink() or not p.is_file() or not self._inside(p.parent):
+                    continue
+                if not a.get("sha") or _plain_sha(self.root, path) != a["sha"]:
+                    keep(path, "a copy of a file you attached; it changed after that, so it was left as is")
+                    continue
+                if not backup(path):
+                    keep(path, "couldn't save a copy of it first, so it was left as is")
+                    continue
+                try:
+                    p.unlink()
+                    deleted.append(path)
+                except OSError as e:
+                    keep(path, f"couldn't delete it ({e.strerror or e})")
+            # 3. the folders those turns made, deepest first, once empty; one with anything in it stays
+            removed_dirs = []
+            for d in sorted(made, reverse=True):
+                p = self.root / d
+                if d in kept or p.is_symlink() or not p.is_dir() or not self._inside(p.parent):
+                    continue
+                try:
+                    p.rmdir()
+                    removed_dirs.append(d)
+                except OSError as e:
+                    try:
+                        full = next(p.iterdir(), None) is not None
+                    except OSError:
+                        full = False
+                    notes.append(f"{d}/: a turn made this folder, but it has files in it now, so it was left as is"
+                                 if full else f"{d}/: couldn't remove this folder ({e.strerror or e})")
             cache = self._load_cache()
             for path in restored + deleted:
                 cache.pop(path, None)
@@ -1196,6 +1424,10 @@ class Checkpoints:
             self._trim_backups()
         self.gc()
         out = {"restored": restored, "deleted": deleted, "kept": kept, "message_index": t.get("message_index")}
+        if outside:
+            out["outside"] = outside
+        if removed_dirs:
+            out["removed_folders"] = removed_dirs
         if notes:
             out["notes"] = notes
         if copied:

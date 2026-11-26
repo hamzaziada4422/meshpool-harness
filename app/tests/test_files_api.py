@@ -205,7 +205,7 @@ def test_open_in_editor_no_longer_starts_a_program(proj, monkeypatch):
     import subprocess
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: pytest.fail("a program was started"))
     r = W.open_editor(str(proj))
-    assert r["ok"] and r["open"]["root"] == str(proj.resolve()) and "Meshpool editor" in r["message"]
+    assert r["ok"] and r["open"]["root"] == str(proj.resolve()) and "meshpool editor" in r["message"]
 
 
 def test_the_terminal_app_never_launches_an_editor_or_a_viewer():

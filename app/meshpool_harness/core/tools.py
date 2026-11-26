@@ -167,6 +167,20 @@ def glob_match(rel: str, glob: str) -> bool:
     return (not pos or any(one(p) for p in pos)) and not any(one(n) for n in neg)
 
 
+_FAIL_ID = re.compile(r"(?m)^(?:FAILED|ERROR)\s+(\S+::\S+?)(?:\s+-\s.*)?$|^(?:FAIL|ERROR): (\S+ \([\w.]+\))|^--- FAIL: (\S+)")
+
+
+def failed_test_ids(out: str) -> list:
+    """The ids of the tests a runner reported as failed ("tests/x.py::test_a", "test_a (mod.Cls.test_a)", "TestA"), in
+    the order printed and without repeats. [] when it printed none (or is no test runner)."""
+    seen: list = []
+    for m in _FAIL_ID.finditer(str(out or "")):
+        i = next(g for g in m.groups() if g)
+        if i not in seen:
+            seen.append(i)
+    return seen
+
+
 def read_only(cmd: str) -> bool:
     """Conservative check that a shell command only reads (safe to run beside others). Unknown means False."""
     import re
@@ -257,6 +271,8 @@ _GIT_FLAGS = {
     "tag": {"-l", "--list"},
     "remote": {"-v", "--verbose"},
     "stash": set(),
+    "clean": {"-n", "--dry-run", "-d", "-nd", "-dn", "-x", "-nx", "-xn", "-ndx", "-nxd", "-dnx", "-dxn", "-xnd", "-xdn",
+              "-X", "-nX", "-Xn", "-ndX", "-nXd", "-dnX", "-dXn", "-Xnd", "-Xdn"},   # only a dry run: it deletes nothing
 }
 _GIT_VALUE_FLAGS = ("-n", "--max-count=", "--since=", "--until=", "--author=", "-L", "-U", "--unified=",
                     "--format=", "--pretty=")      # flags that carry a value, checked as plain tokens too
@@ -295,6 +311,9 @@ def git_read_only(cmd: str) -> bool:
         return True
     if sub == "remote":                                   # "git remote" and "git remote -v": no network
         return all(a in _GIT_FLAGS["remote"] for a in args)
+    if sub == "clean" and not any(a == "--dry-run" or (a.startswith("-") and not a.startswith("--") and "n" in a)
+                                  for a in args):
+        return False                                      # git clean without -n deletes files
     after_dashdash = False
     for a in args:
         if a == "--":
@@ -489,6 +508,8 @@ def shell_script(argv) -> str:
     argv = [str(a) for a in argv or []]
     if len(argv) >= 3 and os.path.basename(argv[0]) in ("bash", "sh", "zsh") and argv[1] in ("-c", "-lc"):
         return argv[2]
+    if not argv:
+        return ""
     if len(argv) == 1:
         return argv[0]
     if os.path.basename(argv[0]) not in ("bash", "sh", "zsh") and any(_ARGV_OP.match(a) for a in argv[1:]) \
@@ -532,9 +553,107 @@ def patch_from_shell(argv):
     script = shell_script(argv)
     m = _HEREDOC.match(script)
     if not m:
-        return None
+        q = _quoted_patch(script)
+        return (q[0], q[1]) if q and not q[2] else None
     cd = (m.group("cd") or "").strip("'\"") or None
     return m.group("body"), cd
+
+
+_PATCH_HEAD = re.compile(r"\A\s*(?:cd\s+(?P<cd>'[^']*'|\"[^\"]*\"|[^\s&;|<>]+)\s*&&\s*)?(?:apply_patch|applypatch)\s*"
+                         r"<<-?\s*(?P<q>['\"]?)(?P<tag>\w+)(?P=q)(?P<inline>[^\n]*)\n")
+
+
+_PATCH_QUOTED = re.compile(r"\A\s*(?:cd\s+(?P<cd>'[^']*'|\"[^\"]*\"|[^\s&;|<>]+)\s*&&\s*)?(?:apply_patch|applypatch)\s+(?=[\"'])")
+
+
+def _quoted_patch(script):
+    """(patch, working folder or None, what follows the argument) for `[cd dir &&] apply_patch "*** Begin Patch ..."`: the
+    patch as one quoted argument, the form models use when they have no heredoc (Omar, 0.0.19: it ran as a command and
+    failed with "apply_patch: command not found"). None when it is not that form: the argument is not a patch, or it is
+    not closed."""
+    import shlex
+    m = _PATCH_QUOTED.match(script or "")
+    if not m:
+        return None
+    i, n = m.end(), len(script)
+    q = script[i]
+    j = i + 1
+    while j < n:
+        if script[j] == "\\" and q == '"':
+            j += 2
+            continue
+        if script[j] == q:
+            break
+        j += 1
+    if j >= n:
+        return None
+    try:
+        body = shlex.split(script[i:j + 1], posix=True)[0]
+    except ValueError:
+        return None
+    if not body.lstrip().startswith("*** Begin Patch"):
+        return None
+    cd = (m.group("cd") or "").strip("'\"") or None
+    return body, cd, script[j + 1:]
+
+
+def split_patch_script(argv):
+    """(patch, working folder or None, rest, rest only if the patch applied) for a script that starts with an
+    apply_patch heredoc and then runs other commands: `apply_patch <<'EOF' ... EOF` and `python -m pytest` on the
+    next line (Omar, 0.0.19: such a script was judged as one command of 50 "steps" and refused in Accept edits).
+    The rest keeps the `cd dir &&` the script started with. None when the script is not of that form, or when the
+    heredoc line pipes or redirects (`apply_patch <<EOF | tee`): those are judged as one command."""
+    script = argv if isinstance(argv, str) else shell_script(argv)
+    m = _PATCH_HEAD.match(script or "")
+    if not m:
+        q = _quoted_patch(script)
+        if not q or not q[2].strip():
+            return None
+        mm = re.match(r"\s*(&&|;|\n)\s*(.*)\Z", q[2], re.S)
+        if not mm or not mm.group(2).strip():
+            return None                                 # a pipe or a redirect after the argument: one command
+        rest = mm.group(2).strip()
+        if q[1]:
+            import shlex
+            rest = f"cd {shlex.quote(q[1])} && {rest}"
+        return q[0], q[1], rest, mm.group(1) == "&&"
+    tag, lines = m.group("tag"), script[m.end():].split("\n")
+    end = next((i for i, ln in enumerate(lines) if ln.strip() == tag), None)
+    if end is None:
+        return None
+    body, after = "\n".join(lines[:end]), "\n".join(lines[end + 1:]).strip()
+    inline, strict = m.group("inline").strip(), False
+    if inline:
+        mm = re.match(r"(&&|;)\s*(.*)\Z", inline, re.S)
+        if not mm:
+            return None
+        strict, inline = mm.group(1) == "&&", mm.group(2).strip()
+    rest = "\n".join(x for x in (inline, after) if x).strip()
+    cd = (m.group("cd") or "").strip("'\"") or None
+    if rest and m.group("cd"):
+        rest = f"cd {m.group('cd')} && {rest}"          # the cd holds for the whole script, as in the shell
+    return body, cd, rest, strict
+
+
+_VAR = re.compile(r"\$\{(\w+)\}|\$(\w+)")
+
+
+def expand_path(p: str) -> str:
+    """A path as a shell would read it: ~ and ~user, $HOME, ${VAR} and $VAR expanded. Omar, 0.0.19: an apply_patch to
+    `$HOME/omar_notes.txt` made a folder named "$HOME" in the project. A variable that is not set is an error, never
+    an empty string or a literal "$NAME" folder."""
+    s = str(p or "")
+    if "$" in s:
+        def var(m):
+            name = m.group(1) or m.group(2)
+            v = os.environ.get(name)
+            if v is None and name in ("HOME", "USERPROFILE"):
+                v = os.path.expanduser("~")
+            if v is None:
+                raise ToolError(f"the path {s} names ${name}, which is not set here. Give the full path instead.")
+            return v
+        s = _VAR.sub(var, s)
+    return os.path.expanduser(s) if s.startswith("~") else s
 
 
 _BG_ALL: set = set()
@@ -848,15 +967,50 @@ def validate(name: str, raw_args, allowed: list[str]) -> dict:
               "number": isinstance(v, (int, float)) and not isinstance(v, bool),
               "boolean": isinstance(v, bool), "array": isinstance(v, list)}[t]
         if not ok:
-            raise ToolError(f"{name}: argument '{k}' must be {t}, got {type(v).__name__}")
+            got = {"bool": "true or false", "NoneType": "nothing (null)", "int": "a number", "float": "a number",
+                   "str": "text", "list": "a list", "dict": "an object"}.get(type(v).__name__, type(v).__name__)
+            what = {"string": "text", "integer": "a whole number", "number": "a number", "boolean": "true or false",
+                    "array": "a list"}[t]
+            hint = (f' For a command, send the command line itself as text, for example {{"{k}": "ls -la"}}.'
+                    if t == "string" and k in ("cmd", "command") else "")
+            raise ToolError(f"{name}: `{k}` must be {what}, but it was {got}. Send the call again with a valid "
+                            f"`{k}`.{hint}")
     return args
 
 
 
 _PY_VERSIONS: dict = {}
+_NODE_CHECKS: dict = {}            # (extension, node, sha1 of the text) -> its node --check answer, oldest first
+_NODE_LOCK = threading.Lock()
 
 
 _BOM = b"\xef\xbb\xbf"
+
+
+def node_check_known(p: Path, node: str) -> bool:
+    """True when the edit tools already asked this node to --check the file's current text (packs.quick_check then
+    has nothing to add). Only where the check of a copy in the temp folder means the same as a check of the file:
+    .mjs and .cjs, and .js outside a package whose package.json says "type": "module"."""
+    suf = p.suffix.lower()
+    if suf == ".js":
+        for d in p.resolve().parents:
+            pj = d / "package.json"
+            if pj.is_file():
+                try:
+                    if json.loads(pj.read_text(encoding="utf-8")).get("type") == "module":
+                        return False
+                except (OSError, ValueError, AttributeError):
+                    return False
+                break
+    elif suf not in (".mjs", ".cjs"):
+        return False
+    try:
+        text = read_src(p)[0]
+    except OSError:
+        return False
+    key = (suf, node, hashlib.sha1(text.encode("utf-8", "surrogateescape")).hexdigest())
+    with _NODE_LOCK:
+        return key in _NODE_CHECKS
 
 
 def read_src(p: Path) -> tuple[str, str, bool]:
@@ -920,6 +1074,17 @@ def write_src(p: Path, text: str, eol: str = "\n", bom: bool = False, append: bo
         # stays one file: both are written through, not replaced by a new regular file.
         fsio.atomic_write_bytes(p, (_BOM if bom else b"") + data, mode=mode, keep_links=True)
     _drop_pyc(p)
+
+
+def text_lines(text: str) -> list[str]:
+    """The lines of a text the way compilers, tracebacks, grep and editors count them: split at \\n only (a CR before
+    it dropped). str.splitlines also splits at form feeds, \\x1c-\\x1e, \\x85 and U+2028, so a Python file with a
+    form feed had every later line number off by one against its tracebacks. A file with only CR endings (classic
+    Mac) is split at CR."""
+    lines = text.split("\n" if "\n" in text or "\r" not in text else "\r")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return [ln[:-1] if ln.endswith("\r") else ln for ln in lines]
 
 
 def shown(text: str) -> str:
@@ -1032,6 +1197,8 @@ class Workspace:
         if self.container and self.mounted and self.cdir and os.path.isabs(p) and (p == self.cdir or p.startswith(self.cdir.rstrip("/") + "/")):
             p = str(self.root / os.path.relpath(p, self.cdir))     # container path -> host copy
         p = fix_win_path(p)
+        if write and ("$" in p or p.startswith("~")):
+            p = expand_path(p)                    # a shell's reading, never a literal "$HOME" or "~" folder
         if write and (bad := reserved_name(p)):
             raise ToolError(f"'{bad}' is a reserved device name on Windows and cannot be used as a file name")
         q = (self.root / p).resolve() if not os.path.isabs(p) else Path(p).resolve()
@@ -1112,7 +1279,9 @@ class Workspace:
 
     def _cwrite(self, path: str, text: str, append=False):
         cp = self._cpath(path)
-        r = self._cexec(["sh", "-c", f'mkdir -p "$(dirname "{cp}")" && cat {">>" if append else ">"} "{cp}"'], input_text=text)
+        # the path goes in as $1, never inside the script: a name with $(...) or a quote in it is not run as code
+        r = self._cexec(["sh", "-c", f'mkdir -p "$(dirname -- "$1")" && cat {">>" if append else ">"} "$1"', "sh", cp],
+                        input_text=text)
         if r.returncode:
             raise ToolError(f"could not write {path} in container: {r.stderr[-200:]}")
 
@@ -1122,7 +1291,7 @@ class Workspace:
             text = self._cread(path)
             self.seen[self._cpath(path)] = self._hash(text)
             self.original.setdefault(self._cpath(path), self.seen[self._cpath(path)])
-            lines = text.splitlines()
+            lines = text_lines(text)
             s, e = max(1, start or 1), min(len(lines), end or len(lines))
             body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(s, e + 1))
             return self._cap(f"{path} lines {s}-{e} of {len(lines)}\n{body}", "read")
@@ -1145,11 +1314,32 @@ class Workspace:
         text = read_src(p)[0]
         self.seen[str(p)] = self._hash(text)
         self.original.setdefault(str(p), self.seen[str(p)])
-        lines = shown(text).splitlines()
+        lines = text_lines(shown(text))
         s = max(1, start or 1)
         e = min(len(lines), end or len(lines))
         if s > len(lines) and lines:
             return f"{path}: file has {len(lines)} lines (start={s} is past the end)"
+        cap = self.max_tool_chars
+        if sum(len(x) + 8 for x in lines[s - 1:e]) > 20 * cap:
+            # a big file (a log, a data dump): only the head and the tail are shown, so only those are numbered, and no
+            # numbered copy of the whole file goes to the run folder (135 MB read whole: 3.8 s and a 152 MB copy)
+            keep = HEAD if cap >= MAX_TOOL_CHARS else max(250, int(cap * 0.375))
+
+            def rows(idx):
+                out, n = [], 0
+                for i in idx:
+                    row = f"{i:>5}  {lines[i - 1]}"[:keep]
+                    n += len(row) + 1
+                    if n > keep and out:
+                        break
+                    out.append(row)
+                return out
+            hl = rows(range(s, e + 1))
+            tl = rows(range(e, s + len(hl) - 1, -1))[::-1]
+            gap = e - s + 1 - len(hl) - len(tl)
+            return clean(f"{path} lines {s}-{e} of {len(lines)}\n" + "\n".join(hl)
+                         + f"\n... [{gap} lines not shown. Read them with read_file start/end, or search with grep] ...\n"
+                         + "\n".join(tl))
         body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(s, e + 1))
         return self._cap(f"{path} lines {s}-{e} of {len(lines)}\n{body}", "read")
 
@@ -1230,7 +1420,7 @@ class Workspace:
             if b"\0" in raw[:8192]:                               # a binary file: never matched as text
                 continue
             text = raw.decode("utf-8", errors="ignore")
-            lines = text.splitlines()
+            lines = text_lines(text)
             hits: list[int] = []                                   # 1-based line numbers that start a match
             need = head - len(out) + 1                             # enough to know the list is full; no more
             if multiline:
@@ -1287,10 +1477,8 @@ class Workspace:
             raise ToolError("glob patterns are relative to the working directory (no absolute paths or '..')")
         try:
             res = []
-            for p in self.root.glob(pattern):
-                if self.should_stop and self.should_stop():
-                    raise ToolError("stopped by the user")
-                if SKIP_DIRS.isdisjoint(p.relative_to(self.root).parts) and (not inside_only or self._inside(p)):
+            for p in self._glob_paths(pattern):
+                if not inside_only or self._inside(p):
                     res.append(str(p.relative_to(self.root)))
             if not any(ch in pattern for ch in ("node_modules", "dist/", "build/")):   # unless asked for by name
                 skip = {str(x.relative_to(self.root)) for x in self._ignored([self.root / r for r in res])}
@@ -1299,6 +1487,57 @@ class Workspace:
         except (NotImplementedError, ValueError) as e:
             raise ToolError(f"invalid glob pattern: {e}")
         return self._cap("\n".join(res[:2000]) or "no files", "glob")
+
+    @staticmethod
+    def _glob_hit(pat: list, parts: list) -> bool:
+        """parts (a path's names) matches pat (a glob's names, "**" for any number of folders), as pathlib does."""
+        if not pat:
+            return not parts
+        if pat[0] == "**":
+            return Workspace._glob_hit(pat[1:], parts) or (bool(parts) and Workspace._glob_hit(pat, parts[1:]))
+        return bool(parts) and fnmatch.fnmatch(parts[0], pat[0]) and Workspace._glob_hit(pat[1:], parts[1:])
+
+    def _glob_paths(self, pattern: str):
+        """What root.glob(pattern) finds outside SKIP_DIRS, found without entering them (H-11: pathlib walked all of
+        node_modules for **/*.py and the results were dropped afterwards, with no Stop check while it walked), and
+        no deeper than the pattern can match."""
+        parts = [x for x in pattern.replace("\\", "/").split("/") if x not in ("", ".")]
+        if not parts:
+            raise ValueError(f"Unacceptable pattern: {pattern!r}")
+        dirs_only = pattern.replace("\\", "/").endswith("/") or parts[-1] == "**"
+        magic = re.compile(r"[*?\[]")
+        n = 0
+        while n < len(parts) and not magic.search(parts[n]) and parts[n] != "**":
+            n += 1
+        lit, rest = parts[:n], parts[n:]
+        if any(x in SKIP_DIRS for x in lit):
+            return
+        base = self.root.joinpath(*lit)
+        if not rest:                                          # no wildcard: the path itself, when it is there
+            if base.exists() and (not dirs_only or base.is_dir()):
+                yield base
+            return
+        if not base.is_dir():
+            return
+        depth = None if "**" in rest else len(rest)
+        if not rest or all(x == "**" for x in rest):
+            yield base                                        # "**" includes the folder itself, as pathlib does
+        # a fixed depth follows symlinked folders as pathlib's * does; ** never enters them (no loops), as in pathlib
+        for dp, dns, fns in os.walk(base, followlinks=depth is not None):
+            if self.should_stop and self.should_stop():
+                raise ToolError("stopped by the user")
+            rel = list(Path(dp).relative_to(base).parts)
+            dns[:] = [d for d in dns if d not in SKIP_DIRS]
+            names = [(d, True) for d in dns] + [(f, False) for f in fns if not dirs_only]
+            for nm, is_dir in names:
+                if self._glob_hit(rest, rel + [nm]):
+                    p = Path(dp, nm)
+                    if rest[-1] == "**" and p.is_symlink():
+                        continue                              # a final ** lists real folders only, as pathlib's
+                    if not dirs_only or is_dir or p.is_dir():
+                        yield p
+            if depth is not None and len(rel) + 1 >= depth:
+                dns[:] = []                                   # deeper names cannot match the pattern
 
     def _walk(self, base: Path):
         """H-11: files under base, never entering SKIP_DIRS, and checking the Stop flag as it walks."""
@@ -1317,7 +1556,7 @@ class Workspace:
         shows it (line, column, the line itself and a caret), so the agent fixes it in the same step instead of
         finding out when the code runs. None when the file parses or the language is not checked."""
         def where(line: int, col: int, msg: str) -> str:
-            lines = text.splitlines()
+            lines = text_lines(text)
             src = lines[line - 1] if 0 < line <= len(lines) else ""
             caret = " " * max(0, min(col, len(src) + 1) - 1) + "^"
             return f"line {line}, column {col}: {msg}\n    {src}\n    {caret}"
@@ -1345,23 +1584,41 @@ class Workspace:
             node = shutil.which("node")
             if not node:
                 return None
-            try:
-                with tempfile.NamedTemporaryFile("w", suffix=suf, delete=False, encoding="utf-8", errors="surrogateescape") as f:
-                    f.write(text)
-                r = subprocess.run([node, "--check", f.name], capture_output=True, text=True, timeout=10)
-            except (OSError, subprocess.SubprocessError):
-                return None
-            finally:
-                try:
-                    os.unlink(f.name)
-                except (OSError, NameError):
-                    pass
-            if r.returncode == 0:
-                return None
-            m = re.search(r":(\d+)\n", r.stderr)
-            msg = next((x for x in r.stderr.splitlines() if "Error" in x), "syntax error").strip()
-            return where(int(m.group(1)), 1, msg) if m else msg
+            # An edit checks the text before and after, and the next edit's "before" is this edit's "after": each
+            # was a node process. The answer for the same text from the same node is kept.
+            key = (suf, node, hashlib.sha1(text.encode("utf-8", "surrogateescape")).hexdigest())
+            with _NODE_LOCK:
+                if key in _NODE_CHECKS:
+                    _NODE_CHECKS[key] = _NODE_CHECKS.pop(key)
+                    return _NODE_CHECKS[key]
+            got = Workspace._node_check(node, suf, text, where)
+            if got != "":
+                with _NODE_LOCK:
+                    _NODE_CHECKS[key] = got
+                    while len(_NODE_CHECKS) > 64:
+                        _NODE_CHECKS.pop(next(iter(_NODE_CHECKS)))
+            return got or None
         return None
+
+    @staticmethod
+    def _node_check(node: str, suf: str, text: str, where) -> str | None:
+        """node --check on the text: None when it parses, the error when it does not, "" when node could not run."""
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=suf, delete=False, encoding="utf-8", errors="surrogateescape") as f:
+                f.write(text)
+            r = subprocess.run([node, "--check", f.name], capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        finally:
+            try:
+                os.unlink(f.name)
+            except (OSError, NameError):
+                pass
+        if r.returncode == 0:
+            return None
+        m = re.search(r":(\d+)\n", r.stderr)
+        msg = next((x for x in r.stderr.splitlines() if "Error" in x), "syntax error").strip()
+        return where(int(m.group(1)), 1, msg) if m else msg
 
     NOOP_EDIT = ("edit rejected: `new` is identical to `old`, so nothing would change and {path} is unchanged. Put "
                  "the changed text in `new` (keep `old` exactly as it is in the file).")
@@ -1785,6 +2042,37 @@ class Workspace:
                          "Start servers and watchers with bash_start to read their output and stop them]").lstrip()
         return subprocess.CompletedProcess(args, rc, out, err)
 
+    def _docker_run(self, cdir, command, timeout_s):
+        """A command inside the container. Killing the local docker client does not end what runs in the container,
+        so the command runs under the container's own `timeout` when it has one, and on a timeout or Stop the process
+        is also killed inside the container. Output is capped as for a local command (_proc)."""
+        import secrets
+        pidf = f"/tmp/.meshpool-run-{secrets.token_hex(6)}.pid"
+        # the container's own limit is a little later than ours: normally our timeout ends it through _docker_kill,
+        # and this one is the backstop when that step cannot run
+        wrap = (f'if command -v timeout >/dev/null 2>&1; then timeout -k 5 {int(timeout_s) + 2} bash -lc "$1" & '
+                f'else bash -lc "$1" & fi; echo $! > {pidf} 2>/dev/null; wait $!; rc=$?; rm -f {pidf}; exit $rc')
+        try:
+            r = self._proc(["docker", "exec", "-w", cdir, self.container, "bash", "-c", wrap, "meshpool", command],
+                           None, timeout_s)
+        except subprocess.TimeoutExpired:
+            self._docker_kill(pidf)
+            raise
+        if r.returncode == 130 and "[stopped by the user]" in (r.stderr or ""):
+            self._docker_kill(pidf)
+        return r
+
+    def _docker_kill(self, pidf):
+        try:
+            subprocess.run(["docker", "exec", self.container, "sh", "-c",
+                            # `timeout` leads its own process group, so the group signal reaches what it started
+                            f'p=$(cat {pidf} 2>/dev/null) || exit 0; kill -TERM -- "-$p" 2>/dev/null || '
+                            f'kill -TERM "$p" 2>/dev/null; sleep 1; kill -KILL -- "-$p" 2>/dev/null || '
+                            f'kill -KILL "$p" 2>/dev/null; rm -f {pidf}'],
+                           capture_output=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
     def _in_scratch(self, p) -> bool:
         d = self.__dict__.get("_scratch_dir")
         try:
@@ -1821,8 +2109,7 @@ class Workspace:
                 env = self._py_env(_C.scrub_env(dict(os.environ)))
             if self.container and not command.lstrip().startswith("docker "):
                 cdir = self.cdir if not cwd else self._cpath(os.path.relpath(cwd, self.root).replace(os.sep, "/"))
-                r = subprocess.run(["docker", "exec", "-w", cdir, self.container, "bash", "-lc", command],
-                                   capture_output=True, text=True, timeout=timeout_s, errors="replace")
+                r = self._docker_run(cdir, command, timeout_s)
             else:
                 env.setdefault("PYTHONUTF8", "1")
                 self._scratch(env)
@@ -1837,8 +2124,9 @@ class Workspace:
                     r = self._proc([bash, "-lc" if login else "-c", fix_nul_redirect(command)], env, timeout_s,
                                    encoding="utf-8", cwd=cwd)
                 elif bash:
-                    r = self._proc(_SB.wrap([bash, "-lc" if login else "-c", command], self.root, cwd=cwd, mode=mode),
-                                   env, timeout_s, cwd=cwd)
+                    offline = command.strip() in self.__dict__.get("sbx_offline", ())   # ran without a question
+                    r = self._proc(_SB.wrap([bash, "-lc" if login else "-c", command], self.root, cwd=cwd, mode=mode,
+                                            offline=offline), env, timeout_s, cwd=cwd)
                 elif os.name == "nt":                            # no Git Bash: PowerShell, not cmd.exe
                     r = self._proc(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                                     "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command],
@@ -1847,13 +2135,16 @@ class Workspace:
                     r = self._proc(command, env, timeout_s, shell=True, cwd=cwd)
             code, out = r.returncode, _C.redact_secrets(r.stdout + ("\n" + r.stderr if r.stderr else ""))   # OSS-29
         except subprocess.TimeoutExpired as e:
-            code = 124
-            out = ((e.stdout or "") if isinstance(e.stdout, str) else "") + f"\n[timed out after {timeout_s}s]"
+            from meshpool_harness import config as _C
+            code = 124                           # OSS-29: what a command printed before its timeout is redacted too
+            out = _C.redact_secrets((e.stdout or "") if isinstance(e.stdout, str) else "") + \
+                f"\n[timed out after {timeout_s}s]"
         if not record:
             return self._cap(out or "no matches", kind), code
         asked = self.__dict__.get("asked_cmds") or ()
         self.commands.append({"cmd": command.strip(), "code": code, "kind": kind, "after_edit": self.edits,
                               "secs": round(time.time() - t0, 1), "tail": out[-600:],
+                              "fails": failed_test_ids(out),                # the receipt compares them with the baseline
                               "cwd": str(cwd) if cwd else None,            # re-check runs it in the same folder
                               "approved_once": command.strip() in asked})  # a yes for this run is not a yes for more
         try:                                     # full outputs: evidence for number tracing; the task may have
@@ -1903,11 +2194,15 @@ class Workspace:
             else:
                 args = [bash, "-c", fix_nul_redirect(command)]
         elif os.name == "nt":
-            args, shell = ["powershell", "-NoProfile", "-NonInteractive", "-Command", command], False
+            args, shell = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                           "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command], False
         else:
             args, shell = command, True
+        # Git Bash and PowerShell (with its OutputEncoding set) write UTF-8 on Windows, as in _run: the locale's code
+        # page (cp1252) turned every non-ASCII character of a dev server's output into mojibake
         p = subprocess.Popen(args, shell=shell, cwd=self.root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             stdin=subprocess.DEVNULL, text=True, errors="replace", **kw)
+                             stdin=subprocess.DEVNULL, text=True, errors="replace",
+                             encoding="utf-8" if os.name == "nt" else None, **kw)
         _BG_ALL.add(p)
         n = self.__dict__["_bg_n"] = self.__dict__.get("_bg_n", 0) + 1
         bid = f"bg{n}"
@@ -1929,8 +2224,9 @@ class Workspace:
                 f"Read its output with bash_output id={bid}; stop it with bash_stop id={bid}.\n" + self._bg_read(bid, entry))
 
     def _bg_read(self, bid, entry):
+        from meshpool_harness import config as _C
         with entry["lock"]:
-            new = "".join(entry["text"][entry["read"]:])
+            new = _C.redact_secrets("".join(entry["text"][entry["read"]:]))   # OSS-29, as for bash
             entry["read"] = len(entry["text"])
         rc = entry["p"].poll()
         state = "running" if rc is None else f"exited with code {rc}"
@@ -2018,6 +2314,16 @@ class Workspace:
         if hit:
             patch, cd = hit
             return self.apply_patch(patch, base=cd or workdir)
+        sp = split_patch_script(command)
+        if sp and sp[2]:                              # a patch, then other commands: the patch as an edit, then the rest
+            patch, cd, rest, strict = sp
+            try:
+                done = self.apply_patch(patch, base=cd or workdir)
+            except ToolError as e:
+                if strict:
+                    raise ToolError(f"{e}\nThe commands after the patch were not run.") from None
+                done = f"apply_patch failed: {e}"
+            return done.rstrip("\n") + "\n" + self.shell(rest, workdir=workdir, timeout_ms=timeout_ms)
         script = shell_script(command)
         if not script.strip():
             raise ToolError("shell: `command` is empty")
@@ -2053,7 +2359,9 @@ class Workspace:
         yield_time_ms, when given, is its time limit (default: the bash tool's). The result is Codex's format
         (exec_result): no Meshpool notes, no saved-output pointer, no error-context excerpts. An apply_patch given
         as a heredoc is applied as a patch, as Codex intercepts it."""
-        if not isinstance(cmd, str) or not cmd.strip():
+        if not isinstance(cmd, str):
+            raise ToolError("exec_command: `cmd` must be the command line as text. Send the call again with it.")
+        if not cmd.strip():
             raise ToolError("exec_command: `cmd` is empty")
         cwd = None
         if workdir:
@@ -2069,12 +2377,32 @@ class Workspace:
             except ToolError as e:
                 out, code = str(e), 1
             return exec_result(out if out.endswith("\n") else out + "\n", code, time.time() - t0, max_output_tokens)
+        pre = ""
+        for _ in range(20):                           # a patch (or several), then other commands: each patch as an
+            sp = split_patch_script(cmd)              # edit, then the rest as commands of their own
+            if not (sp and sp[2]):
+                break
+            try:
+                done = self.apply_patch(sp[0], base=sp[1] or workdir)
+            except ToolError as e:
+                if sp[3]:
+                    return exec_result(f"{pre}{e}\nThe commands after the patch were not run.\n", 1, time.time() - t0,
+                                       max_output_tokens)
+                done = f"apply_patch failed: {e}"
+            pre, cmd = pre + done.rstrip("\n") + "\n", sp[2]
+        hit = patch_from_shell(cmd) if pre else None
+        if hit:                                       # the last part is a patch too
+            try:
+                out, code = pre + self.apply_patch(hit[0], base=hit[1] or workdir), 0
+            except ToolError as e:
+                out, code = pre + str(e), 1
+            return exec_result(out if out.endswith("\n") else out + "\n", code, time.time() - t0, max_output_tokens)
         secs = None
         if isinstance(yield_time_ms, (int, float)) and not isinstance(yield_time_ms, bool):
             secs = max(1, -(-int(max(250, yield_time_ms)) // 1000))
         text, code = self._run(cmd, secs, "bash", raw=True, cwd=cwd, login=login is not False)
         out = text.split("\n", 1)[1] if text.startswith("[exit ") and "\n" in text else text
-        return exec_result(out, code, time.time() - t0, max_output_tokens)
+        return exec_result(pre + out, code, time.time() - t0, max_output_tokens)
 
     # -- subsumed retrieval: a whole-file read of text the model already has, unchanged, is answered from memory.
     # Measured on coding agents, re-reading code already in context occurs 2-6 times per task (arXiv 2609.30725);
@@ -2142,6 +2470,8 @@ class Workspace:
         shown: dict = {}                              # key -> path as the patch names it
 
         def loc(path: str):
+            if "$" in path or path.startswith("~"):
+                path = expand_path(path)           # before the base is joined: $HOME/x is the home folder's x
             full = os.path.join(base, path) if base and not os.path.isabs(path) else path
             if remote:
                 return self._cpath(full), None
@@ -2150,6 +2480,7 @@ class Workspace:
 
         files: dict = {}                              # key -> [path object, text before or None, text after or None]
         order: list = []
+        boms: set = set()                             # files that start with a UTF-8 BOM: matched without it, kept
 
         def get(path: str):
             key, p = loc(path)
@@ -2161,6 +2492,9 @@ class Workspace:
                     before = p.read_bytes().decode("utf-8", "surrogateescape")
                 else:
                     before = None
+                if before is not None and before.startswith("\ufeff"):
+                    before = before[1:]               # else the first line never matches the patch's context
+                    boms.add(key)
                 files[key] = [p, before, before]
                 order.append(key)
             shown.setdefault(key, path)
@@ -2189,6 +2523,8 @@ class Workspace:
                 if h.move and h.move != h.path:
                     k2, f2 = get(h.move)
                     f2[2], f[2] = new, None
+                    if key in boms:
+                        boms.add(k2)
                     modified.append(h.move)
                 else:
                     f[2] = new
@@ -2201,6 +2537,9 @@ class Workspace:
             if bad and (before is None or not self._syntax_error(p, before)):
                 raise ToolError(f"apply_patch rejected: it would make {shown[key]} stop parsing. Nothing was "
                                 f"written. Fix the patch at the marked place and retry.\n{bad}")
+        def raw(key, text):
+            return (("\ufeff" if key in boms else "") + text).encode("utf-8", "surrogateescape")
+
         done: list = []                               # write, restoring everything if one write fails
         try:
             for key in order:
@@ -2212,25 +2551,25 @@ class Workspace:
                     if after is None:
                         self._cexec(["rm", "-f", key])
                     else:
-                        self._cwrite(key, after)
+                        self._cwrite(key, ("\ufeff" if key in boms else "") + after)
                 elif after is None:
                     p.unlink()
                     _drop_pyc(p)
                 else:
                     p.parent.mkdir(parents=True, exist_ok=True)
-                    p.write_bytes(after.encode("utf-8", "surrogateescape"))
+                    p.write_bytes(raw(key, after))
                     _drop_pyc(p)
         except Exception as e:  # noqa: BLE001
             for key in done:
                 p, before, after = files[key]
                 try:
                     if remote:
-                        self._cexec(["rm", "-f", key]) if before is None else self._cwrite(key, before)
+                        self._cexec(["rm", "-f", key]) if before is None else self._cwrite(key, ("\ufeff" if key in boms else "") + before)
                     elif before is None:
                         p.unlink(missing_ok=True)
                     else:
                         p.parent.mkdir(parents=True, exist_ok=True)
-                        p.write_bytes(before.encode("utf-8", "surrogateescape"))
+                        p.write_bytes(raw(key, before))
                 except Exception:  # noqa: BLE001
                     pass
             raise ToolError(f"apply_patch failed while writing ({e}); the files written so far were restored") from None

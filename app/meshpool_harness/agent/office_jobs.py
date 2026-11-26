@@ -3,7 +3,8 @@ Meshpool Office MCP server (agent/office_mcp_server.py): where the files go, how
 report the agent reads.
 
 A job runs `python -P -m meshpool_harness run <request> --engine <engine> --out <folder>` in its own process and
-prints its result as JSON on stdout. Files land in "<project>/Meshpool outputs/<stamp>-<engine>".
+prints its result as JSON on stdout. The job works in meshpool's own data folder (scratch_root: the chat's
+office-jobs folder), and only its deliverable is copied into the user's folder, under its own name (deliver).
 """
 from __future__ import annotations
 
@@ -110,22 +111,36 @@ def resolve_files(root: Path, files: list | None) -> tuple[list[str], str]:
 
 
 def _python_m() -> list[str]:
-    """`python -m meshpool_harness` that keeps its working folder off sys.path: the engine runs in an output folder
-    inside the user's project, where a json.py would shadow Python's own (-P on 3.11+, a bootstrap on 3.10; the same
+    """`python -m meshpool_harness` that keeps its working folder off sys.path: the engine runs in a job folder
+    holding copies of the user's inputs, where a json.py would shadow Python's own (-P on 3.11+, a bootstrap on 3.10; the same
     command the updater relaunches with, minus this process's arguments)."""
     from meshpool_harness import updater
     cmd = updater._relaunch_cmd()
     return cmd[:len(cmd) - (len(sys.argv) - 1)] if len(sys.argv) > 1 else cmd
 
 
+def scratch_root(scope: str = "") -> Path:
+    """Where a chat's engine jobs work: meshpool's own data folder (<runs>/sessions/<chat>/office-jobs), never the
+    user's folder. The job folder holds the build scripts, logs, transcripts, staged copies of the inputs and the
+    research notes; only the deliverable is copied into the user's folder (deliver). Lina, Maya and Priya each found
+    a "Meshpool outputs" folder in their own folder, full of job folders, stale copies and hidden .run folders."""
+    from meshpool_harness import config as C
+    name = re.sub(r"[^\w.-]", "_", str(scope or ""))[:80]
+    if name and not name.startswith("pid"):
+        return C.runs_dir() / "sessions" / name / "office-jobs"
+    return C.runs_dir() / "office-jobs" / (name or f"pid{os.getpid()}")
+
+
 def new_job(engine: str, request: str, paths: list[str], root: Path, scope: str = "",
-            model: str | None = None, env_extra: dict | None = None) -> str:
-    """Register a job (its output folder, command and build number) and return its id; run() runs it. scope is the
+            model: str | None = None, env_extra: dict | None = None, work: Path | None = None) -> str:
+    """Register a job (its working folder, command and build number) and return its id; run() runs it. scope is the
     chat the job serves: build numbers, reuse and the rebuild stop are counted per scope, not per process. env_extra
-    is added to the engine process's environment (the usage task it records into)."""
+    is added to the engine process's environment (the usage task it records into). root is the user's folder, where
+    the deliverable lands; the job works in `work` (default scratch_root(scope)), in meshpool's own data."""
     with _LOCK:
         jid = uuid.uuid4().hex[:8]
-        out = Path(root) / "Meshpool outputs" / f"{time.strftime('%Y%m%d-%H%M%S')}-{engine}-{jid}"   # one folder per job
+        base = Path(work) if work else scratch_root(scope)
+        out = base / f"{time.strftime('%Y%m%d-%H%M%S')}-{engine}-{jid}"   # one folder per job
         out.mkdir(parents=True, exist_ok=True)
         cmd = _python_m() + ["run", request, "--engine", engine, "--out", str(out)]
         if model:
@@ -135,9 +150,10 @@ def new_job(engine: str, request: str, paths: list[str], root: Path, scope: str 
         now = time.time()
         recent = [x for x in JOBS.values() if x["engine"] == engine and x.get("scope", "") == scope
                   and now - x["started"] < REBUILD_WINDOW_S]
-        JOBS[jid] = {"engine": engine, "cmd": cmd, "out": out, "started": now, "build_no": len(recent) + 1,
-                     "scope": scope, "request": request, "paths": _inputs(paths), "event": threading.Event(),
-                     "inputs": {Path(x).name for x in paths or []}, "env_extra": dict(env_extra or {})}
+        JOBS[jid] = {"engine": engine, "cmd": cmd, "out": out, "root": Path(root), "started": now,
+                     "build_no": len(recent) + 1, "scope": scope, "request": request, "paths": _inputs(paths),
+                     "event": threading.Event(), "inputs": {Path(x).name for x in paths or []},
+                     "env_extra": dict(env_extra or {})}
         return jid
 
 
@@ -161,19 +177,140 @@ def _words(request: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]+", (request or "").lower()))
 
 
-def _made(j: dict) -> list[Path]:
-    """The files a finished job made: the engine's own results, not the copies of the user's inputs or build scripts."""
+# What an engine job hands the user: the deliverable, never its build and check files (JSON, logs, scripts, research
+# notes). A job that lists no artifacts delivers only Office files and PDFs.
+BUILD_SUFFIXES = (".py", ".pyc", ".run", ".log", ".json", ".jsonl")
+OFFICE_SUFFIXES = (".xlsx", ".xlsm", ".pptx", ".docx", ".pdf")
+_NOT_DELIVERED = re.compile(r"^(?:dossier|sources|report_sources|commands|transcript)\b|\.provenance\.", re.I)
+
+
+def _job_files(j: dict) -> list[Path]:
+    """The files a finished job made in its folder: the engine's own results, not the copies of the user's inputs,
+    build scripts, logs or research notes."""
     out: Path = j["out"]
     res = j.get("result") or {}
-    arts = [Path(a) if Path(a).is_absolute() else out / a for s in res.get("steps") or [] for a in s.get("artifacts") or []]
-    return sorted({a.resolve() for a in arts if a.is_file()}) or [
-        p for p in sorted(out.rglob("*"))
-        if p.is_file() and not any(x.startswith(".") for x in p.relative_to(out).parts)
-        and not (p.parent == out and p.name in j.get("inputs", set())) and p.suffix not in (".py", ".run", ".log")]
+    steps = res.get("steps") or []
+    arts = [Path(a) if Path(a).is_absolute() else out / a for s in steps for a in s.get("artifacts") or []]
+    if j.get("root") is not None and steps and j.get("engine") in ("slides", "sheets"):
+        last = steps[-1].get("artifacts") or []                 # a research step's report.md is not the deck
+        arts = [Path(a) if Path(a).is_absolute() else out / a for a in last] or arts
+
+    def ok(p: Path) -> bool:
+        return (p.suffix.lower() not in BUILD_SUFFIXES and not _NOT_DELIVERED.search(p.name)
+                and not p.name.startswith(("~$", ".~lock")))
+    have = sorted({a.resolve() for a in arts if a.is_file() and ok(a)})
+    if have:
+        return have
+    return [p for p in sorted(out.rglob("*"))
+            if p.is_file() and not any(x.startswith(".") for x in p.relative_to(out).parts)
+            and not (p.parent == out and p.name in j.get("inputs", set())) and ok(p)
+            and (j.get("root") is None or p.suffix.lower() in OFFICE_SUFFIXES)]
+
+
+def _made(j: dict) -> list[Path]:
+    """The files a finished job made for the user: the ones delivered into their folder (deliver), and the file moved
+    to the name the user asked for (save_as). A job from before delivery existed lists its folder's results."""
+    saved = j.get("saved_as")
+    if j.get("delivered") is not None:
+        have = {Path(p).resolve() for p in j["delivered"] if Path(p).is_file()}
+    else:
+        have = set(_job_files(j))
+    if saved and Path(saved).is_file():           # the file was moved to the name the user asked for (save_as)
+        have.add(Path(saved).resolve())
+    return sorted(p for p in have if p.is_file())
+
+
+def _sha_of(p: Path) -> str:
+    import hashlib
+    try:
+        h = hashlib.sha256()
+        with open(p, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return ""
+
+
+def _own_earlier(dest: Path, scope: str) -> bool:
+    """dest is a file an earlier job of this chat delivered, unchanged since: a rebuild may replace it (the turn's
+    checkpoint keeps the earlier version for Undo) instead of leaving "name (2).xlsx" beside it."""
+    try:
+        want = dest.resolve()
+    except OSError:
+        return False
+    for x in list(JOBS.values()):
+        if x.get("scope", "") != scope:
+            continue
+        for p, sha in (x.get("delivered_sha") or {}).items():
+            if Path(p) == want and sha and _sha_of(want) == sha:
+                return True
+    return False
+
+
+def _free(p: Path) -> Path:
+    stem, suf, i = p.stem, p.suffix, 2
+    while p.exists():
+        p = p.with_name(f"{stem} ({i}){suf}")
+        i += 1
+    return p
+
+
+def _home_for(j: dict, f: Path, root: Path) -> Path:
+    """The folder a deliverable lands in: next to the input it was made from when that input is in the user's folder
+    ("Board deck (summary).docx" beside "Board deck.pptx"), else the top of the user's folder. Slides added to a deck are
+    saved by the engine into that deck itself (engines/forge/engine.py deck_target), not delivered from here."""
+    for p, *_ in j.get("paths") or []:
+        src = Path(p)
+        try:
+            inside = src.resolve().parent == root.resolve() or root.resolve() in src.resolve().parents
+        except OSError:
+            inside = False
+        if inside and f.stem.lower().startswith(src.stem.lower() + " ("):
+            return src.parent
+    return root
+
+
+def deliver(jid: str) -> list[Path]:
+    """Copy a finished job's deliverables from its working folder (meshpool's own data) into the user's folder, under
+    their own names, once. A name already taken by the user's file gets a free "name (2).ext"; a file this chat's
+    earlier job delivered, unchanged since, is replaced. Undo covers the copy: office_task books its call and a job
+    still running after its call keeps the turn's window open (agent/core.py)."""
+    import shutil
+    j = JOBS[jid]
+    with _LOCK:
+        if j.get("delivered") is not None or not (j.get("done") or j.get("finishing")):
+            return _made(j) if j.get("delivered") is not None else []
+        if j.get("root") is None or not j.get("result") or j.get("stopped"):
+            return []
+        j["delivered"] = []
+        files = _job_files(j)
+        root = Path(j["root"])
+        out_dir = Path(j["out"]).resolve()
+        got, shas = [], {}
+        for f in files:
+            if out_dir not in f.parents:              # the engine saved it in the user's folder itself (add_slides)
+                got.append(f)
+                shas[str(f.resolve())] = _sha_of(f)
+                continue
+            dest = _home_for(j, f, root) / f.name
+            if dest.exists() and not _own_earlier(dest, j.get("scope", "")):
+                dest = _free(dest)
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                tmp = dest.with_name(f".{dest.name}.{jid}.part")
+                shutil.copy2(f, tmp)
+                os.replace(tmp, dest)                   # never a half-written file under the user's name
+            except OSError:
+                continue
+            got.append(dest)
+            shas[str(dest.resolve())] = _sha_of(dest)
+        j["delivered"], j["delivered_sha"] = [str(p) for p in got], shas
+        return _made(j)
 
 
 def start(engine: str, request: str, paths: list[str], root: Path, scope: str = "",
-          model: str | None = None, env_extra: dict | None = None) -> tuple[str, str]:
+          model: str | None = None, env_extra: dict | None = None, work: Path | None = None) -> tuple[str, str]:
     """(job id, how) for a request. One request is one engine run: the same request (same chat, engine and input
     files) while its job runs returns that job ("running": wait on its "event"); after it finished within the
     window, returns it again ("done": report it, nothing is rebuilt); otherwise a new job (""). A new request that
@@ -193,14 +330,19 @@ def start(engine: str, request: str, paths: list[str], root: Path, scope: str = 
                 return i, "running"
             if j.get("result") and not j.get("stopped") and _made(j):
                 return i, "done"
+        w = _words(request)
+        for i, j in reversed(mine):          # a reworded retry while the build still runs: wait on that build
+            v = _words(j["request"])          # (Lina: three "timed out" calls, three builds of one workbook)
+            if not j.get("done") and j["paths"] == inputs and w and v and (w <= v or v <= w
+                                                                            or len(w & v) / len(w | v) >= 0.8):
+                return i, "running"
         if len(mine) >= REBUILD_LIMIT:
-            w = _words(request)
             for i, j in reversed(mine):
                 v = _words(j["request"])
                 if (j.get("done") and j.get("result") and j["paths"] == inputs and w and v
                         and len(w & v) / len(w | v) >= SIMILAR and _made(j)):
                     return i, "refused"
-        return new_job(engine, request, paths, root, scope, model=model, env_extra=env_extra), ""
+        return new_job(engine, request, paths, root, scope, model=model, env_extra=env_extra, work=work), ""
 
 
 def refusal_text(jid: str, rel_to: Path | None = None) -> str:
@@ -235,6 +377,9 @@ def run(jid: str, timeout: float | None = None, should_stop=None, env_extra: dic
         pass
     # the job ends itself after its deadline (a little after ours) or once this process is gone (guard_from_env)
     env.update(MH_JOB_DEADLINE=str(time.time() + timeout + 60), MH_JOB_PARENT=str(os.getpid()))
+    env.pop("MH_CHECKPOINT_ROOT", None)     # the chat's folder, which its Undo checkpoints cover: add_slides changes a
+    if j.get("root") is not None:           # deck in place only inside it (engines/forge/engine.py deck_target)
+        env["MH_CHECKPOINT_ROOT"] = str(Path(j["root"]).resolve())
     kw = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}   # no console flashes up;
     # its own process group, so Stop and the timeout end LibreOffice and model-written scripts too, not only the engine
     proc = None
@@ -268,31 +413,71 @@ def run(jid: str, timeout: float | None = None, should_stop=None, env_extra: dic
     finally:
         if proc is not None:
             _PROCS.discard(proc)
+        try:                                # deliver the file and run its checks before anyone reads the report, so
+            j["finishing"] = True           # a waiting call only formats text (it never runs past its client's timeout)
+            deliver(jid)
+            _qa(j)
+        except Exception:  # noqa: BLE001  the report says what is missing
+            pass
         j["done"] = time.time()
         if j.get("event"):
             j["event"].set()
+
+
+def still_running(jid: str) -> str:
+    """The handle a call returns when its job outlives it: the job keeps building and its file lands when it is done.
+    Never a timeout while the job is still writing, and no reason to start the build again (Lina: three "timed out"
+    calls, three builds, the same build approved twice, 45 minutes)."""
+    j = JOBS[jid]
+    mins = int((time.time() - j["started"]) // 60)
+    return (f"Still working: the {j['engine']} job is building ({mins} min so far); nothing failed. Job id: {jid}. "
+            f"Call office_job_status with this id to wait for it; it needs no approval. Do not call the build "
+            f"tool again for this request: that starts no new build and only asks the user again. The file lands "
+            f"in the user's folder when the job is done.")
+
+
+def _qa(j: dict) -> str:
+    """Forge QA on every delivered deck/workbook, run once per job and kept (never fails the job)."""
+    if j.get("qa") is not None:
+        return j["qa"]
+    qa = ""
+    try:
+        if str(APP) not in sys.path:
+            sys.path.insert(0, str(APP))
+        from engines.forge.tools import qa_summary
+        files = [str(m) for m in _made(j) if m.suffix in (".pptx", ".xlsx")]
+        qa = qa_summary(files)
+    except Exception:  # noqa: BLE001
+        pass
+    if j.get("result"):
+        j["qa"] = qa
+    return qa
 
 
 def report(jid: str, rel_to: Path | None = None, reused: str = "") -> tuple[str, bool]:
     """(the text the agent reads, failed). Files are listed relative to rel_to when given, else absolute."""
     j = JOBS[jid]
     if not j.get("done"):
-        mins = int((time.time() - j["started"]) // 60)
-        return (f"Still working on the {j['engine']} job ({mins} min so far). Job id: {jid}. "
-                f"Call office_job_status with this id to get the result."), False
+        return still_running(jid), False
     res = j.get("result") or {}
+    deliver(jid)
     made = _made(j)
     if not res:
         return f"The {j['engine']} engine failed. {j.get('stderr', '')}", True
     notes = "\n".join((s.get("answer") or "") for s in res.get("steps") or []).strip()
-    qa = ""
-    try:                                    # forge QA on every produced deck/workbook (never fails the job)
-        if str(APP) not in sys.path:
-            sys.path.insert(0, str(APP))
-        from engines.forge.tools import qa_summary
-        qa = qa_summary([str(m) for m in made if m.suffix in (".pptx", ".xlsx")])
-    except Exception:  # noqa: BLE001
-        pass
+    if not made and not res.get("ok"):
+        # Priya: the engine stopped after one step (a slow model call) and saved nothing, and the report read "finished;
+        # its quality checks did not all pass (review the file). Files:" with no file. The agent then checked a file
+        # that did not exist, three times, and wrote it with a script. Say what happened and what to do.
+        from meshpool_harness.core import errtext as ET
+        why = " ".join(str(s.get("reason") or "") for s in res.get("steps") or [] if not s.get("ok")).strip() \
+            or str(res.get("reason") or "")
+        plain = ET.outside(why)[0] if why else ""
+        return (f"The {j['engine']} engine stopped before it made the file, so nothing was saved and there is nothing "
+                f"to check." + (f" Why: {plain}" if plain else "") + " Call the same tool again once with the same "
+                "request; a stop like this usually does not happen twice. If it stops again, make the file another "
+                "way and tell the user in plain words."), True
+    qa = _qa(j)
     # "passed" only when nothing is flagged: an engine's ok means "a file was made", and a headline saying "passed"
     # above a list of failing rules sent the agent into rebuild after rebuild (seen live: 8 deck builds, 20 minutes).
     flagged = "rules failing:" in notes and not re.search(r"rules failing:\s*(none)?\s*$", notes, re.M) \
@@ -314,9 +499,15 @@ def report(jid: str, rel_to: Path | None = None, reused: str = "") -> tuple[str,
         lines.insert(0, "This request was already built in this chat; here is that build again (nothing was rebuilt). "
                         "To build again, ask with the changes you want in the request.")
     if notes:
-        lines.append("Engine notes: " + notes[:2500])
+        lines.append("What the build did (for you; tell the user in your own words): " + _plain_notes(notes)[:2500])
     if qa:
         lines += ["Forge QA:", qa]
+    lines.append("Telling the user: say in plain words what was checked (for a workbook, the totals and formulas). "
+                 "A check is worth telling only when it is a real problem in their file, said in plain words; rule "
+                 "ids, check counts and rules that do not apply to this kind of file mean nothing to the user, and "
+                 "neither do the engine, its notes, its checker or other names it gave the file: describe the file "
+                 "itself. meshpool stores the calculated values in the file after the turn, so the values are not "
+                 "missing. The file is in their folder under the name above: nothing else to copy, move or delete.")
     n = j.get("build_no", 1)
     if checks != "passed" and n < REBUILD_LIMIT:
         lines.append("Deliver this file: the flagged items are listed for the user; rebuilding the same request "
@@ -326,6 +517,18 @@ def report(jid: str, rel_to: Path | None = None, reused: str = "") -> tuple[str,
                      "check results, stop here: rebuilding again rarely clears the rest. Deliver the best build so "
                      "far and tell the user which checks remain. Build again only for a new request from the user.")
     return "\n".join(lines), not made
+
+
+# The engine's model writes its notes for itself: "I did not recalculate the workbook, so the check cells will show
+# their results when it is opened in Excel." meshpool fills the values after the turn (xl_values), and the sentence
+# went into the reply as "I did not recalculate it" (Priya, Lina).
+_RECALC = re.compile(r"[^.\n]*\b(?:did not|didn't|not|without|could not|couldn't) (?:re)?calculat[^.\n]*\.?[ \t]*"
+                     r"|[^.\n]*\bwill show (?:their|its|the) (?:results?|values?) when [^.\n]*opened[^.\n]*\.?[ \t]*",
+                     re.I)
+
+
+def _plain_notes(notes: str) -> str:
+    return _RECALC.sub("", notes).strip()
 
 
 def _last_json(out: str) -> dict:

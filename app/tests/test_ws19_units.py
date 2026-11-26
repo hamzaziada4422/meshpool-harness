@@ -64,14 +64,30 @@ def test_b6_a_converter_failure_has_no_paths_or_tool_output():
     assert "/" not in msg and "LibreOffice" not in msg and "Word document" in msg
 
 
-def test_f24_formula_cells_without_cached_values_show_the_formula(proj):
+def test_f24_formula_cells_without_cached_values_show_the_formula(proj, monkeypatch):
+    """Without LibreOffice to calculate them, formula cells with no stored value show the formula."""
     import openpyxl
+    from meshpool_harness import xl_values
+    monkeypatch.setattr(xl_values, "values", lambda *a, **k: None)
     wb = openpyxl.Workbook()
     ws = wb.active
     ws["A1"], ws["A2"], ws["B1"] = 5, "=A1*2", "=SUM(A1:A2)"
     wb.save(proj / "f.xlsx")                       # openpyxl writes no cached values
     rows = P.meta(str(proj), "f.xlsx")["sheets"][0]["rows"]
     assert rows[1][0] == "=A1*2" and rows[0][1] == "=SUM(A1:A2)" and rows[0][0] == "5"
+
+
+def test_f24_formula_cells_without_cached_values_show_the_computed_value_when_libreoffice_runs(proj):
+    """With LibreOffice (the kept session), the preview shows what Excel would show (item 18 of the release review)."""
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["A1"], ws["A2"], ws["B1"] = 5, "=A1*2", "=SUM(A1:A2)"
+    wb.save(proj / "g.xlsx")
+    rows = P.meta(str(proj), "g.xlsx")["sheets"][0]["rows"]
+    if rows[1][0].startswith("="):
+        pytest.skip("no LibreOffice here to calculate it")
+    assert rows[1][0] == "10" and rows[0][1] == "15" and rows[0][0] == "5", rows
 
 
 def test_f05_a_picker_that_cannot_open_is_reported_not_treated_as_a_cancel(monkeypatch):

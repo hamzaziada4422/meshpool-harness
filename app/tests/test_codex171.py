@@ -283,7 +283,7 @@ def test_ask_edits_and_auto_modes(tmp_path):
     assert a._permit("exec_command", {"cmd": "ls -la"}) == (True, "")              # a read needs no question
     _script(a, [_call({"cmd": "touch x.txt", "workdir": "."}), {"role": "assistant", "content": "ok"}])
     a.send("go")
-    assert asked == [("bash", "Run this command?", "cd . && touch x.txt")]
+    assert asked == [("bash", "Run touch x.txt?", "cd . && touch x.txt")]      # the card says what runs
     assert not (root / "x.txt").exists() and "The user denied this action" in _outs(a)[0]
     e = _agent(root, mode="edits", approve=approve)
     assert e._permit("exec_command", {"cmd": "make"})[0] is False and asked[-1][2] == "make"   # commands still ask

@@ -13,9 +13,26 @@ from pathlib import Path
 
 APP = Path(__file__).resolve().parents[1]
 
+# What each access mode does, in one place: the web app (ui/app.js MODES), the terminal (first-run choice, /status)
+# and the settings help read these words, so the two surfaces never say different things. A test keeps app.js equal.
+MODE_INFO = {
+    "ask": ("Ask", "Works in this folder on its own where the computer can sandbox commands (Undo keeps every change); "
+                   "without a sandbox it asks first. Always asks before deleting, using the internet, installing "
+                   "software or going outside the folder."),
+    "edits": ("Accept edits", "File edits in this folder and local git commits never ask, sandbox or not. Commands "
+                              "follow the same rules as Ask."),
+    "auto": ("Full access", "Edits files and runs commands without asking. Destructive commands (rm -r, git reset "
+                            "--hard, sudo) still ask."),
+}
+# The same three modes in one short line each, for the terminal's footer ("Ask: runs in this folder, asks before risky
+# steps"). The names are MODE_INFO's; a test keeps the two together.
+MODE_FOOTER = {"ask": "runs in this folder, asks before risky steps",
+               "edits": "edits and local commits run without asking",
+               "auto": "asks only before destructive steps"}
+
 # Keys the web app shows and edits, in display order. (key, label, default, help)
 FIELDS = [
-    ("MESHPOOL_API_KEY", "API key", "", "Your Meshpool key (or any OpenAI-compatible key)."),
+    ("MESHPOOL_API_KEY", "API key", "", "Your meshpool key (or any OpenAI-compatible key)."),
     ("MESHPOOL_BASE_URL", "Endpoint", "https://llm.meshpool.ai/v1", "OpenAI-compatible base URL."),
     ("MH_MODEL", "Model", "deepseek-v4.1-flash", "Any model id the endpoint serves."),
     ("MH_AUTH_HEADER", "Key header", "", "Optional. The header that carries the key when it is not Authorization: "
@@ -23,7 +40,7 @@ FIELDS = [
     ("MH_AUTH_SCHEME", "Key scheme", "", "Optional. How the key is sent: bearer, basic, token or raw (the key alone)."),
     ("MESHPOOL_AZURE_API_VERSION", "Azure api-version", "", "Optional. The api-version sent to an Azure OpenAI "
      "endpoint. Empty uses the current GA version."),
-    ("MH_PROVIDER", "Provider", "meshpool", "What the models run on: meshpool (your Meshpool key), custom (another "
+    ("MH_PROVIDER", "Provider", "meshpool", "What the models run on: meshpool (your meshpool key), custom (another "
      "OpenAI-compatible key) or chatgpt (your ChatGPT sign-in)."),
     ("MH_REASONING_EFFORT", "Reasoning effort", "", "How hard models that take an effort level think: off, low, medium, "
      "high or xhigh. Empty: each model's own default. A chat can override it (/effort, --effort)."),
@@ -34,8 +51,9 @@ FIELDS = [
     ("MH_OTEL_CONTENT", "OpenTelemetry: include text", "0", "1 adds prompt, reply and tool-argument text (cut to 2 KB) "
      "to the exported spans. Off by default."),
     ("MH_AGENT_PERMISSIONS", "What agents may do without asking", "ask",
-     "Ask asks before every change and command. Accept edits changes files without asking but asks before "
-     "commands. Full access never asks."),
+     " ".join(f"{MODE_INFO[k][0]}: {MODE_INFO[k][1]}" for k in ("ask", "edits", "auto"))),
+    ("MH_SANDBOX_AUTO", "Ordinary work in the folder runs without asking", "1",
+     "0 asks before every command and file change, as before 0.0.18."),
     ("MH_COMMIT_TRAILER", "Line at the end of the agent's commits", "", "For example Co-Authored-By: meshpool "
      "<noreply@example.com>. The agent ends its own commit messages and pull request descriptions with it. Empty: "
      "nothing is added."),
@@ -54,7 +72,7 @@ FIELDS = [
      "plans/ in meshpool's data folder. off: no files."),
     ("MH_KEEP_DAYS", "Keep chats for (days)", "0", "Chats not touched for this many days are deleted, with their "
      "private folders; pinned and open chats are kept. 0 keeps every chat. Whole days, 1 or more. Checked when "
-     "Meshpool starts and once a day."),
+     "meshpool starts and once a day."),
     ("MH_FETCH_ALLOW", "Web pages: only these sites", "", "Comma-separated domains (example.com covers its subdomains). "
      "When set, agents read web pages only from these sites. Empty: any public site."),
     ("MH_FETCH_DENY", "Web pages: never these sites", "", "Comma-separated domains agents never read, even when allowed above."),
@@ -66,7 +84,7 @@ FIELDS = [
      "Off: no hook runs."),
     ("MH_ONBOARDED", "Setup finished", "0", "Set when the first-run steps are done."),
     ("MH_AUTO_SUBSCRIPTIONS", "Let Auto use your ChatGPT subscription", "0",
-     "On: Meshpool Auto may pick an agent on your ChatGPT sign-in when you did not choose it as the provider (it "
+     "On: meshpool Auto may pick an agent on your ChatGPT sign-in when you did not choose it as the provider (it "
      "uses that plan's limits). Off: Auto stays on the provider you chose."),
     ("MH_SUBAGENTS", "Sub-agents", "1", "On: an agent can hand self-contained parts of a job to sub-agents that "
      "work at the same time, each in a fresh context, and report back. Off: it does the parts itself."),
@@ -91,17 +109,17 @@ FIELDS = [
     ("MH_SUBAGENT_DEPTH", "Sub-agent levels", "1", "1: sub-agents do their part themselves. 2 or 3: they may hand "
      "parts on to sub-agents of their own."),
     ("MH_MAX_INFLIGHT", "Model calls at the same time", "", "Per endpoint and key, across all chats and sub-agents. "
-     "Blank: automatic. Meshpool sizes it to the provider (16 on the Meshpool gateway, 32 on the major cloud APIs, 2 "
-     "on a local server, 8 on others) and lowers it when the provider answers too many requests. A number sets a "
+     "Blank: automatic. meshpool sizes it to the provider (16 on the meshpool gateway, 32 on the major cloud APIs, 2 "
+     "on a local server or Ollama, 8 on others) and lowers it when the provider answers too many requests. A number sets a "
      "fixed cap. While the endpoint is recovering from an outage, calls go one at a time."),
     ("MH_BROWSER_USE", "Browser use: which browser", "meshpool",
-     "meshpool: Meshpool's own browser window (default). installed: the Chrome, Edge or Brave on this computer, with a "
-     "profile folder that belongs to Meshpool (Chrome does not allow automation of your everyday profile). attach: "
+     "meshpool: meshpool's own browser window (default). installed: the Chrome, Edge or Brave on this computer, with a "
+     "profile folder that belongs to meshpool (Chrome does not allow automation of your everyday profile). attach: "
      "connect to a browser you started with --remote-debugging-port."),
     ("MH_BROWSER_CDP_URL", "Browser use: debugging address (attach)", "http://127.0.0.1:9222",
      "Where your browser listens when you started it with --remote-debugging-port=9222 and its own --user-data-dir."),
     ("MH_BROWSER_HEADLESS", "Browser use: show a window", "",
-     "Empty (the default): Meshpool's browser stays hidden and shows inside the app, in the Browser panel. 0: it also "
+     "Empty (the default): meshpool's browser stays hidden and shows inside the app, in the Browser panel. 0: it also "
      "opens a window of its own."),
     ("MH_BROWSER_APP", "Browser use: which installed browser", "",
      "chrome, edge or brave. Empty: the first one found."),
@@ -117,6 +135,11 @@ FIELDS = [
     ("MH_SANDBOX_NETWORK", "Network for sandboxed commands", "", "Empty or 1 = commands may use the network. 0 = no network inside the sandbox."),
     ("MH_SHELL_ENV_ALLOW", "Secrets the agent's commands may see", "", "Optional. Comma-separated variable names (for example OPENAI_API_KEY) kept in the "
      "environment of the agent's commands. Everything named like a key, token, secret, password or credential is removed otherwise."),
+    ("MH_TIPS", "Show tips", "1", "1 (default): meshpool now and then suggests a feature (a tip card in the app, a "
+     "suggested prompt in the terminal). 0: no tips, in the app and in the terminal."),
+    ("MH_LOOK_REVIEW", "Look at web pages it makes", "1","1 (default): before it says a web page, document, deck, "
+     "sheet or chart is done, meshpool renders it (a headless browser at desktop and phone width, or LibreOffice), "
+     "measures what is wrong and has the model check it against the request and fix it, at most twice. 0: off."),
     ("MH_AUTO_CHECK", "Check after edits", "off", "off, lint, test or both: after a Code chat edits files, run the project's linter and/or the tests "
      "for the touched files, and give failures back to the agent once."),
     ("MH_ACP_IDLE_S", "Agent idle limit (seconds)", "300", "A connected coding agent that sends nothing for this long during a turn is stopped and restarted."),
@@ -151,6 +174,20 @@ def home() -> Path:
     it), else the per-user data folder. Never the source tree: a checkout must stay clean (C-02, C-90)."""
     h = os.environ.get("MESHPOOL_HOME")
     return Path(h).expanduser() if h else user_home_default()
+
+
+def upload_roots(chat: str | None = None) -> list[Path]:
+    """The attached-file folders one chat may read: its own runs/_uploads/chat-<id> and the folders that belong to no
+    chat (the company profile's files). Never _uploads itself, which lists every chat, and never another chat's
+    folder (release review, 0.0.18: dropped files moved there, and any chat could read every other chat's)."""
+    try:
+        up = (runs_dir() / "_uploads").resolve()
+        out = [up / f"chat-{chat}"] if chat else []
+        if up.is_dir():
+            out += [d.resolve() for d in up.iterdir() if d.is_dir() and not d.name.startswith("chat-")]
+        return out
+    except OSError:
+        return []
 
 
 def runs_dir() -> Path:
@@ -331,6 +368,18 @@ MODE_ALIASES = {"ask": "ask", "manual": "ask", "supervised": "ask", "default": "
                 "auto-accept": "edits", "edit": "edits",
                 "auto": "auto", "full": "auto", "full access": "auto", "full-access": "auto", "full_access": "auto",
                 "fullaccess": "auto", "bypass": "auto"}
+
+
+def tips_on() -> bool:
+    """"Show tips" (Settings, MH_TIPS): on unless it is 0. The app and the terminal both read this one setting; an
+    environment value for this process wins."""
+    v = os.environ.get("MH_TIPS")
+    if v is None:
+        try:
+            v = read().get("MH_TIPS")
+        except OSError:
+            v = None
+    return str(v if v is not None else "1").strip().lower() not in ("0", "off", "false", "no")
 
 
 def normalize_mode(v, default: str | None = "ask") -> str | None:
@@ -681,13 +730,13 @@ def system_check() -> list[dict]:
     from meshpool_harness import bundled
     git = bundled.bundled_git() if bundled.packaged() else shutil.which("git")
     rows.append({"name": "Git", "optional": True, "ok": bool(git),
-                 "detail": (f"{git} (ships with Meshpool)" if bundled.packaged() else git) if git else "not found",
-                 "fix": ("Missing from this install; reinstall Meshpool." if bundled.packaged() else
+                 "detail": (f"{git} (ships with meshpool)" if bundled.packaged() else git) if git else "not found",
+                 "fix": ("Missing from this install; reinstall meshpool." if bundled.packaged() else
                          "Optional. Used to spot edited tests and for pull requests. On a Mac, run: xcode-select --install")})
     node = bundled.node_exe()
     rows.append({"name": "Node.js", "optional": True, "ok": bool(node),
-                 "detail": (f"{node} (ships with Meshpool)" if bundled.packaged() else node) if node else "not found",
-                 "fix": ("Missing from this install; reinstall Meshpool." if bundled.packaged() else
+                 "detail": (f"{node} (ships with meshpool)" if bundled.packaged() else node) if node else "not found",
+                 "fix": ("Missing from this install; reinstall meshpool." if bundled.packaged() else
                          "Optional. Pi runs on Node.js (the app includes it); from the command "
                          "line, install Node.js 22 or newer.")})
     try:
@@ -718,15 +767,18 @@ def system_check() -> list[dict]:
     lo = office_runtime.describe()
     rows.append({"name": "LibreOffice", "optional": True, "ok": bool(lo["path"]),
                  "detail": f"{lo['path']} ({lo['note']})" if lo["path"] else lo["note"],
-                 "fix": "Optional. Meshpool uses only its own LibreOffice (the copy inside the app), never one you "
-                        "installed. With it, Meshpool checks spreadsheet formula results, "
+                 "fix": "Optional. meshpool uses only its own LibreOffice (the copy inside the app), never one you "
+                        "installed. With it, meshpool checks spreadsheet formula results, "
                         "renders slides to review them and converts Office files. Files are complete without it."})
     rows.extend(_bundled_program_rows(bundled))
     rows.append({"name": "Slide icons", "optional": True, "ok": True, "detail": "built in",
-                 "fix": "Not needed: icons ship pre-rendered with Meshpool."})
+                 "fix": "Not needed: icons ship pre-rendered with meshpool."})
     try:                                    # the model's context window and where that number came from
         from meshpool_harness.core import context as _ctx
-        rows.append({"name": "Context window", "optional": True, "ok": True, "detail": _ctx.describe(),
+        # Shown in Settings: plain words, not "context 1,000k (from provider); older steps are summarized above 120k".
+        plain = re.sub(r"^context (\S+) \(([^)]+)\); older steps are summarized above (\S+) tokens$",
+                       r"Up to \1 tokens per chat (\2). Past \3, older steps are summed up to make room.", _ctx.describe())
+        rows.append({"name": "Context window", "optional": True, "ok": True, "detail": plain,
                      "fix": "Set MESHPOOL_CONTEXT_WINDOW (tokens) if this is wrong for your model."})
     except Exception:  # noqa: BLE001 - a check must report, not crash
         pass
@@ -748,14 +800,14 @@ def _bundled_program_rows(bundled) -> list[dict]:
             if why:
                 rows.append({"name": label, "optional": True, "ok": False, "detail": "needs macOS 12 or later", "fix": why})
             elif exe:
-                tail = " (ships with Meshpool)" if mine else ""
+                tail = " (ships with meshpool)" if mine else ""
                 rows.append({"name": label, "optional": True, "ok": bool(ver),
                              "detail": f"{ver or 'found but did not start'} at {exe}{tail}",
-                             "fix": "Missing from this install; reinstall Meshpool." if not ver and bundled.packaged() else
+                             "fix": "Missing from this install; reinstall meshpool." if not ver and bundled.packaged() else
                                     f"Optional. {label} {uses}."})
             else:
                 rows.append({"name": label, "optional": True, "ok": False, "detail": "not found",
-                             "fix": ("Missing from this install; reinstall Meshpool." if bundled.packaged() else
+                             "fix": ("Missing from this install; reinstall meshpool." if bundled.packaged() else
                                      f"Optional. {label} {uses}. The desktop app includes it; for a terminal install, "
                                      "install it with your package manager.")})
         except Exception as e:  # noqa: BLE001
@@ -776,7 +828,7 @@ def _bundled_program_rows(bundled) -> list[dict]:
         ok = len(have) == 3
         rows.append({"name": "Notebooks", "optional": True, "ok": ok,
                      "detail": ", ".join(f"{k} {v}" for k, v in have.items()) if have else "not installed",
-                     "fix": "" if ok else ("Missing from this install; reinstall Meshpool." if bundled.packaged() else
+                     "fix": "" if ok else ("Missing from this install; reinstall meshpool." if bundled.packaged() else
                                            "The desktop app includes them. In a terminal install: pip install nbformat "
                                            "nbconvert ipykernel")})
     except Exception as e:  # noqa: BLE001

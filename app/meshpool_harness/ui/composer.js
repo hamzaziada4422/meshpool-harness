@@ -79,14 +79,14 @@ function styleMenu(anchor) {
 // The default for new chats is kept on this computer; a chat keeps the harness it started with.
 const modeHarness = () => store("harness_default") || "meshpool-auto";
 const harnessChoices = () => S.harnesses.filter(h => !h.error && h.available !== false && h.id !== "meshpool-auto");
-function harnessShort() { const c = cfg().harness; return c === "meshpool-auto" || !c ? "Auto" : (c.startsWith("meshpool") ? "Meshpool" : harness(c).name); }
+function harnessShort() { const c = cfg().harness; return c === "meshpool-auto" || !c ? "Auto" : (c.startsWith("meshpool") ? "meshpool" : harness(c).name); }
 function pickHarness(id) {
   if (S.cur) { if (id === S.cur.view.harness?.id || (id === "meshpool-auto" && S.cur.auto)) return; toast("An agent can’t change mid-chat, so this started a new chat with " + (id === "meshpool-auto" ? "Auto" : harness(id).name) + "."); newThread(); }
   S.draft.harness = id; renderBar(); renderHero();
 }
 function harnessMenuItems() {
   const c = cfg().harness, auto = !S.cur ? c === "meshpool-auto" : !!S.cur.auto;
-  return [{label: "Auto (recommended)", desc: "Meshpool picks the agent that suits each request", checked: auto ? true : undefined, fn: () => pickHarness("meshpool-auto")},
+  return [{label: "Auto (recommended)", desc: "meshpool picks the agent that suits each request", checked: auto ? true : undefined, fn: () => pickHarness("meshpool-auto")},
     ...harnessChoices().map(h => ({label: h.name, desc: h.ready === false ? "Needs setup" : (h.tagline || h.description || ""), checked: !auto && h.id === c ? true : undefined, fn: () => {
       if (h.ready === false) return openSettings(h.login ? "harnesses" : "general");
       pickHarness(h.id); }}))];
@@ -110,42 +110,47 @@ const EFFORT_NAME = {auto: "Auto", low: "Low", medium: "Medium", high: "High"};
 function effortMenuItems(c) {
   if (S.cur && c.effort == null) return [{head: "Effort"}, {label: "Set by this agent", desc: "This agent chooses its own effort.", checked: true, fn: () => {}}];
   const cur = c.effort || "auto";
-  const rows = [["auto", "Meshpool sizes the effort to each request: quick questions stay quick, big jobs get more steps."],
+  const rows = [["auto", "meshpool sizes the effort to each request: quick questions stay quick, big jobs get more steps."],
     ["low", "Least thinking: fastest and cheapest. For simple, clear asks."], ["medium", "More thinking before it acts."],
     ["high", "The most thinking the model offers. Slower and uses more tokens. Models without effort levels ignore it."]];
   return [{head: "Effort"}, ...rows.map(([id, desc]) => ({label: EFFORT_NAME[id], desc, checked: id === cur ? true : undefined, fn: () => setEffort(id)}))];
 }
 function modelMenu(anchor) {
   const c = cfg(), M = S.models || {models: [], groups: []};
-  const rows = modelsForMenu().map((m, i) => ({label: modelName(m.id) + (provOf(m.id) === "chatgpt" ? " · ChatGPT" : ""), desc: (m.caps || []).join(", ") || (provOf(m.id) === "chatgpt" ? "Through your ChatGPT sign-in" : m.id === M.default ? "Your default model" : "From your Meshpool endpoint"), checked: m.id === c.model ? true : undefined, key: String(i + 1), fn: () => pickModel(m.id)}));
+  const rows = modelsForMenu().map((m, i) => ({label: modelName(m.id) + (provOf(m.id) === "chatgpt" ? " · ChatGPT" : ""), desc: (m.caps || []).join(", ") || (provOf(m.id) === "chatgpt" ? "Through your ChatGPT sign-in" : m.id === M.default ? "Your default model" : "From your meshpool endpoint"), checked: m.id === c.model ? true : undefined, key: String(i + 1), fn: () => pickModel(m.id)}));
+  // Chat mode: the choice of agent is for the few who want it, under "Advanced" and called "Other agents" (no "Harness").
+  const chatUi = S.cur ? chatMode() : S.mode !== "code";
+  const agent = {label: chatUi ? "Other agents" : "Harness", note: S.cur && !S.cur.auto ? harness(c.harness).name.replace(/^meshpool .*/i, "meshpool") : harnessShort(), sub: harnessMenuItems()};
   ctxMenu({type: "click", currentTarget: anchor}, [
     {head: S.cur ? "Model · this chat" : "Model · new chats"},
     ...(rows.length ? rows : [{label: "No models yet", desc: "Add a key in Settings to see models", fn: () => openSettings("general")}]),
     {sep: true},
-    {label: "Harness", note: S.cur && !S.cur.auto ? harness(c.harness).name.replace(/^Meshpool .*/, "Meshpool") : harnessShort(), sub: harnessMenuItems()},
+    ...(chatUi ? [] : [agent]),
     {label: "Effort", note: EFFORT_NAME[c.effort || ""] || "Auto", sub: effortMenuItems(c)},
     {label: "More models", more: true, fn: () => modelPop(anchor)},
+    ...(chatUi ? [{sep: true}, {head: "Advanced"}, agent] : []),
   ], {cls: "modelmenu", up: true});
 }
 
 /* ---------- the row under the composer ---------- */
-const greet = () => { const h = new Date().getHours(), n = firstName(); return (h < 5 ? "Working late" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening") + (n ? ", " + n : ""); };
+// The home title names the context: the project the next chat goes into, else "New chat". No greeting.
+const heroTitle = () => (S.pj || []).find(p => p.id === S.draft?.pid)?.name || "New chat";
 function renderSel() {
   const c = cfg(), code = S.mode === "code", home = !S.cur && S.view === "chat";
-  const label = c.model ? modelName(c.model) + (provOf(c.model) === "chatgpt" ? " · ChatGPT" : "") : "Model";
+  const chatUi = S.cur ? chatMode() : !code;      // Chat mode keeps the model name in the picker's list, not on the page
+  const label = chatUi ? "Model" : c.model ? modelName(c.model) + (provOf(c.model) === "chatgpt" ? " · ChatGPT" : "") : "Model";
+  const eff = EFFORT_NAME[c.effort || ""] || "Auto", perm = MODE_NAME[c.mode] || "Ask";   // the muted word is the effort
   const pj = S.pj.find(p => p.id === S.draft.pid);
   const root = S.draft.project, mg = isMgd(root);
   let left = "";
   if (home && !code) left = `<button class="sel" id="projSel" aria-haspopup="listbox">${pj ? esc(clip(pj.name, 28)) : "Project"}${ICON.chev}</button>`;
   else if (home && code) left = `<button class="sel" id="envSel" aria-haspopup="listbox">${mg ? ICON.cloud : ICON.monitor}<span>${root ? esc(clip(projName(root), 24)) : "Choose a folder"}</span>${ICON.chev}</button><button class="sel" id="repoSel" aria-haspopup="listbox">${ICON.pr}<span>${mg ? esc(clip(projName(root), 22)) : "Repo"}</span>${ICON.chev}</button>`;
   else left = `<span class="disc">Answers can be wrong. Check what matters.</span>`;
-  const html = `<span class="sl">${left}</span><span class="sr2"><button class="sel mdl" id="mPill" aria-haspopup="menu" data-tip="Choose a model" data-tip-pos="above"><span class="lbl">${esc(label)}</span><em>Auto</em></button><button class="sel ${c.mode === "auto" ? "hot" : ""}" id="aPill" aria-haspopup="menu" data-tip="What it may do without asking" data-tip-pos="above">${esc(MODE_NAME[c.mode] || "Ask")}</button></span>`;
+  const html = `<span class="sl">${left}</span><span class="sr2"><button class="sel mdl" id="mPill" aria-haspopup="menu" aria-label="Model: ${esc(c.model ? modelName(c.model) : label)}, effort: ${esc(eff)}" data-tip="Model, and how hard it thinks (effort: ${esc(eff)})" data-tip-pos="above"><span class="lbl">${esc(label)}</span><em>${esc(eff)}</em></button><button class="sel ${c.mode === "auto" ? "hot" : ""}" id="aPill" aria-haspopup="menu" aria-label="Permissions: ${esc(perm)}" data-tip="Permissions: what it may do without asking (${esc(perm)})" data-tip-pos="above">${esc(perm)}</button></span>`;
   if (setHTML($("#selrow"), html, true)) {
     $("#mPill").onclick = e => modelMenu(e.currentTarget);
     $("#aPill").onclick = e => permMenu(e.currentTarget);
-    $("#projSel")?.addEventListener("click", e => projectSelector(e.currentTarget));
-    $("#envSel")?.addEventListener("click", e => envSelector(e.currentTarget));
-    $("#repoSel")?.addEventListener("click", e => repoSelector(e.currentTarget));
+    for (const [id, fn] of [["projSel", projectSelector], ["envSel", envSelector], ["repoSel", repoSelector]]) { const b = $("#" + id); if (b) b.onclick = e => fn(e.currentTarget); }
   }
 }
 function renderBar() {
@@ -161,19 +166,20 @@ function renderBar() {
     <button class="send ${c.busy ? "add" : ""}" id="sendBtn" data-tip="${c.busy ? "Add to the task" : "Send"}" data-kbd="Enter" aria-label="${c.busy ? "Add to the task" : "Send"}">${ICON.send}</button>`;
   if (setHTML($("#cbar"), barHTML, true)) {       // rebuilt only when something in it changed; focus and hover survive a run
     $("#attBtn").onclick = e => plusMenu(e.currentTarget);
-    $("#planChip")?.addEventListener("click", () => setPlan(false));
+    const on = (id, fn) => { const b = $("#" + id); if (b) b.onclick = fn; };    // onclick: a kept button is bound once
+    on("planChip", () => setPlan(false));
     window.cbar010bind?.();
-    $("#styleChip")?.addEventListener("click", e => styleMenu(e.currentTarget));
-    $("#sendBtn")?.addEventListener("click", () => sendNow(false));
-    $("#stopBtn")?.addEventListener("click", stopNow);
-    $("#intrBtn")?.addEventListener("click", () => { if ($("#input").value.trim() || S.attachments.length) sendNow(true); else { $("#input").focus(); toast("Type what to do instead, then press Send now."); } });
+    on("styleChip", e => styleMenu(e.currentTarget));
+    on("sendBtn", () => sendNow(false));
+    on("stopBtn", stopNow);
+    on("intrBtn", () => { if ($("#input").value.trim() || S.attachments.length) sendNow(true); else { $("#input").focus(); toast("Type what to do instead, then press Send now."); } });
   }
   renderSel();
   const goal = S.cur?.view?.goal;
   const touch = matchMedia("(pointer: coarse)").matches;
   const hintHTML = (goal ? `<span class="goalh" title="${esc(goal)}">Goal: <b>${esc(clip(goal, 70))}</b> <button class="linkbtn" id="goalClr">Clear</button></span>${c.busy && !touch ? " · " : ""}` : "")
     + (c.busy && !touch ? `Enter adds to the task${store("escstop") === "off" ? "" : " · Esc stops"}` : "");
-  if (setHTML($("#hintTxt"), hintHTML)) { $("#goalClr")?.addEventListener("click", () => setGoal("")); }
+  if (setHTML($("#hintTxt"), hintHTML)) { const g = $("#goalClr"); if (g) g.onclick = () => setGoal(""); }
   const inp = $("#input"), pj = S.view === "project" ? S.pj.find(p => p.id === S.pjId) : null;
   const code = S.mode === "code" && !S.cur;
   const ph = c.busy ? "Reply" : S.cur ? "Reply" : pj ? `Start a chat in ${pj.name}` : code ? "Describe a task or ask a question" : "What would you like to do?";
@@ -198,7 +204,7 @@ function envSelector(anchor) {
   listPop({anchor, placeholder: "Search folders", width: 320,
     groups: () => [
       {label: "Local folder", items: [{label: "Choose a folder…", icon: ICON.folderopen, desc: "A folder on this computer", fn: chooseDraftFolder}, ...local.slice(0, 8).map(p => ({label: p.name, icon: ICON.monitor, desc: shortPath(p.path), check: p.path === S.draft.project, fn: use(p)}))]},
-      {label: "GitHub workspace", items: [{label: "Work on a GitHub repository…", icon: ICON.pr, desc: "Meshpool keeps its own copy", fn: () => openGithubPicker({title: "Work on a GitHub repository", cta: "Use repository", onReady: r => { S.draft.project = r.path; renderBar(); renderTop(); renderHero(); toast(`${r.name} on ${r.branch} is ready`); }})}, ...gh.map(p => ({label: p.name, icon: ICON.cloud, check: p.path === S.draft.project, fn: use(p)}))]},
+      {label: "GitHub workspace", items: [{label: "Work on a GitHub repository…", icon: ICON.pr, desc: "meshpool keeps its own copy", fn: () => openGithubPicker({title: "Work on a GitHub repository", cta: "Use repository", onReady: r => { S.draft.project = r.path; renderBar(); renderTop(); renderHero(); toast(`${r.name} on ${r.branch} is ready`); }})}, ...gh.map(p => ({label: p.name, icon: ICON.cloud, check: p.path === S.draft.project, fn: use(p)}))]},
     ],
     footer: [{label: "Manage folders", icon: ICON.gear, always: true, fn: () => openSettings("permissions")}]});
 }
@@ -223,8 +229,8 @@ function repoSelector(anchor) {
 
 /* ================================== home ================================== */
 const CARDS = () => [
-  {id: "key", show: S.settings && !S.settings.has_key && !S.settings.ready, title: "Add your " + (S.settings?.key_name || "Meshpool") + " key", text: "Meshpool needs a key to talk to a model. It takes a minute.", cta: "Add key", fn: () => openSettings("general")},
-  {id: "github", show: (S.connCache || []).some(c => /github/i.test(c.id || c.name) && !c.connected), title: "Connect GitHub", text: "Let Meshpool work on your repositories and pull requests.", cta: "Connect", fn: () => openSettings("connectors")},
+  {id: "key", show: S.settings && !S.settings.has_key && !S.settings.ready, title: "Add your " + lowBrand(S.settings?.key_name || "meshpool") + " key", text: "meshpool needs a key to talk to a model. It takes a minute.", cta: "Add key", fn: () => openSettings("general")},
+  {id: "github", show: (S.connCache || []).some(c => /github/i.test(c.id || c.name) && !c.connected), title: "Connect GitHub", text: "Let meshpool work on your repositories and pull requests.", cta: "Connect", fn: () => openSettings("connectors")},
   {id: "project", show: !!S.settings?.ready && !(S.pj || []).length, title: "Keep related work together", text: "A project gives its chats shared instructions, files and memory.", cta: "New project", fn: () => newProjectFlow()},
 ];
 function waitingList() { return chatList().filter(t => isCodeThread(t) && t.state === "waiting").slice(0, 3); }
@@ -235,16 +241,14 @@ function renderHero() {
   const cardHTML = card ? `<div class="setupcard" data-card="${card.id}"><span class="sci">${ICON.spark || ICON.bolt}</span><div class="sct"><b>${esc(card.title)}</b><span>${esc(card.text)}</span></div><button class="btn" id="cardGo">${esc(card.cta)}</button><button class="iconbtn" id="cardX" aria-label="Dismiss">${ICON.x}</button></div>` : "";
   const f = S.draft.project;
   if (S.mode === "code") {
-    const w = waitingList(), tip = !(store("tips_off") || []).includes("plan");
+    const w = waitingList();   // no tip on a fresh page: the Plan tip comes after the first reply (chat010.js)
     col.innerHTML = `<div class="hero code"><div class="chome"><img class="mlogo-mark" src="/brand/mark.png" alt="" width="40" height="40">
       ${w.length ? `<div class="waitcard" role="list">${w.map(t => `<button class="wrow" role="listitem" data-open="${esc(t.id)}"><span class="wl">Waiting</span><span class="wt">${esc(t.title)}</span></button>`).join("")}</div>` : `<h1>Start a coding session</h1><p class="sub">${f ? `Working in <b>${esc(projName(f))}</b>.` : "Choose a folder or a repository below, then describe the task."}</p>`}</div>
-      ${tip ? `<div class="tipbar">${ICON.bolt}<span>Tip: for bigger changes, turn on Plan first in the plus menu. Meshpool shows its plan before it edits anything.</span><button class="btn" id="tipTry">Try it</button><button class="iconbtn" id="tipX" aria-label="Dismiss">${ICON.x}</button></div>` : ""}</div>`;
+    </div>`;
     $$(".wrow", col).forEach(b => b.onclick = () => openThread(b.dataset.open));
-    $("#tipTry")?.addEventListener("click", () => { setPlan(true); store("tips_off", [...(store("tips_off") || []), "plan"]); renderHero(); });
-    $("#tipX")?.addEventListener("click", () => { store("tips_off", [...(store("tips_off") || []), "plan"]); renderHero(); });
     return;
   }
-  col.innerHTML = `<div class="hero"><h1><img class="mlogo-mark" src="/brand/mark.png" alt="" width="34" height="34">${esc(greet())}</h1>${f ? `<p class="sub">Working in <button class="linkbtn" id="heroProj" data-tip="Change folder">${esc(projName(f))}</button>. <button class="linkbtn" id="heroNoProj">Don’t use a folder</button></p>` : ""}
+  col.innerHTML = `<div class="hero"><h1><img class="mlogo-mark" src="/brand/mark.png" alt="" width="28" height="28">${esc(heroTitle())}</h1>${f ? `<p class="sub">Working in <button class="linkbtn" id="heroProj" data-tip="Change folder">${esc(projName(f))}</button>. <button class="linkbtn" id="heroNoProj">Don’t use a folder</button></p>` : ""}
     ${cardHTML}<div class="starters">${STARTERS.map(([a, b]) => `<button data-s="${esc(b)}">${esc(a)}</button>`).join("")}</div></div>`;
   $("#heroProj")?.addEventListener("click", chooseDraftFolder);
   $("#heroNoProj")?.addEventListener("click", () => { S.draft.project = ""; renderTop(); renderBar(); renderHero(); });

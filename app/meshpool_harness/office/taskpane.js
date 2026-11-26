@@ -24,6 +24,17 @@ function splitRow(line) {
   return out;
 }
 
+/** What to show when meshpool answered a request with an error: its own words, else what the status means. */
+function failText(status, j) {
+  const said = j && typeof j.error === "string" ? j.error.trim() : "";
+  if (said) return said;
+  if (status === 403) return "meshpool refused this request from the panel. Close the panel and open it again.";
+  if (status === 404) return "meshpool does not know this request: the app may be older than this panel. Update meshpool, then open the panel again.";
+  if (status === 429) return "meshpool is busy with other requests from this panel. Wait a moment, then try again.";
+  if (status >= 500) return `meshpool had a problem answering (status ${status}) and gave no reason. Try again; if it keeps happening, restart the meshpool app.`;
+  return `meshpool could not do that (status ${status}) and gave no reason. Try again.`;
+}
+
 const SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
 
 /** The first markdown table in a reply, as rows of cells (header first), or null. */
@@ -169,7 +180,7 @@ function safeFormulas(m) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = {esc, parseTable, firstCode, plain, toMatrix, mdToHtml, buildMessage, cellsText, splitAddress, safeFormulas};
+  module.exports = {esc, parseTable, firstCode, plain, toMatrix, mdToHtml, buildMessage, cellsText, splitAddress, safeFormulas, failText};
 }
 
 // ------------------------------------------------------------------------------------------- the panel
@@ -177,22 +188,80 @@ if (typeof document !== "undefined") (function () {
   window.__mpParsed = true;                          // compat.js: this file ran, so the Office version is new enough
   const $ = id => document.getElementById(id);
   const S = {id: null, since: 0, host: "", busy: false, bot: null, live: "", final: "", asking: false, gen: 0,
-             polling: false, ctxSeq: 0};
-  const meta = document.querySelector('meta[name="mp-token"]');
-  const TOKEN = meta ? meta.getAttribute("content") : "";
+             polling: false, ctxSeq: 0, pairing: false};
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+  // The page carries no token: anything on this computer can fetch it. The panel pairs instead (ui/office_pair.py):
+  // the user allows its code in the meshpool app, and only then does the panel get a session token. The token is kept
+  // in memory (sessionStorage), never on disk, and lasts until meshpool quits.
+  const KEY = "mp-session";
+  let TOKEN = "";
+  try { TOKEN = sessionStorage.getItem(KEY) || ""; } catch (e) { TOKEN = ""; }
+  const setToken = t => { TOKEN = t || ""; try { if (TOKEN) sessionStorage.setItem(KEY, TOKEN); else sessionStorage.removeItem(KEY); } catch (e) { /* memory only */ } };
 
-  async function api(method, path, body) {
+  async function call(method, path, body, headers) {
     let r;
     try {
-      r = await fetch(path, {method, headers: {"X-Meshpool-Token": TOKEN, "Content-Type": "application/json"},
+      r = await fetch(path, {method, headers: Object.assign({"Content-Type": "application/json"}, headers || {}),
                              body: body ? JSON.stringify(body) : undefined, cache: "no-store"});
     } catch (e) {
       throw new Error("meshpool is not answering. Start the meshpool app on this computer, then try again.");
     }
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.error || `meshpool answered ${r.status}.`);
+    return [r, j];
+  }
+
+  async function api(method, path, body) {
+    const [r, j] = await call(method, path, body, {"X-Meshpool-Token": TOKEN});
+    if (r.status === 401) {                          // never paired, or meshpool restarted: connect again
+      setToken("");
+      pair();
+      throw new Error("This panel is not connected to meshpool. Allow it in the meshpool app, then try again.");
+    }
+    if (!r.ok) throw new Error(failText(r.status, j));
     return j;
+  }
+
+  // ---- pairing: the panel shows a code, the user allows that code in the meshpool app
+  function pairScreen(on) {
+    document.body.classList.toggle("unpaired", on);
+    $("pair").hidden = !on;
+  }
+
+  async function pair() {
+    if (S.pairing) return;
+    S.pairing = true;
+    pairScreen(true);
+    $("pairAgain").hidden = true;
+    $("pairCode").hidden = false;
+    $("pairCode").textContent = "…";
+    $("pairNote").textContent = "Asking meshpool…";
+    const fail = text => { $("pairCode").hidden = true; $("pairNote").textContent = text; $("pairAgain").hidden = false; };
+    try {
+      const [r, j] = await call("POST", "/office/pair", {host: S.host});
+      if (!r.ok) return fail(failText(r.status, j));
+      $("pairCode").textContent = j.code;
+      $("pairNote").textContent = "Waiting for you to allow it in the meshpool app. Allow it only if the app shows this same code.";
+      const end = Date.now() + (j.expires_in || 120) * 1000;
+      while (Date.now() < end) {
+        await sleep(1500);
+        const [, c] = await call("POST", "/office/pair/check", {pair: j.pair});
+        if (c.state === "allowed" && c.token) { setToken(c.token); pairScreen(false); ready(); return; }
+        if (c.state === "denied") return fail("The request was denied in the meshpool app.");
+        if (c.state !== "pending") break;
+      }
+      fail("Nobody allowed the request in time.");
+    } catch (e) {
+      fail(e.message || String(e));
+    } finally {
+      S.pairing = false;
+    }
+  }
+
+  function ready() {
+    $("note").textContent = "";
+    api("GET", "/api/settings").then(s => {
+      if (!s.ready) $("note").textContent = "Set up a model in the meshpool app first.";
+    }).catch(e => { $("note").textContent = e.message; });
   }
 
   // ---- reading the document. light: for the "Include the selection" line only, so moving the cursor never reads
@@ -484,7 +553,7 @@ if (typeof document !== "undefined") (function () {
         break;
       }
       case "question_done": S.asking = false; $("send").disabled = S.busy; break;
-      case "error": note(ev.text || "Something went wrong.", true); break;
+      case "error": note(ev.text || "The chat stopped on an error, and meshpool sent no details. Try again, or open this chat in the meshpool app to see what happened.", true); break;
       case "turn_end": endTurn(); break;
     }
   }
@@ -636,10 +705,10 @@ if (typeof document !== "undefined") (function () {
     try {
       Office.context.document.addHandlerAsync(Office.EventType.DocumentSelectionChanged, () => { clearTimeout(S.t); S.t = setTimeout(showContext, 300); });
     } catch (e) { /* not every host reports selection changes */ }
+    $("pairAgain").onclick = pair;
     showContext();
-    api("GET", "/api/settings").then(s => {
-      if (!s.ready) $("note").textContent = "Set up a model in the meshpool app first.";
-    }).catch(e => { $("note").textContent = e.message; });
+    if (TOKEN) ready();                              // a session from earlier in this pane: checked, else pair again
+    else pair();
   }
 
   if (window.Office && Office.onReady) {

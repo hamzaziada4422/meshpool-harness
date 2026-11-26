@@ -25,14 +25,15 @@ OFFICE = frozenset(CAPS)
 # A file type named outright: enough on its own.
 _STRONG = {
     "presentation": r"power ?points?|pptx?s?|keynotes?|google slides|slide ?decks?|pitch ?decks?|slideshows?",
-    "document": r"word (?:docs?|documents?|files?)|docx?s?|google docs?",
+    # "docx" alone, not "doc" or "docs": in a code chat "docs" means documentation (docs/, "update the docs")
+    "document": r"word (?:docs?|documents?|files?)|docxs?|google docs?",
     "spreadsheet": r"excel(?: (?:files?|workbooks?|sheets?|models?))?|xlsx?s?|google sheets?",
     "pdf": r"pdfs?",
 }
 # A general word: counts when the message asks for something to be made.
 _WEAK = {
     "presentation": r"decks?|slides?|presentations?",
-    "document": r"documents?|docs?|memos?|reports?|proposals?|one[- ]pagers?|briefs?|letters?|white ?papers?",
+    "document": r"documents?|doc|memos?|reports?|proposals?|one[- ]pagers?|briefs?|letters?|white ?papers?",
     "spreadsheet": r"spreadsheets?|workbooks?|financial models?|trackers?",
     "pdf": r"",
 }
@@ -51,7 +52,9 @@ _DO_MAKE = re.compile(r"\b(make|create|build|generate|produce|prepare|put togeth
 
 
 def _rx(words: str) -> re.Pattern | None:
-    return re.compile(r"(?<![a-z0-9])(?:" + words + r")(?![a-z0-9])", re.I) if words else None
+    """A whole word that is not part of a path or a file name: "report" in report.py, "docs" in docs/index.md and
+    "slides" in src/slides/ name code, not a file to make. ".docx" on its own still counts."""
+    return re.compile(r"(?<![a-z0-9/\\])(?:" + words + r")(?![a-z0-9])(?![./\\]\w)", re.I) if words else None
 
 
 _STRONG_RX = {k: _rx(v) for k, v in _STRONG.items()}
@@ -59,7 +62,9 @@ _WEAK_RX = {k: _rx(v) for k, v in _WEAK.items()}
 SEP = "\n\n​"                       # notes only the model sees follow this (pace.SEP)
 
 
-_FILE = re.compile(r"[\w][\w .()-]*\.(?:xlsx?|xlsm|docx?|pptx?)(?![\w])", re.I)
+# A word, then name characters, then an office extension. The match may start only where a run of name characters
+# starts, so one long run (a pasted blob) is scanned once, not once per character: linear, not quadratic.
+_FILE = re.compile(r"(?<![\w .()-])[ .()-]*\w[\w .()-]*\.(?:xlsx?|xlsm|docx?|pptx?)(?![\w])", re.I)
 _EDIT = re.compile(r"\b(add|raise|lower|change|fix|update|replace|edit|modify|rename|delete|remove|insert|set|correct|"
                    r"adjust|increase|decrease|fill|append|reformat|format|sort|filter|swap|highlight|translate|"
                    r"proofread|tidy|clean up|shorten|rewrite|tweak|bump|apply)\b", re.I)
@@ -75,13 +80,22 @@ def edits(text: str) -> bool:
     return bool(_FILE.search(t) and _EDIT.search(t) and not _NEW.search(t))
 
 
+# A file the user already has, named by its type: "the PDF in this folder", "my Excel file from the bank". Not a file
+# to make unless the message also asks to make one (Maya: "an invoice (it's the PDF in this folder). How much do I owe
+# them?" got the hidden "make this PDF" note, and the reply talked about it).
+_HAVE = re.compile(r"\b(?:the|this|that|my|attached|your|their|our)\s+(?:attached\s+)?(?:" + "|".join(_STRONG.values())
+                   + r")\b(?=\s+(?:in|on|from|attached|here|above|below|you|i|they|she|he|we|that|which)\b)", re.I)
+
+
 def needs(text: str) -> list[str]:
     """The capabilities a message asks for, in CAPS order. Empty for a question about a file the user already has
-    ("summarize this pdf") unless it also asks to make one."""
+    ("summarize this pdf", "it's the PDF in this folder") unless it also asks to make one."""
     t = str(text or "").split(SEP)[0]
     if not t.strip() or edits(t):
         return []
     make = bool(_MAKE.search(t))
+    if not make:
+        t = _HAVE.sub(" ", t)
     if _QUESTION.search(t) or (_SUMMARY.search(t) and not _DO_MAKE.search(t)):
         return []
     if not make and _READ_ONLY.search(t):
@@ -157,7 +171,7 @@ def note(caps, harness: dict | None = None, direct: bool = False) -> str:
                 "(reopen it; recalculate through LibreOffice headless only when computed values are asked for) "
                 "and say where it is. Do not answer that "
                 "you cannot, or hand over code to paste. For open details pick sensible defaults and say which. Fix "
-                "real defects only.")
+                "real defects only. If the message does not ask for a new file, ignore this note.")
     how = "; ".join(f"{CAPS[c][0]}: {CAPS[c][1]}" for c in caps)
     return (SEP + f"[Meshpool] The user asks for {labels(caps)}. Make "
             + ("these files" if len(caps) > 1 else "this file")
@@ -165,7 +179,8 @@ def note(caps, harness: dict | None = None, direct: bool = False) -> str:
             "and say where it is. Do not answer that you cannot, or hand over code to paste. For open details use "
             "the recommended defaults (make_deck: brief_ok=true; make_deck and make_spreadsheet: save_as with the "
             "user's file name) and say which; ask at most one question, only if "
-            "it changes the whole file. Fix real defects only; rebuild at most once.")
+            "it changes the whole file. Fix real defects only; rebuild at most once. If the message does not ask "
+            "for a new file, ignore this note.")
 
 
 def pick(caps, current: str, ranked: list[str], ready: dict) -> str | None:

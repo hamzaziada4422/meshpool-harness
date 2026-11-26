@@ -35,6 +35,9 @@ _SLOTS = threading.BoundedSemaphore(max(1, (os.cpu_count() or 2) // 2))
 PDF_PAGES = 80                           # pages read per call when the caller does not name pages
 _CACHE_MAX = 300                         # files kept in the cache folder
 _NOT_CACHED = ("Could not read", "Meshpool cannot read", "[Meshpool] ")
+# Bumped whenever a reader changes what it returns: the cache outlives upgrades, and a file read by an older reader
+# kept its old text until the file itself changed (review, 0.0.18: tracked changes, footnotes, RTF, CSV encodings).
+READER_VERSION = 19
 
 
 def _cache_dir() -> Path:
@@ -45,7 +48,8 @@ def _cache_dir() -> Path:
 def _cache_key(p: Path, *args) -> str:
     import hashlib
     st = p.stat()
-    return hashlib.sha1(repr((str(p.resolve()), st.st_mtime_ns, st.st_size, PDF_PAGES, *args)).encode("utf-8")).hexdigest()
+    return hashlib.sha1(repr((READER_VERSION, str(p.resolve()), st.st_mtime_ns, st.st_size, PDF_PAGES, *args))
+                        .encode("utf-8")).hexdigest()
 
 
 def _cache_get(key: str) -> str | None:
@@ -100,8 +104,44 @@ def extract(path: str | Path, max_chars: int = MAX, sheet: str | None = None, pa
     return out
 
 
+OOXML = {".docx", ".docm", ".dotx", ".pptx", ".pptm", ".ppsx", ".potx", ".xlsx", ".xlsm", ".xltx"}
+
+
+def ole_kind(p: Path) -> str:
+    """For a file with an Office 2007+ name that is not a zip package: "encrypted" when it is a password-protected
+    Office file (an OLE container with an EncryptedPackage stream), "ole" for an old binary Office file saved under a
+    new name, else ""."""
+    try:
+        with open(p, "rb") as fh:
+            if fh.read(8) != b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+                return ""
+        try:
+            import olefile
+            with olefile.OleFileIO(str(p)) as ole:
+                return "encrypted" if ole.exists("EncryptedPackage") or ole.exists("EncryptionInfo") else "ole"
+        except Exception:  # noqa: BLE001  no olefile, or a damaged container: the signature is enough to say so
+            return "encrypted"
+    except OSError:
+        return ""
+
+
+def _protected(p: Path) -> str | None:
+    """A plain sentence for a password-protected or misnamed Office file (the parsers said "Package not found")."""
+    kind = ole_kind(p) if p.suffix.lower() in OOXML else ""
+    if kind == "encrypted":
+        return (f"{p.name} is password-protected (encrypted), so its text cannot be read. Ask the user to remove the "
+                "password (in Office: File, Info, Protect) and save it again, or to share a copy without one.")
+    if kind == "ole":
+        return (f"{p.name} is an old binary Office file saved with a {p.suffix} name. Open it in Office and save it as "
+                f"{p.suffix}, or convert it with LibreOffice, then read that.")
+    return None
+
+
 def _extract(p: Path, max_chars: int, sheet, pages, lang: str, ocr: str) -> str:
     ext = p.suffix.lower()
+    locked = _protected(p)
+    if locked:
+        return locked
     fn = {".pdf": _pdf, ".docx": _docx, ".docm": _docx, ".pptx": _pptx, ".pptm": _pptx, ".xlsx": _xlsx,
           ".xlsm": _xlsx, ".xls": _xls, ".csv": _csv, ".tsv": _csv, ".pbix": _pbix, ".pbit": _pbix,
           ".odt": _odf, ".ods": _odf, ".odp": _odf, ".rtf": _rtf, ".ipynb": _ipynb, ".eml": _eml,
@@ -123,8 +163,13 @@ def _extract(p: Path, max_chars: int, sheet, pages, lang: str, ocr: str) -> str:
         except Exception:  # noqa: BLE001
             pass
         return f"# {p.name}\nImage, {size}.\n\n" + ocr.describe(p, p.name, lang)
-    if not fn:
-        return p.read_text(encoding="utf-8", errors="replace")[:max_chars]
+    if not fn:                                     # plain text: only what is shown is read (a 3 GB log is not loaded)
+        with open(p, "rb") as fh:
+            raw = fh.read(max_chars * 4 + 4)
+        text, size = raw.decode("utf-8", errors="replace"), p.stat().st_size
+        if size > len(raw) or len(text) > max_chars:
+            text = text[:max_chars] + f"\n\n[... cut at {max_chars} characters of a {size:,}-byte file. Read it in parts.]"
+        return text
     try:
         kw = {}
         if fn in (_xlsx, _xls) and sheet:
@@ -137,10 +182,32 @@ def _extract(p: Path, max_chars: int, sheet, pages, lang: str, ocr: str) -> str:
     except ImportError as e:
         return f"Meshpool cannot read {ext} files in this install ({e})."
     except Exception as e:  # noqa: BLE001  damaged or unusual files
+        if ext in OOXML and _opens(p):             # the reader's limit, not a broken file (Daniel, 0.0.18: "could not
+            return (f"meshpool's reader could not read part of {p.name} ({type(e).__name__}: {e}). The file itself "  # parse it")
+                    "opens: this is a limit of the reader, not a damaged file. Do not tell the user the file is "
+                    "broken; read it another way (python-pptx, python-docx or openpyxl in a command).")
         return f"Could not read {p.name}: {type(e).__name__}: {e}"
     if len(out) > max_chars:
         out = out[:max_chars] + f"\n\n[... cut at {max_chars} characters of {len(out)}. Ask for specific pages or sheets.]"
+    if ext in (".pdf", ".docx", ".pptx"):
+        try:                                       # charts drawn as pictures have no text: say where they are (Daniel,
+            from meshpool_harness import docfigures as DF    # 0.0.18: "The report has no barriers chart")
+            fig = DF.note(p, DF.in_pages(DF.figures(p), pages if ext != ".docx" else None))
+            if fig:
+                out += "\n\n" + fig
+        except Exception:  # noqa: BLE001 - the note is extra; the text stands without it
+            pass
     return out
+
+
+def _opens(p: Path) -> bool:
+    """True when an Office file is a whole zip package with its main part: it opens, whatever a reader made of it."""
+    try:
+        with zipfile.ZipFile(p) as z:
+            names = set(z.namelist())
+            return z.testzip() is None and bool(names & {"word/document.xml", "ppt/presentation.xml", "xl/workbook.xml"})
+    except (OSError, zipfile.BadZipFile, RuntimeError, ValueError):
+        return False
 
 
 # ---------- PDF ---------------------------------------------------------------------------------------------------
@@ -263,21 +330,57 @@ def _picture_text(blobs: list[tuple[str, bytes]], ocr_mode: str) -> list[str]:
     return out
 
 
-def _docx(p: Path, ocr_mode: str = "auto") -> str:
-    import docx
-    d = docx.Document(str(p))
-    out = [f"# {p.name}"]
-    body = d.element.body
+_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_MC_FALLBACK = "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
+
+
+def _w_text(el) -> str:
+    """The text of a Word paragraph (or note) as it reads with every tracked change accepted: runs inside hyperlinks,
+    content controls, fields and insertions count; deleted and moved-away text does not, and the fallback copy of a
+    drawing is not read twice."""
+    out = []
+
+    def walk(e):
+        for c in e:
+            tag = c.tag if isinstance(c.tag, str) else ""
+            if tag in (_W + "del", _W + "moveFrom", _MC_FALLBACK, _W + "rPr", _W + "pPr", _W + "instrText"):
+                continue
+            if tag == _W + "t":
+                out.append(c.text or "")
+            elif tag == _W + "tab":
+                out.append("\t")
+            elif tag in (_W + "br", _W + "cr"):
+                out.append("\n")
+            elif tag == _W + "noBreakHyphen":
+                out.append("-")
+            else:
+                walk(c)
+    walk(el)
+    return "".join(out)
+
+
+def _paras_text(root) -> str:
+    """The paragraphs under root (a table cell, a header, a note) joined by spaces; a text box's paragraphs are read
+    once, as part of the paragraph that holds them."""
+    return " ".join(t for t in (_w_text(x).strip() for x in root.iter(_W + "p")
+                                if next(x.iterancestors(_W + "p"), None) is None) if t)
+
+
+def _docx_blocks(parent, d, out: list) -> None:
+    """Paragraphs and tables of a body (or a content control inside it) in order, as Markdown."""
     from docx.table import Table
     from docx.text.paragraph import Paragraph
-    for child in body.iterchildren():
-        tag = child.tag.rsplit("}", 1)[-1]
-        if tag == "p":
-            para = Paragraph(child, d)
-            t = para.text.strip()
+    for child in parent.iterchildren():
+        tag = child.tag if isinstance(child.tag, str) else ""
+        if tag == _W + "p":
+            t = _w_text(child).strip()
             if not t:
                 continue
-            st = (para.style.name if para.style is not None else "") or ""
+            para = Paragraph(child, d)
+            try:
+                st = (para.style.name if para.style is not None else "") or ""
+            except Exception:  # noqa: BLE001  a style id the styles part does not define
+                st = ""
             if st.startswith("Heading"):
                 lvl = re.sub(r"\D", "", st) or "1"
                 out.append("#" * min(6, int(lvl) + 1) + " " + t)
@@ -285,14 +388,61 @@ def _docx(p: Path, ocr_mode: str = "auto") -> str:
                 out.append("- " + t)
             else:
                 out.append(t)
-        elif tag == "tbl":
-            out.append(_md_table([[c.text.strip() for c in row.cells] for row in Table(child, d).rows]))
-    for s in d.sections:
-        for part in (s.header, s.footer):
-            t = " ".join(x.text for x in part.paragraphs if x.text.strip())
-            if t:
-                out.append(f"[{'header' if part is s.header else 'footer'}] {t}")
-                break
+        elif tag == _W + "tbl":
+            out.append(_md_table([[_paras_text(c._tc) for c in row.cells] for row in Table(child, d).rows]))
+        elif tag in (_W + "sdt", _W + "customXml"):          # content controls: a table of contents, a form field
+            content = child.find(_W + "sdtContent") if tag == _W + "sdt" else child
+            if content is not None:
+                _docx_blocks(content, d, out)
+
+
+def _docx_notes(p: Path) -> list[str]:
+    """Footnotes and endnotes, which python-docx does not read: "[^1] text" lines under their own headings."""
+    from lxml import etree
+    out = []
+    try:
+        with zipfile.ZipFile(str(p)) as z:
+            names = set(z.namelist())
+            for part, kind, title in (("word/footnotes.xml", "footnote", "Footnotes"),
+                                      ("word/endnotes.xml", "endnote", "Endnotes")):
+                if part not in names:
+                    continue
+                root = etree.fromstring(z.read(part), etree.XMLParser(resolve_entities=False, no_network=True))
+                rows = []
+                for n in root.iter(_W + kind):
+                    if n.get(_W + "type") in ("separator", "continuationSeparator", "continuationNotice"):
+                        continue
+                    t = _paras_text(n)
+                    if t:
+                        rows.append(f"[^{n.get(_W + 'id')}] {t}")
+                if rows:
+                    out.append(f"\n## {title}\n" + "\n".join(rows))
+    except Exception:  # noqa: BLE001  notes are extra: a damaged part never fails the read
+        return []
+    return out
+
+
+def _docx(p: Path, ocr_mode: str = "auto") -> str:
+    import docx
+    d = docx.Document(str(p))
+    out = [f"# {p.name}"]
+    _docx_blocks(d.element.body, d, out)
+    revs = [sum(1 for e in d.element.body.iter(_W + t) if e.getparent().tag != _W + "rPr") for t in ("ins", "del")]
+    shown = set()
+    for s in d.sections:                    # every section's header and footer (a linked one is the same text)
+        for label, part in (("header", s.header), ("footer", s.footer), ("first page header", s.first_page_header),
+                            ("first page footer", s.first_page_footer), ("even page header", s.even_page_header),
+                            ("even page footer", s.even_page_footer)):
+            if part.is_linked_to_previous:
+                continue
+            t = _paras_text(part._element)
+            if t and (label, t) not in shown:
+                shown.add((label, t))
+                out.append(f"[{label}] {t}")
+    out += _docx_notes(p)
+    if revs[0] or revs[1]:
+        out.append(f"[tracked changes: {revs[0]} insertion(s) and {revs[1]} deletion(s) not yet accepted; the text "
+                   "above reads as if they were accepted]")
     blobs = [(Path(r.target_ref).name, r.target_part.blob) for r in d.part.rels.values()
              if "image" in r.reltype and not r.is_external]
     out += _picture_text(blobs, ocr_mode)
@@ -331,15 +481,23 @@ def _pptx(p: Path, ocr_mode: str = "auto") -> str:
     blobs = []
     for i, s in enumerate(prs.slides, 1):
         lines = []
-        title = s.shapes.title.text.strip() if s.shapes.title is not None and s.shapes.title.has_text_frame else ""
+        try:
+            title = s.shapes.title.text.strip() if s.shapes.title is not None and s.shapes.title.has_text_frame else ""
+        except Exception:  # noqa: BLE001
+            title = ""
+        if not title:                              # a title drawn as a plain shape named "Title 1" (no placeholder)
+            title = next((sh.text_frame.text.strip() for sh in s.shapes if str(sh.name).lower().startswith("title")
+                          and getattr(sh, "has_text_frame", False) and sh.text_frame.text.strip()), "")
         for sh in s.shapes:
             lines += _shape_text(sh, title)
         notes = ""
         if s.has_notes_slide and s.notes_slide.notes_text_frame is not None:
             notes = s.notes_slide.notes_text_frame.text.strip()
-        out.append(f"\n## Slide {i}: {title or '(no title)'}\n" + "\n".join(lines) + (f"\n[notes] {notes}" if notes else ""))
+        hidden = " [hidden slide: not shown in the slide show]" if s._element.get("show") in ("0", "false") else ""
+        out.append(f"\n## Slide {i}: {title or '(no title)'}{hidden}\n" + "\n".join(lines)
+                   + (f"\n[notes] {notes}" if notes else ""))
         for sh in s.shapes:
-            if getattr(sh, "shape_type", None) == 13:
+            if _stype(sh) == 13:
                 try:
                     blobs.append((f"on slide {i}", sh.image.blob))
                 except Exception:  # noqa: BLE001
@@ -348,9 +506,26 @@ def _pptx(p: Path, ocr_mode: str = "auto") -> str:
     return "\n".join(out)
 
 
+def _stype(sh):
+    """A shape's type, or None for one python-pptx cannot classify (a shape with no geometry, ink, an OLE object):
+    shape_type raises NotImplementedError for those, and one such shape made the whole deck unreadable (Daniel,
+    0.0.18: "unrecognized shape type", 2 of 7 slides seen)."""
+    try:
+        return sh.shape_type
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _shape_text(sh, title: str) -> list[str]:
+    try:
+        return _shape_text1(sh, title)
+    except Exception:  # noqa: BLE001 - an odd shape is skipped, never the slide
+        return []
+
+
+def _shape_text1(sh, title: str) -> list[str]:
     out = []
-    if getattr(sh, "shape_type", None) == 6 and hasattr(sh, "shapes"):          # group
+    if (_stype(sh) == 6 or sh._element.tag.endswith("}grpSp")) and hasattr(sh, "shapes"):          # group
         for x in sh.shapes:
             out += _shape_text(x, title)
         return out
@@ -371,7 +546,7 @@ def _shape_text(sh, title: str) -> list[str]:
             out.append("[chart]\n" + _md_table(rows))
         except Exception:  # noqa: BLE001
             out.append("[chart]")
-    if getattr(sh, "shape_type", None) == 13:
+    if _stype(sh) == 13:
         out.append(f"[picture: {sh.name}]")
     return out
 
@@ -397,14 +572,33 @@ def _xlsx(p: Path, sheet: str | None = None, rows: int = 200) -> str:
                     pass
 
 
+def _sheet_state(ws) -> str:
+    st = getattr(ws, "sheet_state", "visible") or "visible"
+    return {"hidden": "hidden", "veryHidden": "very hidden"}.get(st, "")
+
+
 def _xlsx_text(p: Path, vals, forms, sheet: str | None, rows: int) -> str:
-    out = [f"# {p.name}\nSheets: " + ", ".join(vals.sheetnames)]
-    for name in ([sheet] if sheet else vals.sheetnames):
+    names = vals.sheetnames
+    listed = [n + (f" ({_sheet_state(vals[n])})" if _sheet_state(vals[n]) else "") for n in names]
+    out = [f"# {p.name}\nSheets: " + ", ".join(listed)]
+    if sheet and sheet not in names:
+        match = [n for n in names if n.strip().lower() == str(sheet).strip().lower()]
+        if not match:
+            return f"{p.name} has no sheet named {sheet!r}. Sheets: {', '.join(listed)}"
+        sheet = match[0]
+    for name in ([sheet] if sheet else names):
         ws = vals[name]
-        fws = forms[name] if forms else None
+        if not hasattr(ws, "iter_rows"):            # a chart sheet: a chart on its own tab, no cells (it failed the read)
+            out.append(f"\n## Chart sheet: {name} (a chart, no cells)")
+            continue
+        try:
+            fws = forms[name] if forms else None
+        except KeyError:
+            fws = None
         # read-only sheets saved without a <dimension> report max_row/max_column as None: count while reading
         size = f" ({ws.max_row} rows x {ws.max_column} columns)" if ws.max_row and ws.max_column else ""
-        out.append(f"\n## Sheet: {name}{size}")
+        state = _sheet_state(ws)
+        out.append(f"\n## Sheet: {name}{size}" + (f" [{state} sheet: not shown in Excel]" if state else ""))
         table, nform, more = [], 0, False
         frows = fws.iter_rows(max_row=rows) if fws is not None else None
         for r_i, row in enumerate(ws.iter_rows(values_only=True)):
@@ -435,25 +629,60 @@ def _xlsx_text(p: Path, vals, forms, sheet: str | None, rows: int) -> str:
 def _xls(p: Path, sheet: str | None = None, rows: int = 200) -> str:
     import xlrd
     wb = xlrd.open_workbook(str(p))
-    out = [f"# {p.name}\nSheets: " + ", ".join(wb.sheet_names())]
+    hidden = {s.name: {1: "hidden", 2: "very hidden"}.get(s.visibility, "") for s in wb.sheets()}
+    listed = [n + (f" ({hidden[n]})" if hidden.get(n) else "") for n in wb.sheet_names()]
+    out = [f"# {p.name}\nSheets: " + ", ".join(listed)]
+    if sheet and sheet not in wb.sheet_names():
+        return f"{p.name} has no sheet named {sheet!r}. Sheets: {', '.join(listed)}"
     for name in ([sheet] if sheet else wb.sheet_names()):
         sh = wb.sheet_by_name(name)
-        out.append(f"\n## Sheet: {name} ({sh.nrows} rows x {sh.ncols} columns)")
+        out.append(f"\n## Sheet: {name} ({sh.nrows} rows x {sh.ncols} columns)"
+                   + (f" [{hidden[name]} sheet: not shown in Excel]" if hidden.get(name) else ""))
         out.append(_md_table([[str(c) for c in sh.row_values(r)] for r in range(min(rows, sh.nrows))]) or "(empty)")
     return "\n".join(out)
 
 
+def decode_text(raw: bytes, cut: bool = False) -> str:
+    """Bytes of a text file (CSV, TSV) as text, whatever program wrote it: a BOM names the encoding (Excel's
+    "Unicode text" is UTF-16), else UTF-8, else UTF-16 without a BOM, else Windows-1252 (Excel on Windows: euro sign,
+    curly quotes, accents). cut: raw is only the start of the file, so a character split at the end is dropped."""
+    for bom, enc in ((b"\xef\xbb\xbf", "utf-8"), (b"\xff\xfe\x00\x00", "utf-32-le"), (b"\x00\x00\xfe\xff", "utf-32-be"),
+                     (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be")):
+        if raw.startswith(bom):
+            body = raw[len(bom):]
+            if cut and enc.startswith("utf-16"):
+                body = body[:len(body) - len(body) % 2]
+            return body.decode(enc, errors="replace")
+    # UTF-16 with no byte-order mark first: NUL bytes are valid UTF-8, so plain ASCII text saved as UTF-16 "decoded"
+    # as UTF-8 with a NUL after every letter (review, 0.0.18)
+    head = raw[:4000]
+    if len(head) >= 4 and head[1::2].count(0) > len(head) // 4 and head[0::2].count(0) < len(head) // 20:
+        return raw[:len(raw) - len(raw) % 2].decode("utf-16-le", errors="replace")
+    if len(head) >= 4 and head[0::2].count(0) > len(head) // 4 and head[1::2].count(0) < len(head) // 20:
+        return raw[:len(raw) - len(raw) % 2].decode("utf-16-be", errors="replace")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        if cut and e.start >= len(raw) - 3 and e.reason == "unexpected end of data":
+            return raw[:e.start].decode("utf-8", errors="replace")
+    return raw.decode("cp1252", errors="replace")
+
+
+def sniff_delimiter(text: str, default: str = ",") -> str:
+    """The delimiter of a CSV sample (comma, semicolon, tab or bar), else default."""
+    if not text.strip():
+        return default
+    try:
+        return csv.Sniffer().sniff(text[:8000], delimiters=",;\t|").delimiter
+    except csv.Error:                              # one column, or no consistent delimiter
+        return default
+
+
 def _csv(p: Path, rows: int = 300) -> str:
+    size = p.stat().st_size
     with open(p, "rb") as fh:                      # only the start of a big file, never all of it
-        raw = fh.read(5_000_000).decode("utf-8-sig", errors="replace")
-    delim = ","
-    if p.suffix.lower() == ".tsv":
-        delim = "\t"
-    elif raw.strip():
-        try:
-            delim = csv.Sniffer().sniff(raw[:4000], delimiters=",;\t|").delimiter
-        except csv.Error:                          # one column, or no consistent delimiter
-            delim = ","
+        raw = decode_text(fh.read(5_000_000), cut=size > 5_000_000)
+    delim = "\t" if p.suffix.lower() == ".tsv" else sniff_delimiter(raw)
     csv.field_size_limit(min(sys.maxsize, 2**31 - 1))     # a huge cell must not fail the whole file
     data = list(csv.reader(io.StringIO(raw), delimiter=delim))
     cut = p.stat().st_size > 5_000_000
@@ -577,11 +806,96 @@ def _odf(p: Path) -> str:
         return f"# {p.name}\n" + re.sub(r"\n{3,}", "\n\n", _xml_text(z.read("content.xml"))).strip()
 
 
+_RTF_TOKEN = re.compile(r"\\([a-zA-Z]+)(-?\d+)? ?|\\'([0-9a-fA-F]{2})|\\([\s\S])|([{}])|([^\\{}\r\n]+)|[\r\n]+")
+# groups whose text is not part of the document: tables of fonts, colours and styles, metadata, pictures, field codes
+_RTF_SKIP = {"fonttbl", "colortbl", "stylesheet", "info", "pict", "listtable", "listoverridetable", "rsidtbl",
+             "generator", "xmlnstbl", "themedata", "colorschememapping", "datastore", "latentstyles", "fldinst",
+             "objdata", "header", "footer", "headerl", "headerr", "headerf", "footerl", "footerr", "footerf",
+             "expandedcolortbl", "filetbl", "revtbl", "mmathPr", "pgdsctbl", "listtext", "pntext"}
+_RTF_CHARS = {"par": "\n", "line": "\n", "sect": "\n\n", "page": "\n\n", "row": "\n", "cell": " | ", "tab": "\t",
+              "emdash": "\u2014", "endash": "\u2013", "bullet": "\u2022", "lquote": "\u2018", "rquote": "\u2019",
+              "ldblquote": "\u201c", "rdblquote": "\u201d", "emspace": " ", "enspace": " ", "qmspace": " "}
+
+
+def _rtf_text(s: str) -> str:
+    """The text of an RTF document: \\'e9 and \\u8364 decoded in the file's code page, the font, colour and style
+    tables, pictures and field codes left out (a regex left "Helvetica;" and dropped every accented letter)."""
+    out, pend = [], bytearray()
+    codepage, uc, skip_n = "cp1252", 1, 0
+    stack: list[tuple[bool, int]] = []
+    skip = False
+    star = False
+
+    def flush():
+        if pend:
+            out.append(bytes(pend).decode(codepage, errors="replace"))
+            pend.clear()
+    for m in _RTF_TOKEN.finditer(s):
+        word, arg, hexb, sym, brace, text = m.groups()
+        if brace == "{":
+            stack.append((skip, uc))
+            star = False
+            continue
+        if brace == "}":
+            flush()
+            skip, uc = stack.pop() if stack else (False, 1)
+            skip_n = 0
+            continue
+        if word is not None:
+            if word in _RTF_SKIP or star:
+                skip, star = True, False
+            if skip:
+                continue
+            if word == "ansicpg" and arg:
+                try:
+                    codepage = "cp" + str(int(arg))
+                    "".encode(codepage)
+                except (LookupError, ValueError):
+                    codepage = "cp1252"
+            elif word == "uc" and arg:
+                uc = max(0, int(arg))
+            elif word == "u" and arg:
+                flush()
+                n = int(arg)
+                out.append(chr(n + 65536 if n < 0 else n))
+                skip_n = uc
+            elif word in _RTF_CHARS:
+                flush()
+                out.append(_RTF_CHARS[word])
+            continue
+        if sym is not None:
+            if sym == "*":
+                star = True
+                continue
+            if skip:
+                continue
+            if skip_n:
+                skip_n -= 1
+                continue
+            flush()
+            out.append({"~": "\u00a0", "_": "-", "-": "", "\n": "\n", "\r": "\n"}.get(sym, sym))
+            continue
+        if skip:
+            continue
+        if hexb is not None:
+            if skip_n:
+                skip_n -= 1
+            else:
+                pend.append(int(hexb, 16))
+            continue
+        if text:
+            flush()
+            if skip_n:
+                drop = min(skip_n, len(text))
+                text, skip_n = text[drop:], skip_n - drop
+            out.append(text)
+    flush()
+    return re.sub(r"\n{3,}", "\n\n", "".join(out))
+
+
 def _rtf(p: Path) -> str:
-    s = p.read_text(encoding="latin-1", errors="replace")
-    s = re.sub(r"\\par[d]?", "\n", s)
-    s = re.sub(r"\{\\\*[^{}]*\}|\\[a-z]+-?\d* ?|[{}]", "", s)
-    return f"# {p.name}\n" + s.strip()
+    s = p.read_bytes()[:50_000_000].decode("latin-1")      # RTF is 7-bit: other bytes are escaped as \'hh
+    return f"# {p.name}\n" + _rtf_text(s).strip()
 
 
 def _ipynb(p: Path) -> str:
@@ -622,8 +936,16 @@ def _strip_html(s: str) -> str:
     return re.sub(r"[ \t]+", " ", html.unescape(s)).strip()
 
 
+HTML_MAX = 20_000_000
+
+
 def _html(p: Path) -> str:
-    return _strip_html(p.read_text(encoding="utf-8", errors="replace"))
+    with open(p, "rb") as fh:                      # a huge saved page or log: the start is read, not all of it
+        raw = fh.read(HTML_MAX + 1)
+    text = _strip_html(raw[:HTML_MAX].decode("utf-8", errors="replace"))
+    if len(raw) > HTML_MAX:
+        text += f"\n\n[only the first {HTML_MAX // 1_000_000} MB of this page were read]"
+    return text
 
 
 def _epub(p: Path) -> str:

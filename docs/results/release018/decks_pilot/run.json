@@ -1,0 +1,43 @@
+{
+ "date": "2026-11-26T09:43:33+00:00",
+ "model": "deepseek-v4.1-flash",
+ "prices": {
+  "gpt-6-luna": {
+   "in": 0.1,
+   "cached": 0.01,
+   "out": 0.5
+  },
+  "deepseek-v4.1-flash": {
+   "in": 0.33,
+   "cached": 0.0066,
+   "out": 1.32
+  }
+ },
+ "price_used": {
+  "in": 0.33,
+  "cached": 0.0066,
+  "out": 1.32
+ },
+ "upstream": "https://llm.meshpool.ai/v1",
+ "budget_usd": 1.0,
+ "reps": 1,
+ "tasks": [
+  "deck_read",
+  "deck_edit",
+  "deck_add",
+  "deck_reorder",
+  "deck_chart"
+ ],
+ "arms": [
+  "codex",
+  "mp-work"
+ ],
+ "versions": {
+  "codex": "codex-cli 0.171.0",
+  "pi": "0.73.1",
+  "meshpool_src": "/home/user/rc018/app",
+  "meshpool_git": "8dbf65f762b7cb02e3d65c7c839d230808a032f1",
+  "python": "/usr/local/bin/python"
+ },
+ "meter": "testkit/loop/small_meter.py (no reasoning-token field; reasoning is reported as null)"
+}

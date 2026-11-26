@@ -368,7 +368,7 @@ def verdict_line(panel: dict | None, what: str = "deck") -> str:
 
 
 def review_notes(panel: dict | None, n_slides: int) -> dict[int, list[str]]:
-    """The blocking and major issues still open, as [REVIEW] lines for the speaker notes (deck-wide ones on slide
+    """The blocking and major issues still open, as [REVIEW] lines for qa.json, never the speaker notes (deck-wide on slide
     1)."""
     out: dict[int, list[str]] = {}
     for it in (panel or {}).get("issues") or []:

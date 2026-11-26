@@ -38,9 +38,12 @@ def append(target: str, source: str, out: str) -> int:
     f = min(dst.slide_width / src.slide_width, dst.slide_height / src.slide_height)
     dx = (dst.slide_width - src.slide_width * f) / 2
     dy = (dst.slide_height - src.slide_height * f) / 2
-    added = 0
-    for s in src.slides:
-        new = dst.slides.add_slide(_layout(dst, s.slide_layout.name))
+    added, base = 0, len(dst.slides)
+    olds = list(src.slides)
+    news = [dst.slides.add_slide(_layout(dst, s.slide_layout.name)) for s in olds]   # first, so links can find them
+    as_new = {id(s.part): n.part for s, n in zip(olds, news)}
+    copied: dict = {}                                            # a part two slides share is copied once
+    for s, new in zip(olds, news):
         for ph in list(new.placeholders):                        # the layout's empty placeholders: not on the copy
             ph._element.getparent().remove(ph._element)
         ids = {}
@@ -54,9 +57,13 @@ def append(target: str, source: str, out: str) -> int:
                 ids[rel.rId] = rid
             elif rel.reltype == RT.CHART:
                 ids[rel.rId] = new.part.relate_to(_copy_chart(rel.target_part, pkg, pin, f), RT.CHART)
-            else:                                                # anything else: carried over as it is
-                ids[rel.rId] = new.part.relate_to(rel.target_part, rel.reltype)
+            elif rel.reltype == RT.SLIDE:                        # a link to another slide: to that slide's copy
+                if id(rel.target_part) in as_new:
+                    ids[rel.rId] = new.part.relate_to(as_new[id(rel.target_part)], RT.SLIDE)
+            else:                                                # media, tags, SmartArt, ...: copied under fresh names
+                ids[rel.rId] = _copy_part(rel.target_part, new.part, rel.reltype, pkg, copied)
         tree = new.shapes._spTree
+        keep_title = _has_title(new.slide_layout)               # the title stays the slide's title placeholder
         for el in s.shapes._spTree.iterchildren():
             if el.tag.endswith("}nvGrpSpPr") or el.tag.endswith("}grpSpPr"):
                 continue
@@ -64,9 +71,12 @@ def append(target: str, source: str, out: str) -> int:
             _inherit(el, s)                                      # before it stops being a placeholder
             if abs(f - 1) > 0.002:
                 _scale(el, f, dx, dy)
-            _renumber(el, len(dst.slides))
+            _renumber(el, base + added + 1)
             pin(el)
-            _unplaceholder(el)
+            P_ = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+            is_title = any(ph.get("type") in ("title", "ctrTitle") for ph in el.iter(f"{P_}ph"))
+            _unplaceholder(el, keep_title and is_title)
+            keep_title = keep_title and not is_title             # one title per slide
             for node in el.iter():
                 for k, v in list(node.attrib.items()):
                     if k.startswith(_R) and v in ids:
@@ -76,7 +86,8 @@ def append(target: str, source: str, out: str) -> int:
         if bg is not None:                                       # the slide's own background, if it has one
             new._element.cSld.insert(0, copy.deepcopy(bg))
         if s.has_notes_slide and s.notes_slide.notes_text_frame is not None:
-            new.notes_slide.notes_text_frame.text = s.notes_slide.notes_text_frame.text
+            from .notes import write as _write_notes          # presenter prose only (notes.py)
+            _write_notes(new, s.notes_slide.notes_text_frame.text, None)   # the render already kept their length
         added += 1
     dst.save(out)
     return added
@@ -181,16 +192,30 @@ def _inherit(el, slide):
                         r.set(k, d.get(k))
 
 
-def _unplaceholder(el):
+def _unplaceholder(el, keep_title: bool = False):
     """A copied placeholder would take the target layout's formatting (a centred, middle-anchored title over the
-    rule): when it has its own position it becomes a plain shape and keeps the look it was drawn with."""
+    rule): when it has its own position it becomes a plain shape and keeps the look it was drawn with. The title
+    stays the slide's title placeholder when the target layout has one (keep_title): its own position and the
+    formatting _inherit wrote onto it win over the layout's, and outline view, accessibility tools and the checks
+    (P7, "a filled title placeholder") still find it. Daniel, round 2: slide 7, added to his deck, had its title as a
+    plain shape named "Title 1"."""
     P = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
     for nv in el.iter(f"{P}nvPr"):
         ph = nv.find(f"{P}ph")
         sp = nv.getparent().getparent() if nv.getparent() is not None else None
         has_xfrm = sp is not None and any(c.tag.endswith("}xfrm") for c in sp.iter())
+        if ph is not None and keep_title and ph.get("type") in ("title", "ctrTitle"):
+            for k in [k for k in ph.attrib if k not in ("type",)]:
+                del ph.attrib[k]                             # the target layout's title, not the source's index
+            continue
         if ph is not None and has_xfrm:
             nv.remove(ph)
+
+
+def _has_title(layout) -> bool:
+    P = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+    return any((sp._element.find(f".//{P}ph") is not None and sp._element.find(f".//{P}ph").get("type")
+                in ("title", "ctrTitle")) for sp in layout.placeholders)
 
 
 def _renumber(el, n: int):
@@ -263,6 +288,37 @@ def _copy_chart(part, pkg, pin, f: float = 1.0):
         if rid != rel.rId:
             _fix_rid(new, rid, rel.rId)
     return new
+
+
+# Parts of the source deck's frame: never copied along with a slide's media, tags or SmartArt.
+_FRAME = (RT.SLIDE, RT.SLIDE_LAYOUT, RT.SLIDE_MASTER, RT.NOTES_SLIDE, RT.NOTES_MASTER, RT.HANDOUT_MASTER, RT.THEME,
+          RT.OFFICE_DOCUMENT)
+
+
+def _copy_part(part, owner, reltype: str, pkg, copied: dict) -> str:
+    """Relate `owner` to a copy of the source deck's `part` (and the parts it relates to) under fresh names in pkg,
+    and return the new relationship id. The source part itself would keep its name, and the target deck may already
+    have a part of that name (ppt/tags/tag1.xml, ppt/media/media1.mp4): both were written under it."""
+    from pptx.opc.packuri import PackURI
+    if id(part) in copied:
+        return owner.relate_to(copied[id(part)], reltype)
+    name = str(part.partname)
+    folder, file = name.rsplit("/", 1)
+    stem, dot, ext = file.rpartition(".") if "." in file else (file, "", "")
+    template = f"{folder}/{re.sub(r'[0-9]+$', '', stem).replace('%', '')}%d{dot}{ext}"
+    new = Part.load(PackURI(pkg.next_partname(template)), part.content_type, pkg, part.blob)
+    copied[id(part)] = new
+    rid = owner.relate_to(new, reltype)                          # in the package now: the next fresh name skips it
+    for rel in list(part.rels.values()):
+        if rel.is_external:
+            got = new.relate_to(rel.target_ref, rel.reltype, is_external=True)
+        elif rel.reltype in _FRAME:
+            continue
+        else:
+            got = _copy_part(rel.target_part, new, rel.reltype, pkg, copied)
+        if got != rel.rId:
+            _fix_rid(new, got, rel.rId)
+    return rid
 
 
 def _fix_rid(part, got: str, want: str):

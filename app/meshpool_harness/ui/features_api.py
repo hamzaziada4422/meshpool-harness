@@ -4,6 +4,8 @@
   POST /api/trust {"root", "action": "trust" | "revoke"}
   GET  /api/office                 the Excel, PowerPoint and Word add-in: certificate, manifest, sideloaded, running
   POST /api/office {"action": "install" | "uninstall", "apps": [...]}
+  GET  /api/office/pairs           Office panels asking to connect (their codes) and how many are connected
+  POST /api/office/pairs {"action": "allow" | "deny", "code"} | {"action": "forget"}
 """
 from __future__ import annotations
 
@@ -113,6 +115,22 @@ def office_get() -> tuple[int, dict]:
                      trust_note=OF.TRUST_NOTE)
 
 
+def _cert_bytes(OF) -> bytes:
+    """The certificate the Office listener would load now (empty when there is none)."""
+    cp = OF.cert_paths()
+    try:
+        return cp[0].read_bytes() + cp[1].read_bytes() if cp else b""
+    except OSError:
+        return b""
+
+
+def _stop_office(S) -> None:
+    for srv in list(S.OFFICE_HTTPD):
+        srv.shutdown()
+        srv.server_close()
+    S.OFFICE_HTTPD.clear()
+
+
 def office_post(b: dict) -> tuple[int, dict]:
     """The click on Settings' button is the user's say-so to trust the certificate (the system shows its own
     confirmation too: Windows asks before adding a root, macOS asks for the login password)."""
@@ -121,15 +139,17 @@ def office_post(b: dict) -> tuple[int, dict]:
     act = b.get("action") or "install"
     try:
         if act == "install":
+            before = _cert_bytes(OF)
             lines = OF.install([str(a) for a in (b.get("apps") or list(OF.APPS))], confirm=lambda cmd: True)
+            if S.OFFICE_HTTPD and _cert_bytes(OF) != before:   # renewed: the listener still holds the old one
+                _stop_office(S)
             if not S.OFFICE_HTTPD:
                 S._start_office()
         elif act == "uninstall":
             lines = OF.uninstall()
-            for srv in list(S.OFFICE_HTTPD):
-                srv.shutdown()
-                srv.server_close()
-            S.OFFICE_HTTPD.clear()
+            _stop_office(S)
+            from meshpool_harness.ui import office_pair as OP
+            OP.forget()                                  # removed from Office: no panel stays connected
         else:
             raise ValueError("action is install or uninstall")
     except OF.OfficeError as e:
@@ -137,10 +157,33 @@ def office_post(b: dict) -> tuple[int, dict]:
     return 200, dict(office_get()[1], lines=lines)
 
 
+def office_pairs_get() -> tuple[int, dict]:
+    """For the app's prompt: the panels waiting for the user's OK, each with the code that panel shows."""
+    from meshpool_harness.ui import office_pair as OP
+    from meshpool_harness.ui import server as S
+    return 200, {"pending": OP.pending(), "sessions": OP.sessions(), "running": bool(S.OFFICE_HTTPD)}
+
+
+def office_pairs_post(b: dict) -> tuple[int, dict]:
+    """Only the app's own window reaches this (the launch-key token), so only the user can let a panel in."""
+    from meshpool_harness.ui import office_pair as OP
+    act = b.get("action")
+    if act in ("allow", "deny"):
+        if not OP.decide(str(b.get("code") or ""), act == "allow"):
+            return 404, {"error": "That request is gone. Open the meshpool panel in Office again."}
+    elif act == "forget":
+        OP.forget()
+    else:
+        raise ValueError("action is allow, deny or forget")
+    return office_pairs_get()
+
+
 ROUTES = {("GET", "/api/rules"): lambda u, b: rules_get(),
           ("POST", "/api/rules"): lambda u, b: rules_post(json.loads(b.decode("utf-8")) if b else {}),
           ("GET", "/api/office"): lambda u, b: office_get(),
           ("POST", "/api/office"): lambda u, b: office_post(json.loads(b.decode("utf-8")) if b else {}),
+          ("GET", "/api/office/pairs"): lambda u, b: office_pairs_get(),
+          ("POST", "/api/office/pairs"): lambda u, b: office_pairs_post(json.loads(b.decode("utf-8")) if b else {}),
           ("GET", "/api/trust"): lambda u, b: trust_get(parse_qs(u.query)),
           ("POST", "/api/trust"): lambda u, b: trust_post(json.loads(b.decode("utf-8")) if b else {})}
 

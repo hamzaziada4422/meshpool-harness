@@ -15,6 +15,7 @@ import re
 from urllib.parse import quote, urlparse
 
 from meshpool_harness import config as C
+from meshpool_harness import fsio
 
 PREFIXED = ("chatgpt",)
 PROVIDERS = ("key", "chatgpt")
@@ -31,11 +32,22 @@ SUPPORTS = {
 }
 
 
+def _settings(raw: bytes) -> dict:
+    return C._parse(C.decode_settings(raw)[0].replace("\ufeff", ""))
+
+
+def _read() -> dict:
+    """The settings file, parsed once while it is unchanged. One model call or relay request asks for the base, key,
+    kind and api-version, and each of those read and parsed the whole file again, some more than once. The value is
+    shared: callers must not change it."""
+    return fsio.parse_cached(C.config_path(), _settings, "settings", missing={})
+
+
 def _cfg(k: str) -> str:
     env = os.environ.get(k)
     if env and k not in C._INJECTED:                  # a value the shell set wins over the saved file
         return env.strip()
-    return (C.read().get(k) or env or "").strip()
+    return (_read().get(k) or env or "").strip()
 
 
 def host(url: str) -> str:
@@ -54,7 +66,7 @@ def _shell(k: str) -> str:
 
 def _file(k: str) -> str:
     env = os.environ.get(k) if k in C._INJECTED else ""
-    return (C.read().get(k) or env or "").strip()
+    return (_read().get(k) or env or "").strip()
 
 
 def endpoint_pair() -> tuple[str, str, str]:
@@ -302,7 +314,7 @@ def is_key_endpoint(base: str) -> bool:
     """Whether `base` is the key endpoint: the one in use now, or the saved or environment one (they can differ
     when the shell overrides the saved address)."""
     b = _norm_base(base)
-    return bool(b) and b in {_norm_base(key_base()), _norm_base(C.read().get("MESHPOOL_BASE_URL", "")),
+    return bool(b) and b in {_norm_base(key_base()), _norm_base(_read().get("MESHPOOL_BASE_URL", "")),
                              _norm_base(os.environ.get("MESHPOOL_BASE_URL", "")),
                              _norm_base(os.environ.get("OPENAI_BASE_URL", ""))}
 
@@ -335,7 +347,7 @@ def key_problem(k: str | None) -> str:
 
 def key_name() -> str:
     h = host(key_base())
-    return "Meshpool" if "meshpool" in h else (h or "Your endpoint")
+    return "meshpool" if "meshpool" in h else (h or "Your endpoint")
 
 
 def agent_endpoint(prov: str = "key") -> tuple[str, str]:
@@ -375,7 +387,7 @@ def configured_model(explicit: str | None = None) -> str:
     saved = ""
     if not ((explicit or "").strip() or os.environ.get("MH_MODEL")):
         try:
-            saved = (C.read().get("MH_MODEL") or "").strip()
+            saved = (_read().get("MH_MODEL") or "").strip()
         except OSError:                          # an unreadable settings file must not stop an engine
             saved = ""
     return (explicit or "").strip() or (os.environ.get("MH_MODEL") or "").strip() or saved or DEFAULT_MODEL
@@ -392,7 +404,7 @@ def split(model: str | None) -> tuple[str, str]:
         return head, rest
     if sep and head in RETIRED:                  # a model saved for a provider Meshpool no longer has: use the default
         m = DEFAULT_MODEL
-    if (os.environ.get("MH_PROVIDER") or C.read().get("MH_PROVIDER")) == "chatgpt" and not key():
+    if (os.environ.get("MH_PROVIDER") or _read().get("MH_PROVIDER")) == "chatgpt" and not key():
         return "chatgpt", m                      # set up with only a ChatGPT sign-in
     if m in ("", DEFAULT_MODEL) and env_deployment():
         m = env_deployment()                     # Azure from the environment: the deployment is the model

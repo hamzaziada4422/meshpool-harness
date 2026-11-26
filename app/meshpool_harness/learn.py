@@ -21,9 +21,11 @@ import threading
 
 from meshpool_harness import assistant as A
 
-GATE = re.compile(r"(?i)\b(never|always|don'?t|do not|stop|i (?:prefer|like|love|hate|dislike)|"
-                  r"from now on|make sure|by default|default to|hard no|too (?:long|short|much|little|"
-                  r"wordy|dense|thin)|instead of|rather than|not like (?:that|this)|i told you)\b")
+# Only words that make a rule for later ("always", "from now on", "I prefer"), not the wishes of one request ("don't make it
+# too formal", "make sure it has a date"): a plain email request must not end with "Noted for next time".
+GATE = re.compile(r"(?i)\b(never|always|from now on|going forward|in future|by default|default to|hard no|"
+                  r"i (?:prefer|always|never|hate|dislike)|stop (?:using|doing|putting|adding|writing|making)|"
+                  r"i told you)\b")
 SYSTEM = """You keep a user's standing preferences. Read the user's message (and the reply it answers, for context).
 List only LASTING preferences about how this user wants work done that a future chat should follow: style, format,
 tone, defaults, things to always or never do. Not tasks, not facts about this one piece of work, not the content of

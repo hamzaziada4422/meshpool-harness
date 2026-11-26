@@ -129,7 +129,7 @@ def requests(messages: list, start: int, before: int = 2) -> list[str]:
             continue
         raw = m.get("content")
         txt = clean_text(raw)
-        if txt.startswith(("[Independent review]", "[Meshpool]")) or not txt:
+        if txt.startswith(("[Independent review]", "[Meshpool]", "[meshpool]")) or not txt:
             continue
         if txt.startswith("[Added by the user while you were working]"):
             txt = txt.replace("[Added by the user while you were working]", "(added while it worked)", 1).strip()
@@ -608,6 +608,7 @@ def make_agent(parent, emit, stop_check=None):
 
     class GraderAgent(K.Agent):
         _is_grader = True
+        reports_to_agent = True      # its verdict is JSON for the parent, not a reply to the user
 
         def system_prompt(self):
             return SYSTEM
@@ -637,7 +638,7 @@ def make_agent(parent, emit, stop_check=None):
                 return False, ("the reviewer may only run commands that read, or the project's own tests "
                                "(pytest, npm test, go test, cargo test)")
             if self.mcp and _Mcp.ok(name):
-                if DL._mcp_paths_outside(parent.root, args):
+                if DL._mcp_paths_outside(parent.root, args, getattr(parent, 'id', None)):
                     return False, "the reviewer only reads inside the project"
                 return True, ""
             return False, "the reviewer cannot use this tool: it only reads and runs checks"

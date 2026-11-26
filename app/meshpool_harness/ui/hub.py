@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import mimetypes
 import platform
+import re
 import time
 from pathlib import Path
 
@@ -29,7 +30,7 @@ _ART: dict[str, tuple] = {}                     # session id -> (mtime_ns of ses
 def is_code_session(r: dict) -> bool:
     """A coding session: it works in a real folder or a GitHub workspace. A chat that only has its own private
     folder is a chat, whichever agent the router picked."""
-    return r.get("kind") == "code" and not r.get("scratch")
+    return r.get("kind") == "code" and not r.get("scratch") and r.get("code_mode") is not False
 
 
 def _events(sid: str) -> list:
@@ -49,11 +50,16 @@ def _session_files(r: dict) -> list[dict]:
     sid, root = r["id"], r.get("workdir") or ""
     if not root or not Path(root).is_dir():
         return []
-    p = A.SESSIONS / sid / "session.json"
-    try:
-        stamp = p.stat().st_mtime_ns
-    except OSError:
-        stamp = 0
+    stamp = []
+    # the cache follows the transcript and the checkpoints (a turn's files, an Undo): either one changing means new
+    # rows. With session.json alone, Artifacts kept a file Undo had removed and missed a deck an edit had changed.
+    for p in (A.SESSIONS / sid / "session.json", A.SESSIONS / sid / "checkpoints" / "turns.json",
+              A.SESSIONS / sid / "transcript.jsonl"):
+        try:
+            stamp.append(p.stat().st_mtime_ns)
+        except OSError:
+            stamp.append(0)
+    stamp = tuple(stamp)
     live = sid in A.LIVE and r.get("state") in ("working", "waiting")
     hit = _ART.get(sid)
     if hit and hit[0] == stamp and not live:
@@ -65,7 +71,7 @@ def _session_files(r: dict) -> list[dict]:
     except Exception:  # noqa: BLE001
         turns = []
     rows = []
-    for o in W.outputs_from(_events(sid), turns, Path(root).resolve()):
+    for o in W.outputs_from(_events(sid), turns, Path(root).resolve()):     # files that still exist, user files only
         ext = o["path"].rsplit(".", 1)[-1].lower() if "." in o["path"] else ""
         if ext not in KINDS or (o["how"] == "edited" and r.get("kind") == "code"):
             continue
@@ -74,10 +80,10 @@ def _session_files(r: dict) -> list[dict]:
     return rows
 
 
-def artifacts(limit: int = 300) -> dict:
+def artifacts(limit: int = 300, listing: list | None = None) -> dict:
     """Files made or changed across all chats, newest first."""
     out = []
-    for r in A.listing()[:150]:
+    for r in (A.listing() if listing is None else listing)[:150]:
         for f in _session_files(r):
             fp = Path(r["workdir"]) / f["path"]
             try:
@@ -91,19 +97,26 @@ def artifacts(limit: int = 300) -> dict:
                         "project_id": r.get("project_id") or "", "kind": r.get("kind"),
                         "mime": mimetypes.guess_type(fp.name)[0] or ""})
     out.sort(key=lambda a: -a["updated"])
+    seen, once = set(), []                      # one entry per file: the same path in several chats is one (the newest)
+    for a in out:
+        key = (str(a["root"]).rstrip("/\\"), str(a["path"]).replace("\\", "/"))
+        if key not in seen:
+            seen.add(key)
+            once.append(a)
+    out = once
     counts: dict[str, int] = {}
     for a in out:
         counts[a["type"]] = counts.get(a["type"], 0) + 1
     return {"artifacts": out[:limit], "types": counts}
 
 
-def _task_row(t: dict, threads: dict) -> dict:
+def _task_row(t: dict, threads: dict, names: dict | None = None) -> dict:
     last = threads.get(t.get("last_thread") or "")
     pj = ""
     if t.get("folder"):
-        for p in W.projects():
-            if p.get("path") == t["folder"]:
-                pj = p.get("name", "")
+        if names is None:
+            names = {p.get("path"): p.get("name", "") for p in W.projects()}
+        pj = names.get(t["folder"], "")
     return {"id": t["id"], "name": t.get("name") or "Scheduled task", "prompt": t.get("prompt", ""),
             "enabled": bool(t.get("enabled")), "status": AS.status(t),
             "error": (t.get("last_error") or {}).get("text", ""), "invalid": t.get("invalid", ""),
@@ -123,9 +136,12 @@ TEMPLATES = [
 ]
 
 
-def scheduled() -> dict:
-    threads = {r["id"]: r for r in A.listing()}
-    rows = [_task_row(t, threads) for t in AS.tasks()]
+def scheduled(listing: list | None = None) -> dict:
+    """The tasks as cards. `listing` is the chat list when the caller has it already (it is not cheap to build)."""
+    threads = {r["id"]: r for r in (A.listing() if listing is None else listing)}
+    tasks = AS.tasks()
+    names = {p.get("path"): p.get("name", "") for p in W.projects()} if any(t.get("folder") for t in tasks) else {}
+    rows = [_task_row(t, threads, names) for t in tasks]
     return {"tasks": rows, "templates": TEMPLATES, "problem": AS.tasks_problem()}
 
 
@@ -139,14 +155,14 @@ def account() -> dict:
     rows = A.listing()
     code = [r for r in rows if is_code_session(r) and not r.get("archived")]
     return {"name": name, "first_name": first, "initial": (first or "M")[:1].upper(), "full_name": p["name"],
-            "plan": "Meshpool key" if key else "No key yet", "key_set": key,
-            "email": "Signed in with a Meshpool key" if key else "Not signed in",
+            "plan": "meshpool key" if key else "No key yet", "key_set": key,
+            "email": "Signed in with a meshpool key" if key else "Not signed in",
             "device": {"name": platform.node() or "This computer", "connected": True, "os": platform.system()},
             "billing_url": SV.BILLING_URL, "keys_url": SV.BILLING_URL,
             "code_waiting": len([r for r in code if r.get("state") == "waiting"]),
             "chat_unread": len([r for r in rows if not is_code_session(r) and r.get("unread") and not r.get("archived")]),
             "code_unread": len([r for r in code if r.get("unread")]),
-            "scheduled_unread": len([t for t in scheduled()["tasks"] if t["unread"]])}
+            "scheduled_unread": len([t for t in scheduled(rows)["tasks"] if t["unread"]])}
 
 
 def _item(kind: str, id_: str, title: str, sub: str = "", **kw) -> dict:
@@ -160,11 +176,22 @@ def _thread_item(r: dict, sub: str = "") -> dict:
                  waiting=r.get("state") == "waiting", updated=r.get("updated", 0), project_id=r.get("project_id") or "")
 
 
+def _fold(s: str) -> str:
+    """Lowercase with spaces, hyphens, underscores and dots alike, so "open house" finds open-house.html."""
+    return " ".join(re.sub(r"[\s_\-.]+", " ", str(s or "").lower()).split())
+
+
+def _name_has(name: str, q: str) -> bool:
+    n = _fold(name)
+    return all(w in n for w in _fold(q).split())
+
+
 def search(q: str, tab: str = "all") -> dict:
     """Search results as groups. An empty query gives what needs attention, recent items and actions."""
     q = (q or "").strip().lower()
     tab = tab if tab in TABS else "all"
-    rows = [r for r in A.listing() if not r.get("archived")]
+    every = A.listing()                             # once: artifacts and scheduled below use it too
+    rows = [r for r in every if not r.get("archived")]
     chats = [r for r in rows if not is_code_session(r)]
     codes = [r for r in rows if is_code_session(r)]
     want = lambda t: tab in ("all", t)  # noqa: E731
@@ -192,10 +219,10 @@ def search(q: str, tab: str = "all") -> dict:
                                          for p in PS.list_projects()[:5]])
         if want("artifacts"):
             add("artifacts", "Artifacts", [_item("artifact", a["id"], a["name"], a["type"], session_id=a["session_id"], root=a["root"], path=a["path"])
-                                           for a in artifacts(20)["artifacts"][:5]])
+                                           for a in artifacts(20, every)["artifacts"][:5]])
         if want("scheduled"):
             add("scheduled", "Scheduled", [_item("scheduled", t["id"], t["name"], t["schedule"], unread=t["unread"])
-                                           for t in scheduled()["tasks"][:5]])
+                                           for t in scheduled(every)["tasks"][:5]])
         if tab == "all":
             add("actions", "Actions", [_item("action", "new_chat", "New chat"), _item("action", "new_session", "New session"),
                                        _item("action", "settings", "Open settings")])
@@ -215,12 +242,19 @@ def search(q: str, tab: str = "all") -> dict:
             items = []
             for r in pool:
                 hit = full.get(r["id"])
-                if q in r["title"].lower() or hit or r["id"] in boost:
+                in_title = all(w in r["title"].lower() for w in q.split())     # every word, in any order
+                if in_title or hit or r["id"] in boost:
                     seen.add(r["id"])
-                    sub = (hit or {}).get("snippet", "") if q not in r["title"].lower() else ""
-                    if not sub and SU is not None:
+                    snip = (hit or {}).get("snippet", "")
+                    if snip.strip("… ").lower() == r["title"].strip().lower():
+                        snip = ""                          # the title again says nothing new
+                    sub = ""
+                    if not snip and SU is not None:
                         sub = SU.summary_for(r["id"])
-                    items.append(_thread_item(r, sub))
+                    it = _thread_item(r, sub)
+                    if snip:
+                        it["snippet"] = snip              # a short piece of the chat around the match
+                    items.append(it)
             add(key, label, items[:12])
     if want("projects"):
         from meshpool_harness import project_store as PS
@@ -229,8 +263,8 @@ def search(q: str, tab: str = "all") -> dict:
     if want("artifacts"):
         add("artifacts", "Artifacts", [_item("artifact", a["id"], a["name"], a["type"] + " · " + a["session_title"], session_id=a["session_id"],
                                              root=a["root"], path=a["path"])
-                                       for a in artifacts()["artifacts"] if q in a["name"].lower()][:8])
+                                       for a in artifacts(listing=every)["artifacts"] if _name_has(a["name"], q)][:8])
     if want("scheduled"):
         add("scheduled", "Scheduled", [_item("scheduled", t["id"], t["name"], t["schedule"], unread=t["unread"])
-                                       for t in scheduled()["tasks"] if q in t["name"].lower() or q in t["prompt"].lower()][:8])
+                                       for t in scheduled(every)["tasks"] if q in t["name"].lower() or q in t["prompt"].lower()][:8])
     return {"q": q, "tab": tab, "groups": groups, "now": time.time()}

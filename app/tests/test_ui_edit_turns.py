@@ -113,6 +113,17 @@ def _files(app):
     return sorted(p.name for p in Path(app["proj"]).iterdir())
 
 
+def _until(check, secs: float = 30.0):
+    """Wait on a condition, not on the clock: under load the rewind lands a moment after the page shows it."""
+    end, got = time.time() + secs, None
+    while time.time() < end:
+        got = check()
+        if got:
+            return got
+        time.sleep(0.1)
+    return got
+
+
 def _msg_action(pg, i, act, confirm):
     m = pg.locator("#col .msg-user").nth(i)
     m.hover()
@@ -134,8 +145,8 @@ def test_edit_and_try_again_go_back_to_their_own_message(page, app):
     # Edit the 3rd message (the last one: no question asked): its turn goes, the text is in the box
     _msg_action(page, 2, "edit", confirm=False)
     page.wait_for_function("() => document.querySelectorAll('#col .msg-user').length === 2", timeout=30000)
-    assert page.input_value("#input") == "make the file c.txt"
-    assert _files(app) == ["a.txt", "b.txt"]
+    page.wait_for_function("() => document.querySelector('#input').value === 'make the file c.txt'", timeout=30000)
+    assert _until(lambda: _files(app) == ["a.txt", "b.txt"]), _files(app)
 
     # two more messages, then Edit the 4th: only its turn may go (checkpoint 5 here, not "the 4th")
     page.fill("#input", "")
@@ -144,10 +155,9 @@ def test_edit_and_try_again_go_back_to_their_own_message(page, app):
     assert _files(app) == ["a.txt", "b.txt", "c2.txt", "d.txt"]
     _msg_action(page, 3, "edit", confirm=False)
     page.wait_for_function("() => document.querySelectorAll('#col .msg-user').length === 3", timeout=30000)
-    time.sleep(0.5)
-    assert _users(page) == ["make the file a.txt", "make the file b.txt", "make the file c2.txt"]
-    assert _files(app) == ["a.txt", "b.txt", "c2.txt"]
-    assert page.input_value("#input") == "make the file d.txt"
+    assert _until(lambda: _users(page) == ["make the file a.txt", "make the file b.txt", "make the file c2.txt"]), _users(page)
+    assert _until(lambda: _files(app) == ["a.txt", "b.txt", "c2.txt"]), _files(app)
+    page.wait_for_function("() => document.querySelector('#input').value === 'make the file d.txt'", timeout=30000)
 
     # Try again under the last reply redoes that reply only
     page.fill("#input", "")
@@ -157,8 +167,8 @@ def test_edit_and_try_again_go_back_to_their_own_message(page, app):
     page.wait_for_function("() => (S.cur.view.turns || []).some(t => t.title === 'make the file c2.txt' && t.done && t.changed && t.changed.length)",
                            timeout=60000)                                                   # and the message ran again
     _idle(page, app, 3)
-    assert _users(page) == ["make the file a.txt", "make the file b.txt", "make the file c2.txt"]
-    assert _files(app) == ["a.txt", "b.txt", "c2.txt"]
+    assert _until(lambda: _users(page) == ["make the file a.txt", "make the file b.txt", "make the file c2.txt"]), _users(page)
+    assert _until(lambda: _files(app) == ["a.txt", "b.txt", "c2.txt"]), _files(app)
     assert page.errors == [], page.errors
 
 

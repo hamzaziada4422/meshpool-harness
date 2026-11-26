@@ -1145,8 +1145,8 @@ def _fit_shape(el, k, s, ctx, n, mult=(1.0, 1.0)):
         cut_words += cut
         bl[j]["text"] = " ".join(words[:-cut])
     if cut_words:
-        s["notes"] = (s.get("notes", "") + f"\n[QA] The text of slot {k} of the library layout was cut by about "
-                      f"{cut_words} words to fit its shape.").strip()
+        from .notes import qa
+        qa(s, f"The text of slot {k} of the library layout was cut by about {cut_words} words to fit its shape.")
         ctx.miss(n, f"slot {k} of the library layout", cut_words)
     _apply_blocks(el, bl, keep)
 
@@ -1414,7 +1414,10 @@ def _fallback_dict(s, why: str) -> dict:
         if s.get(key) is not None and fb.get(key) is None:
             fb[key] = s[key]
     fb = R.normalize(fb)
-    fb["notes"] = (s.get("notes", "") + f"\n[QA] The library layout was not used: {why}.").strip()
+    if s.get("notes"):
+        fb["notes"] = s["notes"]
+    from .notes import qa
+    qa(fb, f"The library layout was not used: {why}.")
     return fb
 
 
@@ -1480,12 +1483,12 @@ def _draw_fallback(ctx, s, sl, n, why):
     arch = fb.get("archetype")
     fn = R.ARCHETYPES.get(arch)
     if fn is None or arch == "library":
-        fb = _plain_fallback(s) | {"notes": fb.get("notes", "")}
+        fb = _plain_fallback(s) | {"notes": fb.get("notes", ""), "_qa": fb.get("_qa") or []}
         arch, fn = "argument_only", R.ARCHETYPES["argument_only"]
     sl._element.find(qn("p:cSld")).set("name", re.sub(r"arch:\w+", f"arch:{arch}",
                                                       sl._element.find(qn("p:cSld")).get("name") or ""))
     fn(ctx, fb, sl, n)
-    for key in ("notes", "source", "footnotes"):
+    for key in ("notes", "source", "footnotes", "_qa"):
         if fb.get(key) is not None:
             s[key] = fb[key]
 

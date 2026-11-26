@@ -12,7 +12,16 @@ Microsoft 365, Office 2021 or later on Windows and Mac, and Office on the web. O
 
 The panel is a web page that meshpool serves on this computer at `https://localhost:44317/office/taskpane.html`. Office loads it from there, so the panel only talks to the meshpool app running on your computer. meshpool then sends your request to the model you set up, the same as any other chat.
 
-That HTTPS address serves only the panel and the few calls it makes (start a chat, send, read, stop, answer an approval once), with a key of its own. The rest of the app is not reachable there, and the panel cannot pick a folder, an agent or a permission mode: its chats are plain Work chats with your usual settings.
+That HTTPS address serves only the panel and the few calls it makes (start a chat, send, read, stop, answer an approval once). The rest of the app is not reachable there, and the panel cannot pick a folder, an agent or a permission mode: its chats are plain Work chats with your usual settings.
+
+## Connecting the panel
+
+Anything on your computer can load the panel page, so the page carries no key. When you open the panel, it shows a six-digit code and asks the meshpool app to connect. The app shows the same code and asks you to allow it. Allow it only if the codes match. Until you do, the panel cannot start a chat, read your settings or answer an approval.
+
+- The connection lasts until meshpool quits. Close and reopen the panel, or restart meshpool, and it asks again.
+- The panel keeps its connection in memory, never on disk.
+- If more than one request is waiting, the app shows each code. Allow only the one your panel shows, and deny the rest.
+- Settings, Plugins, Office apps shows how many panels are connected, with a button that disconnects them all. Removing the add-in disconnects them too.
 
 Office loads add-in panels only over HTTPS, from a certificate the computer trusts. meshpool makes its own certificate for localhost. The certificate authority that signs it is limited to `localhost` and `127.0.0.1`, and its private key is thrown away as soon as the certificate is signed, so it cannot vouch for any other site.
 
