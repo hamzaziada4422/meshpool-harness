@@ -336,6 +336,8 @@ def test_the_footer_names_the_one_open_point():
         len(short) < 100 and "where:" not in short, short
     short, _ = CK.footer("", {"line": "Checked the deck. Things to look at: a; b."})
     assert short == "Checked · 2 to look at", short
+    short, _ = CK.footer("Checked as a guest: fixed nothing. Still open: 1 thing.", {"line": ""})
+    assert short == "Checked · 1 to look at", "a count names nothing: the fold holds the point"
 
 
 def test_a_reply_unsure_of_its_own_check_is_not_all_good():

@@ -496,6 +496,8 @@ def _brief(point: str, limit: int = 60) -> str:
     """One open point, short enough for the footer: "legend sits on top of the two most expensive bars"."""
     t = re.sub(r"\s*\([^)]*\)", "", str(point or ""))          # "(where: ...)" stays in the fold
     t = " ".join(t.split()).strip(" .;:,")
+    if re.match(r"(?:\d+|one|a|an|two|three|four|five)\s+(?:things?|problems?|issues?)\b", t, re.I):
+        return ""                                              # "Still open: 1 thing." names nothing
     if len(t) <= limit:
         return t
     cut = t[:limit].rsplit(" ", 1)[0].rstrip(" ,;:")
