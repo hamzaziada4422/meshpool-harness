@@ -481,3 +481,37 @@ def test_of15_hidden_text_check_reads_the_text_file_as_utf8(tmp_path, monkeypatc
     monkeypatch.setattr(pathlib.Path, "read_text", windows_locale)
     asked = "Retrieve reference text from reference.txt and add it to the end of project_report.docx"
     assert core._docx_hidden_text_miss(asked, tmp_path, since) == ""
+
+
+# ---------- OF-17: grading each best-of candidate left its PDF and page images in a temp folder for good ------------
+
+def test_of17_best_of_grading_leaves_no_temp_folder(tmp_path, monkeypatch):
+    import json
+    import tempfile
+    app = str(Path(__file__).resolve().parents[1])
+    if app not in sys.path:
+        sys.path.insert(0, app)
+    from engines.forge import common, select
+    from reportlab.pdfgen import canvas
+    tmp = tmp_path / "tmp"
+    tmp.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp))
+
+    def fake_convert(src, to, out_dir, timeout=240):
+        pdf = Path(out_dir) / (Path(src).stem + ".pdf")
+        c = canvas.Canvas(str(pdf), pagesize=(720, 405))
+        c.drawString(72, 200, "Slide one")
+        c.showPage()
+        c.save()
+        return pdf
+    monkeypatch.setattr(common, "soffice_convert", fake_convert)
+    (tmp_path / "deck.pptx").write_bytes(b"x")
+
+    class Client:
+        def chat(self, **kw):
+            assert kw["messages"][1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
+            scores = {k: 7 for k in select.KEYS}
+            return {"choices": [{"message": {"content": json.dumps(dict(scores, worst="none"))}}]}
+    got = select.judge(str(tmp_path / "deck.pptx"), Client())
+    assert got["mean"] == 7.0
+    assert list(tmp.iterdir()) == []
