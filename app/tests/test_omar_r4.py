@@ -256,3 +256,19 @@ def test_print_mode_writes_the_trimmed_answer(tmp_path):
     t.emit({"type": "reply_trim", "text": ANSWER})
     t.flush_held()
     assert out.getvalue().strip() == ANSWER
+
+
+# ---------------------------------------------------------------------------------------------- item 6
+def test_a_commit_trailer_keeps_the_word_claude_in_the_step_log():
+    from meshpool_harness.redact import redact
+    # "Co-Authored-By" holds "auth", which the key=value rule read as a secret name and hid the value after the colon
+    t = "git commit -m 'x' -m 'Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>'"
+    assert redact(t) == t
+    assert redact("Author: Alexander Smith\nAuthors: Alexander Smith") == "Author: Alexander Smith\nAuthors: Alexander Smith"
+
+
+@pytest.mark.parametrize("secret", ["AUTH_TOKEN=abcdef123456", "auth: abcdef123456", "Authorization=abcdef123456",
+                                    "x-auth-key: abcdef123456", "API_KEY=abcdef123456"])
+def test_real_secrets_are_still_hidden(secret):
+    from meshpool_harness.redact import HIDDEN, redact
+    assert HIDDEN in redact(secret) and "abcdef123456" not in redact(secret)
