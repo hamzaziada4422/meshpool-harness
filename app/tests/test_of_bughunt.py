@@ -129,3 +129,61 @@ def test_of16_pptx_replace_after_a_line_break_keeps_offsets(tmp_path):
     assert not err, msg
     tf = Presentation(str(tmp_path / "d (edited).pptx")).slides[0].shapes[0].text_frame
     assert [r.text for r in tf.paragraphs[0].runs] == ["Line one", "costs 250 now"]
+
+
+# ---------- OF-03, OF-04, OF-05, OF-06: Word reads lost content controls, tracked insertions, footers, footnotes ------
+
+def _w(xml: str):
+    """A Word XML element; the namespace goes on the outer tag."""
+    head, rest = xml.split(">", 1)
+    return parse_xml(f"{head} {nsdecls('w')}>{rest}")
+
+
+def test_of03_text_inside_a_content_control_is_read(tmp_path):
+    d = Document()
+    d.add_paragraph("Intro.")
+    d.element.body.insert(len(d.element.body) - 1, _w(
+        "<w:sdt><w:sdtContent><w:p><w:r><w:t>Inside a content control</w:t></w:r></w:p>"
+        "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>cell in a control</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+        "</w:sdtContent></w:sdt>"))
+    d.save(str(tmp_path / "a.docx"))
+    out = _read(tmp_path / "a.docx")
+    assert "Inside a content control" in out and "cell in a control" in out
+
+
+def test_of04_tracked_insertions_are_read_and_deletions_are_not(tmp_path):
+    d = Document()
+    p = d.add_paragraph()
+    p.add_run("Price is ")
+    p._p.append(_w('<w:ins w:id="1" w:author="a" w:date="2024-01-01T00:00:00Z"><w:r><w:t>500</w:t></w:r></w:ins>'))
+    p._p.append(_w('<w:del w:id="2" w:author="a" w:date="2024-01-01T00:00:00Z"><w:r><w:delText>400</w:delText></w:r></w:del>'))
+    p.add_run(" dollars.")
+    d.save(str(tmp_path / "a.docx"))
+    out = _read(tmp_path / "a.docx")
+    assert "Price is 500 dollars." in out and "400" not in out.split("[tracked")[0]
+    assert "1 insertion(s) and 1 deletion(s)" in out
+
+
+def test_of05_footer_is_read_when_the_header_has_text(tmp_path):
+    d = Document()
+    d.add_paragraph("Body")
+    d.sections[0].header.paragraphs[0].text = "HEADER TEXT"
+    d.sections[0].footer.paragraphs[0].text = "Page footer: confidential"
+    d.add_section()                                    # linked: the same header is not listed again
+    d.save(str(tmp_path / "a.docx"))
+    out = _read(tmp_path / "a.docx")
+    assert "[header] HEADER TEXT" in out and "[footer] Page footer: confidential" in out
+    assert out.count("HEADER TEXT") == 1
+
+
+def test_of06_footnotes_are_read(tmp_path):
+    d = Document()
+    d.add_paragraph("Revenue grew 12 percent.")
+    d.save(str(tmp_path / "a.docx"))
+    notes = (f'<w:footnotes {nsdecls("w")}><w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r>'
+             '</w:p></w:footnote><w:footnote w:id="1"><w:p><w:r><w:t>Source: annual report, page 4.</w:t></w:r>'
+             '</w:p></w:footnote></w:footnotes>')
+    with zipfile.ZipFile(tmp_path / "a.docx", "a") as z:
+        z.writestr("word/footnotes.xml", notes)
+    out = _read(tmp_path / "a.docx")
+    assert "## Footnotes" in out and "[^1] Source: annual report, page 4." in out

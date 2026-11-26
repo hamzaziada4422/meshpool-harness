@@ -263,21 +263,57 @@ def _picture_text(blobs: list[tuple[str, bytes]], ocr_mode: str) -> list[str]:
     return out
 
 
-def _docx(p: Path, ocr_mode: str = "auto") -> str:
-    import docx
-    d = docx.Document(str(p))
-    out = [f"# {p.name}"]
-    body = d.element.body
+_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_MC_FALLBACK = "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
+
+
+def _w_text(el) -> str:
+    """The text of a Word paragraph (or note) as it reads with every tracked change accepted: runs inside hyperlinks,
+    content controls, fields and insertions count; deleted and moved-away text does not, and the fallback copy of a
+    drawing is not read twice."""
+    out = []
+
+    def walk(e):
+        for c in e:
+            tag = c.tag if isinstance(c.tag, str) else ""
+            if tag in (_W + "del", _W + "moveFrom", _MC_FALLBACK, _W + "rPr", _W + "pPr", _W + "instrText"):
+                continue
+            if tag == _W + "t":
+                out.append(c.text or "")
+            elif tag == _W + "tab":
+                out.append("\t")
+            elif tag in (_W + "br", _W + "cr"):
+                out.append("\n")
+            elif tag == _W + "noBreakHyphen":
+                out.append("-")
+            else:
+                walk(c)
+    walk(el)
+    return "".join(out)
+
+
+def _paras_text(root) -> str:
+    """The paragraphs under root (a table cell, a header, a note) joined by spaces; a text box's paragraphs are read
+    once, as part of the paragraph that holds them."""
+    return " ".join(t for t in (_w_text(x).strip() for x in root.iter(_W + "p")
+                                if next(x.iterancestors(_W + "p"), None) is None) if t)
+
+
+def _docx_blocks(parent, d, out: list) -> None:
+    """Paragraphs and tables of a body (or a content control inside it) in order, as Markdown."""
     from docx.table import Table
     from docx.text.paragraph import Paragraph
-    for child in body.iterchildren():
-        tag = child.tag.rsplit("}", 1)[-1]
-        if tag == "p":
-            para = Paragraph(child, d)
-            t = para.text.strip()
+    for child in parent.iterchildren():
+        tag = child.tag if isinstance(child.tag, str) else ""
+        if tag == _W + "p":
+            t = _w_text(child).strip()
             if not t:
                 continue
-            st = (para.style.name if para.style is not None else "") or ""
+            para = Paragraph(child, d)
+            try:
+                st = (para.style.name if para.style is not None else "") or ""
+            except Exception:  # noqa: BLE001  a style id the styles part does not define
+                st = ""
             if st.startswith("Heading"):
                 lvl = re.sub(r"\D", "", st) or "1"
                 out.append("#" * min(6, int(lvl) + 1) + " " + t)
@@ -285,14 +321,61 @@ def _docx(p: Path, ocr_mode: str = "auto") -> str:
                 out.append("- " + t)
             else:
                 out.append(t)
-        elif tag == "tbl":
-            out.append(_md_table([[c.text.strip() for c in row.cells] for row in Table(child, d).rows]))
-    for s in d.sections:
-        for part in (s.header, s.footer):
-            t = " ".join(x.text for x in part.paragraphs if x.text.strip())
-            if t:
-                out.append(f"[{'header' if part is s.header else 'footer'}] {t}")
-                break
+        elif tag == _W + "tbl":
+            out.append(_md_table([[_paras_text(c._tc) for c in row.cells] for row in Table(child, d).rows]))
+        elif tag in (_W + "sdt", _W + "customXml"):          # content controls: a table of contents, a form field
+            content = child.find(_W + "sdtContent") if tag == _W + "sdt" else child
+            if content is not None:
+                _docx_blocks(content, d, out)
+
+
+def _docx_notes(p: Path) -> list[str]:
+    """Footnotes and endnotes, which python-docx does not read: "[^1] text" lines under their own headings."""
+    from lxml import etree
+    out = []
+    try:
+        with zipfile.ZipFile(str(p)) as z:
+            names = set(z.namelist())
+            for part, kind, title in (("word/footnotes.xml", "footnote", "Footnotes"),
+                                      ("word/endnotes.xml", "endnote", "Endnotes")):
+                if part not in names:
+                    continue
+                root = etree.fromstring(z.read(part), etree.XMLParser(resolve_entities=False, no_network=True))
+                rows = []
+                for n in root.iter(_W + kind):
+                    if n.get(_W + "type") in ("separator", "continuationSeparator", "continuationNotice"):
+                        continue
+                    t = _paras_text(n)
+                    if t:
+                        rows.append(f"[^{n.get(_W + 'id')}] {t}")
+                if rows:
+                    out.append(f"\n## {title}\n" + "\n".join(rows))
+    except Exception:  # noqa: BLE001  notes are extra: a damaged part never fails the read
+        return []
+    return out
+
+
+def _docx(p: Path, ocr_mode: str = "auto") -> str:
+    import docx
+    d = docx.Document(str(p))
+    out = [f"# {p.name}"]
+    _docx_blocks(d.element.body, d, out)
+    revs = [sum(1 for e in d.element.body.iter(_W + t) if e.getparent().tag != _W + "rPr") for t in ("ins", "del")]
+    shown = set()
+    for s in d.sections:                    # every section's header and footer (a linked one is the same text)
+        for label, part in (("header", s.header), ("footer", s.footer), ("first page header", s.first_page_header),
+                            ("first page footer", s.first_page_footer), ("even page header", s.even_page_header),
+                            ("even page footer", s.even_page_footer)):
+            if part.is_linked_to_previous:
+                continue
+            t = _paras_text(part._element)
+            if t and (label, t) not in shown:
+                shown.add((label, t))
+                out.append(f"[{label}] {t}")
+    out += _docx_notes(p)
+    if revs[0] or revs[1]:
+        out.append(f"[tracked changes: {revs[0]} insertion(s) and {revs[1]} deletion(s) not yet accepted; the text "
+                   "above reads as if they were accepted]")
     blobs = [(Path(r.target_ref).name, r.target_part.blob) for r in d.part.rels.values()
              if "image" in r.reltype and not r.is_external]
     out += _picture_text(blobs, ocr_mode)
