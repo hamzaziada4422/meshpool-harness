@@ -143,3 +143,35 @@ def test_pf04_a_start_without_the_model_step_says_step_1(tmp_path):
                      "full = 1; console.log([say(onbSteps(1)), say(onbSteps(2)), say(onbSteps(3))].join('|'));\n")
     out = subprocess.run([node, str(probe)], capture_output=True, text=True, timeout=30).stdout.splitlines()
     assert out == ["Step 1 of 2 1|Step 2 of 2 2", "Step 1 of 3 1|Step 2 of 3 2|Step 3 of 3 3"]
+
+
+# ---------- PF-05: systemd-inhibit that exits at once stayed a zombie child for the whole turn ----------------------
+
+def test_pf05_a_holder_that_exits_is_reaped_and_not_started_again(monkeypatch):
+    import subprocess
+    from meshpool_harness import awake as AW
+    monkeypatch.setattr(AW, "_count", 0)
+    monkeypatch.setattr(AW, "_proc", None)
+    monkeypatch.setattr(AW, "_gave_up", False, raising=False)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.delenv("MH_KEEP_AWAKE", raising=False)
+    # what systemd-inhibit does with no D-Bus: "Failed to connect to bus", exit 1
+    monkeypatch.setattr(AW, "_command", lambda: [sys.executable, "-c", "raise SystemExit(1)"])
+    made, real = [], subprocess.Popen
+
+    def popen(*a, **k):
+        made.append(real(*a, **k))
+        return made[-1]
+    monkeypatch.setattr(AW.subprocess, "Popen", popen)
+    AW.hold()
+    try:
+        t0 = time.time()
+        while made[0].returncode is None and time.time() - t0 < 5:    # nothing here waits on it: only the app can
+            time.sleep(0.05)
+        assert made[0].returncode == 1                                # reaped while the turn still runs
+        assert AW._proc is None
+    finally:
+        AW.release()
+    AW.hold()                                                          # the next turn does not start a dead holder
+    AW.release()
+    assert len(made) == 1
