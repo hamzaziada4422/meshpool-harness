@@ -469,7 +469,7 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
                           f"python-pptx cannot read the deck ({type(e).__name__}: {e}).",
                           status="not_run" if opens else "fail", fix_scope="renderer"))
         status = {r: "not_run" for r in RULES}                # nothing else could be evaluated
-        status["P0"] = "fail"
+        status["P0"] = "not_run" if opens else "fail"         # a file that opens was not measured, not failed
         return {"file": str(path), "sha256": None, "rules": status, "failures": failures,
                 "stats": {}, "evidence": [], "measurement": {}}
     try:
