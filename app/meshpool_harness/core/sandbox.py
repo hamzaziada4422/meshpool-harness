@@ -168,14 +168,15 @@ def _office_profile() -> str | None:
     return str(d)
 
 
-def wrap(argv: list[str], root, platform: str | None = None, which=shutil.which, cwd=None, mode: str | None = None) -> list[str]:
+def wrap(argv: list[str], root, platform: str | None = None, which=shutil.which, cwd=None, mode: str | None = None,
+         offline: bool = False) -> list[str]:
     """argv, wrapped so it can only write where it should. Unchanged when the sandbox is off or unavailable (with a
-    notice, once, when it was wanted)."""
+    notice, once, when it was wanted). offline: no network for this command (one that ran without a question)."""
     if not requested(mode):
         return argv
     plat = platform or sys.platform
     root = Path(root).resolve()
-    net = network_allowed()
+    net = network_allowed() and not offline
     if plat.startswith("linux") and which("bwrap"):
         out = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--die-with-parent", "--unshare-pid"]
         if not net:
@@ -196,7 +197,7 @@ def wrap(argv: list[str], root, platform: str | None = None, which=shutil.which,
         prof = _office_profile()
         if prof:
             out += ["--bind", prof, prof, "--setenv", "UserInstallation", Path(prof).as_uri()]
-        return out + ["--chdir",str(Path(cwd).resolve() if cwd else root), "--"] + argv
+        return out + ["--chdir", str(Path(cwd).resolve() if cwd else root), "--"] + argv
     if plat == "darwin" and which("sandbox-exec"):
         ws = _writable(root)
         allow = "".join(f'(subpath "{p}")' for p in ws + ["/private/tmp", "/private/var/folders"])

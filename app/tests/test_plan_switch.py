@@ -92,6 +92,9 @@ def test_build_card_only_on_plan_turns(page):
             applyEv({type: "assistant", text, streamed: false, has_tools: false});
             applyEv({type: "turn_end", turn: {}, session: {}});
         }""", [plan, text])
+        # the page draws streamed events on animation frames: wait for two, so the count below sees what was drawn
+        # (under a loaded CI runner the check ran before the frame and saw the old count)
+        page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
     turn(False, "An old answer")
     assert page.locator(".buildplan").count() == 0       # old answers get no card just because plan mode is on now
     turn(True, "1. do it")
