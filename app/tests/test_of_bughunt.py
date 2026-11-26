@@ -425,3 +425,37 @@ def test_of12_convert_uses_its_own_profile_and_a_timeout_ends_the_whole_tree(tmp
     while _alive(child) and time.time() < end:
         time.sleep(0.05)
     assert not _alive(child), "the process soffice started was left running"
+
+
+# ---------- OF-13: a workbook with a chart sheet could not be read at all; hidden sheets read as visible ------------
+
+def test_of13_a_chart_sheet_does_not_fail_the_whole_workbook(tmp_path):
+    import openpyxl
+    from openpyxl.chart import BarChart, Reference
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for i in range(1, 5):
+        ws.append([i, i * 2])
+    ch = BarChart()
+    ch.add_data(Reference(ws, min_col=2, min_row=1, max_row=4))
+    wb.create_chartsheet("Chart1").add_chart(ch)
+    wb.save(str(tmp_path / "cs.xlsx"))
+    out = _read(tmp_path / "cs.xlsx")
+    assert not out.startswith("Could not read"), out
+    assert "| 4 | 8 |" in out and "## Chart sheet: Chart1" in out
+
+
+def test_of13_hidden_sheets_are_marked_and_a_wrong_sheet_name_lists_the_sheets(tmp_path):
+    import openpyxl
+    wb = openpyxl.Workbook()
+    wb.active["A1"] = "shown"
+    h = wb.create_sheet("Workings")
+    h["A1"] = "old numbers"
+    h.sheet_state = "hidden"
+    wb.save(str(tmp_path / "h.xlsx"))
+    out = _read(tmp_path / "h.xlsx")
+    assert "Sheets: Sheet, Workings (hidden)" in out
+    assert "## Sheet: Workings (1 rows x 1 columns) [hidden sheet: not shown in Excel]" in out
+    out = _read(tmp_path / "h.xlsx", sheet="Nope")
+    assert out == "h.xlsx has no sheet named 'Nope'. Sheets: Sheet, Workings (hidden)"
+    assert "old numbers" in _read(tmp_path / "h.xlsx", sheet="workings")

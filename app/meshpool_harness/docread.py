@@ -521,14 +521,33 @@ def _xlsx(p: Path, sheet: str | None = None, rows: int = 200) -> str:
                     pass
 
 
+def _sheet_state(ws) -> str:
+    st = getattr(ws, "sheet_state", "visible") or "visible"
+    return {"hidden": "hidden", "veryHidden": "very hidden"}.get(st, "")
+
+
 def _xlsx_text(p: Path, vals, forms, sheet: str | None, rows: int) -> str:
-    out = [f"# {p.name}\nSheets: " + ", ".join(vals.sheetnames)]
-    for name in ([sheet] if sheet else vals.sheetnames):
+    names = vals.sheetnames
+    listed = [n + (f" ({_sheet_state(vals[n])})" if _sheet_state(vals[n]) else "") for n in names]
+    out = [f"# {p.name}\nSheets: " + ", ".join(listed)]
+    if sheet and sheet not in names:
+        match = [n for n in names if n.strip().lower() == str(sheet).strip().lower()]
+        if not match:
+            return f"{p.name} has no sheet named {sheet!r}. Sheets: {', '.join(listed)}"
+        sheet = match[0]
+    for name in ([sheet] if sheet else names):
         ws = vals[name]
-        fws = forms[name] if forms else None
+        if not hasattr(ws, "iter_rows"):            # a chart sheet: a chart on its own tab, no cells (it failed the read)
+            out.append(f"\n## Chart sheet: {name} (a chart, no cells)")
+            continue
+        try:
+            fws = forms[name] if forms else None
+        except KeyError:
+            fws = None
         # read-only sheets saved without a <dimension> report max_row/max_column as None: count while reading
         size = f" ({ws.max_row} rows x {ws.max_column} columns)" if ws.max_row and ws.max_column else ""
-        out.append(f"\n## Sheet: {name}{size}")
+        state = _sheet_state(ws)
+        out.append(f"\n## Sheet: {name}{size}" + (f" [{state} sheet: not shown in Excel]" if state else ""))
         table, nform, more = [], 0, False
         frows = fws.iter_rows(max_row=rows) if fws is not None else None
         for r_i, row in enumerate(ws.iter_rows(values_only=True)):
@@ -559,10 +578,15 @@ def _xlsx_text(p: Path, vals, forms, sheet: str | None, rows: int) -> str:
 def _xls(p: Path, sheet: str | None = None, rows: int = 200) -> str:
     import xlrd
     wb = xlrd.open_workbook(str(p))
-    out = [f"# {p.name}\nSheets: " + ", ".join(wb.sheet_names())]
+    hidden = {s.name: {1: "hidden", 2: "very hidden"}.get(s.visibility, "") for s in wb.sheets()}
+    listed = [n + (f" ({hidden[n]})" if hidden.get(n) else "") for n in wb.sheet_names()]
+    out = [f"# {p.name}\nSheets: " + ", ".join(listed)]
+    if sheet and sheet not in wb.sheet_names():
+        return f"{p.name} has no sheet named {sheet!r}. Sheets: {', '.join(listed)}"
     for name in ([sheet] if sheet else wb.sheet_names()):
         sh = wb.sheet_by_name(name)
-        out.append(f"\n## Sheet: {name} ({sh.nrows} rows x {sh.ncols} columns)")
+        out.append(f"\n## Sheet: {name} ({sh.nrows} rows x {sh.ncols} columns)"
+                   + (f" [{hidden[name]} sheet: not shown in Excel]" if hidden.get(name) else ""))
         out.append(_md_table([[str(c) for c in sh.row_values(r)] for r in range(min(rows, sh.nrows))]) or "(empty)")
     return "\n".join(out)
 
