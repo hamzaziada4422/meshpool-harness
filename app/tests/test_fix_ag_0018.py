@@ -208,3 +208,30 @@ def test_killed_twice_guard_needs_a_real_kill_and_no_change(env):
     assert len(runs2) == 3 and "killed twice" not in out
     out = [b._repeat_guard(_shell_call("python3 big.py"), g2) for _ in range(2)][-1]
     assert len(runs2) == 4 and "killed twice" in out         # killed twice with no change since: refused
+
+
+# AG-10: the log facts kept at compaction (files changed, commands and exit codes, the plan) knew only the classic
+# tools, so in the default code lane (shell, apply_patch, update_plan) the note kept none of them.
+def test_compaction_facts_cover_the_codex_style_tools():
+    import json
+    from meshpool_harness.agent import compaction as CP
+
+    def call(cid, name, args):
+        return {"id": cid, "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+    patch = "*** Begin Patch\n*** Update File: src/app.py\n@@\n-a\n+b\n*** Add File: tests/test_app.py\n+x\n*** End Patch"
+    middle = [
+        {"role": "assistant", "content": "", "tool_calls": [
+            call("1", "apply_patch", {"input": patch}),
+            call("2", "shell", {"command": ["bash", "-lc", "pytest -q"]}),
+            call("3", "shell", {"command": ["bash", "-lc", "cd lib && apply_patch <<'EOF'\n*** Begin Patch\n"
+                                            "*** Add File: util.py\n+y\n*** End Patch\nEOF\n"]}),
+            call("4", "update_plan", {"plan": [{"step": "fix the parser", "status": "in_progress"}]})]},
+        {"role": "tool", "tool_call_id": "1", "content": "Success. Updated the following files:\nM src/app.py"},
+        {"role": "tool", "tool_call_id": "2", "content": "[exit 1]\n1 failed"},
+        {"role": "tool", "tool_call_id": "3", "content": "Success."},
+        {"role": "tool", "tool_call_id": "4", "content": "Plan updated"},
+    ]
+    notes = CP.rule_notes(middle)
+    assert "src/app.py" in notes and "tests/test_app.py" in notes and "util.py" in notes
+    assert "pytest -q (exit 1)" in notes and "Commands that failed" in notes
+    assert "fix the parser" in notes
