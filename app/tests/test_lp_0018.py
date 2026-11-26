@@ -231,3 +231,34 @@ def test_lp05_old_uploads_nothing_points_at_are_removed(tmp_path, monkeypatch):
     upload("aaaa0005", old)
     (home / "brand" / "profiles.json").write_text("{not json")
     assert S.prune_uploads() == []                       # cannot tell what the profiles name: keep everything
+
+
+def test_lp06_macos_sandbox_keeps_the_data_folder_read_only(tmp_path, monkeypatch):
+    """LP-06: when MH_SANDBOX_WRITE covers meshpool's data folder, the Seatbelt profile denies writes there after its
+    allow rules, and gives back only the folder the command works in (as bwrap does since AG-15)."""
+    from meshpool_harness.core import sandbox as SB
+    data = (tmp_path / "Library" / "meshpool").resolve()
+    job = data / "runs" / "job"
+    job.mkdir(parents=True)
+    monkeypatch.setenv("MESHPOOL_HOME", str(data))
+    monkeypatch.setenv("MH_SANDBOX", "1")
+    monkeypatch.setenv("MH_SANDBOX_WRITE", str(tmp_path / "Library"))
+    which = lambda name: "/usr/bin/" + name  # noqa: E731
+
+    def profile(root):
+        argv = SB.wrap(["bash", "-c", "true"], root, platform="darwin", which=which)
+        assert argv[:2] == ["sandbox-exec", "-p"]
+        return argv[2]
+    proj = (tmp_path / "proj").resolve()
+    proj.mkdir()
+    p = profile(proj)
+    allow_lib = p.index(f'(subpath "{tmp_path / "Library"}")')
+    deny = p.index(f'(deny file-write* (subpath "{data}"))')
+    assert deny > allow_lib                                # the later rule wins in Seatbelt
+    assert p.rfind(f'(subpath "{data}') == deny + len('(deny file-write* ')   # nothing in it is given back
+    p = profile(job)                                       # an engine's folder inside the data folder
+    deny = p.index(f'(deny file-write* (subpath "{data}"))')
+    assert p.rindex(f'(subpath "{job}")') > deny
+
+    monkeypatch.setattr(SB, "_writable", lambda root: [str(root)])   # nothing covers the data folder: as before
+    assert "(deny file-write* (subpath" not in profile(proj)
