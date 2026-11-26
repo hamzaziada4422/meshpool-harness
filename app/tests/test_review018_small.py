@@ -1,7 +1,7 @@
 """Release review nits, 0.0.18: small fixes with small tests.
 
 - steps_retried is in the transcript keep list (_KEEP), so it is saved soon after it is shown.
-- The permissions note is not empty on Linux, and the page hides an empty one.
+- The page draws no empty permissions note (Linux has none).
 - An outside engine asks before it changes a file open in Office in Full access too.
 """
 import sys
@@ -30,9 +30,9 @@ def test_steps_retried_is_kept_with_the_transcript():
     assert saved == [1]
 
 
-def test_the_permissions_note_is_not_empty_here_and_an_empty_one_is_hidden():
+def test_an_empty_permissions_note_is_hidden():
+    """Linux has no permission rows and no note (round 2 took the Linux line out): no empty pnote is drawn."""
     from meshpool_harness.ui import desktop as D
-    assert D.permissions()["note"].strip()
     src = (Path(D.__file__).parent / "app.js").read_text(encoding="utf-8")
     assert '(r.note ? `<li class="pnote">${esc(r.note)}</li>` : "")' in src
     assert '$("#oPermH", card).hidden = !rows.length && !r.note;' in src
