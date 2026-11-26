@@ -177,3 +177,15 @@ def test_the_page_never_shows_the_title_twice():
     js = (Path(__file__).resolve().parents[1] / "meshpool_harness" / "ui" / "app.js").read_text(encoding="utf-8")
     pa = js[js.index("function plainApproval("):][:900]
     assert "never the title twice" in pa and 'String(ev.title || "")' in pa
+
+
+def test_segoe_ui_is_measured_as_the_face_libreoffice_draws():
+    """Release review: LibreOffice draws Segoe UI with the bundled Selawik (FONT_SUBSTITUTES), but the overflow check
+    measured it as whatever fc-match named on the machine (Inter here): every PointCard2 'overflowed' on one computer
+    and not on another. It is now measured as Selawik with or without a metric map."""
+    from engines.forge import common as CM
+    CM.font_file.cache_clear()
+    for fam in ("Segoe UI", "Segoe UI Semibold"):
+        for metric in ((), (("Calibri", "Carlito"),)):
+            path, _ = CM.font_file(fam, False, False, metric)
+            assert path and Path(path).name.startswith("Selawik"), (fam, metric, path)

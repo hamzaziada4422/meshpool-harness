@@ -282,7 +282,10 @@ def font_file(family: str, bold: bool = False, italic: bool = False, metric_map:
     mapping = dict(metric_map)
     style = ("Bold" if bold else "") + ("Italic" if italic else "")
     # fonts shipped with the engine come first: measuring is then exact on every computer (fc-match is Linux-only)
-    for name in (family, mapping.get(family)):
+    # ...and a face LibreOffice is told to draw with a bundled one (FONT_SUBSTITUTES: Segoe UI as Selawik) is measured
+    # as that face whatever map the caller passed: measure_pptx's rules map has no Segoe UI, so since the substitute
+    # rule below it was measured as whatever fc-match names (Inter on one machine), and fitted text "overflowed"
+    for name in (family, mapping.get(family), FONT_SUBSTITUTES.get(family)):
         own = BUNDLED.get((name or "").lower())
         if own and not italic:
             path = Path(__file__).with_name("fonts") / own[1 if bold else 0]
