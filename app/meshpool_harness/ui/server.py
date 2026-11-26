@@ -32,9 +32,22 @@ RUNS = C.runs_dir()
 UPLOADS = RUNS / "_uploads"
 EXTRA_PREFIXES = ("/api/memory", "/api/xray", "/api/insights", "/api/work", "/api/summaries", "/api/receipt",
                   "/api/checks", "/api/firstrun", "/api/away", "/api/scheduler", "/api/fs", "/api/browser/",
-                  "/api/worktree")
+                  "/api/worktree", "/api/trust", "/api/office", "/api/rules")
 
 TOKEN = secrets.token_urlsafe(24)
+OF_DIR = HERE.parent / "office"
+_ICONS: dict = {}
+# The Office panel's own token: good only on the HTTPS listener and only for the few calls the panel makes.
+OFFICE_TOKEN = secrets.token_urlsafe(24)
+# A chat's event stream sends what is new at most about 30 times a second: a streaming reply came as ~80 frames a
+# second at 10 ms, each one parsed and applied by the page (CPU audit). The page paces the text per animation frame.
+SSE_FRAME_S = 0.03
+# Only Office on the web may show the panel in a frame (its add-in frames live on these hosts; the desktop apps do not
+# frame it). No SharePoint or live.com: any tenant can put pages there.
+OFFICE_FRAMES = ("frame-ancestors 'self' https://*.officeapps.live.com https://*.office.com https://*.office365.com "
+                 "https://*.microsoft365.com https://*.cloud.microsoft")
+OFFICE_HTTPD: list = []
+OFFICE_CHATS: set = set()      # the chats the Office panel started: the only ones its token reaches
 # The page that carries TOKEN is served only to the app's own window: it opens app_url(port), whose launch key sets an
 # HttpOnly, SameSite=Strict session cookie. Any other local process (a sandboxed command, a script the user allowed)
 # that asks for / gets no token, so it cannot reach /api/term or /api/settings (security review: `curl
@@ -357,9 +370,21 @@ class Handler(BaseHTTPRequestHandler):
                 with s.lock:                      # wake the moment an event arrives; 0.25 s at most for a state change
                     if len(s.events) <= cursor and s.state == last_state:
                         s.changed.wait(0.25)
-                time.sleep(0.01)                  # let a burst of text_delta pile up into one frame
+                time.sleep(SSE_FRAME_S)           # let a burst of text_delta pile up into one frame
         except (BrokenPipeError, ConnectionResetError, OSError):
             return
+
+    def _office(self, name: str, size: str | None):
+        from meshpool_harness import office as OF
+        if size:
+            png = _ICONS.get(size) or _ICONS.setdefault(size, OF.icon_png(int(size)))
+            return self._send(200, png, "image/png", {"Cache-Control": "max-age=86400"})
+        data = (OF_DIR / name).read_bytes()
+        if name == "taskpane.html":
+            data = data.replace(b"__MESHPOOL_TOKEN__", OFFICE_TOKEN.encode())
+        ctype = {"html": "text/html; charset=utf-8", "js": "text/javascript; charset=utf-8",
+                 "css": "text/css; charset=utf-8"}[name.rsplit(".", 1)[1]]
+        return self._send(200, data, ctype, {"Content-Security-Policy": OFFICE_FRAMES} if name.endswith(".html") else None)
 
     def do_GET(self):
         if not self._host_ok():
@@ -1128,6 +1153,8 @@ class Handler(BaseHTTPRequestHandler):
                     CN.set_token(cid, tok)
                 elif act == "enable":
                     CN.set_enabled(cid, bool(b.get("on")))
+                elif act == "read_only":
+                    CN.set_read_only(cid, bool(b.get("on")))
                 elif act == "disconnect":
                     CN.disconnect(cid)
                 C.load_into_env(override=True)
@@ -1154,6 +1181,18 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/threads/([\w-]+)", u.path)
             if m:
                 return self._send(200, A.thread_action(m.group(1), self._json()))
+            m = re.fullmatch(r"/api/agent/([\w-]+)/add_dir", u.path)    # /add-dir: another folder for this chat
+            if m:
+                s_ = A.get(m.group(1))
+                if not hasattr(s_.agent, "add_dir"):
+                    raise ValueError("Adding a folder works with Meshpool's own agents.")
+                return self._send(200, {"folder": s_.agent.add_dir(str(self._json().get("path") or ""))})
+            m = re.fullmatch(r"/api/agent/([\w-]+)/btw", u.path)        # a side question, kept out of the chat
+            if m:
+                s_ = A.get(m.group(1))
+                if not hasattr(s_.agent, "side_question"):
+                    raise ValueError("Side questions work with Meshpool's own agents.")
+                return self._send(200, {"answer": s_.agent.side_question(str(self._json().get("question") or ""))})
             m = re.fullmatch(r"/api/agent/([\w-]+)/(model|plan|goal|revert|route|harness|style|effort)", u.path)
             if m:
                 return self._send(200, A.session_action(m.group(1), m.group(2), self._json()))
@@ -1170,7 +1209,7 @@ class Handler(BaseHTTPRequestHandler):
                 s, b = A.get(m.group(1)), self._json()
                 s.reply(b.get("question_id", ""), b.get("answers"))
                 return self._send(200, s.view(int(b.get("since", 10**9))))
-            m = re.fullmatch(r"/api/agent/([\w-]+)/(send|stop|answer|mode|compact|grade)", u.path)
+            m = re.fullmatch(r"/api/agent/([\w-]+)/(send|stop|answer|mode|compact|grade|take_back)", u.path)
             if m:
                 return self._send(200, A.session_action(m.group(1), m.group(2), self._json()))
         except KeyError as e:
@@ -1304,6 +1343,7 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     except Exception:  # noqa: BLE001
         pass
     threading.Thread(target=A.probe_mcp, daemon=True).start()
+    office = _start_office()
     ON_QUIT.append(HR.stop_login)                   # an unfinished ChatGPT sign-in does not outlive the app
     threading.Thread(target=A.recover_worktrees, daemon=True).start()   # copies a crash or a deleted chat left
     if desktop:                                     # background update checks and downloads; install on quit
@@ -1320,6 +1360,8 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     print(f"  Open {url} in your browser if it did not open by itself.")
     print(f"  Settings file: {C.config_path()}")
     print(f"  Task outputs:  {RUNS}")
+    if office:
+        print(f"  Office panel:  {office}")
     print("  Use Quit in the app to stop Meshpool." if desktop else "  Close this window (or press Ctrl+C) to stop Meshpool.")
     print("", flush=True)                           # a log file gets the address now, not when its buffer fills
     if open_browser:
@@ -1331,7 +1373,121 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     finally:
         A.close_all()
         httpd.server_close()
+        for srv in OFFICE_HTTPD:
+            srv.shutdown()
+            srv.server_close()
     return 0
+
+
+class OfficeHandler(Handler):
+    """The HTTPS listener Excel, PowerPoint and Word load the panel from. It serves the panel's files and the few
+    calls the panel makes (start a chat, send, read, stop, answer an approval, read settings), with the panel's own
+    token. Nothing else of the app is reachable here, and what the panel can ask for is narrowed (_json)."""
+    timeout = 60                                      # an idle or half-open connection never holds a thread for good
+    _FILES = re.compile(r"/office/(taskpane\.html|taskpane\.js|taskpane\.css|compat\.js|commands\.html|help\.html|"
+                        r"icon-(16|32|64|80)\.png)")
+    _GET = re.compile(r"/api/agent/[\w-]+|/api/settings")
+    _POST = re.compile(r"/api/agent(/[\w-]+/(send|stop|answer))?")
+
+    def _gate(self) -> bool:
+        if not self._host_ok():
+            self._send(403, {"error": "forbidden"})
+            return False
+        path = urlparse(self.path).path
+        if self.command == "GET" and (self._FILES.fullmatch(path) or path == "/healthz"):
+            return True
+        rule = self._GET if self.command == "GET" else self._POST
+        if not rule.fullmatch(path):
+            self._send(404, {"error": "not found"})
+            return False
+        if self.headers.get("X-Meshpool-Token") != OFFICE_TOKEN:
+            self._send(403, {"error": "forbidden"})
+            return False
+        m = re.fullmatch(r"/api/agent/([\w-]+)(/.*)?", path)
+        if m and m.group(1) in A.DELETED:             # a deleted chat: forgotten here too
+            OFFICE_CHATS.discard(m.group(1))
+        if m and m.group(1) not in OFFICE_CHATS:      # a chat of the app's own: never through the panel's token
+            self._send(403, {"error": "forbidden"})
+            return False
+        self.headers.replace_header("X-Meshpool-Token", TOKEN)     # the app's own checks, unchanged, from here on
+        return True
+
+    def _json(self) -> dict:
+        b = super()._json()
+        path = urlparse(self.path).path
+        if path == "/api/agent":                      # a plain Work chat: no folder, harness or mode from the panel
+            return {"kind": "cowork", "task": str(b.get("task") or "")[:500]}
+        if path.endswith("/send"):
+            return {"text": str(b.get("text") or ""), "since": b.get("since", 10 ** 9)}
+        if path.endswith("/answer"):                  # once only: "always" answers belong in the app
+            return {"id": b.get("id", 0), "decision": "yes" if b.get("decision") == "yes" else "no",
+                    "since": b.get("since", 10 ** 9)}
+        return {"since": b.get("since", 10 ** 9)}
+
+    def _send(self, code: int, body, ctype="application/json; charset=utf-8", extra=None):
+        if self.command == "POST" and code == 200 and isinstance(body, dict) and body.get("id") and \
+                urlparse(self.path).path == "/api/agent":
+            OFFICE_CHATS.add(str(body["id"]))         # a chat this panel started: its later calls may reach it
+        return super()._send(code, body, ctype, extra)
+
+    def do_GET(self):
+        if not self._gate():
+            return None
+        m = self._FILES.fullmatch(urlparse(self.path).path)
+        if m:
+            return self._office(m.group(1), m.group(2))
+        return super().do_GET()
+
+    def do_POST(self):
+        if not self._gate():
+            return None
+        return super().do_POST()
+
+
+class _OfficeServer(_Server):
+    def handle_error(self, request, client_address):
+        import ssl
+        if isinstance(sys.exc_info()[1], (ssl.SSLError, ConnectionError, TimeoutError)):
+            return                                    # a client that refused the certificate or went away
+        super().handle_error(request, client_address)
+
+
+def _start_office() -> str:
+    """The HTTPS listener Excel, PowerPoint and Word load the meshpool panel from, once `meshpool office install`
+    made a certificate. Localhost only (IPv4 and, where there is one, IPv6); see OfficeHandler for what it serves."""
+    if os.environ.get("MH_OFFICE") == "0":
+        return ""
+    import socket
+    import ssl
+    from meshpool_harness import office as OF
+    cp = OF.cert_paths()
+    if not cp or not (OF.folder() / "manifest.xml").exists():     # only once the add-in was set up here
+        return ""
+    try:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.load_cert_chain(str(cp[0]), str(cp[1]))
+    except (OSError, ssl.SSLError) as e:
+        print(f"  The Office panel is off: its certificate did not load ({e}). Run: meshpool office install")
+        return ""
+
+    class _V6(_OfficeServer):
+        address_family = socket.AF_INET6
+
+    for cls, host in ((_OfficeServer, "127.0.0.1"), (_V6, "::1")):
+        try:
+            srv = cls((host, OF.port()), OfficeHandler)
+        except OSError as e:
+            if host == "127.0.0.1":
+                print(f"  The Office panel is off: port {OF.port()} is in use ({e}). Set MH_OFFICE_PORT to another one "
+                      "and run: meshpool office install")
+                return ""
+            continue                                      # no IPv6 loopback here
+        # the TLS handshake happens in the request's own thread, so a slow client never holds up the others
+        srv.socket = ctx.wrap_socket(srv.socket, server_side=True, do_handshake_on_connect=False)
+        OFFICE_HTTPD.append(srv)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return OF.base_url() + "/office/taskpane.html"
 
 
 def _default_project() -> Path:

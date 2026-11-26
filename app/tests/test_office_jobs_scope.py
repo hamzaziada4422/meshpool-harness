@@ -127,5 +127,16 @@ def test_manager_passes_chat_id_to_the_office_server():
     m = mcp.Manager.__new__(mcp.Manager)
     m.chat = "chat-A"
     spec = {"command": "python", "args": ["-m", "meshpool_harness.agent.office_mcp_server"]}
-    assert m._with_chat(spec)["env"]["MH_CHAT_ID"] == "chat-A"
+    got = m._with_chat(spec)       # with each call (_chat), not in the env: one office process serves every chat
+    assert got["chat_id"] == "chat-A" and got["per_call_project"] and "MH_CHAT_ID" not in (got.get("env") or {})
     assert "env" not in m._with_chat({"command": "x", "args": ["other.py"]})
+
+
+def test_office_scope_is_the_calling_chat(monkeypatch):
+    monkeypatch.delenv("MH_CHAT_ID", raising=False)
+    O._CALL.chat = "chat-B"
+    try:
+        assert O._scope() == "chat-B"
+    finally:
+        O._CALL.chat = None
+    assert O._scope().startswith("pid")

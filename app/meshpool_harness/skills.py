@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import zipfile
 from pathlib import Path
 
@@ -97,6 +98,33 @@ def parse(text: str) -> tuple[dict, str]:
     return meta, body
 
 
+def _front_list(text: str, *keys: str) -> list[str]:
+    """A front-matter value that may be a list: a YAML list, [a, b], or a comma or space separated line."""
+    if not text.startswith("---"):
+        return []
+    end = text.find("\n---", 3)
+    if end < 0 or not any(f"\n{k}:" in text[:end + 1] for k in keys):   # cheap: most skills have none of these
+        return []
+    raw = None
+    try:
+        import yaml
+        doc = yaml.load(text[3:end], Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
+        if isinstance(doc, dict):
+            raw = next((doc[k] for k in keys if doc.get(k) not in (None, "")), None)
+    except Exception:  # noqa: BLE001
+        raw = None
+    if raw is None:
+        meta, _ = parse(text)
+        raw = next((meta[k] for k in keys if meta.get(k)), "")
+    items = raw if isinstance(raw, list) else re.split(r"[,\s]+", str(raw).strip("[]"))
+    return [str(x).strip().strip("'\"") for x in items if str(x).strip().strip("'\"")]
+
+
+def _flag(meta: dict, key: str, default: bool) -> bool:
+    v = str(meta.get(key, meta.get(key.replace("-", "_"), ""))).strip().lower()
+    return default if v == "" else v in ("true", "yes", "1", "on")
+
+
 def front_matter(**kv) -> str:
     """A SKILL.md front matter block. Values are written as YAML (quoted when needed), so a description with a colon,
     a '#', quotes or a leading '-' still parses in Codex, Hermes and here. Empty values are left out."""
@@ -111,7 +139,7 @@ def front_matter(**kv) -> str:
 # the new one; an edited copy is left alone. {skill: SHA-256 of every earlier shipped SKILL.md}.
 REFRESHED_DEFAULTS = {
     "transcribe-audio": {"3e9a05eb613a601a3209285f2713f169b8edcd8694fee67151699df706332dfb"},
-    "convert-files": {"31921397babd7efde4b533297328b4835119c7e23820bf4f86aca81dd87bcc7d"},
+    "convert-files": {"31921397babd7efde4b533297328b4835119c7e23820bf4f86aca81dd87bcc7d", "7208b2af222dc3274042665c9004888e0af0c86e21b9204606f7541085feda3d"},
     "pdf-tools": {"6bda4b25570556d043a9654ccf0df38ec61f90723de60e4a38d3907780737ff0"},
     "image-tools": {"221c5aa55b774d466a4c6b2274655dac71b792ee7d6328ea2272fe28904ef576"},
     "notebooks": {"a15b7391182d52e2b2bf66363a2962d84f02da8bbd7c6f47df556e16c9299d29"},
@@ -130,6 +158,17 @@ REFRESHED_DEFAULTS = {
     "feedback-synthesis": {"15c2c58b9d1487f8da1ccd0853e1d6288012098ad8c81cb4dccc8b571b61aa53"},
     "survey-analysis": {"406d25eb7f07630f9093481c9eae463b48c76e53788e31fd639f090c020b78d9"},
     "interview-plan": {"5842c313a72830ea3c96f3d8624b10fb8b1671eef090e152c9c624b76475815e"},
+    # 0.0.15: front matter made valid YAML (descriptions with ": " quoted), so other tools can read these too.
+    # The 0.0.13 skills above keep their one registered hash; an unedited 0.0.13 copy still loads as before.
+    "build-app": {"d95588280427c5e9da6ee2d6efc8fa9aeed29b33c37b5fa99ed5153a45a98047"},
+    "chat-catch-up": {"db465c84ff15ea2f2c88bbf121dc14506fbc05524537c79004a43c4103a0c476"},
+    "finance-assumption-book": {"d5d26f7803e8691bb4eb52a297fbf7f9f0ba721078fb82232bd073d808799a60"},
+    "git-help": {"9a8b46135ee6c523e06492c9055e8314d76b7295dd3e665c1f78597c5ae2bc3c"},
+    "make-diagram": {"7439477e886f91b9853b428025ff1930554eab1c9c1bba5f609442f30bf9cc25"},
+    "memo": {"b67109067f7868b1851cb2f8adf10ada241cdfb3f5b5bbb8d9fa2bc549a6b780"},
+    "power-bi-review": {"0557b0a1139d0d3019a8efa3c3ed09763be103da1c4231e6987e0300a9af6a30"},
+    "prd": {"e4ce0c2a415a95d29239a5d5083f4483468ed307f934c44acc22193cc1363c33"},
+    "weekly-status-update": {"f0572cca30ecf83859d1de910caff1f81d63a268ed68de817b89061997477d07"},
 }
 
 
@@ -196,13 +235,15 @@ def ensure_defaults():
 def expand_mentions(text: str) -> str:
     """For harnesses with their own skill systems (Pi, Hermes): when the message names $skill, attach that skill's
     instructions so it is followed the same way in every harness."""
-    import re
-    out = []
-    for m in dict.fromkeys(re.findall(r"(?<![\w$])\$([A-Za-z0-9][\w-]{1,63})", text)):
-        sk = get(m)
-        if sk and sk.get("enabled", True):
+    out, done = [], set()
+    for m in re.finditer(r"(?<![\w$])\$([A-Za-z0-9][\w-]{1,63})([^\n]*)", text):
+        if m.group(1).lower() in done:
+            continue
+        done.add(m.group(1).lower())
+        sk = get(m.group(1))
+        if sk and sk.get("enabled", True) and sk.get("user_ok", True):
             try:
-                out.append(instructions(m))
+                out.append(instructions(m.group(1), m.group(2).strip(), by_user=True))
             except ValueError:
                 pass
     if not out:
@@ -214,25 +255,111 @@ def load_all(include_disabled: bool = True) -> list[dict]:
     ensure_defaults()
     off = _disabled()
     out = []
-    for d in sorted(folder().iterdir()) if folder().exists() else []:
-        f = d / "SKILL.md"
-        if not d.is_dir() or d.name.startswith(".") or not f.is_file():
-            continue
+    base = folder()
+    try:
+        names = sorted((e.name for e in os.scandir(base) if e.is_dir() and not e.name.startswith(".")),
+                       key=os.path.normcase)              # the order sorted(Path) gave (no case on Windows)
+    except OSError:
+        names = []
+    for name in names:
+        d = os.path.join(base, name)
+        f = os.path.join(d, "SKILL.md")
         try:
-            meta, body = parse(f.read_text(encoding="utf-8", errors="replace"))
-        except OSError:
+            row = _skill_row(d, f)
+        except OSError:                               # no SKILL.md (or not a file): not a skill
             continue
-        sid = d.name
-        row = {"id": sid, "name": meta.get("name") or sid, "description": meta.get("description", ""),
-               "enabled": sid not in off, "path": str(f),
-               "files": sorted(str(p.relative_to(d)) for p in d.rglob("*") if p.is_file() and p.name != "SKILL.md")[:50]}
+        row["enabled"] = row["id"] not in off
         if include_disabled or row["enabled"]:
             out.append(row)
     return out
 
 
+# A skill's row, kept while its folder, its SKILL.md and every folder inside it are unchanged (modification time, size,
+# inode). The agent asks for the skills list several times per step (tool list, on-demand check, file hints): with 130
+# skills each time read and YAML-parsed every SKILL.md and walked every folder, 40 ms a time, about 1.6 s of CPU in a
+# ten-step turn.
+_ROWS: dict = {}
+_RACY_NS = 3_000_000_000             # a file changed this recently may change again in the same clock tick: not kept
+
+
+def _stamp(paths) -> tuple:
+    out = []
+    for p in paths:
+        try:
+            st = os.stat(p)
+            out.append((st.st_mtime_ns, st.st_size, st.st_ino, stat.S_ISREG(st.st_mode)))
+        except OSError:
+            out.append(None)
+    return tuple(out)
+
+
+def _copy(row: dict) -> dict:
+    return {k: (list(v) if isinstance(v, list) else v) for k, v in row.items()}
+
+
+def _skill_row(d: str, f: str) -> dict:
+    """A skill folder's row (enabled not set). OSError when it has no SKILL.md file."""
+    import time
+    hit = _ROWS.get(d)
+    if hit is not None and _stamp([d, f, *hit[2]]) == hit[0]:
+        return _copy(hit[1])
+    now = time.time_ns()
+    before = _stamp([d, f])
+    if before[1] is None or not before[1][3]:
+        _ROWS.pop(d, None)
+        raise OSError(f"no SKILL.md in {d}")
+    d, f = Path(d), Path(f)
+    raw = f.read_text(encoding="utf-8", errors="replace")
+    meta, _body = parse(raw)
+    files, subdirs = [], []
+    for p in d.rglob("*"):
+        if p.is_dir():
+            subdirs.append(p)                        # a file added in there changes that folder's time
+        elif p.is_file() and p.name != "SKILL.md":
+            files.append(str(p.relative_to(d)))
+    sid = d.name
+    row = {"id": sid, "name": meta.get("name") or sid, "description": meta.get("description", ""),
+           "when": meta.get("when_to_use") or meta.get("when-to-use") or "",
+           "model_ok": not _flag(meta, "disable-model-invocation", False),   # only when the user asks for it
+           "user_ok": _flag(meta, "user-invocable", True),                   # only the model loads it
+           "disallowed": _front_list(raw, "disallowed-tools", "disallowed_tools"),
+           "paths": _front_list(raw, "paths"),
+           "argument_hint": meta.get("argument-hint") or meta.get("argument_hint") or "",
+           "enabled": True, "path": str(f), "files": sorted(files)[:50]}
+    subdirs = [str(p) for p in subdirs]
+    stamp = _stamp([str(d), str(f), *subdirs])
+    if stamp[:2] == before and all(s is not None and s[0] < now - _RACY_NS for s in stamp):
+        _ROWS[str(d)] = (stamp, _copy(row), subdirs)
+    else:
+        _ROWS.pop(str(d), None)
+    return row
+
+
 def enabled() -> list[dict]:
     return load_all(include_disabled=False)
+
+
+def for_model() -> list[dict]:
+    """The enabled skills the agent may pick by itself (not the ones marked disable-model-invocation)."""
+    return [s for s in enabled() if s.get("model_ok", True)]
+
+
+def _desc(s: dict, n: int = 0) -> str:
+    d = s["description"] + (f" Use when: {s['when']}" if s.get("when") else "")
+    return d[:n] if n else d
+
+
+def for_path(rel: str, seen: set) -> str:
+    """A note naming skills whose paths: patterns match a file the agent is working on, once per skill."""
+    from meshpool_harness.agent import extras as EX
+    hits = []
+    for s in for_model():
+        key = "skill:" + s["id"]
+        if s.get("paths") and key not in seen and any(EX._glob_match(rel, g) for g in s["paths"]):
+            seen.add(key)
+            hits.append(f"- {s['name']}: {_desc(s, 300)}")
+    return ("[Skills made for files like this one (load one with use_skill if it fits the task):]\n" + "\n".join(hits)
+            ) if hits else ""
 
 
 def get(name: str) -> dict | None:
@@ -243,15 +370,35 @@ def get(name: str) -> dict | None:
     return None
 
 
-def instructions(name: str) -> str:
+def _with_arguments(text: str, arguments: str) -> str:
+    """$ARGUMENTS (or ${ARGUMENTS}) is everything given; $1 to $9 are its words. A skill with none of these and
+    some arguments gets them at the end."""
+    import shlex
+    arguments = str(arguments or "").strip()
+    try:
+        words = shlex.split(arguments)
+    except ValueError:
+        words = arguments.split()
+    used = bool(re.search(r"\$(\{ARGUMENTS\}|ARGUMENTS\b|[1-9]\b)", text))
+    text = re.sub(r"\$\{ARGUMENTS\}|\$ARGUMENTS\b", lambda m: arguments, text)
+    text = re.sub(r"\$([1-9])\b", lambda m: words[int(m.group(1)) - 1] if int(m.group(1)) <= len(words) else "", text)
+    if arguments and not used:
+        text += f"\n\nArguments: {arguments}"
+    return text
+
+
+def instructions(name: str, arguments: str = "", by_user: bool = False) -> str:
     s = get(name)
-    if not s:
-        names = ", ".join(x["name"] for x in enabled()) or "none"
+    if not s or (not by_user and not s.get("model_ok", True)):
+        names = ", ".join(x["name"] for x in enabled() if x.get("model_ok", True)) or "none"
+        if s:
+            raise ValueError(f"The skill {s['name']} runs only when the user asks for it (${s['id']}). "
+                             f"Other skills: {names}")
         raise ValueError(f"No skill named {name}. Available: {names}")
-    text = Path(s["path"]).read_text(encoding="utf-8", errors="replace")
+    text = _with_arguments(Path(s["path"]).read_text(encoding="utf-8", errors="replace"), arguments)
     extra = ""
     if s["files"]:
-        extra = (f"\n\nFiles that come with this skill (read them with read_file using these full paths):\n"
+        extra = ("\n\nFiles that come with this skill (read them with read_file using these full paths):\n"
                  + "\n".join(str(Path(s["path"]).parent / f) for f in s["files"]))
     return f"Skill: {s['name']}\nFolder: {Path(s['path']).parent}\n\n{text}{extra}"
 
@@ -286,10 +433,10 @@ def search(query: str, k: int = 8, rows: list | None = None, min_score: int = 1,
     q = set(_terms(query))
     if not q:
         return []
-    rows = enabled() if rows is None else rows
+    rows = for_model() if rows is None else rows
     scored = []
     for s in rows:
-        name, desc = set(_terms(s["name"].replace("-", " "))), set(_terms(s["description"]))
+        name, desc = set(_terms(s["name"].replace("-", " "))), set(_terms(_desc(s)))
         score = 3 * len(q & name) + len(q & desc)
         if score and score >= min_score and len(q & (name | desc)) >= min_terms:
             scored.append((score, s))
@@ -302,23 +449,24 @@ def search_text(query: str) -> str:
     if not hits:
         return "No skill matches. Try other words, or go ahead without a skill."
     return "Best matching skills (load one with use_skill):\n" + "\n".join(
-        f"- {s['name']}: {s['description'][:300]}" for s in hits)
+        f"- {s['name']}: {_desc(s, 300)}" for s in hits)
 
 
 def catalog_text(task: str = "", searchable: bool = True) -> str:
     """The skills list for an agent's system prompt: in full for a few skills, otherwise names only plus the
     ones that match the task the chat started with."""
-    rows = enabled()
+    import os
+    rows = for_model() if os.environ.get("MH_NO_COMMANDS") != "1" else []
     if not rows:
         return ""
     if not on_demand():
-        lines = [f"- {s['name']}: {s['description']}" for s in rows]
+        lines = [f"- {s['name']}: {_desc(s)}" for s in rows]
         return ("\n\nSkills you can use (call use_skill with the name to load full instructions before doing a task "
                 "that matches one; when the user writes $name, load that skill first):\n" + "\n".join(lines))
     if not searchable:                            # a lean harness: only the skills that match its task
         hits = search(task, k=3, rows=rows) if task else []
         return ("\n\nSkills that may fit this task (load one with use_skill):\n" + "\n".join(
-            f"- {s['name']}: {s['description'][:200]}" for s in hits)) if hits else ""
+            f"- {s['name']}: {_desc(s, 200)}" for s in hits)) if hits else ""
     text = (f"\n\nSkills: {len(rows)} saved instruction sets for specific jobs. Before a task that may match one, "
             "call find_skill with a few words; load a match with use_skill. A skill the user names with $name is "
             "attached to their message already.")
@@ -326,7 +474,7 @@ def catalog_text(task: str = "", searchable: bool = True) -> str:
         text += " Names: " + ", ".join(s["name"] for s in rows) + "."
     hits = search(task, k=5, rows=rows) if task else []
     if hits:
-        text += "\nLikely relevant to this chat:\n" + "\n".join(f"- {s['name']}: {s['description'][:240]}" for s in hits)
+        text += "\nLikely relevant to this chat:\n" + "\n".join(f"- {s['name']}: {_desc(s, 240)}" for s in hits)
     return text
 
 
@@ -406,7 +554,13 @@ def add_files(files: list[tuple[str, bytes]]) -> list[dict]:
         added.append(d.name)
     if not added:
         raise ValueError("No skill found. Add a folder or .zip that contains a SKILL.md, or a SKILL.md file.")
-    return [get(a) for a in added if get(a)]
+    out = []
+    for a in added:
+        s = get(a)
+        if s:
+            s["risks"] = risks(Path(s["path"]).parent)
+            out.append(s)
+    return out
 
 
 def _from_zip(data: bytes) -> list[str]:
@@ -429,6 +583,60 @@ def _from_zip(data: bytes) -> list[str]:
             p.write_bytes(z.read(n))
         out.append(d.name)
     return out
+
+
+# ---------- risky content in skills from elsewhere -------------------------------------------------------------------
+_RISKS = [
+    (re.compile(r"\b(curl|wget|iwr|invoke-webrequest)\b[^\n|]*\|\s*(sudo\s+)?(ba|z|da)?sh\b", re.I),
+     "pipes a download straight into a shell"),
+    (re.compile(r"\b(iex|invoke-expression)\b\s*\(?\s*(irm|iwr|invoke-restmethod|new-object)", re.I),
+     "runs a downloaded PowerShell script"),
+    (re.compile(r"base64\s+(-d|--decode)[^\n]*\|\s*(ba|z)?sh\b|powershell[^\n]*\s-(e|enc|encodedcommand)\s", re.I),
+     "runs encoded commands"),
+    (re.compile(r"\brm\s+-[a-z]*r[a-z]*f?[a-z]*\s+(--no-preserve-root\s+)?(/|~|\$HOME)(\s|$)|\bmkfs\.|\bdd\s+if=[^\n]*of=/dev/", re.I),
+     "deletes or overwrites a whole disk or home folder"),
+    (re.compile(r"(~|\$HOME|%USERPROFILE%)[/\\]\.(ssh|aws|gnupg|netrc|docker/config\.json|kube/config)|\bid_(rsa|ed25519)\b|"
+                r"\.config/gh/hosts|login\.keychain|\bsecurity\s+find-generic-password", re.I),
+     "reads keys or saved logins"),
+    (re.compile(r"\b(curl|wget)\b[^\n]*(--data(-binary)?|-d|-F|--upload-file|-T)\s+@|\b(printenv|env)\b[^\n]*\|\s*(curl|nc|wget)\b", re.I),
+     "sends files or settings to a web address"),
+    (re.compile(r"ignore\s+(all\s+)?(the\s+)?(previous|prior|above|earlier)\s+(instructions|rules)|"
+                r"(do\s+not|don'?t|never)\s+(tell|inform|show)\s+the\s+user\s+(about|that\s+you|what\s+you|you\s+(ran|read|sent))|"
+                r"without\s+telling\s+the\s+user|(keep|hide)\s+(this|it)\s+(secret\s+|hidden\s+)?from\s+the\s+user|"
+                r"(disable|turn\s+off|bypass)\s+(the\s+)?(safety|sandbox|approvals?|guard(s|rails)?|permission\s+checks)", re.I),
+     "tells the agent to skip or hide things from you"),
+    (re.compile("[\u200b-\u200f\u202a-\u202e\u2066-\u2069]"), "contains hidden or direction-changing characters"),
+]
+_SECRETISH = re.compile(r"(?i)(credential|secret|token|passw|auth\.json|\.pem$|\.key$|id_(rsa|ed25519|ecdsa)|\.env$|"
+                        r"\.p12$|\.pfx$|keychain|cookies?)")
+_TEXT_EXT = {".md", ".txt", ".sh", ".bash", ".zsh", ".ps1", ".py", ".js", ".ts", ".rb", ".pl", ".bat", ".cmd", ".json",
+             ".yaml", ".yml", ".toml", ""}
+
+
+def risks(path) -> list[str]:
+    """What looks risky in a skill folder (or one SKILL.md): ["file:line: what it does"]. Advice, not a verdict: a
+    skill can have a good reason, so this only says where to look before trusting it."""
+    p = Path(path)
+    files = [p] if p.is_file() else sorted(
+        f for f in p.rglob("*") if f.is_file() and not f.is_symlink() and f.suffix.lower() in _TEXT_EXT
+        and not any(part.startswith(".") for part in f.relative_to(p).parts)        # .env, .ssh/...: never opened
+        and not _SECRETISH.search(f.name))[:60]
+    out = []
+    for f in files:
+        try:
+            if f.stat().st_size > 300_000:
+                continue
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        rel = f.name if p.is_file() else f.relative_to(p).as_posix()
+        for i, line in enumerate(text.splitlines(), 1):
+            for rx, what in _RISKS:
+                if rx.search(line):
+                    out.append(f"{rel}:{i}: {what}")
+        if len(out) > 40:
+            break
+    return list(dict.fromkeys(out))[:40]
 
 
 def toggle(sid: str, on: bool):
@@ -472,7 +680,9 @@ def api_action(body: dict) -> dict:
         remove(body.get("id", ""))
     elif act == "upload":
         import base64
-        add_files([(f["name"], base64.b64decode(f["data"])) for f in body.get("files") or []])
+        got = add_files([(f["name"], base64.b64decode(f["data"])) for f in body.get("files") or []])
+        return {"skills": load_all(), "folder": str(folder()),
+                "risks": {s["name"]: s["risks"] for s in got if s.get("risks")}}   # lines to look at before use
     elif act == "open":                       # the page shows the folder in its own file tree
         folder().mkdir(parents=True, exist_ok=True)
     return {"skills": load_all(), "folder": str(folder())}

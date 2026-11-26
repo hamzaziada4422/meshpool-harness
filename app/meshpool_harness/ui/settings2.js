@@ -9,7 +9,7 @@ const SET_NAV = [
   [["account", "Account", "user", ["profile"]], ["billing", "Billing", "card", ["billing"]], ["usage", "Usage", "bolt", ["usage"]]],
   [["appearance", "Appearance", "palette", ["appearance"]], ["personal", "Your Meshpool", "brain", ["personal", "styles", "import"]], ["caps", "Capabilities", "tool", ["caps", "suggest", "web"]],
    ["notify", "Notifications", "bell", ["notify"]], ["privacy", "Privacy", "shield", ["data", "permissions"]]],
-  [["plugins", "Plugins", "plug", ["connectors", "skills", "plugins", "mcp"]], ["code", "Code", "codebr", ["terminal", "advanced"]]],
+  [["plugins", "Plugins", "plug", ["connectors", "skills", "plugins", "mcp", "office"]], ["code", "Code", "codebr", ["terminal", "advanced"]]],
   [["models", "Models and providers", "cpu", ["general", "models", "harnesses"]], ["scheduled", "Scheduled tasks", "clock", ["scheduled"]],
    ["company", "Company and brand", "stack", ["company"]], ["about", "About and updates", "help", ["about"]]],
 ];
@@ -17,7 +17,7 @@ const SET_GROUPS = SET_NAV.flat().map(([k, lb, , subs]) => [k, lb, subs]);      
 const SET_NAMES = {profile: "Profile", appearance: "Appearance", notify: "Notifications", suggest: "Suggestions", caps: "Features", personal: "Instructions and memory", styles: "Styles", web: "Web search",
   connectors: "Directory", skills: "Skills", plugins: "Plugins", mcp: "Custom tools", general: "Connection", models: "Models", harnesses: "Agents",
   usage: "Usage", billing: "Plan and billing", permissions: "Permissions", data: "Your data", import: "Import chats",
-  about: "About and updates", scheduled: "Scheduled tasks", terminal: "Terminal command", advanced: "More options"};
+  about: "About and updates", scheduled: "Scheduled tasks", terminal: "Terminal command", advanced: "More options", office: "Office apps"};
 // company.js adds "Company and brand" to this list, as it did before.
 const SECTIONS = Object.entries(SET_NAMES);
 const setName = k => SET_NAMES[k] || (SECTIONS.find(x => x[0] === k) || [])[1] || k;
@@ -65,7 +65,7 @@ addEventListener("hashchange", () => { const m = /^#settings\/([\w-]+)/.exec(loc
 function setRow(title, desc, control) { return `<div class="sr-row"><div class="sr-t"><b>${esc(title)}</b>${desc ? `<small>${esc(desc)}</small>` : ""}</div><div class="sr-c">${control}</div></div>`; }
 const selOpts = (id, opts, cur) => `<select class="sr-sel" id="${id}">${opts.map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
 function appearancePage(b, close) {
-  const keys = [["Esc", "Stop the running task, or close what is open"], [`${MOD}N`, "New chat"], [`${MOD}K`, "Search"], [`${MOD}B`, "Show or hide the sidebar"], [`${MOD}U`, "Add files"], [`${MOD}E`, "Show or fold steps"],
+  const keys = [["Esc", store("escstop") === "off" ? "Close what is open" : "Stop the running task, or close what is open"], [`${MOD}N`, "New chat"], [`${MOD}K`, "Search"], [`${MOD}B`, "Show or hide the sidebar"], [`${MOD}U`, "Add files"], [`${MOD}E`, "Show or fold steps"],
     [`${MOD}⇧D`, "Changes panel"], [`${MOD}J`, "Terminal"], [`${MOD},`, "Settings"], ["Enter", "Send"], ["Shift+Enter", "New line"], ["/", "Commands and skills"], ["$", "Skills"],
     ["P  R  A  D", "In a chat's title menu: pin, rename, archive, delete"], ["1 – 4", "In the model menu: pick that model"]];
   const th = store("theme") || "system";
@@ -77,6 +77,8 @@ function appearancePage(b, close) {
     ${setRow("Text size", "", selOpts("apSize", [["small", "Small"], ["normal", "Normal"], ["large", "Large"]], store("size") || "normal"))}
     ${setRow("Density", "Compact fits more chats in the sidebar and tightens the spacing.", selOpts("apDensity", [["comfortable", "Comfortable"], ["compact", "Compact"]], store("density") || "comfortable"))}
     ${setRow("Steps", "Show every step as Meshpool works, or fold them into a summary.", selOpts("apSteps", [["1", "Show every step"], ["0", "Fold into a summary"]], S.steps ? "1" : "0"))}
+    ${setRow("Reasoning", "Show the model's reasoning, when it sends it, in a Thinking block.", selOpts("apThink", [["show", "Show"], ["hide", "Hide"]], store("thinking") || "show"))}
+    ${setRow("Esc while a task runs", "Esc stops the running task. Turn this off to stop only with the Stop button.", selOpts("apEsc", [["on", "Stops the task"], ["off", "Does nothing"]], store("escstop") || "on"))}
     <h4 class="sr-h">Accessibility</h4>
     ${setRow("Motion", "Reduce motion in the app, or follow your system setting.", selOpts("apMotion", [["system", "System"], ["reduce", "Reduce"]], store("motion") || "system"))}
     ${setRow("Contrast", "Increase contrast for text and lines, or follow your system setting.", selOpts("apContrast", [["system", "System"], ["high", "High"]], store("contrast") || "system"))}
@@ -84,11 +86,13 @@ function appearancePage(b, close) {
     <h4 class="sr-h">Code</h4>
     ${setRow("Code font", "A font installed on this computer. Leave empty for the default.", `<input class="sr-in" id="apCodeFont" value="${esc(store("codefont") || "")}" placeholder="IBM Plex Mono" spellcheck="false" autocomplete="off">`)}
     ${setRow("Code font size", "", selOpts("apCodeSize", [["12", "12 px"], ["13", "13 px (default)"], ["14", "14 px"], ["16", "16 px"]], String(store("codesize") || 13)))}
+    ${setRow("Code colours", "Colour the code in replies by its syntax.", selOpts("apCodeColor", [["on", "On"], ["off", "Off"]], store("codecolor") || "on"))}
     <h4 class="sr-h">Keyboard shortcuts</h4><div class="keys">${keys.map(([k, d]) => `<kbd>${esc(k)}</kbd><span>${esc(d)}</span>`).join("")}</div>`;
   const on = (id, fn) => { $("#" + id).onchange = e => { fn(e.target.value); applyAppearance(); }; };
   $$("[data-th]", b).forEach(x => x.onclick = () => { store("theme", x.dataset.th); applyAppearance(); $$("[data-th]", b).forEach(y => y.setAttribute("aria-checked", String(y === x))); });
   on("apFont", v => store("font", v)); on("apRFont", v => store("rfont", v)); on("apWidth", v => store("width", v)); on("apSize", v => store("size", v)); on("apDensity", v => store("density", v));
   on("apMotion", v => store("motion", v)); on("apContrast", v => store("contrast", v)); on("apPopups", v => store("popups", v)); on("apCodeSize", v => store("codesize", +v));
+  on("apThink", v => store("thinking", v)); on("apEsc", v => store("escstop", v)); on("apCodeColor", v => store("codecolor", v));
   $("#apCodeFont").onchange = e => { store("codefont", e.target.value.trim()); applyAppearance(); };
   $("#apSteps").onchange = () => { if (($("#apSteps").value === "1") !== !!S.steps) toggleSteps(); };
 }

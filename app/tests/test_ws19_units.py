@@ -112,4 +112,8 @@ def test_f25_the_brand_is_meshpool_in_user_facing_text():
 def test_f39_disabled_buttons_say_why():
     js = (UI / "app.js").read_text(encoding="utf-8")
     for bid in ("gcommit", "gpush", "gpull", "gpr", "ghGo"):
-        assert re.search(r'id="%s"[^\n]*?disabled[^\n]*?title=' % bid, js), bid
+        # each button's own opening tag only: several buttons share one line, so a title on the next button
+        # must not count for this one
+        tags = re.findall(r'<button\b[^>]*\bid="%s"[^>]*>' % bid, js)
+        assert len(tags) == 1, (bid, tags)
+        assert re.search(r'\bdisabled title="[^"]{8,}"', tags[0]), (bid, tags[0])

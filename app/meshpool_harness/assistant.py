@@ -84,7 +84,7 @@ WORK_ITEM = re.compile(r"(?i)\b(to-?do|todo list|backlog|feature request|bug to 
 
 MAX_MEMORY = 12000
 DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-WHEN = ("once", "hourly", "daily", "weekdays", "weekly", "every")
+WHEN = ("once", "hourly", "daily", "weekdays", "weekly", "every", "cron")
 _LOCK = threading.Lock()
 BAD = re.compile(r"ignore (all|previous|the above)|system prompt|disregard (all|previous)|you are now|api[_ ]?key|"
                  r"password|secret|token\s*[:=]", re.I)
@@ -400,12 +400,13 @@ def project_block(project_id: str, task: str = "", exclude=()) -> str:
 
 def context_block(task: str = "", root: str = "", project_id: str = "", chat_id: str = "", incognito: bool = False,
                   exclude=(), record: bool = True, lookup: bool = True, rules: bool = True, tools: str = "all",
-                  office: bool = True) -> str:
+                  office: bool = True, data_rule: bool = False) -> str:
     """Text the app adds, out of sight, to the first message of a new thread. task and root pick what memory is
     relevant: the user's core facts, the facts that match the task, and the project's notes. project_id adds the
     project's instructions, memory and knowledge files (see project_store). `incognito` reads no memory at all.
     With a chat_id, the facts given are recorded (so a reply can show its sources)."""
-    return build_context(task, root, project_id, chat_id, incognito, exclude, record, lookup, rules, tools, office)["text"]
+    return build_context(task, root, project_id, chat_id, incognito, exclude, record, lookup, rules, tools, office,
+                         data_rule)["text"]
 
 
 def _notes(tools: str, office, mem_on: bool, incognito: bool) -> str:
@@ -437,7 +438,7 @@ def _notes(tools: str, office, mem_on: bool, incognito: bool) -> str:
 
 def build_context(task: str = "", root: str = "", project_id: str = "", chat_id: str = "", incognito: bool = False,
                   exclude=(), record: bool = False, lookup: bool = True, rules: bool = True, tools: str = "all",
-                  office: bool = True) -> dict:
+                  office: bool = True, data_rule: bool = False) -> dict:
     """context_block with its parts: {text, facts: [ids given], sections: [{title, text, ids}]} for the X-ray.
     `rules`: add HONESTY and PLAIN (Meshpool's own agents carry them in their system prompt, so their first message
     leaves them out; Pi and Codex get them here, once). `tools`: which Meshpool tools the agent has, "all", "deferred"
@@ -459,6 +460,9 @@ def build_context(task: str = "", root: str = "", project_id: str = "", chat_id:
              f"Today is {now.strftime('%A %d %B %Y')}, {now.strftime('%H:%M')} local time "
              f"(UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]}).",
              *(([LEAN_RULES] if lean else [HONESTY, PLAIN]) if rules else [])]
+    if rules or data_rule:                     # an agent whose system prompt is someone else's text gets it here
+        from meshpool_harness.agent.core import DATA_RULE
+        parts.append(DATA_RULE)
     sections.append({"title": "Meshpool's own rules", "text": "\n".join(parts), "ids": []})
     try:                                       # who the user is and the language to answer in (Settings, General)
         from meshpool_harness.ui import settings_v2 as SV
@@ -635,6 +639,15 @@ def next_run(t: dict, after: datetime | None = None) -> float | None:
         return ((ts + off) // 3600 + 1) * 3600 - off
     if w == "every":
         return ts + max(15, int(t.get("minutes") or 60)) * 60
+    if w == "cron":
+        from meshpool_harness import cron as CR
+        try:
+            nxt = CR.next_after(t.get("cron") or "", now)
+            if nxt and nxt.timestamp() <= datetime.now().timestamp():   # a slow call or a clock change: never the past
+                nxt = CR.next_after(t.get("cron") or "", datetime.now().replace(second=0, microsecond=0))
+        except CR.CronError:
+            return None
+        return nxt.timestamp() if nxt else None
     h, mi = _hm(t.get("time", "09:00"))
     cand = now.replace(hour=h, minute=mi)
     for i in range(0, 8):
@@ -658,6 +671,12 @@ def _check_task(t: dict, past_ok: bool = False) -> dict:
     if not str(t.get("prompt") or "").strip():
         raise ValueError("Write what the task should do.")
     t["prompt"] = str(t["prompt"]).strip()
+    if when == "cron":
+        from meshpool_harness import cron as CR
+        try:
+            t["cron"] = CR.validate(t.get("cron") or "")
+        except CR.CronError as e:
+            raise ValueError(str(e))
     if when == "once":
         try:
             at = _at(t)
@@ -692,11 +711,11 @@ def _check_task(t: dict, past_ok: bool = False) -> dict:
 
 def add_task(name: str, prompt: str, when: str, time_: str = "09:00", day: str = "mon", at: str = "",
              minutes: int = 60, folder: str = "", harness: str = "", kind: str = "cowork",
-             only_on_change: bool = False, skip_if_missed_h=None) -> dict:
+             only_on_change: bool = False, skip_if_missed_h=None, cron: str = "") -> dict:
     t = _check_task({"id": uuid.uuid4().hex[:8], "name": name, "prompt": prompt, "when": when, "time": time_,
                      "day": day, "at": at, "minutes": minutes, "folder": folder, "harness": harness, "kind": kind,
-                     "only_on_change": bool(only_on_change), "skip_if_missed_h": skip_if_missed_h, "enabled": True,
-                     "created": time.time(), "last_run": None, "last_thread": None})
+                     "only_on_change": bool(only_on_change), "skip_if_missed_h": skip_if_missed_h, "cron": cron,
+                     "enabled": True, "created": time.time(), "last_run": None, "last_thread": None})
     t["next_run"] = next_run(t)
     _mutate(lambda rows: rows.append(t))
     return t
@@ -708,11 +727,12 @@ def update_task(tid: str, **kw) -> dict:
             if isinstance(t, dict) and t.get("id") == tid:
                 new = dict(t)
                 for k in ("name", "prompt", "when", "time", "day", "at", "minutes", "folder", "harness", "kind", "enabled",
-                          "only_on_change", "skip_if_missed_h"):
+                          "only_on_change", "skip_if_missed_h", "cron"):
                     if k in kw and kw[k] is not None:
                         new[k] = kw[k]
                 done = _is_done(t)
-                moved = new.get("when") != t.get("when") or new.get("at") != t.get("at")
+                moved = new.get("when") != t.get("when") or new.get("at") != t.get("at") or \
+                    new.get("cron") != t.get("cron")
                 if done and new.get("enabled") and not moved:
                     raise ValueError("This one-time task already ran. Pick a new date and time to run it again.")
                 new.pop("invalid", None)                             # edited: look at it afresh
@@ -893,6 +913,8 @@ def describe(t: dict) -> str:
         s = f"every {t.get('minutes')} minutes"
     elif w == "weekly":
         s = f"every {str(t.get('day', 'mon')).title()} at {t.get('time')}"
+    elif w == "cron":
+        s = f"on the schedule {t.get('cron')}"
     else:
         s = f"{'every weekday' if w == 'weekdays' else 'every day'} at {t.get('time')}"
     nr = t.get("next_run")
@@ -1194,11 +1216,11 @@ def api_action(b: dict) -> dict:
         add_task(b.get("name", ""), b.get("prompt", ""), b.get("when", "daily"), b.get("time", "09:00"),
                  b.get("day", "mon"), b.get("at", ""), int(b.get("minutes") or 60), b.get("folder", ""),
                  b.get("harness", ""), b.get("kind", "cowork"), bool(b.get("only_on_change")),
-                 b.get("skip_if_missed_h"))
+                 b.get("skip_if_missed_h"), str(b.get("cron") or ""))
     elif act == "task_update":
         update_task(b.get("id", ""), **{k: b.get(k) for k in ("name", "prompt", "when", "time", "day", "at", "minutes",
                                                               "folder", "harness", "kind", "enabled",
-                                                              "only_on_change", "skip_if_missed_h")})
+                                                              "only_on_change", "skip_if_missed_h", "cron")})
     elif act == "tasks_reset":
         reset_tasks()
     elif act == "task_delete":

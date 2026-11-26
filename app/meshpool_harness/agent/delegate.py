@@ -30,6 +30,7 @@ import shutil
 import threading
 import time
 import uuid
+from pathlib import Path
 
 from meshpool_harness.core import usage
 
@@ -169,7 +170,11 @@ def schema(max_children: int) -> dict:
         "context": {"type": "string", "description": "Background this sub-agent needs: file paths, error messages, "
                     "constraints, the language and tone of the result. Each sub-agent sees only its own context."},
         "output_schema": {"type": "object", "description": "Optional JSON Schema the final answer must match "
-                          "(the sub-agent then replies with JSON only)."}}, "required": ["goal"]}
+                          "(the sub-agent then replies with JSON only)."},
+        "agent": {"type": "string", "description": "Optional: the name of a saved sub-agent (listed under Saved "
+                  "sub-agents in your instructions). It brings its own instructions and may narrow the tools "
+                  "and pick the model."}},
+        "required": ["goal"]}
     return {"type": "function", "function": {"name": "delegate_task", "description": (
         "Hand self-contained parts of a job to sub-agents that work at the same time, each in a fresh context with "
         "your tools and permissions; only each one's final report comes back. Use it for independent parts: "
@@ -210,8 +215,9 @@ def check_goals(tasks) -> list[dict]:
             raise ValueError("output_schema must be a JSON Schema object, like {\"type\": \"object\", ...}.")
         row = {"goal": goal, "context": str(t.get("context") or "").strip(),
                "schema": t.get("output_schema") if isinstance(t.get("output_schema"), dict) else None,
-               "title": str(t.get("title") or goal.splitlines()[0])[:80]}
-        key = json.dumps([row["goal"], row["context"], row["schema"]], sort_keys=True, default=str)
+               "title": str(t.get("title") or goal.splitlines()[0])[:80],
+               "agent": str(t.get("agent") or "").strip()}         # a saved sub-agent by name (agents/*.md)
+        key = json.dumps([row["goal"], row["context"], row["schema"], row["agent"]], sort_keys=True, default=str)
         if key in seen:                                 # an identical request in the same batch runs once
             continue
         seen.add(key)
@@ -316,9 +322,19 @@ class ChildMcp:
 
 
 # ---------- one delegation (a call with one or more tasks) ----------------------------------------------------------
+def _hook(parent, event: str, payload: dict) -> None:
+    """Runs the user's hooks for a sub-agent event (agent/extras.py). Never raises."""
+    try:
+        from meshpool_harness.agent import extras as EX
+        EX.run_hooks(parent.root, event, payload, timeout=15)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class Delegation:
-    def __init__(self, parent, rows: list[dict], cfg: dict, depth: int):
+    def __init__(self, parent, rows: list[dict], cfg: dict, depth: int, defs: dict | None = None):
         self.parent, self.rows, self.cfg, self.depth = parent, rows, cfg, depth
+        self.defs = defs or {}                         # saved sub-agents by name (subagents.py)
         self.id = "deleg_" + uuid.uuid4().hex[:8]
         self.children: dict[str, dict] = {}            # subagent_id -> {agent, row, index, status, ...}
         self.lock = threading.Lock()
@@ -348,6 +364,8 @@ class Delegation:
             elif t == "usage":
                 for k in ("in", "cached", "out", "calls"):
                     rec["usage"][k] += int(ev.get(k) or 0)
+                if isinstance(ev.get("cost"), (int, float)):
+                    rec["usage"]["cost"] = rec["usage"].get("cost", 0.0) + float(ev["cost"])
             elif t == "error":
                 rec["errors"].append(str(ev.get("text") or "")[:300])
         return emit
@@ -357,6 +375,12 @@ class Delegation:
         parent, cfg, depth = self.parent, self.cfg, self.depth
         root = (rec.get("wt") or {}).get("workdir") or str(parent.root)   # its isolated copy, or the project
         names = [n for n in parent._tool_names() if n not in BLOCKED and n != "delegate_task"]
+        defn = self.defs.get(self.rows[index]["agent"]) if self.rows[index].get("agent") else None
+        if self.rows[index].get("agent") and not defn:   # never a general sub-agent with every tool in its place
+            raise RuntimeError(f"no saved sub-agent named {self.rows[index]['agent']}")
+        if defn:                                         # a saved sub-agent: its tools, from the chat's own
+            from meshpool_harness.agent import subagents as SA
+            names = SA.tool_names(defn, names) or [n for n in names if n in K.READ_ONLY]
         if cfg["access"] == "read":                      # read and research only
             names = [n for n in names if n in K.READ_ONLY and n != "office_task"]
         elif cfg["access"] == "edit":                    # read and edit files, never run commands
@@ -427,14 +451,36 @@ class Delegation:
         def glob_in_project(pattern):                    # nor a symlinked folder a listing outside it
             return glob(pattern, inside_only=True)
         a.ws.glob = glob_in_project
-        a.model = cfg["model"] or parent.current_model()
+        a.model = (defn or {}).get("model") or cfg["model"] or parent.current_model()
+        if defn and defn.get("effort"):
+            a.effort = K.effort_choice(defn["effort"])
+        if defn and defn.get("omit_instructions"):        # the project's AGENTS.md and the like stay out
+            a._no_instructions = True
+            a.messages[0]["content"] = a.system_prompt()
         row = self.rows[index]
         block = ("\n\nYou are a focused sub-agent working on one part of a larger job; other sub-agents may work on "
                  "other parts at the same time. You know nothing about the conversation that started you: your task "
                  "and context below are all you have.\n\nYOUR TASK:\n" + row["goal"])
+        if defn:
+            block += (f"\n\nYOUR ROLE ({defn['name']}), " + ("saved by the user" if defn.get("own") else
+                      "from this project's agents folder") + ":\n" + defn["prompt"][:20000])
+        if defn and defn.get("skills"):                   # skills the definition loads up front
+            from meshpool_harness import skills as SK
+            got, room = [], 30000
+            for sk in defn["skills"][:8]:
+                try:
+                    t = SK.instructions(sk, by_user=True)
+                except ValueError:
+                    continue
+                if len(t) <= room:
+                    got.append(t)
+                    room -= len(t)
+            if got:
+                block += "\n\nSKILLS LOADED FOR YOU (follow them):\n\n" + "\n\n---\n".join(got)
         if row["context"]:
             block += "\n\nCONTEXT:\n" + row["context"]
-        block += f"\n\nWORKSPACE: {root} (the project's instructions above apply to you too)"
+        block += f"\n\nWORKSPACE: {root}" + (
+            "" if getattr(a, "_no_instructions", False) else " (the project's instructions above apply to you too)")
         if rec.get("wt"):
             block += (f"\n(This is your own isolated copy of the project {parent.root}: work only in the copy. Other "
                       "sub-agents cannot see your edits; the chat applies them to the project when you report.)")
@@ -456,6 +502,7 @@ class Delegation:
             self.children[sid] = rec
         self.parent.emit({"type": "subagent", "delegation": self.id, "sid": sid, "index": index,
                           "count": len(self.rows), "title": row["title"], "kind": "start"})
+        _hook(self.parent, "SubagentStart", {"subagent": sid, "title": row["title"], "goal": str(row["goal"])[:2000]})
         if self.stopped:
             rec.update(status="interrupted", summary="Not started: the sub-agents were stopped.")
             return self._entry(sid, rec)
@@ -585,6 +632,7 @@ class Delegation:
         self.parent.emit({"type": "subagent", "delegation": self.id, "sid": sid, "index": rec["index"],
                           "count": len(self.rows), "title": self.rows[rec["index"]]["title"], "kind": "done",
                           "status": e["status"], "text": f"{e['status']} in {e['duration_seconds']:.0f} s"})
+        _hook(self.parent, "SubagentStop", {"subagent": sid, "status": rec.get("status"), "summary": str(rec.get("summary") or "")[:2000]})
         return e
 
     def _copy(self, row: dict) -> dict | None:
@@ -741,7 +789,17 @@ def run_tool(parent, args: dict) -> tuple[str, bool]:
         return (f"Too many tasks ({len(rows)}): at most {cfg['max_tasks']} per call. Split the work into fewer, "
                 "larger parts, or call again for the rest."), False
     parent.__dict__.pop("_delegate_partial", None)       # never an older call's reports
-    d = Delegation(parent, rows, cfg, depth)
+    from meshpool_harness.agent import subagents as SA
+    defs = SA.definitions(parent.root) if any(r.get("agent") for r in rows) else {}
+    unknown = sorted({r["agent"] for r in rows if r.get("agent") and SA._slug(r["agent"]) not in defs})
+    if unknown:
+        return (f"No saved sub-agent named {', '.join(unknown)}. Saved ones: {', '.join(defs) or 'none'}. Leave "
+                "agent out to use a general sub-agent."), False
+    for r in rows:
+        if r.get("agent"):
+            r["agent"] = SA._slug(r["agent"])
+            r["title"] = f"{r['agent']}: {r['title']}"[:80]
+    d = Delegation(parent, rows, cfg, depth, defs)
     reg = parent.__dict__.setdefault("_delegations", {})
     reg[d.id] = d
     gen = getattr(parent, "_gen", 0)

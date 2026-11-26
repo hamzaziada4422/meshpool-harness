@@ -10,13 +10,22 @@ listed. With no recorder active every call does nothing, so the engines behave e
 The record is a small file under <Meshpool data folder>/checks/, not memory, because the engines often run in another
 process (the office tool server) than the app. `begin()` writes a pointer file and sets MH_CHECK_RUN for child
 processes; both are read by `passed()`.
+
+PA-toplevel-23: that pointer and MH_CHECK_RUN are one per process, so two chats running at once would mix their
+checks. In this process the recorder is therefore also keyed by context: `begin()` binds the run to the calling
+thread's context (a ContextVar), `bind()` carries it into a worker thread, and `env_for(chat)` gives an engine process
+started for one chat that chat's own run. The process-wide pointer is only the fallback (a tool server started
+before the turn, say).
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import os
 import re
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from meshpool_harness import config as C
@@ -27,6 +36,11 @@ _LABELS = {                                   # kind -> (singular, plural) wordi
     "workbook_rules": ("workbook rule", "workbook rules"),
     "sources": ("source", "sources"),
 }
+
+
+_RUN: contextvars.ContextVar = contextvars.ContextVar("meshpool_check_run", default="")
+_ACTIVE: dict = {}                            # run id -> start time: runs begun in this process and not ended
+_ACTIVE_LOCK = threading.Lock()
 
 
 def _dir() -> Path:
@@ -49,6 +63,9 @@ def _pointer() -> Path:
 
 def begin(run_id: str) -> None:
     """Start recording for `run_id`. Replaces any earlier record of the same id."""
+    with _ACTIVE_LOCK:
+        _ACTIVE[str(run_id)] = time.time()
+    _RUN.set(str(run_id))                     # this thread's context: its checks go to this run, whatever began later
     try:
         _file(run_id).write_text("", encoding="utf-8")
         _pointer().write_text(json.dumps({"run": str(run_id), "ts": time.time()}), encoding="utf-8")
@@ -59,6 +76,10 @@ def begin(run_id: str) -> None:
 
 def end(run_id: str) -> None:
     """Stop recording. The record stays readable."""
+    with _ACTIVE_LOCK:
+        _ACTIVE.pop(str(run_id), None)
+    if _RUN.get() == str(run_id):
+        _RUN.set("")
     try:
         if current() == str(run_id):
             _pointer().unlink(missing_ok=True)
@@ -69,7 +90,13 @@ def end(run_id: str) -> None:
 
 
 def current() -> str:
-    """The run being recorded now ("" when none)."""
+    """The run being recorded now ("" when none): this context's own run first, then the process-wide one."""
+    own = _RUN.get()
+    if own:
+        with _ACTIVE_LOCK:
+            live = own in _ACTIVE             # bound here and not ended (a thread reused after end() falls through)
+        if live and (C.home() / "checks" / f"{_safe(own)}.jsonl").is_file():   # and its record is in this data folder
+            return own
     rid = os.environ.get("MH_CHECK_RUN", "")
     if rid:
         return rid
@@ -80,6 +107,33 @@ def current() -> str:
     except (OSError, ValueError):
         pass
     return ""
+
+
+@contextmanager
+def bind(run_id: str):
+    """Record the checks made inside this block (in a worker thread, say) into `run_id`."""
+    tok = _RUN.set(str(run_id or ""))
+    try:
+        yield
+    finally:
+        _RUN.reset(tok)
+
+
+def run_for(chat_id: str) -> str:
+    """The newest run begun in this process for chat `chat_id` (run ids are "<chat id>:<turn start>"), else ""."""
+    if not chat_id:
+        return ""
+    pre = f"{chat_id}:"
+    with _ACTIVE_LOCK:
+        mine = [(t, r) for r, t in _ACTIVE.items() if r.startswith(pre)]
+    return max(mine)[1] if mine else ""
+
+
+def env_for(chat_id: str) -> dict:
+    """Environment for a process started for chat `chat_id`: its checks go to that chat's run, not to whichever chat
+    began a turn last. Empty when the chat has no run here (the inherited behaviour stays)."""
+    rid = run_for(chat_id)
+    return {"MH_CHECK_RUN": rid} if rid else {}
 
 
 def record(kind: str, label: str, count: int | None = None, ok: bool = True, subject: str = "") -> bool:

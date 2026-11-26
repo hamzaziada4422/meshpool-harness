@@ -62,4 +62,8 @@ jobs:
           python packaging/mac/wheel_minos.py programs
       - name: Tests
         working-directory: app
-        run: python -m pytest -q -p no:cacheprovider tests
+        # -rs lists every skip; ci_skips.py counts them and fails when a test skipped because a tool installed above
+        # (LibreOffice, Chromium, Playwright, jsonschema) is missing, so a broken install step cannot pass green
+        run: |
+          python -m pytest -q -p no:cacheprovider -rs --junitxml="$RUNNER_TEMP/pytest-report.xml" tests
+          python ../packaging/ci_skips.py "$RUNNER_TEMP/pytest-report.xml"

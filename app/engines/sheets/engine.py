@@ -1004,7 +1004,7 @@ class WorkbookReview:
             (self.ws.run_dir / "review.json").write_text(json.dumps({
                 "models": self.models, "max_rounds": self.max_rounds, "stopped": self.stopped,
                 "delivered_round": delivered, "best_round": (self.best() or {}).get("round"),
-                "rounds": self.rounds}, indent=1, default=str))
+                "rounds": self.rounds}, indent=1, default=str), encoding="utf-8")
         except OSError:
             pass
 

@@ -154,3 +154,95 @@ def test_typing_in_a_long_chat_stays_cheap(longchats):
       return performance.now() - t0; }""")
     print("TYPING 20 keys ms:", round(ms), "nodes", page.evaluate("document.querySelectorAll('*').length"))
     assert ms < 1500, ms
+
+
+# ---- 0.0.17 CPU audit (app area): streaming into a long chat, reasoning, code blocks, the Session panel
+
+def test_stream_frames_do_not_redraw_the_header(longchats):
+    # A text-only stream frame has no goal; `prevGoal !== v.goal` was always true, so the header (and, in a code chat,
+    # a /api/git request) was redrawn on every frame: ~80 times a second while a reply streamed.
+    page = longchats
+    page.evaluate("() => { window.__rt = 0; const o = window.renderTop; window.renderTop = function () { window.__rt++; return o.apply(this, arguments); }; }")
+    page.evaluate("() => ingest(S.cur, Object.assign({}, S.cur.view, {state: 'working', events: [], total: S.cur.total}))")
+    r0 = page.evaluate("window.__rt")
+    page.evaluate(H.STREAM_FRAMES, 50)
+    n = page.evaluate("window.__rt") - r0
+    print("HEADER redraws for 50 stream frames:", n)
+    assert n == 0, n                              # was 50
+
+
+def test_long_chat_history_is_folded_into_blocks(longchats):
+    # 2400 items directly in #col: every frame of a streaming reply laid out, hit-tested and paint-walked all of them
+    # (a whole core in a 3000-event chat). Older items now sit in blocks the browser skips as a unit.
+    page = longchats
+    r = page.evaluate("""() => { const col = document.querySelector('#col');
+      const qs = [...col.querySelectorAll('.msg-user .b')].map(b => +(/number (\\d+)/.exec(b.textContent) || [0, 0])[1]);
+      return {kids: col.children.length, outer: col.querySelectorAll(':scope > .hist').length, blocks: col.querySelectorAll('.hist > .hist').length,
+              users: qs.length, ordered: qs.every((x, i) => !i || x === qs[i - 1] + 1), enter: col.querySelectorAll('.hist.enter').length}; }""")
+    ms = min(page.evaluate(H.LAYOUT_PER_CHANGE) for _ in range(3))
+    print("FOLD:", r, "layout per change ms", round(ms, 3))
+    assert r["kids"] < 300, r                     # was 2400
+    assert r["outer"] == 1 and r["blocks"] >= 10, r
+    assert r["users"] == 600 and r["ordered"] and not r["enter"], r
+    assert ms < 0.3, ms                           # was ~0.9 ms per frame (2400 items); ~0.03 ms folded
+
+
+def test_reasoning_stream_is_cheap(longchats):
+    # Each streamed piece of reasoning rewrote the box's text and read scrollHeight (a forced layout of the whole chat),
+    # three pieces a frame. Now pieces are appended and the box scrolls once per frame.
+    page = longchats
+    page.evaluate(H.SCROLL_READS, ".think")
+    try:
+        r = page.evaluate("""() => { const c = S.cur;
+          for (let k = 0; k < 300; k++) c.q.push({type: 'thought', delta: true, text: 'step' + k + ' '});
+          drainQ(c); const oneFrame = 300 - c.q.length; flushQ(c);
+          const box = [...document.querySelectorAll('#col .think')].pop();
+          return {oneFrame, reads: window.__reads, text: box ? box.querySelector('div').textContent : ''}; }""")
+    finally:
+        page.evaluate("window.__readsOff()")
+    print("THINK:", {k: v for k, v in r.items() if k != "text"})
+    assert r["reads"] <= 2, r["reads"]            # was 300
+    assert r["oneFrame"] == 300, r["oneFrame"]    # was 3 a frame: reasoning fell behind the stream
+    assert r["text"].startswith("step0 step1 ") and r["text"].endswith("step299 ")
+
+
+def test_open_code_block_is_not_recoloured_every_delta(page):
+    # The code block a reply is streaming was tokenized and rebuilt span by span on every frame.
+    r = page.evaluate("""() => { let calls = 0; const o = window.edTokens; window.edTokens = function () { calls++; return o.apply(this, arguments); };
+      try {
+        const code = Array.from({length: 200}, (_, i) => `def f${i}(x):\\n    return x * ${i}  # line ${i}`).join('\\n');
+        const full = 'Here:\\n\\n```python\\n' + code + '\\n```\\n\\nDone.';
+        const n = document.createElement('div'); document.body.appendChild(n);
+        const t0 = performance.now(); let steps = 0;
+        for (let k = 20; k < full.length; k += 6) { mdRender(n, full.slice(0, k)); steps++; }
+        mdRender(n, full);
+        const ms = performance.now() - t0, fresh = document.createElement('div'); mdRender(fresh, full);
+        const same = fresh.innerHTML === n.innerHTML, spans = n.querySelectorAll('pre code span').length; n.remove();
+        return {calls, steps, ms, same, spans};
+      } finally { window.edTokens = o; } }""")
+    print("CODE:", r)
+    assert r["same"] and r["spans"] > 100, r      # the finished block is exactly what a fresh render gives, coloured
+    assert r["calls"] <= r["ms"] / 300 + 12, r    # was one tokenizer pass per step (~1000)
+
+
+def test_session_panel_polls_rarely_when_idle_and_never_when_hidden(longchats):
+    # The Session panel asked the server every 4 s (six git processes and a diff each time in a repository) even while
+    # the chat was idle and the tab hidden.
+    page = longchats
+    calls = H.count_requests(page, r"/api/session/[^/]+/panel")
+    page.evaluate("() => togglePanel('session', true)")
+    page.wait_for_timeout(1500)
+    n0 = calls["n"]
+    page.wait_for_timeout(12000)
+    idle = calls["n"] - n0
+    H.hide(page)
+    n1 = calls["n"]
+    page.wait_for_timeout(9000)
+    hidden = calls["n"] - n1
+    H.show(page)
+    page.wait_for_timeout(1500)
+    back = calls["n"] - n1 - hidden
+    print("SESSION PANEL calls: idle 12s", idle, "hidden 9s", hidden, "on return", back)
+    assert idle <= 1, idle                        # was 3
+    assert hidden == 0, hidden                    # was 2
+    assert back >= 1, back                        # coming back refreshes at once

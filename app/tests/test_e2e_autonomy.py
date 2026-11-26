@@ -117,7 +117,8 @@ def test_agent_notes_a_second_page(tmp_path):
     a, _ = _agent(tmp_path, [{"content": "", "tool_calls": [_call(1, "mcp__x__list", {})]}, {"content": "ok"}], mcp)
     a.send("list them")
     tool = [m for m in a.messages if m.get("role") == "tool"][0]["content"]
-    assert tool.startswith("{") and "not the last page" in tool and "next_cursor" in tool
+    assert '{"tickets"' in tool and "not the last page" in tool and "next_cursor" in tool
+    assert tool.startswith('<untrusted_content source="connected app x">')   # a connected app's data is marked
 
 
 def test_the_page_after_the_last_cursor_says_it_was_the_last(tmp_path):

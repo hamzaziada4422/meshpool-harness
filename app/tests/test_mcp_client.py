@@ -276,3 +276,78 @@ def test_open_app_refuses_shell_metacharacters():
             CU._check_app_name(bad)
     assert CU._check_app_name(" Calculator ") == "Calculator"
     assert CU._check_app_name("https://example.com/?a=1&b=2") == "https://example.com/?a=1&b=2"
+
+
+def test_resources_can_be_listed_and_read(tmp_path):
+    spec = _script(tmp_path, """
+        import json, sys
+        for line in sys.stdin:
+            msg = json.loads(line)
+            if "id" not in msg:
+                continue
+            m = msg["method"]
+            if m == "initialize":
+                res = {"protocolVersion": "2025-06-18", "capabilities": {"resources": {}}, "serverInfo": {"name": "docs"}}
+            elif m == "tools/list":
+                res = {"tools": []}
+            elif m == "resources/list":
+                res = {"resources": [{"uri": "docs://guide", "name": "Guide", "mimeType": "text/markdown"}]}
+            elif m == "resources/read":
+                res = {"contents": [{"uri": msg["params"]["uri"], "text": "# The guide"}]}
+            else:
+                res = {}
+            print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": res}), flush=True)
+    """)
+    m = M.Manager(roots=["."])
+    try:
+        m.add("docs", spec, 20)
+        names = [x["function"]["name"] for x in m.schemas()]
+        assert M.RES_LIST in names and M.RES_READ in names and m.has(M.RES_READ)
+        out, failed = m.call(M.RES_LIST, {})
+        assert not failed and "docs: docs://guide  Guide (text/markdown)" in out
+        assert m.call(M.RES_READ, {"server": "docs", "uri": "docs://guide"}) == ("# The guide", False)
+        assert m.call(M.RES_READ, {"server": "nope", "uri": "x"})[1] is True
+    finally:
+        m.close()
+
+
+def test_no_resource_tools_without_a_server_that_offers_them():
+    m = M.Manager(roots=["."])
+    assert not m.has(M.RES_LIST) and M.RES_LIST not in [x["function"]["name"] for x in m.schemas()]
+
+
+def test_server_prompts_become_commands(tmp_path):
+    spec = _script(tmp_path, """
+        import json, sys
+        for line in sys.stdin:
+            msg = json.loads(line)
+            if "id" not in msg:
+                continue
+            m = msg["method"]
+            if m == "initialize":
+                res = {"protocolVersion": "2025-06-18", "capabilities": {"prompts": {}}, "serverInfo": {"name": "gh"}}
+            elif m == "tools/list":
+                res = {"tools": []}
+            elif m == "prompts/list":
+                res = {"prompts": [{"name": "review-pr", "description": "Review a pull request",
+                                    "arguments": [{"name": "number", "required": True}, {"name": "focus"}]}]}
+            elif m == "prompts/get":
+                a = msg["params"]["arguments"]
+                res = {"messages": [{"role": "user", "content": {"type": "text",
+                        "text": f"Review PR {a['number']} focusing on {a.get('focus', 'everything')}."}}]}
+            else:
+                res = {}
+            print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": res}), flush=True)
+    """)
+    m = M.Manager(roots=["."])
+    try:
+        m.add("gh", spec, 20)
+        ps = m.prompts()
+        assert ps and ps[0]["command"] == "/mcp__gh__review-pr"
+        assert m.expand_prompt("/mcp__gh__review-pr 12 error handling") == "Review PR 12 focusing on error handling."
+        assert m.expand_prompt("/mcp__gh__other 1") is None and m.expand_prompt("hello") is None
+        import pytest
+        with pytest.raises(ValueError, match="needs: number"):
+            m.expand_prompt("/mcp__gh__review-pr")
+    finally:
+        m.close()

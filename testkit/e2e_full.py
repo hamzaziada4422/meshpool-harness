@@ -188,7 +188,8 @@ for hid in ("meshpool-code", "pi"):
     call(f"/api/agent/{v['id']}/send", {"text": "read the pdf"})
     v = wait_idle(v["id"])
     outs = [str(e.get("output")) for e in v.get("events", []) if e["type"] == "tool_end"]
-    check(f"[{hid}] reads a PDF through the document reader", any("Page" in o or "page" in o for o in outs), outs[-2:])
+    how = "with its command tool" if hid == "meshpool-code" else "through the document reader"   # code: Codex 0.171
+    check(f"[{hid}] reads a PDF {how}", any("Page" in o or "page" in o for o in outs), outs[-2:])
 
 # Meshpool Auto creates the routed thread
 v = call("/api/agent", {"workdir": P, "harness": "meshpool-auto", "kind": "cowork", "task": "Build a revenue forecast in Excel"})

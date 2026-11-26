@@ -84,11 +84,17 @@ function fsTree(host, root, opts = {}) {
     if (!v) { res.hidden = true; tree.hidden = false; note.hidden = true; return; }
     timer = setTimeout(async () => {
       try {
-        const r = await api(`/api/fs/search?${edQ(root, "")}&q=${encodeURIComponent(v)}`);
+        const r = await api(`/api/fs/search?${edQ(root, "")}&q=${encodeURIComponent(v)}${v.length >= 2 ? "&content=1" : ""}`);
         if (q.value.trim() !== v) return;
         res.innerHTML = ""; r.results.forEach(e => res.appendChild(row(e, true)));
+        const lines = r.lines || [];
+        if (lines.length) {                                // the text search: each line that contains it, opened at that line
+          const h = document.createElement("li"); h.className = "fshd"; h.textContent = "Inside files"; res.appendChild(h);
+          lines.forEach(e => { const li = row(e, true); const b = $(".fsr", li); b.dataset.line = e.line; $(".fsn", b).textContent = `${e.name}:${e.line}`; const sm = document.createElement("small"); sm.className = "fsd fsl"; sm.textContent = e.text; b.appendChild(sm); b.title = `${e.path}:${e.line}`; res.appendChild(li); });
+        }
         tree.hidden = true; res.hidden = false;
-        note.hidden = false; note.textContent = r.results.length ? (r.truncated ? "Showing the first matches. Type more to narrow it." : `${r.results.length} found`) : "No files match.";
+        const n = r.results.length, m = lines.length;
+        note.hidden = false; note.textContent = n || m ? `${n} file${n === 1 ? "" : "s"} by name${m ? `, ${m}${m >= 200 ? "+" : ""} line${m === 1 ? "" : "s"} inside files` : ""}` + (r.truncated ? ". Type more to narrow it." : "") : "Nothing matches.";
       } catch (e) { note.hidden = false; note.textContent = e.message; }
     }, 180);
   };

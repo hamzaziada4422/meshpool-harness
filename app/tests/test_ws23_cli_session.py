@@ -314,7 +314,8 @@ def test_json_and_stream_json_contract(monkeypatch, proj, capfd, tmp_path):
 
 
 def test_slash_commands_alias_for_access():
-    assert T.ALIASES["access"] == "auto" and T.ALIASES["permissions"] == "auto" and "mode" not in T.ALIASES
+    assert T.ALIASES["access"] == "auto" and "mode" not in T.ALIASES
+    assert "permissions" not in T.ALIASES and hasattr(T.Session, "cmd_permissions")   # 0.0.17: lists rules, or sets a mode
     assert {"plan", "goal", "undo", "diff", "rewind", "attach", "agent", "mode", "resume"} <= {c[0] for c in T.COMMANDS}
 
 
@@ -402,7 +403,8 @@ def test_approval_menu_offers_only_the_grant_the_agent_keeps(monkeypatch, proj, 
     T.TermFrontend(s, t, headless=True).send("go")
     piped, _again, plain = t.offered
     assert piped == ["Yes", "No"]                            # a chained command is approved once, never for the chat
-    assert len(plain) == 3 and "pytest" in plain[1] and "commands in this session" in plain[1]
+    assert len(plain) == 4 and "pytest" in plain[1] and "commands in this session" in plain[1]
+    assert "always allow this in this folder" in plain[2]     # 0.0.17: a narrow rule saved for this folder
 
 
 def test_p_json_usage_is_this_runs_on_a_resumed_chat(monkeypatch, proj, capfd):

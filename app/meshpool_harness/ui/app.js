@@ -15,15 +15,17 @@ const ROUTES = [["chat", "Chat", "Quick answers, rewrites, questions"], ["resear
   ["code.test", "Tests", "Write and run tests"], ["code.terminal", "Terminal", "Install, configure, deploy"],
   ["browser", "Browser", "Websites, forms, sign-ins"], ["automation", "Automation", "Scheduled and repeating work"]];
 function routeMenu(anchor) {
-  document.querySelector(".routemenu")?.remove();
+  { const old = document.querySelector(".routemenu"); if (old) { if (old._close) old._close(); else old.remove(); } }   // its listener goes too
   const m = document.createElement("div"); m.className = "routemenu"; m.setAttribute("role", "menu");
   m.innerHTML = ROUTES.map(([id, name, d]) => `<button role="menuitem" data-spec="${id}"><b>${name}</b><small>${d}</small></button>`).join("");
   anchor.appendChild(m);
-  const close = e => { if (!m.contains(e.target)) { m.remove(); document.removeEventListener("mousedown", close); } };
-  setTimeout(() => document.addEventListener("mousedown", close), 0);
-  m.addEventListener("keydown", e => { if (e.key === "Escape") { m.remove(); document.removeEventListener("mousedown", close); } });
+  const shut = () => { m.remove(); document.removeEventListener("mousedown", close); };
+  const close = e => { if (!m.contains(e.target)) shut(); };
+  m._close = shut;
+  setTimeout(() => { if (m.isConnected) document.addEventListener("mousedown", close); }, 0);
+  m.addEventListener("keydown", e => { if (e.key === "Escape") shut(); });
   m.querySelectorAll("button").forEach(b => b.onclick = async () => {
-    m.remove(); document.removeEventListener("mousedown", close);
+    shut();
     const c = S.cur; if (!c) return;
     try { await post(`/api/agent/${c.id}/route`, {spec: b.dataset.spec, since: 1e9}); clearTimeout(c.pollT); poll(); }
     catch (e) { toast(e.message); }
@@ -43,7 +45,9 @@ function ago(t) {
 function linkFiles(html) {
   const root = String(curRoot() || "").replace(/[\\/]+$/, ""); if (!root) return html;
   const rx = new RegExp(esc(root).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[\\\\/]([^\\n<\"'`)]+?\\.(?:docx|doc|xlsx|xls|pptx|ppt|odt|odp|ods|pdf|csv|tsv|md|html|htm|txt|png|jpe?g|gif|webp|svg|py|js|ts|json)(?![\\w]))", "g");
-  return html.replace(rx, (m, rel) => `<button class="flink" data-open="${rel}" title="Preview ${rel}">${ICON.files}${rel}</button>`);
+  const img = /\.(png|jpe?g|gif|webp)$/i, tok = encodeURIComponent((window.MP && MP.token) || "");
+  return html.replace(rx, (m, rel) => `<button class="flink" data-open="${rel}" title="Preview ${rel}">${ICON.files}${rel}</button>` +
+    (img.test(rel) && tok ? `<button class="flink rimgb" data-open="${rel}" title="Open ${rel}"><img class="rimg" loading="lazy" alt="${rel}" src="/raw?t=${tok}&root=${encodeURIComponent(root)}&path=${encodeURIComponent(rel.replace(/&amp;/g, "&"))}" onerror="this.parentNode.remove()"></button>` : ""));   // a picture the reply names is shown in the reply
 }
 // Windows: PowerShell, Command Prompt or Git Bash for commands you type; Mac and Linux: your login shell.
 function termShellPicker() {
@@ -256,7 +260,7 @@ function applyAppearance() {
   R.style.setProperty("--resp", rf === "serif" ? 'Georgia,"Times New Roman",serif' : rf === "system" ? 'system-ui,-apple-system,"Segoe UI",sans-serif' : "inherit");
   R.style.setProperty("--mono", store("codefont") ? `${store("codefont")},"IBM Plex Mono",ui-monospace,Consolas,monospace` : '"IBM Plex Mono",ui-monospace,Consolas,"SFMono-Regular",monospace');
   R.style.setProperty("--code-fs", (store("codesize") || 13) + "px");
-  for (const [k, a, d] of [["motion", "motion", "system"], ["contrast", "contrast", "system"]]) { const v = store(k) || d; if (v === "system") R.removeAttribute("data-" + a); else R.dataset[a] = v; }
+  for (const [k, a, d] of [["motion", "motion", "system"], ["contrast", "contrast", "system"], ["thinking", "thinking", "show"], ["codecolor", "codecolor", "on"]]) { const v = store(k) || d; if (v === "system") R.removeAttribute("data-" + a); else R.dataset[a] = v; }
   const t = store("theme") || "system", z = store("size") || "normal";
   if (t === "system") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = t;
   if (z === "normal") document.documentElement.removeAttribute("data-size"); else document.documentElement.dataset.size = z;
@@ -484,11 +488,20 @@ function setupComposer() {
   inp.addEventListener("keydown", e => {
     const pop = $("#pop.inline");
     if (pop && ["ArrowDown", "ArrowUp", "Enter", "Tab"].includes(e.key)) { e.preventDefault(); popKey(e.key); return; }
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey &&
+        !inp.value.slice(0, inp.selectionStart).includes("\n") && recallSent(inp, e.key === "ArrowUp" ? -1 : 1)) { e.preventDefault(); return; }
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendNow((isMac ? e.metaKey : e.ctrlKey) && cfg().busy); }
-    if (e.key === "Escape" && !pop && cfg().busy && !$(".scrim")) { e.preventDefault(); stopNow(); }
+    if (e.key === "Escape" && !pop && cfg().busy && !$(".scrim") && store("escstop") !== "off") { e.preventDefault(); stopNow(); }
   });
   inp.addEventListener("paste", e => {
-    const files = [...(e.clipboardData?.files || [])]; if (files.length) { e.preventDefault(); addAttachments(files); }
+    const files = [...(e.clipboardData?.files || [])]; if (files.length) { e.preventDefault(); addAttachments(files); return; }
+    const t = e.clipboardData?.getData("text") || "", lines = t.split("\n").length;
+    if (t.length > 3000 || lines > 60) {                // a long paste: a chip that goes with the message, not a wall of text
+      e.preventDefault();
+      const n = S.attachments.filter(a => a.pasted).length + 1;
+      S.attachments.push({name: `Pasted text ${n} (${lines} line${lines === 1 ? "" : "s"})`, pasted: true, text: t});
+      renderAttach();
+    }
   });
   const c = $("#composer");
   c.addEventListener("dragover", e => { e.preventDefault(); c.classList.add("drag"); });
@@ -499,8 +512,8 @@ function setupComposer() {
 }
 function cfg() { // the settings that apply to the next message: the open thread's, or the draft's
   const v = S.cur?.view;
-  if (v) return {harness: v.harness?.id, model: v.model, mode: v.mode, plan: v.plan, style: v.style, busy: ["working", "waiting"].includes(v.state), starting: v.state === "starting"};
-  return {harness: S.draft.harness, model: S.draft.model || S.models?.default, mode: S.draft.mode || defaultMode(), plan: S.draft.plan, style: S.draft.style, busy: false};
+  if (v) return {harness: v.harness?.id, model: v.model, mode: v.mode, plan: v.plan, style: v.style, effort: v.effort, busy: ["working", "waiting"].includes(v.state), starting: v.state === "starting"};
+  return {harness: S.draft.harness, model: S.draft.model || S.models?.default, mode: S.draft.mode || defaultMode(), plan: S.draft.plan, style: S.draft.style, effort: S.draft.effort || "", busy: false};
 }
 async function chooseDraftFolder() {
   const path = await browseFolder(S.draft.project || "");
@@ -510,6 +523,11 @@ async function chooseDraftFolder() {
 async function setPlan(on) {
   if (S.cur) { try { S.cur.view = Object.assign(S.cur.view, await post(`/api/agent/${S.cur.id}/plan`, {on, since: 1e9})); } catch (e) { return toast(e.message); } }
   else S.draft.plan = on;
+  renderBar();
+}
+async function setEffort(e) {
+  if (S.cur) { try { S.cur.view = Object.assign(S.cur.view, await post(`/api/agent/${S.cur.id}/effort`, {effort: e, since: 1e9})); } catch (err) { return toast(err.message); } }
+  else S.draft.effort = e;
   renderBar();
 }
 async function setMode(m) {
@@ -531,7 +549,11 @@ async function addAttachments(files) {
   renderAttach();
 }
 function renderAttach() {
-  $("#attachRow").innerHTML = S.attachments.map((a, i) => `<span class="att-chip">${a.image ? `<img src="data:${a.mime};base64,${a.data}" alt="">` : ICON.file}<span>${esc(a.name)}</span><button data-i="${i}" aria-label="Remove ${esc(a.name)}">×</button></span>`).join("");
+  $("#attachRow").innerHTML = S.attachments.map((a, i) => `<span class="att-chip"${a.pasted ? ` title="${esc(a.text.slice(0, 600))}" data-paste="${i}"` : ""}>${a.image ? `<img src="data:${a.mime};base64,${a.data}" alt="">` : ICON.file}<span>${esc(a.name)}</span><button data-i="${i}" aria-label="Remove ${esc(a.name)}">×</button></span>`).join("");
+  $$("#attachRow [data-paste] > span").forEach(x => x.onclick = () => {     // put a pasted block back in the box
+    const i = +x.parentElement.dataset.paste, a = S.attachments[i], inp = $("#input");
+    S.attachments.splice(i, 1); inp.value += (inp.value ? "\n" : "") + a.text; inp.dispatchEvent(new Event("input")); renderAttach();
+  });
   $$("#attachRow button").forEach(b => b.onclick = () => { S.attachments.splice(+b.dataset.i, 1); renderAttach(); });
 }
 async function stopNow() {
@@ -548,8 +570,14 @@ async function sendNow(interrupt) {
   try { sessionStorage.removeItem("mp_draft_" + (S.cur?.id || "new")); } catch (e) {}
   const inp = $("#input"); let text = inp.value.trim(); const typed = text;
   if (!text && !S.attachments.length) return;
+  S.recall = null; rememberSent(typed);
   const busy = cfg().busy;
   if (text.startsWith("/") && await runSlash(text)) { inp.value = ""; inp.dispatchEvent(new Event("input")); return; }
+  if (/^#\s+\S/.test(text) && !text.includes("\n") && !S.attachments.length) {   // "# a fact": saved to memory, not sent
+    try { const r = await post("/api/memory", {action: "add", text: text.replace(/^#\s+/, "")}); inp.value = ""; inp.dispatchEvent(new Event("input")); toast(r.created ? "Saved to memory." : "Already in memory.", 3000, {label: "Memory", fn: () => goPage("memory")}); }
+    catch (e) { toast(e.message, 5000); }
+    return;
+  }
   if (!S.settings?.ready) { S.pendingGoal = null; showOnboarding(); return; }
   if (!S.cur && S.mode === "code" && !S.draft.project) { toast("Choose a folder or a repository first."); $("#envSel")?.click(); return; }
   const atts = S.attachments; S.attachments = []; renderAttach();
@@ -561,12 +589,13 @@ async function sendNow(interrupt) {
   let created = null; const draft0 = {project: S.draft.project, pid: S.draft.pid};
   try {
     if (!S.cur) {
-      const v = created = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode || defaultMode(), plan: S.draft.plan, style: styleId(), task: text, incognito: !!S.draft.incognito, memory_exclude: S.draft.exclude || [], ...(S.mode === "code" && S.draft.worktree ? {worktree: true} : {})});
+      const v = created = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode || defaultMode(), plan: S.draft.plan, style: styleId(), task: text, incognito: !!S.draft.incognito, memory_exclude: S.draft.exclude || [], ...(S.draft.effort ? {effort: S.draft.effort} : {}), ...(S.mode === "code" && S.draft.worktree ? {worktree: true} : {})});
       S.draft.style = ""; S.draft.incognito = false; S.draft.worktree = false; S.draft.exclude = []; S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
       openThread(v.id, true);
     }
     const cur = S.cur;                              // before any wait: the user may open another chat meanwhile
-    const files = atts.filter(a => !a.image).map(a => ({name: a.name, data: a.data}));   // saved by the server, in the chat's own folder
+    for (const a of atts.filter(a => a.pasted)) text += `\n\n[${a.name}]\n\`\`\`\n${a.text}\n\`\`\``;   // a long paste
+    const files = atts.filter(a => !a.image && !a.pasted).map(a => ({name: a.name, data: a.data}));   // saved by the server, in the chat's own folder
     const images = atts.filter(a => a.image).map(a => ({name: a.name, mime: a.mime, data: a.data}));
     const wasStopping = S.stopping;               // Stop is still finishing: stopNow's wait loop owns the flag
     if (interrupt) { S.stopping = true; renderBar(); }
@@ -603,11 +632,24 @@ const SLASH = [
   ["/plan", "Turn plan mode on or off", () => setPlan(!cfg().plan)],
   ["/goal", "Set a goal: the agent keeps going until it is done (/goal clear ends it)", arg => goalCmd(arg)],
   ["/usage", "Usage, by model and by chat", () => openSettings("usage")],
-  ["/review", "Review this branch's changes for bugs (/review what to focus on)", arg => sendCmd(REVIEW_PROMPT + (arg ? ` Focus on: ${arg}.` : ""))],
+  ["/review", "Review this branch's changes for bugs (/review quick or deep, --max N, what to focus on)", arg => sendCmd(reviewPrompt(arg))],
+  ["/simplify", "Make the changed code simpler without changing what it does (/simplify what)", arg => sendCmd(simplifyPrompt(arg))],
   ["/qa", "Click through your app and report UI and UX problems (/qa address)", arg => sendCmd(qaPrompt(arg))],
-  ["/compact", "Summarize the earlier steps to free up room, so a long task can keep going", async () => {
+  ["/add-dir", "Let the agent read and edit in another folder too (/add-dir path)", async arg => {
     if (!S.cur) return toast("Open a chat first.");
-    try { const r = await post(`/api/agent/${S.cur.id}/compact`, {}); toast(r.compacted ? `Summarized ${r.compacted.removed} earlier messages.` : "Nothing to summarize yet."); } catch (e) { toast(e.message); }
+    if (!arg) return toast("Type the folder's path after /add-dir.");
+    try { const r = await post(`/api/agent/${S.cur.id}/add_dir`, {path: arg}); toast(`The agent may now work in ${r.folder} too.`, 5000); } catch (e) { toast(e.message, 6000); }
+  }],
+  ["/btw", "A quick side question about this chat; the answer is not added to it (/btw your question)", async arg => {
+    if (!S.cur) return toast("Open a chat first.");
+    if (!arg) return toast("Type your question after /btw.");
+    toast("Asking on the side…", 2500);
+    try { const r = await post(`/api/agent/${S.cur.id}/btw`, {question: arg}); await ask({title: "By the way", text: r.answer, ok: "Close", cancel: "Copy"}) === false && navigator.clipboard?.writeText(r.answer); }
+    catch (e) { toast(e.message, 6000); }
+  }],
+  ["/compact", "Summarize the earlier steps to free up room (/compact what to keep in full)", async arg => {
+    if (!S.cur) return toast("Open a chat first.");
+    try { const r = await post(`/api/agent/${S.cur.id}/compact`, {focus: arg || ""}); toast(r.compacted ? `Summarized ${r.compacted.removed} earlier messages.` : "Nothing to summarize yet."); } catch (e) { toast(e.message); }
   }],
   ["/diff", "Show what changed", () => togglePanel("diff", true)],
   ["/files", "Browse the project's files", () => togglePanel("files", true)],
@@ -628,6 +670,20 @@ async function runSlash(text) {
   if (!hit) return false; hit[2](text.slice(cmd.length).trim()); return true;
 }
 const REVIEW_PROMPT = "Review the changes on this branch against the branch it merges into: find the base with git, read `git diff <base>...HEAD` and the changed files in full. Look for correctness bugs, security problems, missing tests and anything that would break on Mac or Windows. Report findings most severe first, each with file:line, what goes wrong and the fix. Do not change any files.";
+const REVIEW_LEVELS = {quick: [5, "Look at the changed lines and the lines right around them. Report only findings you are sure of."],
+  standard: [10, ""], deep: [25, "Also read the code that calls what changed and its tests, run the tests if there is an obvious command, and think through empty, large and failing inputs and concurrent use."]};
+function reviewPrompt(arg) {                              // /review [quick|deep] [--max N] [focus], like the terminal's
+  const w = String(arg || "").split(/\s+/).filter(Boolean);
+  const level = REVIEW_LEVELS[(w[0] || "").toLowerCase()] ? w.shift().toLowerCase() : "standard";
+  let cap = REVIEW_LEVELS[level][0];
+  const i = w.indexOf("--max");
+  if (i >= 0) { const n = parseInt(w[i + 1], 10); if (n > 0) { cap = Math.min(100, n); w.splice(i, 2); } else w.splice(i, 1); }
+  const focus = w.join(" ");
+  return REVIEW_PROMPT + (REVIEW_LEVELS[level][1] ? " " + REVIEW_LEVELS[level][1] : "") + ` At most ${cap} findings.` + (focus ? ` Focus on: ${focus}.` : "");
+}
+function simplifyPrompt(what) {
+  return `Look at ${what || "the current changes (git diff and git diff --staged)"}. Make the changed code simpler without changing what it does: reuse helpers the project already has instead of new copies, remove dead code and needless layers, and fix plain inefficiencies. Leave public names and formats as they are. Do not hunt for bugs. Make the edits, run the tests if there is an obvious command, and list what you changed.`;
+}
 function qaPrompt(where) {
   return `Do a UI and UX pass of ${where || "the app in this project"}. If it is not running, start it the way its README or package.json says. Open it with the browser tools and click through every page and control at desktop width (1280x800) and phone width (390x844), in light and dark mode if it has both. Take a screenshot of each problem. Report issues most severe first: what you saw, the screenshot, the likely cause (file:line) and the fix. Look for broken flows, console errors, overlapping or cut-off elements, poor contrast, small tap targets, missing empty, loading and error states, and unclear wording. Do not change any files.`;
 }
@@ -680,6 +736,8 @@ function menuFromInput() {
   const before = v.slice(0, pos);
   const slash = /^\/(\w*)$/.exec(before);
   const skill = /(^|\s)\$([\w-]*)$/.exec(before);
+  const at = /(^|\s)@([\w./-]*)$/.exec(before);
+  if (at && !slash && !skill) return mentionPop(inp, v, pos, at[2]);
   if (slash) {
     const q = slash[1].toLowerCase();
     const items = byUse(SLASH.filter(s => s[0].slice(1).startsWith(q)).map(s => ({label: s[0], desc: s[1], fn: () => { used(s[0]); if (ARG_CMDS.has(s[0])) { inp.value = s[0] + " "; inp.focus(); inp.dispatchEvent(new Event("input")); return; } inp.value = ""; s[2](); }})));
@@ -696,6 +754,46 @@ function menuFromInput() {
   if ($("#pop.inline")) closePop();
 }
 
+/* @ in the composer: pick a file in this chat's folder; it is attached when the message is sent (@path). */
+let MENTION_T = null, MENTION_Q = null;
+function mentionPop(inp, v, pos, q) {
+  const root = S.cur?.view?.workdir || S.draft.project || "";
+  if (!root) { if ($("#pop.inline")) closePop(); return; }
+  clearTimeout(MENTION_T); MENTION_Q = q;
+  MENTION_T = setTimeout(async () => {
+    const sym = (q || "").length >= 2 ? api(`/api/fs/symbols?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}`).catch(() => ({results: []})) : Promise.resolve({results: []});
+    let r, s; try { [r, s] = await Promise.all([api(`/api/fs/search?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q || ".")}`), sym]); } catch (e) { return; }
+    if (MENTION_Q !== q || $("#input") !== inp) return;
+    const put = text => {
+      const cur = inp.value, p2 = inp.selectionStart, start = cur.lastIndexOf("@", p2 - 1);
+      inp.value = cur.slice(0, start) + text + " " + cur.slice(p2); inp.focus();
+      const c = start + text.length + 1; inp.setSelectionRange(c, c); inp.dispatchEvent(new Event("input"));
+    };
+    const hits = (r.results || []).sort((a, b) => a.path.length - b.path.length).slice(0, (s.results || []).length ? 5 : 8);
+    const syms = (s.results || []).slice(0, 5);          // functions and classes: @path:line (name)
+    if (!hits.length && !syms.length) { if ($("#pop.inline")) closePop(); return; }
+    inlinePop([...hits.map(h => ({label: "@" + h.path, desc: h.dir ? "folder" : "", fn: () => put("@" + h.path)})),
+      ...syms.map(x => ({label: `${x.name}`, desc: `${x.kind} · ${x.path}:${x.line}`, fn: () => put(`@${x.path}:${x.line} (${x.kind} ${x.name})`)}))]);
+  }, 120);
+}
+/* Up and Down in an empty composer walk back through the messages you sent (newest first), as in a terminal. */
+const SENT_KEY = "mp_sent";
+function sentList() { try { return JSON.parse(localStorage.getItem(SENT_KEY) || "[]"); } catch (e) { return []; } }
+function rememberSent(text) {
+  if (!text || S.cur?.view?.incognito || S.draft.incognito) return;          // incognito chats leave nothing behind
+  const l = sentList().filter(x => x !== text); l.push(text);
+  try { localStorage.setItem(SENT_KEY, JSON.stringify(l.slice(-100))); } catch (e) {}
+}
+function recallSent(inp, dir) {
+  const l = sentList(); if (!l.length) return false;
+  if (S.recall == null) { if (inp.value.trim()) return false; S.recall = l.length; }
+  else if (inp.value !== l[S.recall]) { S.recall = null; return false; }      // edited: stop walking history
+  const n = S.recall + dir;
+  if (n < 0) return true;
+  if (n >= l.length) { S.recall = null; inp.value = ""; inp.dispatchEvent(new Event("input")); return true; }
+  S.recall = n; inp.value = l[n]; inp.dispatchEvent(new Event("input")); inp.setSelectionRange(inp.value.length, inp.value.length);
+  return true;
+}
 /* ================================== popovers ================================== */
 function closePop() { $("#pop")?.remove(); document.removeEventListener("mousedown", popAway); }
 function popAway(e) { if (!e.target.closest("#pop") && !e.target.closest(".pill") && !e.target.closest(".chip")) closePop(); }
@@ -878,6 +976,43 @@ function commitStage(cur) {
   for (const n of col.children) n.classList.remove("enter");
   S.pinned = true; scrollConv(true);
   if (cur.live) easeStart(cur.live);
+  foldHistory(col);
+}
+/* Long chats: with thousands of items directly in #col, every frame of a streaming reply laid out, hit-tested and
+   paint-walked all of them, even though each skips its own content (content-visibility): a 3000-event chat used a
+   whole core while a reply streamed (CPU audit). Older items are moved, in order, into blocks of about FOLD_SIZE, and
+   the blocks into one outer block; the browser skips each block as a unit while it is off screen (.hist in app.css),
+   so at the end of the chat the whole history costs one skipped box, and scrolling up opens only the blocks in view.
+   (Blocks straight under #col, once drawn, still cost ~30 us each per layout; under one outer block they cost nothing.)
+   A block ends before a message of the user where it can, so the space between items stays what it was. The newest
+   FOLD_KEEP items always stay where they are. */
+const FOLD_AT = 160, FOLD_KEEP = 40, FOLD_SIZE = 100;
+function foldHistory(col) {
+  if (!col || col.childElementCount < FOLD_AT) return 0;
+  const kids = []; for (const n of col.children) if (!n.classList.contains("hist") && n.id !== "trustBar") kids.push(n);
+  if (kids.length < FOLD_AT) return 0;
+  const limit = kids.length - FOLD_KEEP, spans = [];
+  for (let a = 0, i = 1; i <= limit; i++) {
+    const n = i - a;
+    if ((n >= FOLD_SIZE && kids[i].classList.contains("msg-user")) || n >= FOLD_SIZE * 3) { spans.push([a, i]); a = i; }
+  }
+  if (!spans.length) return 0;
+  const conv = $("#conv"), fromEnd = conv ? conv.scrollHeight - conv.scrollTop : 0, made = [];
+  for (const [a, b] of spans) {
+    const w = document.createElement("div"); w.className = "hist"; w.style.cssText = "content-visibility:visible;contain:layout";
+    col.insertBefore(w, kids[a]);
+    for (const n of kids.slice(a, b)) { n.classList.remove("enter"); w.appendChild(n); }
+    made.push(w);
+  }
+  const hs = made.map(w => w.offsetHeight);       // one layout: the size each block keeps while it is skipped
+  made.forEach((w, k) => { w.style.cssText = `contain-intrinsic-size:auto ${hs[k]}px`; });
+  let outer = col.querySelector(":scope > .hist.histo");
+  if (!outer) { outer = document.createElement("div"); outer.className = "hist histo"; outer.dataset.h = "0"; col.insertBefore(outer, made[0]); }
+  const h = Number(outer.dataset.h || 0) + hs.reduce((x, y) => x + y, 0);
+  for (const w of made) outer.appendChild(w);
+  outer.dataset.h = String(h); outer.style.cssText = `contain-intrinsic-size:auto ${h}px`;
+  if (conv) conv.scrollTop = S.pinned ? conv.scrollHeight : conv.scrollHeight - fromEnd;
+  return made.length;
 }
 function openThread(id, fresh) {
   clearColHandlers(); window.navPush?.("chat:" + id);
@@ -953,17 +1088,36 @@ function ingest(cur, v) {
   if (got) wakeFrame();
   if (cur.stage || document.hidden) { flushQ(cur); }          // history, or a hidden tab (no animation frames): apply at once
   if (cur.stage) commitStage(cur);
+  else if (got) foldHistory($("#col"));                       // a long run keeps its column short too (cheap until FOLD_AT)
   if (!cur.q.length) reconcileOpen(cur, v);
   if (got || prevState !== v.state) progressSoon();
   const busy = ["starting", "working", "waiting"].includes(v.state);
   cur.busy = busy; cur.working = v.state === "working";
   if (v.state === "working") { if (!cur.since) cur.since = v.turn_started ? v.turn_started * 1000 : Date.now(); } else cur.since = null;
-  if (first || prevState !== v.state || prevGoal !== v.goal || (v.title && v.title !== cur.shownTitle)) { cur.shownTitle = v.title; renderTop(); renderBar(); }
+  // A stream frame of only text carries no goal or title (server.py _event_stream): it must not redraw the header, which
+  // asked the server for git status on every frame of a code chat (CPU audit: ~80 /api/git requests a second while streaming).
+  if (first || prevState !== v.state || ("goal" in v && prevGoal !== v.goal) || (v.title && v.title !== cur.shownTitle)) { cur.shownTitle = v.title; renderTop(); renderBar(); }
+  renderTrust(cur);
   if (first && S.panel) renderPanel();
   if (first) scrollConv(true);
   if (!cur.ready) setTimeout(() => { if (S.cur === cur && !cur.stage) cur.ready = true; }, 50);
+  if (prevState && prevState !== v.state && S.panel === "session") S.spTick?.();     // 4 s while it works, 15 s while idle
   if (prevState && prevState !== v.state && !busy) { loadThreads(); renderBranch(); if (S.panel === "diff") renderPanel(); }
   return false;
+}
+/* Folder trust: a project's own hooks and allow rules are ignored until the user trusts the folder (trust.py). */
+function renderTrust(cur) {
+  const col = $("#col"), t = cur.view?.trust, have = $("#trustBar");
+  if (!col || !t || cur.trustHidden) { have?.remove(); return; }
+  if (have) return;
+  const d = document.createElement("div"); d.id = "trustBar"; d.className = "note warn trustbar"; d.setAttribute("role", "status");
+  d.innerHTML = `${esc(t.text)} <button class="linkbtn" id="trustYes">Trust this folder</button> <button class="linkbtn" id="trustNo">Not now</button>`;
+  col.prepend(d);
+  $("#trustYes", d).onclick = async () => {
+    if (!await ask({title: "Trust this folder?", text: `Its ${t.files.join(" and ")} will run commands and skip approval questions in every chat in ${cur.view.workdir}. Only trust folders you made or know.`, ok: "Trust"})) return;
+    try { await post("/api/trust", {root: cur.view.workdir, action: "trust"}); cur.view.trust = null; d.remove(); toast("Folder trusted. New messages use its hooks and rules."); } catch (e) { toast(e.message); }
+  };
+  $("#trustNo", d).onclick = () => { cur.trustHidden = true; d.remove(); };
 }
 // What the server says it still waits on is the truth: a card, step or spinner it no longer waits on is closed here (a reopened chat, an old transcript).
 function reconcileOpen(cur, v) {
@@ -1036,7 +1190,7 @@ function drainQ(cur, all) {
       if (budget <= 0) break;
       if (ev.text.length > budget) { const head = ev.text.slice(0, budget); ev.text = ev.text.slice(budget); const part = {type: "text_delta", text: head}; cur.log.push(part); applyEv(part); break; }
       q.shift(); budget -= ev.text.length;
-    } else { q.shift(); evs++; }
+    } else { q.shift(); if (!(ev.type === "thought" && ev.delta)) evs++; }   // reasoning pieces are text: they use up no step
     cur.log.push(ev); applyEv(ev);
   }
 }
@@ -1046,7 +1200,8 @@ function flushLive(cur) {
   try { mdRender(cur.live, cur.liveText); }
   catch (e) { console.warn("meshpool: could not draw the reply", e); try { cur.live.textContent = cur.liveText; } catch (_) {} }
 }
-function flushQ(cur) { drainQ(cur, true); flushLive(cur); }
+function flushThought(cur) { const td = cur.thoughtScroll; if (td) { cur.thoughtScroll = null; if (td.isConnected) td.scrollTop = td.scrollHeight; } }
+function flushQ(cur) { drainQ(cur, true); flushLive(cur); flushThought(cur); }
 // The frame loop only runs at display rate while there is something to animate (queued events, a reply easing open).
 // Otherwise it ticks slowly (the elapsed-time label needs about once a second), and not at all while the tab is hidden.
 let frameR = 0, frameT = 0;
@@ -1055,7 +1210,7 @@ function frame() {
   frameR = 0; frameT = 0;
   const cur = S.cur;
   // Never let one bad event or reply stop the loop: the live reply, the easing and the timer all run from here.
-  try { if (cur && !cur.stage) { if (cur.q.length) drainQ(cur); flushLive(cur); } } catch (e) { console.warn("meshpool: frame", e); }
+  try { if (cur && !cur.stage) { if (cur.q.length) drainQ(cur); flushLive(cur); flushThought(cur); } } catch (e) { console.warn("meshpool: frame", e); }
   try { easeAll(); workTick(cur); } catch (e) { console.warn("meshpool: frame", e); }
   const active = !document.hidden && cur && !cur.stage && (cur.q.length || cur.liveDirty) || EASE.size;
   if (active && !document.hidden) frameR = requestAnimationFrame(frame);
@@ -1119,16 +1274,27 @@ function mdBlocks(text) {
   return out;
 }
 function mdRoot(node) { let r = node.firstElementChild; if (!r || !r.classList.contains("mdh")) { r = document.createElement("div"); r.className = "mdh"; node.textContent = ""; node.appendChild(r); node._blocks = []; } return r; }
+// The code of a fence that is still open (the reply is streaming it), when its language line is complete.
+function openFence(src) { const parts = src.split("```"); if (parts.length % 2) return null; const p = parts[parts.length - 1]; return /^[\w+.#-]*\n/.test(p) ? p : null; }
+const CODE_RECOLOUR_MS = 300;
 function mdRender(node, text) {
   const root = mdRoot(node), prev = node._blocks || (node._blocks = []), srcs = mdBlocks(text);
   for (let i = 0; i < srcs.length; i++) {
     if (prev[i] && prev[i].src === srcs[i]) continue;
+    // A code block that streams grows by a few characters a frame: colouring all of it again every frame cost a
+    // tokenizer pass and a rebuild of every span (CPU audit). The new text is added as plain text and the block is
+    // coloured again at most every CODE_RECOLOUR_MS, and in full once its fence closes or the reply ends.
+    const pv = prev[i], add = pv && srcs[i].startsWith(pv.src) ? srcs[i].slice(pv.src.length) : null;
+    if (add && i === srcs.length - 1 && !add.includes("`") && Date.now() - (pv.hl || 0) < CODE_RECOLOUR_MS && openFence(pv.src) != null) {
+      const last = pv.nodes[pv.nodes.length - 1], code = last?.classList?.contains("codewrap") ? last.querySelector("pre > code") : null;
+      if (code) { code.appendChild(document.createTextNode(add)); pv.src = srcs[i]; continue; }
+    }
     const t = document.createElement("template"); t.innerHTML = linkFiles(md(srcs[i]));
     const nodes = [...t.content.childNodes], old = prev[i]?.nodes || [];
     const ref = old.length ? old[0] : (prev[i + 1]?.nodes[0] || null);
     for (const n of nodes) root.insertBefore(n, ref && ref.parentNode === root ? ref : null);
     for (const n of old) n.remove();
-    prev[i] = {src: srcs[i], nodes};
+    prev[i] = {src: srcs[i], nodes, hl: Date.now()};
   }
   while (prev.length > srcs.length) { for (const n of prev.pop().nodes) n.remove(); }
   return node;
@@ -1148,13 +1314,46 @@ function b64utf8(t) {
   for (let i = 0; i < u.length; i += 0x8000) bin += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
   return btoa(bin);
 }
+/* Code blocks in replies: coloured with the editor's tokenizer (editor.js), with a Copy button. */
+const CODE_EXT = {python: "py", py: "py", javascript: "js", js: "js", jsx: "js", typescript: "ts", ts: "ts", tsx: "ts", json: "json",
+  bash: "sh", sh: "sh", shell: "sh", zsh: "sh", console: "sh", powershell: "ps1", ps1: "ps1", sql: "sql", html: "html", xml: "xml",
+  svg: "svg", css: "css", scss: "css", yaml: "yaml", yml: "yaml", toml: "toml", ini: "ini", go: "go", golang: "go", rust: "rs", rs: "rs",
+  ruby: "rb", rb: "rb", php: "php", java: "java", kotlin: "kt", kt: "kt", swift: "swift", c: "c", h: "c", cpp: "cpp", "c++": "cpp",
+  cs: "cs", csharp: "cs", "c#": "cs", markdown: "md", md: "md", vue: "vue", dockerfile: "dockerfile", makefile: "makefile"};
+const CODE_LABEL = {py: "python", js: "javascript", ts: "typescript", sh: "shell", rs: "rust", rb: "ruby", md: "markdown"};
+function codeHTML(text, lang) {
+  const ext = CODE_EXT[lang];
+  if (!ext || typeof edTokens !== "function" || typeof edLangOf !== "function" || text.length > 60000) return esc(text);
+  try {
+    const L = edLangOf(ext === "dockerfile" || ext === "makefile" ? ext : "x." + ext);
+    return edTokens(text, L).map(([c, s]) => c ? `<span class="tk-${c}">${esc(s)}</span>` : esc(s)).join("");
+  } catch (e) { return esc(text); }
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest?.("[data-copycode]"); if (!b) return;
+  const code = b.closest(".codewrap")?.querySelector("pre code")?.textContent || "";
+  navigator.clipboard.writeText(code).then(() => { b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy"; }, 1500); }, () => toast("Could not copy."));
+});
+document.addEventListener("click", async e => {              // Take back: a message sent while the agent worked
+  const b = e.target.closest?.("[data-takeback]"); if (!b || !S.cur) return;
+  b.disabled = true;
+  try {
+    const r = await post(`/api/agent/${S.cur.id}/take_back`, {since: 1e9});
+    const t = r.taken?.text;
+    if (t == null) { toast("The agent has already read it."); b.remove(); return; }
+    const inp = $("#input"); inp.value = t + (inp.value ? "\n" + inp.value : ""); inp.dispatchEvent(new Event("input")); inp.focus();
+    clearTimeout(S.cur.pollT); poll();
+  } catch (err) { toast(err.message); b.disabled = false; }
+});
 function md(src) {
   const parts = String(src || "").split(/```/);
   return parts.map((p, i) => {
     if (i % 2) {
-      const lang = (/^([\w+.#-]*)\n/.exec(p) || [, ""])[1].toLowerCase(), pre = `<pre><code>${esc(p.replace(/^[\w+.#-]*\n/, ""))}</code></pre>`;
+      const lang = (/^([\w+.#-]*)\n/.exec(p) || [, ""])[1].toLowerCase(), body = p.replace(/^[\w+.#-]*\n/, ""), pre = `<pre><code>${codeHTML(body, lang)}</code></pre>`;
       if (lang === "mermaid" && i < parts.length - 1) { const src = p.replace(/^[\w+.#-]*\n/, ""); return `<div class="mermaid-box" data-mermaid="${esc(src)}"><pre><code>${esc(src)}</code></pre></div>`; }
-      return (lang === "html" || lang === "svg") && i < parts.length - 1 ? `<div class="codewrap"><div class="codehd"><span>${lang}</span><button class="pvbtn" type="button" data-pvcode="${lang}" title="Preview this ${lang.toUpperCase()}">Preview</button></div>${pre}</div>` : pre;   // a closed fence only: not while it streams
+      const closed = i < parts.length - 1;          // a closed fence only: not while it streams
+      const prev = (lang === "html" || lang === "svg") && closed ? `<button class="pvbtn" type="button" data-pvcode="${lang}" title="Preview this ${lang.toUpperCase()}">Preview</button>` : "";
+      return `<div class="codewrap"><div class="codehd"><span>${esc(CODE_LABEL[lang] || lang || "text")}</span><span class="codeacts">${prev}<button class="pvbtn" type="button" data-copycode="1" title="Copy this code" aria-label="Copy this code">Copy</button></span></div>${pre}</div>`;
     }
     const b64 = b64utf8;
     p = p.replace(/(^|\n)([ \t]*)\$\$([\s\S]+?)\$\$/g, (_, pre, sp, t) => `${pre}${sp}\u0001M${b64(t)}\u0002`).replace(/\\\[([\s\S]+?)\\\]/g, (_, t) => `\u0001M${b64(t)}\u0002`)
@@ -1225,14 +1424,19 @@ function applyEvRaw(ev) {
   switch (ev.type) {
     case "queued": {
       const box = $("#attachRow"); $("#queuedChip")?.remove();
-      if (ev.n) box.insertAdjacentHTML("afterbegin", `<span class="att-chip" id="queuedChip">${ICON.list}<span>${ev.after_stop ? "Runs after the stop: " : "Queued: "}${esc(ev.text.slice(0, 60))}${ev.n > 1 ? ` and ${ev.n - 1} more` : ""}</span></span>`);
+      if (ev.n) box.insertAdjacentHTML("afterbegin", `<span class="att-chip" id="queuedChip">${ICON.list}<span>${ev.after_stop ? "Runs after the stop: " : "Queued: "}${esc(ev.text.slice(0, 60))}${ev.n > 1 ? ` and ${ev.n - 1} more` : ""}</span><button class="linkbtn" data-takeback title="Put it back in the message box">Take back</button></span>`);
       break; }
+    case "unsteer": {                                    // a message added while working, taken back before it was read
+      const b = [...col.querySelectorAll(".msg-user.steer:not(.taken)")].pop();
+      if (b) { b.classList.add("taken"); const t = b.querySelector(".tag"); if (t) t.textContent = "Taken back"; b.querySelector("[data-takeback]")?.remove(); }
+      break; }
+    case "steer_read": { col.querySelectorAll(".msg-user.steer [data-takeback]").forEach(x => x.remove()); break; }
     case "user": {
       if (!ev.steer) { cur.turnPlan = !!ev.plan; for (const x of col.querySelectorAll(".buildplan")) x.remove(); }   // the card belongs to a turn sent in plan mode
       if (String(ev.text).trim() === RESUME_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Picking up where it left off</span>`, "goalturn"); break; }
       if (String(ev.text).trim() === GOAL_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Continuing toward the goal</span>`, "goalturn"); break; }
-      if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span><br>${esc(ev.text)}</div>`, "msg-user"); $("#queuedChip")?.remove(); break; }
-      closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; cur.tpaths = [];
+      if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span> <button class="linkbtn" data-takeback title="Take it back before the agent reads it">Take back</button><br><span class="stx">${esc(ev.text)}</span></div>`, "msg-user steer"); $("#queuedChip")?.remove(); break; }
+      closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; cur.tpaths = []; cur.lastAi = null; cur.lastText = "";
       { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button><button class="iconbtn" data-ma="rewind" data-tip="Rewind to here" data-tip-pos="below" aria-label="Rewind to here">${ICON.undo}</button><button class="iconbtn" data-ma="fork" data-tip="Fork from here" data-tip-pos="below" aria-label="Fork from here">${ICON.branch}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.ei = ev.i; cur.turnEi = ev.i; cur.lastFoot = null; }
       break; }
     case "text_delta":
@@ -1242,8 +1446,8 @@ function applyEvRaw(ev) {
     case "retry_ok": clearRetry(); break;
     case "assistant":
       { const txt = stripGoal(ev.text); if (txt) clearRetry();
-      if (cur.live) { if (txt) { mdRender(cur.live, txt); easeEnd(cur.live); } else cur.live.remove(); cur.live = null; cur.liveDirty = false; }
-      else if (txt) { closeGroup(); mdRender(add("", "msg-ai"), txt); } }
+      if (cur.live) { if (txt) { mdRender(cur.live, txt); easeEnd(cur.live); cur.lastAi = cur.live; } else cur.live.remove(); cur.live = null; cur.liveDirty = false; }
+      else if (txt) { closeGroup(); cur.lastAi = add("", "msg-ai"); mdRender(cur.lastAi, txt); } }
       cur.lastText = stripGoal(ev.text || "") || cur.lastText;
       break;
     case "tool_start": {
@@ -1257,9 +1461,17 @@ function applyEvRaw(ev) {
       $(".rows", g).appendChild(d); cur.tools[ev.id] = d; bumpGroup(g);
       if (/(^|__|[.:])browser_open$/.test(raw) && cur.ready && typeof browserAutoOpen === "function") browserAutoOpen(cur);
       { const sm = stepSummary(name, ev); cur.activity = `${label}${sm ? " " + sm : ""}`; } break; }
+    case "tool_output": {                               // a command's output while it runs (live only, not saved)
+      const d = cur.tools[ev.id] || document.getElementById("tool-" + ev.id); if (!d || d.dataset.done) break;
+      let pre = $("pre.live", d);
+      if (!pre) { pre = document.createElement("pre"); pre.className = "live"; d.appendChild(pre); if (!d.open) { d.open = true; d.dataset.autoOpen = "1"; } }
+      const lines = (pre.textContent + ev.text).split("\n"); pre.textContent = lines.slice(-30).join("\n");
+      pre.scrollTop = pre.scrollHeight;
+      break; }
     case "tool_end": {
       if (ev.output) for (const m of String(ev.output).matchAll(OUT_RX)) (cur.tpaths ||= []).push(relPath(m[1]));   // this turn's files, for the cards under the reply
       const d = cur.tools[ev.id] || document.getElementById("tool-" + ev.id); if (!d) break;
+      d.dataset.done = "1"; $("pre.live", d)?.remove(); if (d.dataset.autoOpen) { d.open = false; delete d.dataset.autoOpen; }
       // A step the user stopped, or one Plan mode blocked, did not fail: label it for what happened.
       const out = String(ev.output || ""), stopped = ev.stopped || /not run: stopped by the user|^\[exit 130\]|stopped by the user|sub-agents were stopped by stop/i.test(out);
       const planned = !ev.ok && (/plan mode/i.test(out) || (cur.view?.plan && ["write", "edit", "write_file", "bash", "bash_many", "delete", "move"].includes(d.dataset.name)));
@@ -1276,7 +1488,7 @@ function applyEvRaw(ev) {
       closeGroup();
       const OPT = {allow_once: "Allow", allow_always: "Allow for this chat", reject_once: "Deny", reject_always: "Always deny"};
       const opts = ev.options && ev.options.length ? ev.options.map(o => `<button class="btn ${o.kind === "allow_once" ? "primary" : String(o.kind).startsWith("reject") ? "danger" : ""}" data-d="${esc(o.id)}">${esc(OPT[o.kind] || o.label)}</button>`).join("")
-        : `<button class="btn primary" data-d="yes">Allow</button>${ev.scope === "once" ? "" : `<button class="btn" data-d="always">Allow ${ev.scope ? esc(ev.scope) : ev.kind === "edit" ? "all edits" : ev.kind === "bash" ? "all commands" : "this tool"} in this chat</button>`}<button class="btn danger" data-d="no">Deny</button><input placeholder="Note for the agent (optional)" aria-label="Note for the agent">`;
+        : `<button class="btn primary" data-d="yes">Allow</button>${ev.scope === "once" ? "" : `<button class="btn" data-d="always">Allow ${ev.scope ? esc(ev.scope) : ev.kind === "edit" ? "all edits" : ev.kind === "bash" ? "all commands" : "this tool"} in this chat</button>`}${ev.scope !== "once" && ["edit", "bash", "mcp"].includes(ev.kind) ? `<button class="btn" data-d="save" title="Saves a rule for this folder in your own settings: this command and its subcommand with any arguments, file edits, or this tool. A test or build command that runs project code then runs whatever that code holds.">Always in this folder</button>` : ""}<button class="btn danger" data-d="no">Deny</button><input placeholder="Note for the agent (optional)" aria-label="Note for the agent">`;
       const title = String(ev.title || "").replace(/^(run a command|execute terminal|terminal)\s*:.*$/is, "Run this command?").replace(/^Approve edit:\s*(.+)$/i, "Change $1?");
       const g0 = gKeep;
       const d = add(`<b>${esc(title)}</b>${ev.detail ? (ev.kind === "doc" ? `<div class="docprev">${md(ev.detail)}</div>` : `<pre>${ev.kind === "edit" ? diffLines(ev.detail) : esc(ev.detail)}</pre>`) : ""}<div class="acts">${opts}</div>`, "appr");
@@ -1290,11 +1502,21 @@ function applyEvRaw(ev) {
       });
       scrollConv(true); break; }
     case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /approval|waiting/i.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
-      const d = cardEl("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.closed ? "Closed when Meshpool restarted." : ev.decision === "stopped" ? "Stopped before running." : ev.decision === "timeout" ? "No answer in time." : ev.reason ? esc(ev.reason) : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
+      const d = cardEl("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.closed ? "Closed when Meshpool restarted." : ev.decision === "stopped" ? "Stopped before running." : ev.decision === "timeout" ? "No answer in time." : ev.reason ? esc(ev.reason) : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "save" ? "Allowed, and saved for this folder." : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
         const g = d.previousElementSibling; if (g?.classList.contains("work") && d === col.lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
+      if (ev.final && cur.thoughtLive) {      // the saved copy of what streamed live: add only what this page missed
+        const seen = cur.thoughtSeen || ""; cur.thoughtLive = false; cur.thoughtSeen = "";   // (FL-R6a: the server drops
+        const rest = ev.text.startsWith(seen) ? ev.text.slice(seen.length) : "";             // the pieces once it is here)
+        if (rest && cur.thought && cur.thought.isConnected) { const tdr = $("div", cur.thought); tdr.textContent += rest; }
+        break; }
+      if (ev.delta) { cur.thoughtLive = true; cur.thoughtSeen = (cur.thoughtSeen || "") + ev.text; }
       if (!cur.thought || !cur.thought.isConnected) { closeGroup(); cur.thought = add(`<details ${S.steps ? "open" : ""}><summary>Thinking</summary><div></div></details>`, "think"); }
-      const td = $("div", cur.thought); td.textContent += ev.text; td.scrollTop = td.scrollHeight; cur.activity = "Thinking"; break; }
+      // Appended, not rewritten, and scrolled once per frame (frame()): reading scrollHeight here forced a layout of the
+      // whole chat for every streamed piece of reasoning.
+      const td = $("div", cur.thought), tn = td.lastChild;
+      if (tn && tn.nodeType === 3) tn.appendData(ev.text); else td.appendChild(document.createTextNode(ev.text));
+      cur.thoughtScroll = td; cur.activity = "Thinking"; break; }
     case "plan": { cur.planEv = ev; planSoon(); break; }       // shown in the Session panel and as one line above the composer
     case "subagent": {      // delegate_task progress: one row per sub-agent, live (agent/delegate.py)
       cur.subs = cur.subs || {};
@@ -1337,7 +1559,8 @@ function applyEvRaw(ev) {
     case "interrupted": {
       cur.gateEl?.remove(); cur.gateEl = null;
       settleSteps("stopped"); closeGroup();
-      const n = add(esc(ev.text) + (ev.resend ? ` <button class="linkbtn" data-resend="1">Put it back in the message box</button>` : ""), "note warn");
+      const n = add(esc(ev.text) + (ev.restarted ? ` <button class="linkbtn" data-cont="1">Continue</button>` : "") + (ev.resend ? ` <button class="linkbtn" data-resend="1">Put it back in the message box</button>` : ""), "note warn");
+      $("[data-cont]", n)?.addEventListener("click", () => { if (cfg().busy) return; const inp = $("#input"); inp.value = RESUME_NEXT; inp.dispatchEvent(new Event("input")); sendNow(false); });
       $("[data-resend]", n)?.addEventListener("click", () => { const inp = $("#input"); inp.value = ev.resend; inp.dispatchEvent(new Event("input")); inp.focus(); });
       break; }
     case "checkpoint": {
@@ -1467,6 +1690,19 @@ function settleSteps(label) {
 function bindFoot(foot) {
   $$("[data-diff]", foot).forEach(b => b.onclick = () => { S.diffTurn = +b.dataset.diff; togglePanel(curMode() === "cowork" ? "outputs" : "diff", true); });
   $$("[data-undo]", foot).forEach(b => b.onclick = () => undoTurn(+b.dataset.undo));
+}
+/* Settings, Permissions: every saved rule, with Remove, and a way to add one. */
+async function drawRules(box, r) {
+  try { r = r || await api("/api/rules"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
+  const NAMES = {allow: ["Always allowed", "Runs without asking."], ask: ["Always asks", "Asks first, even with full access or an allow rule."], deny: ["Never allowed", "Refused, whatever the mode."]};
+  const row = (lst, rule, folder) => `<li><span class="tg"><code>${esc(rule)}</code></span><button class="iconbtn" data-rrm="${esc(lst)}" data-rule="${esc(rule)}" ${folder ? `data-folder="${esc(folder)}"` : ""} aria-label="Remove ${esc(rule)}">${ICON.x}</button></li>`;
+  box.innerHTML = `<h3 style="font-size:16px;margin:18px 0 4px">Saved rules</h3><p class="pnote">A rule is a tool name (<code>edit</code>), or <code>bash:</code> and a command with * for any text (<code>bash:git push*</code>). Saved in ${esc(r.path)}.</p>
+    ${Object.entries(NAMES).map(([k, [h, d]]) => `<h4 style="margin:12px 0 4px">${h}</h4><small class="pnote">${d}</small><ul class="rows2">${(r[k] || []).map(x => row(k, x)).join("") || `<li class="pnote">None.</li>`}</ul>`).join("")}
+    ${r.folders.length ? `<h4 style="margin:12px 0 4px">Allowed in one folder</h4>${r.folders.map(f => `<small class="pnote">${esc(f.folder)}</small><ul class="rows2">${f.allow.map(x => row("allow", x, f.folder)).join("")}</ul>`).join("")}` : ""}
+    <div class="srow" style="margin-top:10px"><select id="ruleList" aria-label="Kind of rule"><option value="ask">Always ask</option><option value="deny">Never allow</option><option value="allow">Always allow</option></select><input id="ruleText" placeholder="bash:git push*" spellcheck="false"><button class="btn" id="ruleAdd">Add rule</button></div><div class="res" id="ruleRes"></div>`;
+  const act = async body => { try { drawRules(box, await post("/api/rules", body)); } catch (e) { const x = $("#ruleRes", box); x.className = "res bad"; x.textContent = e.message; } };
+  $$("[data-rrm]", box).forEach(x => x.onclick = () => act({action: "remove", list: x.dataset.rrm, rule: x.dataset.rule, folder: x.dataset.folder || ""}));
+  $("#ruleAdd", box).onclick = () => act({action: "add", list: $("#ruleList", box).value, rule: $("#ruleText", box).value});
 }
 // Put a message back into the box (Undo, Rewind, Edit) without losing what is typed there: a draft stays first, the
 // message goes after it, unless the draft already is that message.
@@ -1645,9 +1881,10 @@ async function panelDiff(body) {
   const turns = S.cur.view?.turns || [];
   const sel = S.diffTurn ?? "";
   body.innerHTML = `<div class="pbar"><select id="dturn" aria-label="Which changes"><option value="">All changes in this chat</option>${turns.slice().reverse().map(t => `<option value="${t.n}" ${+sel === t.n ? "selected" : ""}>Reply ${t.n}${t.title ? ": " + esc(clip(t.title, 50)) : ""}</option>`).join("")}</select>
-    <button class="btn" id="dref" title="Refresh">${ICON.refresh}</button>${sel && (turns.find(t => t.n === +sel)?.changed || []).length ? `<button class="btn danger" id="dundo">${ICON.undo} Undo</button>` : ""}</div><div id="dbody" class="pbody"><div class="pnote">Loading...</div></div>`;
+    <button class="btn" id="dref" title="Refresh">${ICON.refresh}</button><button class="btn" id="dsplit" aria-pressed="${store("diffSplit") === "1"}" title="Show old and new next to each other">${store("diffSplit") === "1" ? "Unified" : "Side by side"}</button>${sel && (turns.find(t => t.n === +sel)?.changed || []).length ? `<button class="btn danger" id="dundo">${ICON.undo} Undo</button>` : ""}</div><div id="dbody" class="pbody"><div class="pnote">Loading...</div></div>`;
   $("#dturn").onchange = () => { S.diffTurn = $("#dturn").value ? +$("#dturn").value : null; renderPanel(); };
   $("#dref").onclick = renderPanel;
+  $("#dsplit").onclick = () => { store("diffSplit", store("diffSplit") === "1" ? "0" : "1"); renderPanel(); };
   $("#dundo")?.addEventListener("click", () => undoTurn(+sel));
   try {
     const d = await api(`/api/agent/${S.cur.id}/diff${sel ? "?turn=" + sel : ""}`);
@@ -1655,9 +1892,39 @@ async function panelDiff(body) {
     const add = d.files.reduce((a, f) => a + (f.add || 0), 0), del = d.files.reduce((a, f) => a + (f.del || 0), 0);
     $("#dbody").innerHTML = `<div class="pnote" style="padding:8px 12px">${d.files.length} file${d.files.length === 1 ? "" : "s"} · <span style="color:var(--add)">+${add}</span> <span style="color:var(--del)">−${del}</span></div>
       <ul class="flist">${d.files.map((f, i) => `<li data-i="${i}"><span class="badge ${f.status}">${f.status[0].toUpperCase()}</span><span class="p">${esc(String(f.path).replace(/^"|"$/g, ""))}</span><span class="a">+${f.add || 0}</span><span class="r">−${f.del || 0}</span></li>`).join("")}</ul>
-      <pre class="patch" id="patch">${patchHTML(d.patch)}</pre>`;
+      ${store("diffSplit") === "1" ? `<div class="sbs-wrap" id="patch">${splitHTML(d.patch)}</div>` : `<pre class="patch" id="patch">${patchHTML(d.patch)}</pre>`}`;
     $$("#dbody .flist li").forEach(li => li.onclick = () => { const f = d.files[+li.dataset.i]; const el = $(`#patch [data-file="${CSS.escape(f.path)}"]`); el?.scrollIntoView({block: "start"}); });
   } catch (e) { $("#dbody").innerHTML = `<div class="pnote">${esc(e.message)}</div>`; }
+}
+/* The same patch with old and new next to each other: removed lines on the left, added on the right, paired in
+   order within each run of changes; unchanged lines on both sides. */
+function splitHTML(p) {
+  const rows = []; let o = 0, n = 0, dels = [], adds = [];
+  const cell = (num, text, cls) => `<td class="ln">${num ?? ""}</td><td class="tx ${cls}">${text === null ? "" : esc(text) || " "}</td>`;
+  const flush = () => {
+    for (let i = 0; i < Math.max(dels.length, adds.length); i++) {
+      const d = dels[i], a = adds[i];
+      rows.push(`<tr>${d ? cell(d[0], d[1], "d") : cell(null, null, "e")}${a ? cell(a[0], a[1], "a") : cell(null, null, "e")}</tr>`);
+    }
+    dels = []; adds = [];
+  };
+  for (const l of String(p || "").split("\n")) {
+    if (l.startsWith("--- a/") || l.startsWith("--- /dev/null")) continue;
+    if (l.startsWith("+++ ") || l.startsWith("diff --meshpool")) {
+      flush();
+      const f = l.startsWith("+++ ") ? l.slice(4).replace(/^b\//, "") : (l.split(" b/")[1] || l);
+      rows.push(`<tr class="f" data-file="${esc(f)}"><td colspan="4">${esc(f)}</td></tr>`); continue;
+    }
+    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(l);
+    if (h) { flush(); o = +h[1]; n = +h[2]; rows.push(`<tr class="h"><td colspan="4">${esc(l)}</td></tr>`); continue; }
+    if (l.startsWith("-")) { dels.push([o++, l.slice(1)]); continue; }
+    if (l.startsWith("+")) { adds.push([n++, l.slice(1)]); continue; }
+    flush();
+    if (l.startsWith("\\") || !l) continue;
+    const t = l.slice(1); rows.push(`<tr>${cell(o++, t, "")}${cell(n++, t, "")}</tr>`);
+  }
+  flush();
+  return `<table class="sbs">${rows.join("")}</table>`;
 }
 function patchHTML(p) {
   return String(p || "").split("\n").map(l => {
@@ -1713,15 +1980,19 @@ async function panelGit(body) {
     <div><h4>Branch</h4><div class="row" style="margin-top:6px"><select id="gbr">${g.branches.map(b => `<option ${b === g.branch ? "selected" : ""}>${esc(b)}</option>`).join("")}</select></div>
       <div class="row" style="margin-top:6px"><input id="gnew" placeholder="New branch name"><button class="btn" id="gcreate">Create</button></div>
       <div class="stat" style="margin-top:6px">${g.upstream ? `${g.ahead} to push, ${g.behind} to pull` : "Not pushed yet"}${g.remote ? ` · ${esc(g.github || g.remote)}` : " · no remote"}</div></div>
-    <div><h4>Changes (${g.dirty})</h4><ul class="flist" style="border:1px solid var(--line-2);border-radius:var(--r-s);margin-top:6px;max-height:180px;overflow:auto">${g.files.map(f => `<li><span class="badge modified">${esc(GIT_WORD[String(f.status).trim()] || f.status)}</span><span class="p">${esc(f.path)}</span></li>`).join("") || `<li class="pnote" style="padding:6px 10px">Nothing to commit.</li>`}</ul></div>
-    <div><h4>Commit</h4><textarea id="gmsg" rows="2" placeholder="What changed and why" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px"><button class="btn primary" id="gcommit" ${g.dirty ? "" : `disabled title="Nothing to commit: no files have changed."`}>Commit all</button><button class="btn" id="gpush" ${g.remote ? "" : `disabled title="This folder has no remote to push to."`}>Push</button><button class="btn" id="gpull" ${g.upstream ? "" : `disabled title="This branch is not linked to a remote branch yet."`}>Pull</button></div></div>
+    <div><h4>Changes (${g.dirty})${g.staged ? ` · ${g.staged} staged` : ""}</h4><ul class="flist" style="border:1px solid var(--line-2);border-radius:var(--r-s);margin-top:6px;max-height:180px;overflow:auto">${g.files.map((f, i) => `<li><span class="badge modified">${esc(GIT_WORD[String(f.status).trim()] || f.status)}</span><span class="p">${esc(f.path)}</span>${f.unstaged ? `<button class="linkbtn" data-gst="${i}" title="Stage this file for the next commit">Stage</button>` : ""}${f.staged ? `<button class="linkbtn" data-gun="${i}" title="Take it out of the next commit; the change stays">Unstage</button>` : ""}</li>`).join("") || `<li class="pnote" style="padding:6px 10px">Nothing to commit.</li>`}</ul></div>
+    <div><h4>Commit</h4><textarea id="gmsg" rows="2" placeholder="What changed and why" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px">${g.staged ? `<button class="btn primary" id="gcommitst">Commit staged (${g.staged})</button>` : ""}<button class="btn ${g.staged ? "" : "primary"}" id="gcommit" ${g.dirty ? "" : `disabled title="Nothing to commit: no files have changed."`}>Commit all</button><button class="btn" id="gpush" ${g.remote ? "" : `disabled title="This folder has no remote to push to."`}>Push</button><button class="btn" id="gpull" ${g.upstream ? "" : `disabled title="This branch is not linked to a remote branch yet."`}>Pull</button></div></div>
     <div id="chgBox"></div>
+    ${g.log?.length ? `<details class="cil"><summary><b>Recent commits</b> <span class="stat">${g.log.length}</span></summary><ul class="flist glog">${g.log.map(c => `<li title="${esc(c.author)}"><code>${esc(c.hash)}</code> <span class="cn">${esc(c.subject)}</span> <span class="stat">${esc(c.when)}</span></li>`).join("")}</ul></details>` : ""}
     <div id="ciBox"><h4>Pull request, checks and deployments</h4><div class="pnote" style="padding:6px 0">Loading from GitHub...</div></div>
     <div><h4>Open a pull request</h4><input id="gprt" placeholder="Title (defaults to the last commit)" style="margin-top:6px"><textarea id="gprb" rows="3" placeholder="Description" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px"><button class="btn" id="gpr" ${g.github ? "" : `disabled title="Needs a GitHub remote."`}>Open pull request</button>${g.github ? "" : `<span class="stat">Needs a GitHub remote.</span>`}</div><div class="stat" id="gres"></div></div>
   </div>`;
   $("#gbr").onchange = () => gitAct({action: "checkout", branch: $("#gbr").value});
   $("#gcreate").onclick = () => gitAct({action: "checkout", branch: $("#gnew").value, create: true});
   $("#gcommit").onclick = () => gitAct({action: "commit", message: $("#gmsg").value});
+  $("#gcommitst")?.addEventListener("click", () => gitAct({action: "commit", message: $("#gmsg").value, staged_only: true}));
+  $$("[data-gst]", body).forEach(b => b.onclick = () => gitAct({action: "stage", paths: [g.files[+b.dataset.gst].path]}));
+  $$("[data-gun]", body).forEach(b => b.onclick = () => gitAct({action: "unstage", paths: [g.files[+b.dataset.gun].path]}));
   $("#gpush").onclick = () => gitAct({action: "push"});
   $("#gpull").onclick = () => gitAct({action: "pull"});
   $("#gpr").onclick = () => gitAct({action: "pr", title: $("#gprt").value, body: $("#gprb").value});
@@ -1774,7 +2045,7 @@ async function gitAct(b) {
   try {
     const r = await post("/api/git", {root, ...b});
     if (b.action === "pr" && r.pr) { renderPanel(); setTimeout(() => { const el = $("#gres"); if (el) el.innerHTML = `${esc(r.note || "Pull request ready:")} <a href="${esc(r.pr)}" target="_blank" rel="noopener">${esc(r.pr)}</a>`; }, 300); }
-    else { toast({checkout: "Switched branch", commit: "Committed", push: "Pushed", pull: "Pulled", init: "Repository created"}[b.action] || "Done"); renderPanel(); }
+    else { toast({checkout: "Switched branch", commit: "Committed", push: "Pushed", pull: "Pulled", init: "Repository created", stage: "Staged", unstage: "Unstaged"}[b.action] || "Done"); renderPanel(); }
     renderBranch();
   } catch (e) { toast(e.message, 5000); }
 }
@@ -1878,15 +2149,25 @@ async function panelSession(body) {
   const sid = S.cur.id, root = curRoot();
   S.spPr = S.spPr?.sid === sid ? S.spPr : {sid, t: 0, data: null};
   body.innerHTML = `<div class="pnote">Loading...</div>`;
+  // Each refresh runs git several times on the server. It refreshes every 4 s while the agent works, every 15 s while the
+  // chat is idle, not at all while the tab is hidden, and at once when the tab or window comes back or the chat starts
+  // or stops working (S.spTick). The same answer twice is not drawn again.
+  let busy = false;
   const tick = async first => {
-    if (S.panel !== "session" || S.cur?.id !== sid) return;
+    clearTimeout(S.spT);
+    if (S.panel !== "session" || S.cur?.id !== sid || S.spTick !== tick) return;
+    if (document.hidden && !first) return;            // visibilitychange calls S.spTick again
+    if (busy) return; busy = true;
     try {
       if (!S.spPr.data || Date.now() - S.spPr.t > 30000) { api(`/api/session/${sid}/pr`).then(r => { S.spPr = {sid, t: Date.now(), data: r}; if (S.panel === "session") spDraw(sid, root, last); }).catch(() => {}); S.spPr.t = Date.now(); }
-      const d = await api(`/api/session/${sid}/panel`); last = d; spDraw(sid, root, d);
+      const d = await api(`/api/session/${sid}/panel`), j = JSON.stringify(d);
+      last = d; if (first || j !== lastJ || !$("#pbody .spw")) { spDraw(sid, root, d); if (S.spLast === d) lastJ = j; }
     } catch (e) { if (first) body.innerHTML = `<div class="pnote">${esc(e.message)}</div>`; }
-    clearTimeout(S.spT); S.spT = setTimeout(() => tick(false), 4000);
+    finally { busy = false; }
+    if (S.spTick !== tick) return;
+    clearTimeout(S.spT); S.spT = setTimeout(() => tick(false), S.cur?.busy ? 4000 : 15000);
   };
-  let last = null; clearTimeout(S.spT); tick(true);
+  let last = null, lastJ = ""; clearTimeout(S.spT); S.spTick = tick; tick(true);
 }
 function spDraw(sid, root, d) {
   const body = $("#pbody"); if (!body || !d || S.panel !== "session" || S.cur?.id !== sid) return;
@@ -2020,17 +2301,18 @@ async function renderSection(sec) {
         <div class="sform">
           <input id="tsName" placeholder="Name, for example Morning AI news" spellcheck="false">
           <textarea id="tsPrompt" rows="3" placeholder="What should it do? For example: Find the 5 most important AI infrastructure news stories from the last 24 hours and summarize each in two sentences with links."></textarea>
-          <div class="srow"><select id="tsWhen" aria-label="How often"><option value="daily">Every day</option><option value="weekdays">Every weekday</option><option value="weekly">Every week</option><option value="hourly">Every hour</option><option value="once">Once</option></select>
+          <div class="srow"><select id="tsWhen" aria-label="How often"><option value="daily">Every day</option><option value="weekdays">Every weekday</option><option value="weekly">Every week</option><option value="hourly">Every hour</option><option value="once">Once</option><option value="cron">Custom (cron)</option></select>
+          <input id="tsCron" aria-label="Cron expression" placeholder="30 8 * * 1-5" spellcheck="false" style="max-width:150px">
           <select id="tsDay" aria-label="Day">${["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map(d => `<option value="${d}">${d[0].toUpperCase() + d.slice(1)}</option>`).join("")}</select>
           <input id="tsTime" aria-label="Time" type="time" value="08:30"><input id="tsAt" aria-label="Date and time" type="datetime-local">
           <select id="tsKind" aria-label="Mode"><option value="cowork">Work</option><option value="code">Code</option></select>
           <select id="tsFolder" aria-label="Folder"><option value="">Default folder</option>${proj}</select></div>
           <button class="btn primary" id="tsAdd">Add task</button></div><div class="res" id="tsRes"></div>`;
       done();
-      const sync = () => { const w = $("#tsWhen").value; $("#tsDay").hidden = w !== "weekly"; $("#tsTime").hidden = !["daily", "weekdays", "weekly"].includes(w); $("#tsAt").hidden = w !== "once"; };
-      $("#tsWhen").onchange = sync; sync();
+      const sync = () => { const w = $("#tsWhen").value; $("#tsDay").hidden = w !== "weekly"; $("#tsTime").hidden = !["daily", "weekdays", "weekly"].includes(w); $("#tsAt").hidden = w !== "once"; $("#tsCron").hidden = w !== "cron"; };
+      $("#tsWhen").onchange = sync; $("#tsFolder").onchange = sync; sync();
       const act = async body => { try { draw(await post("/api/assistant", body)); } catch (e) { RES("tsRes").className = "res bad"; RES("tsRes").textContent = e.message; } };
-      $("#tsAdd").onclick = () => !$("#tsPrompt").value.trim() ? (RES("tsRes").className = "res bad", RES("tsRes").textContent = "Write what the task should do.", $("#tsPrompt").focus()) : act({action: "task_add", name: $("#tsName").value.trim(), prompt: $("#tsPrompt").value.trim(), when: $("#tsWhen").value, day: $("#tsDay").value, time: $("#tsTime").value, at: $("#tsAt").value, kind: $("#tsKind").value, folder: $("#tsFolder").value});
+      $("#tsAdd").onclick = () => !$("#tsPrompt").value.trim() ? (RES("tsRes").className = "res bad", RES("tsRes").textContent = "Write what the task should do.", $("#tsPrompt").focus()) : act({action: "task_add", name: $("#tsName").value.trim(), prompt: $("#tsPrompt").value.trim(), when: $("#tsWhen").value, day: $("#tsDay").value, time: $("#tsTime").value, at: $("#tsAt").value, kind: $("#tsKind").value, folder: $("#tsFolder").value, cron: $("#tsCron").value.trim()});
       $$("[data-ton]", b).forEach(x => x.onchange = () => act({action: "task_update", id: x.dataset.ton, enabled: x.checked}));
       $$("[data-tdel]", b).forEach(x => x.onclick = async () => { if (await ask({title: "Delete this scheduled task?", text: "It won't run again. Chats from earlier runs stay.", ok: "Delete task", danger: true})) act({action: "task_delete", id: x.dataset.tdel}); });
       $$("[data-trun]", b).forEach(x => x.onclick = async () => { try { const r = await post("/api/assistant", {action: "task_run", id: x.dataset.trun}); $(".scrim")?.remove(); await loadThreads(); openThread(r.thread); } catch (e) { toast(e.message); } });
@@ -2063,7 +2345,7 @@ async function renderSection(sec) {
     const row = c => {
       const cat = c.connected ? "Connected" : c.custom ? "Yours" : c.category || "Yours";
       const own = c.needs_client && !c.own_client && !c.connected;
-      const btn = c.connected ? `<label class="switch" title="Use in new chats"><input type="checkbox" data-on="${esc(c.id)}" ${c.enabled ? "checked" : ""} aria-label="Use ${esc(c.name)}"><span></span></label><button class="btn" data-test="${esc(c.id)}">Test</button><button class="btn" data-off="${esc(c.id)}">${c.auth === "none" ? "Turn off" : "Disconnect"}</button>`
+      const btn = c.connected ? `<label class="chk" title="Chats can read from it but not change anything: its create, update, delete and send tools are left out"><input type="checkbox" data-ro="${esc(c.id)}" ${c.read_only ? "checked" : ""}> Read only</label><label class="switch" title="Use in new chats"><input type="checkbox" data-on="${esc(c.id)}" ${c.enabled ? "checked" : ""} aria-label="Use ${esc(c.name)}"><span></span></label><button class="btn" data-test="${esc(c.id)}">Test</button><button class="btn" data-off="${esc(c.id)}">${c.auth === "none" ? "Turn off" : "Disconnect"}</button>`
         : c.auth === "none" ? `<button class="btn primary" data-turnon="${esc(c.id)}">Turn on</button>`
         : c.auth === "oauth" && !own ? `<button class="btn primary" data-go="${esc(c.id)}">${c.expired ? "Sign in again" : "Connect"}</button>` : "";
       return `<li data-id="${esc(c.id)}" data-cat="${esc(cat)}" data-text="${esc((c.name + " " + c.description + " " + (c.category || "")).toLowerCase())}"><span class="tg"><b>${esc(c.name)}</b>${c.connected ? ` <span class="badge added">${c.auth === "none" ? "On" : "Connected"}</span>` : c.expired ? ` <span class="badge deleted">Sign in again</span>` : c.auth === "none" ? ` <span class="badge">No sign-in</span>` : ""}<small>${esc(c.description)}</small>
@@ -2152,6 +2434,7 @@ async function renderSection(sec) {
       });
       $$("[data-save]", b).forEach(x => x.onclick = async () => { const v = $(`[data-tok="${x.dataset.save}"]`, b).value.trim(); if (!v) return; const r = await act({action: "token", id: x.dataset.save, token: v}); if (r) { S.connCache = r.connectors; draw(r.connectors); const t = await act({action: "check", id: x.dataset.save}); if (t) say(t.ok ? `Connected: ${t.tools.length} tools.` : t.error, t.ok ? "ok" : "bad"); } });
       $$("[data-on]", b).forEach(x => x.onchange = async () => { const r = await act({action: "enable", id: x.dataset.on, on: x.checked}); if (r) draw(r.connectors); });
+      $$("[data-ro]", b).forEach(x => x.onchange = async () => { const r = await act({action: "read_only", id: x.dataset.ro, on: x.checked}); if (r) { draw(r.connectors); say(x.checked ? "Read only: new chats get only its read tools." : "New chats get all its tools again.", "ok"); } });
       $$("[data-off]", b).forEach(x => x.onclick = async () => { if (!await ask({title: "Disconnect this app?", text: "Chats stop using it. You can connect it again any time.", ok: "Disconnect", danger: true})) return; const r = await act({action: "disconnect", id: x.dataset.off}); if (r) draw(r.connectors); });
     };
     draw((await api("/api/connectors")).connectors);
@@ -2182,7 +2465,8 @@ async function renderSection(sec) {
         $("textarea", ed).focus();
       });
     };
-    const skillAct = async body => { try { S.skills = (await post("/api/skills", body)).skills; drawSk(); RES("skRes").className = "res ok"; RES("skRes").textContent = body.action === "upload" ? "Added." : body.action === "create" ? "Created." : body.action === "update" ? "Saved." : ""; } catch (e) { RES("skRes").className = "res bad"; RES("skRes").textContent = e.message; } };
+    const skillAct = async body => { try { const r = await post("/api/skills", body); S.skills = r.skills; drawSk(); RES("skRes").className = "res ok"; RES("skRes").textContent = body.action === "upload" ? "Added." : body.action === "create" ? "Created." : body.action === "update" ? "Saved." : "";
+      const rk = Object.entries(r.risks || {}); if (rk.length) { RES("skRes").className = "res bad"; RES("skRes").textContent = "Added. Check these before you use them: " + rk.map(([n, l]) => `${n}: ${l.slice(0, 4).join("; ")}${l.length > 4 ? ` and ${l.length - 4} more` : ""}`).join(" | "); } } catch (e) { RES("skRes").className = "res bad"; RES("skRes").textContent = e.message; } };
     drawSk();
     const upload = async (files, paths) => {
       const list = [];
@@ -2270,6 +2554,7 @@ async function renderSection(sec) {
       $$("[data-perm]", b).forEach(x => x.onclick = () => draw({id: x.dataset.perm}));
       $("#permAll")?.addEventListener("click", () => draw({id: "all"}));
       $$("[data-rmp]", b).forEach(x => x.onclick = async () => { await post("/api/projects", {action: "remove", path: x.dataset.rmp}); await loadProjects(); renderSide(); draw(); });
+      const rb = document.createElement("div"); rb.id = "rulesBox"; b.appendChild(rb); drawRules(rb);
       $("#addP").onclick = async () => { await pickProject(); await loadProjects(); draw(); };
     };
     await draw(); return;
@@ -2294,6 +2579,25 @@ async function renderSection(sec) {
       <div class="res ${c.installed ? "ok" : ""}">${c.available ? (c.installed ? (c.new_window ? "Installed. Open a new terminal window and type meshpool." : "Installed. In any terminal window, type meshpool.") : "Not on your PATH yet.") : "The meshpool command comes with the Meshpool app for Mac and Windows. On other computers, install it with the one-line installer on the Meshpool download page."}</div>
       ${c.available && !c.installed ? `<button class="btn primary" id="cliBtn" style="margin-top:8px">Install the meshpool command</button>` : ""}`;
     $("#cliBtn")?.addEventListener("click", async () => { try { const r = await post("/api/install-cli"); $(".res", b).textContent = r.message; } catch (e) { $(".res", b).textContent = e.message; } });
+  } else if (sec === "office") {
+    b.innerHTML = `${close}<h3>Excel, PowerPoint and Word</h3><p class="lead">Add a meshpool panel to the Home tab of Excel, PowerPoint and Word. Ask about what you selected, then insert the answer into your sheet, slide or document. The panel talks only to meshpool on this computer, and nothing changes in your file until you click Insert.</p>
+      <div class="res" id="ofRes">Checking…</div>
+      <p class="pnote" id="ofNote" hidden></p>
+      <div style="display:flex;gap:8px;margin-top:8px"><button class="btn primary" id="ofInstall" hidden>Add meshpool to Office</button><button class="btn" id="ofRemove" hidden>Remove from Office</button></div>
+      <pre class="pnote" id="ofLines" hidden style="white-space:pre-wrap"></pre>`;
+    const show = r => {
+      const on = !!(r.manifest && r.certificate) && !r.needs_trust && !(r.days_left !== null && r.days_left < 30);
+      $("#ofRes").className = "res" + (on && r.running ? " ok" : "");
+      $("#ofInstall").textContent = r.manifest && r.needs_trust ? "Trust the certificate" : r.manifest ? "Renew the certificate" : "Add meshpool to Office";
+      $("#ofRes").textContent = r.manifest && r.needs_trust ? "Added, but the certificate is not trusted yet, so Office cannot load the panel." :
+        r.manifest && r.days_left !== null && r.days_left < 30 ? `The certificate expires in ${Math.max(0, r.days_left)} days.` : !on ? "Not added yet." : r.running ? `Added${r.sideloaded.length ? " to " + r.sideloaded.map(x => ({excel: "Excel", powerpoint: "PowerPoint", word: "Word"})[x]).join(", ") : ""}. Restart those apps, then click meshpool on the Home tab.` : "Added, but the panel is not being served. Quit and reopen meshpool.";
+      $("#ofNote").hidden = on || (!!r.manifest && !r.needs_trust); $("#ofNote").textContent = r.trust_note + (r.desktop_office ? " Your system asks you to confirm." : " There is no desktop Office here: use Office on the web and upload the manifest (Home, Add-ins, Upload My Add-in).");
+      $("#ofInstall").hidden = on; $("#ofRemove").hidden = !r.manifest;
+    };
+    const act = async (action, btn) => { btn.disabled = true; try { const r = await post("/api/office", {action}); show(r); $("#ofLines").hidden = false; $("#ofLines").textContent = (r.lines || []).join("\n"); } catch (e) { $("#ofRes").className = "res bad"; $("#ofRes").textContent = e.message; } btn.disabled = false; };
+    $("#ofInstall").onclick = e => act("install", e.currentTarget);
+    $("#ofRemove").onclick = e => act("uninstall", e.currentTarget);
+    api("/api/office").then(show).catch(e => { $("#ofRes").className = "res bad"; $("#ofRes").textContent = e.message; });
   } else if (sec === "advanced") {
     const CH = {MH_AGENT_PERMISSIONS: [["ask", "Ask"], ["edits", "Accept edits"], ["auto", "Full access"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]], MH_SUBAGENTS: [["1", "On"], ["0", "Off"]], MH_SUBAGENT_ACCESS: [["inherit", "Same as the chat"], ["edit", "Read and edit files, no commands"], ["read", "Read and research"]], MH_SUBAGENT_AUTO_APPROVE: [["0", "Off"], ["1", "On"]], MH_SUBAGENT_DEPTH: [["1", "1"], ["2", "2"], ["3", "3"]]};
     // Search keys and the GitHub token have their own pages (Web search, Connectors).
@@ -2532,16 +2836,16 @@ async function importPanel(box, onDone) {
   try { f = await api("/api/import-agents"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
   const agents = f.agents.filter(a => a.items.length);
   if (!agents.length) { box.innerHTML = `<span></span>`; onDone?.(null); return; }
-  const KIND = {skill: "Skill", mcp: "Tool", memory: "Memory", instructions: "Instructions"};
-  const item = it => `<label class="imp ${it.exists ? "have" : ""}"><input type="checkbox" data-key="${esc(it.key)}" ${it.exists ? "disabled" : (it.kind === "instructions" || it.default === false) ? "" : "checked"}><span class="tg"><b>${esc(it.name)}</b> <span class="badge modified">${KIND[it.kind]}</span>${it.exists ? ` <span class="badge">Already here</span>` : ""}${it.kind === "memory" ? "" : `<small>${esc((it.preview || "").slice(0, 140))}</small>`}${(it.stripped || []).length ? `<small>Left out: ${esc(it.stripped.join(", "))}</small>` : ""}</span></label>`;
-  const sum = a => ["skill", "mcp", "memory", "instructions"].filter(k => a.counts[k]).map(k => `${a.counts[k]} ${({skill: "skill", mcp: "tool", memory: "memor", instructions: "instruction file"})[k]}${k === "memory" ? (a.counts[k] === 1 ? "y" : "ies") : a.counts[k] === 1 ? "" : "s"}`).join(", ");
+  const KIND = {skill: "Skill", mcp: "Tool", memory: "Memory", instructions: "Instructions", hook: "Hook"};
+  const item = it => `<label class="imp ${it.exists ? "have" : ""}"><input type="checkbox" data-key="${esc(it.key)}" ${it.exists ? "disabled" : (it.kind === "instructions" || it.kind === "hook" || it.default === false) ? "" : "checked"}><span class="tg"><b>${esc(it.name)}</b> <span class="badge modified">${KIND[it.kind]}</span>${it.exists ? ` <span class="badge">Already here</span>` : ""}${it.kind === "memory" ? "" : `<small>${esc((it.preview || "").slice(0, 140))}</small>`}${(it.stripped || []).length ? `<small>Left out: ${esc(it.stripped.join(", "))}</small>` : ""}${(it.risks || []).length ? `<small class="bad">Check first: ${esc(it.risks.slice(0, 3).join("; "))}</small>` : ""}</span></label>`;
+  const sum = a => ["skill", "mcp", "memory", "instructions", "hook"].filter(k => a.counts[k]).map(k => `${a.counts[k]} ${({skill: "skill", mcp: "tool", memory: "memor", instructions: "instruction file", hook: "hook"})[k]}${k === "memory" ? (a.counts[k] === 1 ? "y" : "ies") : a.counts[k] === 1 ? "" : "s"}`).join(", ");
   box.innerHTML = `<h3 class="onb-h">Agents on this computer</h3>
     ${agents.map(a => `<details class="impag" open><summary><b>${esc(a.name)}</b> <small class="muted">${esc(sum(a))}</small></summary><div class="impl">${a.items.map(item).join("")}</div></details>`).join("")}${agents.some(a => a.credentials_not_read.length) ? `<small class="muted">Logins are never read.</small>` : ""}
     <div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="impGo">Import selected</button><button class="linkbtn" id="impDry">Preview only</button></div><div class="res" id="impRes"></div>`;
   const keys = () => $$("[data-key]", box).filter(x => x.checked && !x.disabled).map(x => x.dataset.key);
   const say = (t, cls) => { const r = $("#impRes", box); r.className = "res " + (cls || ""); r.textContent = t; };
   const text = (r, dry) => `${dry ? "Would import" : "Imported"} ${r.skills.length} skill${r.skills.length === 1 ? "" : "s"}, ${r.mcp.length} tool${r.mcp.length === 1 ? "" : "s"}, ${r.memory} to review in Memory, ${r.instructions} instruction file${r.instructions === 1 ? "" : "s"}.`
-    + (r.stripped.length ? ` Keys left out of ${r.stripped.map(x => x.server).join(", ")}: add them in Settings.` : "") + (r.errors.length ? " Problems: " + r.errors.join("; ") : "");
+    + ((r.hooks || []).length ? ` ${dry ? "Would add" : "Added"} ${r.hooks.length} hook${r.hooks.length === 1 ? "" : "s"}.` : "") + (r.stripped.length ? ` Keys left out of ${r.stripped.map(x => x.server).join(", ")}: add them in Settings.` : "") + (r.errors.length ? " Problems: " + r.errors.join("; ") : "");
   $("#impDry", box).onclick = async () => { const k = keys(); if (!k.length) return say("Nothing selected."); try { say(text(await post("/api/import-agents", {keys: k, dry_run: true}), true)); } catch (e) { say(e.message, "bad"); } };
   $("#impGo", box).onclick = box._import = async () => {
     const k = keys(); if (!k.length) return say("Nothing selected.");
@@ -2764,7 +3068,7 @@ async function restartApp(bootBefore) {
   document.addEventListener("click", e => { const b = e.target.closest(".flink, .outs [data-open]"); if (!b || !b.classList.contains("flink")) return;
     openPreview(curRoot(), b.dataset.open); });
   // New items in an open thread ease in; a thread being opened shows at once (no wave of animations).
-  new MutationObserver(ms => { if (!S.cur?.ready) return; for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1 && n.id !== "working") n.classList.add("enter"); })
+  new MutationObserver(ms => { if (!S.cur?.ready) return; for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1 && n.id !== "working" && !n.classList.contains("hist")) n.classList.add("enter"); })
     .observe($("#col"), {childList: true});
   try { await Promise.all([loadSettings(), loadProjects(), loadHarnesses(), loadSkills(), loadPj()]); }
   catch (e) { $("#col").innerHTML = `<div class="hero"><h1>Meshpool could not start</h1><p class="sub">${esc(e.message)}</p></div>`; return; }
@@ -2792,7 +3096,8 @@ async function restartApp(bootBefore) {
   // The sidebar list: every 4 s while something runs, every 20 s otherwise, never while the tab is hidden.
   let thT = 0;
   setInterval(() => { if (document.hidden) return; const run = S.threads.some(t => ["working", "waiting"].includes(t.state)); if (Date.now() - thT < (run ? 3500 : 20000)) return; thT = Date.now(); Promise.resolve(loadThreads()).catch(() => {}); }, 4000);
-  document.addEventListener("visibilitychange", () => { if (document.hidden) return; thT = Date.now(); Promise.resolve(loadThreads()).catch(() => {}); wakeFrame(); const c = S.cur; if (c && !c.stage) { clearTimeout(c.pollT); c.quiet = 0; poll(); } });
+  window.addEventListener("focus", () => { if (!document.hidden) S.spTick?.(); });     // back from an editor: the Session panel shows its edits
+  document.addEventListener("visibilitychange", () => { if (document.hidden) return; S.spTick?.(); thT = Date.now(); Promise.resolve(loadThreads()).catch(() => {}); wakeFrame(); const c = S.cur; if (c && !c.stage) { clearTimeout(c.pollT); c.quiet = 0; poll(); } });
 })();
 
 /* ---------- pull requests: the repository's pull requests, one in full with its diff, checks, runs and deployments ---------- */

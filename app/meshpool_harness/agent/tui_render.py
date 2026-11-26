@@ -94,7 +94,10 @@ def cw(ch: str) -> int:
 
 
 def vlen(s: str) -> int:
-    return sum(cw(c) for c in strip(s))
+    s = strip(s)
+    if s.isascii():                     # every ASCII character is one column (cw): no per-character lookups
+        return len(s)
+    return sum(cw(c) for c in s)
 
 
 def clip(s: str, width: int, ell: str = "…") -> str:

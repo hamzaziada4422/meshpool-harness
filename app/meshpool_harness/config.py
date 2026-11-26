@@ -36,9 +36,34 @@ FIELDS = [
     ("MH_AGENT_PERMISSIONS", "What agents may do without asking", "ask",
      "Ask asks before every change and command. Accept edits changes files without asking but asks before "
      "commands. Full access never asks."),
-    ("MH_BUDGET_USD", "Spending limit per task (USD)", "0", "A task stops when it reaches this. 0 means no limit."),
+    ("MH_COMMIT_TRAILER", "Line at the end of the agent's commits", "", "For example Co-Authored-By: meshpool "
+     "<noreply@example.com>. The agent ends its own commit messages and pull request descriptions with it. Empty: "
+     "nothing is added."),
+    ("MH_STATUSLINE", "Terminal status line command", "", "A command whose first line of output shows at the "
+     "bottom of the terminal, refreshed every few seconds. It gets the session (folder, model, mode, tokens, cost) "
+     "as JSON on standard input."),
+    ("MH_COMPACT_PROMPT", "Summary instructions", "", "What the summary of a long chat must keep, used in place of "
+     "meshpool's own instructions. Text, or the full path of a .md or .txt file. Empty: meshpool's own."),
+    ("MH_INSTRUCTIONS_EXCLUDE", "Instruction files to skip", "", "Comma-separated patterns of instruction and rules "
+     "files never loaded, for example */legacy/AGENTS.md or */.cursor/rules/*."),
+    ("MH_EXTRA_HEADERS", "Extra headers for the model provider", "", "Added to every model request, as JSON or "
+     "Name: value pairs split by ;. They never replace the key header."),
+    ("MH_EXTRA_QUERY", "Extra query parameters for the model provider", "", "Added to every model request URL, "
+     "like a=1&b=2."),
+    ("MH_PLANS_DIR", "Plans folder", "", "Plans that plan mode writes are also saved here as Markdown files. Empty: "
+     "plans/ in meshpool's data folder. off: no files."),
+    ("MH_KEEP_DAYS", "Keep chats for (days)", "0", "Chats not touched for this many days are deleted, with their "
+     "private folders; pinned and open chats are kept. 0 keeps every chat. Whole days, 1 or more. Checked when "
+     "Meshpool starts and once a day."),
+    ("MH_FETCH_ALLOW", "Web pages: only these sites", "", "Comma-separated domains (example.com covers its subdomains). "
+     "When set, agents read web pages only from these sites. Empty: any public site."),
+    ("MH_FETCH_DENY", "Web pages: never these sites", "", "Comma-separated domains agents never read, even when allowed above."),
+    ("MH_BUDGET_USD", "Spending limit per task (USD)", "0", "A task stops when it reaches this. 0 means no limit. It "
+     "needs a cost: the endpoint's own figure per request, or your prices (MH_PRICE_IN and MH_PRICE_OUT)."),
     ("MH_MAX_STEPS", "Max steps per reply", "200", "The most tool steps the agent takes for one message. At the limit it "
      "stops and keeps its work; send a message to continue. 0 means no limit."),
+    ("MH_HOOKS", "Run hooks", "1", "On: commands in hooks.json run at set moments (yours, and a trusted folder's). "
+     "Off: no hook runs."),
     ("MH_ONBOARDED", "Setup finished", "0", "Set when the first-run steps are done."),
     ("MH_AUTO_SUBSCRIPTIONS", "Let Auto use your ChatGPT subscription", "0",
      "On: Meshpool Auto may pick an agent on your ChatGPT sign-in when you did not choose it as the provider (it "
@@ -55,11 +80,14 @@ FIELDS = [
     ("MH_SUBAGENT_AUTO_APPROVE", "Sub-agents approve their own actions", "0", "On: what would need your yes in the "
      "chat (a command in Ask, say) is allowed once for a sub-agent. Off: it is refused and the sub-agent "
      "reports it."),
-    ("MH_SUBAGENT_PARALLEL", "Sub-agents at the same time", "4", "1 to 10."),
+    # PA-toplevel-20: these ranges must match the clamps in agent/delegate.settings and assistant.subagent_settings
+    ("MH_SUBAGENT_PARALLEL", "Sub-agents at the same time", "4", "1 to 10. Sub-agents started from Hermes, Codex or "
+     "Pi: 6 at most."),
     ("MH_SUBAGENT_STEPS", "Steps per sub-agent", "50", "The most tool steps one sub-agent takes before it reports "
-     "(5 to 250)."),
+     "(5 to 250; 200 at most for sub-agents started from Hermes, Codex or Pi)."),
     ("MH_SUBAGENT_MINUTES", "Sub-agent time limit (minutes)", "30", "All sub-agents of one job stop at this and "
-     "report what they have. 0: no limit."),
+     "report what they have (up to 240). 0: no limit. Sub-agents started from Hermes, Codex or Pi stop at 25 "
+     "minutes at most, also with 0."),
     ("MH_SUBAGENT_DEPTH", "Sub-agent levels", "1", "1: sub-agents do their part themselves. 2 or 3: they may hand "
      "parts on to sub-agents of their own."),
     ("MH_MAX_INFLIGHT", "Model calls at the same time", "", "Per endpoint and key, across all chats and sub-agents. "
@@ -586,6 +614,38 @@ def find_soffice() -> str | None:
     return office_runtime.find_soffice()
 
 
+_VERSIONS: dict = {}
+_VERSIONS_LOCK = __import__("threading").Lock()
+
+
+def program_version(exe: str, arg: str = "--version", timeout: float = 3) -> tuple[int, str] | None:
+    """(exit code, first line of the output) of `exe arg`, or None when it cannot run. Kept per program file (its
+    path, size and modification time): every new chat used to run python, node, git, go, cargo, java and docker again
+    for a line that only changes when the program is reinstalled."""
+    import subprocess
+    try:
+        real = os.path.realpath(exe)
+        st = os.stat(real)
+        key = (real, arg, st.st_size, st.st_mtime_ns, st.st_ino)
+    except OSError:
+        return None
+    with _VERSIONS_LOCK:
+        if key in _VERSIONS:
+            return _VERSIONS[key]
+    try:
+        r = subprocess.run([exe, arg], capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
+                           creationflags=0x08000000 if os.name == "nt" else 0)
+        lines = (r.stdout or r.stderr or "").strip().splitlines()
+        got = (r.returncode, lines[0] if lines else "")
+    except subprocess.TimeoutExpired:
+        return None                                    # a slow start (a cold disk) is asked again next time
+    except (OSError, ValueError, subprocess.SubprocessError):
+        got = None
+    with _VERSIONS_LOCK:
+        _VERSIONS[key] = got
+    return got
+
+
 def find_bash() -> str | None:
     """A real bash for the agent's shell commands. On Windows: Git Bash, never WSL's System32 bash."""
     if os.environ.get("MH_BASH"):
@@ -731,6 +791,30 @@ def packaged() -> bool:
     if (APP.parent / "venv").is_dir() or (APP / "meshpool_launch.py").exists():
         return False
     return (APP.parent / "python").is_dir() or (APP.parent / "runtime").is_dir()
+
+
+def _windows_locale_name() -> str:
+    """The Windows user locale ("de-DE"), or "" when it cannot be read."""
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(85)
+        if ctypes.windll.kernel32.GetUserDefaultLocaleName(buf, 85):
+            return buf.value
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def msys_lang(env: dict, nt: bool | None = None, locale_name=_windows_locale_name) -> dict:
+    """Git Bash's /etc/profile.d/lang.sh runs /usr/bin/locale when LC_ALL, LC_CTYPE and LANG are all unset, as they
+    are on Windows. MinGit (the bundled Git) has no locale program, so every login shell printed "lang.sh: line 19:
+    /usr/bin/locale: No such file or directory" into the command's output. LANG is set here the way that program sets
+    it: the Windows user locale, UTF-8 ("de_DE.UTF-8"), else C.UTF-8. A locale the user set is never changed."""
+    if not (os.name == "nt" if nt is None else nt) or any(env.get(k) for k in ("LC_ALL", "LC_CTYPE", "LANG")):
+        return env
+    name = locale_name() or ""
+    env["LANG"] = name.replace("-", "_") + ".UTF-8" if re.fullmatch(r"[a-z]{2,3}-[A-Z]{2}", name) else "C.UTF-8"
+    return env
 
 
 def user_env(base: dict | None = None) -> dict:

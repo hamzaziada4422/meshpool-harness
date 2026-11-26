@@ -222,10 +222,17 @@ def run(jid: str, timeout: float | None = None, should_stop=None, env_extra: dic
     if not extra:                           # a usage task is current (the Office MCP server of a chat): bill under it
         from meshpool_harness.core import usage
         cur = usage.current()[0]
+        if cur is None and not str(j.get("scope") or "").startswith("pid"):
+            cur = usage.chat_task(str(j.get("scope") or ""))    # one office process serves every chat: the job's own
         if cur is not None:
             extra = usage.child_env(usage.start_task(chat=cur.chat, parent=cur, label="office:" + j["engine"]),
                                     "engine:" + j["engine"])
     env.update(extra or {})
+    try:                                    # PA-toplevel-23: the engine's checks go to the turn of the chat it serves,
+        from meshpool_harness import checks as CK   # not to the chat that began a turn last
+        env.update(CK.env_for(j.get("scope", "")))
+    except Exception:  # noqa: BLE001
+        pass
     # the job ends itself after its deadline (a little after ours) or once this process is gone (guard_from_env)
     env.update(MH_JOB_DEADLINE=str(time.time() + timeout + 60), MH_JOB_PARENT=str(os.getpid()))
     kw = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}   # no console flashes up;

@@ -14,6 +14,13 @@ def _home(monkeypatch, tmp_path):
     (tmp_path / "home").mkdir(exist_ok=True)
 
 
+def _trusted(monkeypatch, tmp_path):
+    """A test folder the user has trusted, so its own .meshpool/hooks.json runs (see trust.py)."""
+    _home(monkeypatch, tmp_path)
+    from meshpool_harness import trust as TR
+    TR.trust(tmp_path)
+
+
 def test_instructions_come_from_home_parents_and_project(tmp_path, monkeypatch):
     _home(monkeypatch, tmp_path)
     (tmp_path / "home" / "MESHPOOL.md").write_text("Always reply in French.", encoding="utf-8")
@@ -29,7 +36,7 @@ def test_instructions_come_from_home_parents_and_project(tmp_path, monkeypatch):
 
 
 def test_hooks_block_and_report(tmp_path, monkeypatch):
-    _home(monkeypatch, tmp_path)
+    _trusted(monkeypatch, tmp_path)
     (tmp_path / ".meshpool").mkdir()
     (tmp_path / ".meshpool" / "hooks.json").write_text(json.dumps({
         "PreToolUse": [{"matcher": "bash:git push*", "command": "echo no pushing here 1>&2; exit 2"}],
@@ -61,7 +68,7 @@ def test_at_mentions_attach_files_inside_the_project_only(tmp_path):
 
 
 def test_hooks_can_decide_in_json_and_add_context(tmp_path, monkeypatch):
-    _home(monkeypatch, tmp_path)
+    _trusted(monkeypatch, tmp_path)
     (tmp_path / ".meshpool").mkdir()
     (tmp_path / ".meshpool" / "hooks.json").write_text(json.dumps({
         "PreToolUse": [{"matcher": "bash:ls*", "command": "echo '{\"decision\": \"allow\"}'"},
@@ -77,3 +84,56 @@ def test_hooks_can_decide_in_json_and_add_context(tmp_path, monkeypatch):
     assert a._permit("bash", {"command": "rm -rf build"})[0] is False             # but never for a destructive command
     EX.run_hooks(tmp_path, "PreCompact", {})
     assert (tmp_path / "compact.flag").exists()
+
+
+def test_a_subfolders_instructions_join_the_first_time_work_reaches_it(tmp_path, monkeypatch):
+    import json as _json
+    from meshpool_harness.agent import core as K
+    _home(monkeypatch, tmp_path)
+    monkeypatch.setattr(K, "SESSIONS", tmp_path / "sessions")
+    monkeypatch.setenv("MESHPOOL_API_KEY", "k")
+    proj = tmp_path / "proj"
+    (proj / "pkg" / "sub").mkdir(parents=True)
+    (proj / "AGENTS.md").write_text("Top rules.")
+    (proj / "pkg" / "AGENTS.md").write_text("Pkg uses tabs.")
+    (proj / "pkg" / "sub" / "CLAUDE.md").write_text("Sub is legacy code.")
+    (proj / "pkg" / "sub" / "x.py").write_text("x = 1\n")
+    (proj / "y.py").write_text("y = 1\n")
+    a = Agent(str(proj), mode="auto")
+    a._turn_no = 1
+    run = lambda name, args: a._run_tool({"id": "c", "type": "function", "function": {"name": name, "arguments": _json.dumps(args)}})
+    assert "Top rules" in a.messages[0]["content"] and "Pkg uses tabs" not in a.messages[0]["content"]
+    assert "Instructions from" not in run("read_file", {"path": "y.py"})            # the project's own: already loaded
+    out = run("read_file", {"path": "pkg/sub/x.py"})
+    assert "Pkg uses tabs" in out and "Sub is legacy" in out and out.index("Pkg uses tabs") < out.index("Sub is legacy")
+    assert "Instructions from" not in run("read_file", {"path": "pkg/sub/x.py"})    # once only
+
+
+def test_path_scoped_rules_apply_only_to_matching_files(tmp_path, monkeypatch):
+    import json as _json
+    import subprocess as _sp
+    from meshpool_harness.agent import core as K
+    _home(monkeypatch, tmp_path)
+    monkeypatch.setattr(K, "SESSIONS", tmp_path / "sessions")
+    monkeypatch.setenv("MESHPOOL_API_KEY", "k")
+    proj = tmp_path / "proj"
+    (proj / ".claude" / "rules").mkdir(parents=True)
+    (proj / ".cursor" / "rules").mkdir(parents=True)
+    _sp.run(["git", "init", "-q", str(proj)], check=True)
+    (proj / ".claude" / "rules" / "always.md").write_text("Always use British spelling.")
+    (proj / ".claude" / "rules" / "api.md").write_text("---\npaths:\n  - \"src/api/**/*.ts\"\n---\nAPI handlers validate input.")
+    (proj / ".cursor" / "rules" / "tests.mdc").write_text("---\nglobs: *.test.ts\nalwaysApply: false\n---\nTests use vitest.")
+    (proj / "src" / "api" / "v1").mkdir(parents=True)
+    (proj / "src" / "api" / "v1" / "users.ts").write_text("x")
+    (proj / "src" / "a.test.ts").write_text("x")
+    (proj / "README.md").write_text("x")
+    a = Agent(str(proj), mode="auto")
+    a._turn_no = 1
+    run = lambda name, args: a._run_tool({"id": "c", "type": "function", "function": {"name": name, "arguments": _json.dumps(args)}})
+    sysp = a.messages[0]["content"]
+    assert "British spelling" in sysp and "validate input" not in sysp and "vitest" not in sysp
+    assert "Rules from" not in run("read_file", {"path": "README.md"})
+    out = run("read_file", {"path": "src/api/v1/users.ts"})
+    assert "API handlers validate input" in out and "vitest" not in out
+    assert "Tests use vitest" in run("read_file", {"path": "src/a.test.ts"})
+    assert "Rules from" not in run("read_file", {"path": "src/api/v1/users.ts"})        # once

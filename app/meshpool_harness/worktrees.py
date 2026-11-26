@@ -98,6 +98,8 @@ def _git_cmd(*args: str) -> list:
     pre = ["git", "-c", "core.quotepath=false"]
     if _WINDOWS:
         pre += ["-c", "core.longpaths=true"]       # deep node_modules / src trees past MAX_PATH
+    # never the repository's own programs: no hooks (worktree add runs post-checkout), no fsmonitor
+    pre += ["-c", "core.fsmonitor=false", "-c", f"core.hooksPath={os.devnull}"]
     return pre + list(args)
 
 
@@ -404,6 +406,11 @@ def create(source, *, owner_kind: str = "cli", owner_id: str = "", title: str = 
     if _norm(src).startswith(_norm(root()) + os.sep) and toplevel(src) is None:
         raise WorktreeError("That folder is itself an isolated copy without git; work in it directly.")
     top = toplevel(src)
+    if top:
+        from meshpool_harness.core import tools as _TT
+        if _TT.git_config_runs_programs(top):           # filters, an external diff or a pager would run its programs
+            raise WorktreeError("This repository's own git settings run programs (filters, fsmonitor, an external "
+                                "diff), so meshpool does not make isolated copies of it. Trust and review them first.")
     while True:                                     # an id whose branch name is free: clean-up may delete that branch
         wid = uuid.uuid4().hex[:8]
         if not top or _git(top, "rev-parse", "-q", "--verify", f"refs/heads/meshpool/{wid}").returncode:
@@ -428,7 +435,19 @@ def create(source, *, owner_kind: str = "cli", owner_id: str = "", title: str = 
             _cleanup(rec)
             _drop(wid)
             raise
+    _hook("WorktreeCreate", rec)
     return rec
+
+
+def _hook(event: str, rec: dict) -> None:
+    """The user's WorktreeCreate / WorktreeRemove hooks (hooks.json, and a trusted folder's own). Never raises."""
+    try:
+        from meshpool_harness.agent import extras as EX
+        EX.run_hooks(Path(rec.get("source") or "."), event, {
+            "worktree": {k: rec.get(k) for k in ("id", "kind", "workdir", "path", "branch", "source", "title")}},
+            timeout=300)
+    except Exception:  # noqa: BLE001 - a hook never breaks making or removing a copy
+        pass
 
 
 def _create_git(rec: dict, top: str, src: Path, base: str) -> None:
@@ -896,6 +915,7 @@ def discard(wid: str, keep_work: bool = False) -> dict:
             if not kept_dir:
                 _rmtree(rec["path"])
         _drop(rec["id"])
+    _hook("WorktreeRemove", rec)
     if kept_dir:
         note = (f"Its changed files were kept in {kept_dir} (the base folder beside it holds the files as they were "
                 "when the copy was made). Delete that folder when you do not need them.")

@@ -77,7 +77,7 @@ def theme_spec(theme=None) -> dict:
 
 W_IN, H_IN = 13.333, 7.5
 # per user: a template another local user left in a shared /tmp cannot be replaced (and must not be trusted)
-CACHE = Path(__import__("tempfile").gettempdir()) / f"forge_template_v2_{__import__('engines.icons', fromlist=['_user_tag'])._user_tag()}.pptx"
+CACHE = Path("forge_template_v2.pptx")    # the name only: built in the private per-user forge cache (engines.icons)
 
 
 def _theme_part(prs):
@@ -189,7 +189,8 @@ def default_template(theme=None) -> str:
 def _build(key: str, spec_json: str) -> str:
     import json as _json
     spec = _json.loads(spec_json)
-    out = CACHE.with_name(f"{CACHE.stem}_{key}.pptx")
+    from engines.icons import forge_cache
+    out = forge_cache() / f"{CACHE.stem}_{key}.pptx"
     prs = Presentation()
     sx = Inches(W_IN) / prs.slide_width
     prs.slide_width, prs.slide_height = Inches(W_IN), Inches(H_IN)

@@ -62,6 +62,8 @@ def test_saved_allow_and_deny_rules(tmp_path, monkeypatch):
     (tmp_path / ".meshpool").mkdir()
     (tmp_path / ".meshpool" / "permissions.json").write_text(json.dumps(
         {"allow": ["bash:npm test*", "mcp__browser__*"], "deny": ["bash:git push*", "web_search"]}), encoding="utf-8")
+    from meshpool_harness import trust as TR
+    TR.trust(tmp_path)                                   # a project's allow rules count only in a trusted folder
     a = core.Agent(str(tmp_path), approve=lambda *x: ("no", ""), mode="ask")
     assert a._permit("bash", {"command": "npm test -- --watch=false"}) == (True, "")
     assert a._permit("mcp__browser__ui_audit", {})[0] is True

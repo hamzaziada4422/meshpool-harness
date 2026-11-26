@@ -111,8 +111,9 @@ def _save_copy(jid: str, want: str) -> str:
 
 
 def _scope() -> str:
-    """The chat this server serves (the app passes MH_CHAT_ID), else this server process: builds are counted per chat."""
-    return os.environ.get("MH_CHAT_ID") or f"pid{os.getpid()}"
+    """The chat this call serves (the app sends _chat with each call; an outside harness sets MH_CHAT_ID), else this
+    server process: builds are counted per chat."""
+    return getattr(_CALL, "chat", None) or os.environ.get("MH_CHAT_ID") or f"pid{os.getpid()}"
 
 
 def _engine(engine: str, request: str, files: list | None, save_as: str | None = None) -> tuple[str, bool]:
@@ -1037,11 +1038,14 @@ def _as_mcp(fn, props: dict):
         priv = private_args()                            # one server process for every chat: the caller's folder
         _CALL.project = args.pop("_project", None) or priv.get("_project")
         _CALL.model = args.pop("_model", None) or priv.get("_model")    # and its model (else the engine uses MH_MODEL)
+        _CALL.chat = args.pop("_chat", None) or priv.get("_chat")       # and the chat: builds and usage are per chat
         extra = sorted(k for k in args if k not in props) if props else []
+        from meshpool_harness.core import usage as _U
         try:
-            text, err = fn(**{k: v for k, v in args.items() if k not in extra})
+            with _U.bind_chat(_CALL.chat):
+                text, err = fn(**{k: v for k, v in args.items() if k not in extra})
         finally:
-            _CALL.project = _CALL.model = None
+            _CALL.project = _CALL.model = _CALL.chat = None
         if extra:
             text = f"(Ignored unknown argument(s): {', '.join(extra)}.)\n{text}"
         if err:

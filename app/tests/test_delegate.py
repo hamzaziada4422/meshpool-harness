@@ -312,11 +312,12 @@ def test_ctrl_c_in_the_terminal_stops_the_sub_agents_before_it_goes_on(monkeypat
 
     def child(b):
         calls.append(time.time())
+        if len(calls) == 1:                                         # Ctrl+C, in the main thread as in a terminal,
+            threading.Timer(0.3, _thread.interrupt_main).start()   # only once run_tool is surely running (PA-skills-13)
         time.sleep(0.15)
         return _msg("", [("glob", {"pattern": "*"})])               # never finishes on its own
     fake(monkeypatch, child)
     a = _agent(_env)
-    threading.Timer(0.6, _thread.interrupt_main).start()            # Ctrl+C, in the main thread as in a terminal
     with pytest.raises(KeyboardInterrupt):
         D.run_tool(a, {"tasks": [{"goal": "List files again and again"}, {"goal": "List files once more, slowly"}]})
     t_back = time.time()
@@ -527,11 +528,19 @@ def test_a_failed_sub_agent_says_why_and_the_turn_counts_its_tokens(monkeypatch,
 def test_ctrl_c_ends_the_turn_but_keeps_the_reports_that_finished(monkeypatch, _env):
     import os
     import signal
+    fast_done = threading.Event()
+
     def child(b):
         if "slow" in _goal(b):
-            time.sleep(0.2)
+            time.sleep(0.5)
             return _msg("", [("glob", {"pattern": "*"})])
+        fast_done.set()
         return _msg("fast report: acme sells widgets")
+
+    def ctrl_c():                                  # a real Ctrl+C once the fast child has reported, while the slow one
+        if fast_done.wait(30):                     # still works (a fixed delay raced a slow child that got faster)
+            time.sleep(1.0)
+            os.kill(os.getpid(), signal.SIGINT)
 
     def parent(b):
         if b["messages"][-1]["role"] == "tool":
@@ -543,7 +552,7 @@ def test_ctrl_c_ends_the_turn_but_keeps_the_reports_that_finished(monkeypatch, _
     old = signal.signal(signal.SIGINT, signal.default_int_handler)
     try:
         a = _agent(_env)
-        threading.Timer(3.0, lambda: os.kill(os.getpid(), signal.SIGINT)).start()   # a real Ctrl+C, after the fast child is done
+        threading.Thread(target=ctrl_c, daemon=True).start()
         t0 = time.time()
         a.send("research both")
     finally:
@@ -877,3 +886,97 @@ def test_parallel_sub_agents_share_one_parent_task_outside_a_turn(monkeypatch, _
         a._task, before = None, dict(a.usage)
         D.run_tool(a, {"tasks": [{"goal": f"Research company {n} pricing"} for n in ("A", "B", "C")]})
         assert a.usage["calls"] - before["calls"] == 3
+
+
+# ---------------------------------------------------------------- saved sub-agents (agents/*.md)
+def _saved_agent(proj, name="reviewer", tools="Read, Grep", model="", trust=True):
+    import os as _os
+    from meshpool_harness import trust as TR
+    if trust and _os.environ.get("MESHPOOL_HOME"):
+        TR.trust(proj)
+    d = proj / ".meshpool" / "agents"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{name}.md").write_text(f"---\nname: {name}\ndescription: Reviews code for bugs\ntools: {tools}\n"
+                                  + (f"model: {model}\n" if model else "") + "---\nYou are a strict reviewer. Report bugs only.\n")
+
+
+def test_a_saved_sub_agent_brings_its_role_tools_and_model(monkeypatch, _env):
+    monkeypatch.setenv("MESHPOOL_HOME", str(_env.parent / "mphome"))
+    _saved_agent(_env, model="acme/review-model")
+    seen = []
+    fake(monkeypatch, lambda b: _msg("no bugs"), seen=seen)
+    a = _agent(_env)
+    assert "reviewer: Reviews code for bugs" in a.system_prompt()          # the chat knows it can use it
+    out, ok = D.run_tool(a, {"tasks": [{"goal": "Review calc.py for bugs", "agent": "Reviewer"}]})
+    assert ok, out
+    child = [s for s in seen if s["child"]][0]
+    assert "YOUR ROLE (reviewer)" in child["system"] and "strict reviewer" in child["system"]
+    assert set(child["tools"]) <= {"read_file", "grep"} and "read_file" in child["tools"]
+    assert child["model"] == "acme/review-model"
+
+
+def test_an_unknown_saved_sub_agent_is_named(monkeypatch, _env):
+    monkeypatch.setenv("MESHPOOL_HOME", str(_env.parent / "mphome"))
+    _saved_agent(_env)
+    fake(monkeypatch, lambda b: _msg("x"))
+    out, ok = D.run_tool(_agent(_env), {"tasks": [{"goal": "Review calc.py for bugs", "agent": "tester"}]})
+    assert not ok and "No saved sub-agent named tester" in out and "reviewer" in out
+
+
+def test_a_saved_sub_agent_cannot_widen_its_tools(monkeypatch, _env):
+    monkeypatch.setenv("MESHPOOL_HOME", str(_env.parent / "mphome"))
+    _saved_agent(_env, name="runner", tools="Bash, Write")
+    monkeypatch.setenv("MH_SUBAGENT_ACCESS", "read")                     # the chat lets sub-agents read only
+    seen = []
+    fake(monkeypatch, lambda b: _msg("done"), seen=seen)
+    D.run_tool(_agent(_env), {"tasks": [{"goal": "Run the build and report", "agent": "runner"}]})
+    tools = [s for s in seen if s["child"]][0]["tools"]
+    assert not {"bash", "write_file"} & set(tools)
+
+
+
+def test_an_untrusted_projects_agents_are_ignored_and_yours_win(monkeypatch, _env):
+    from meshpool_harness.agent import subagents as SA
+    home = _env.parent / "mphome"
+    monkeypatch.setenv("MESHPOOL_HOME", str(home))
+    _saved_agent(_env, name="reviewer", tools="", trust=False)              # the repo's: all tools, untrusted
+    assert SA.definitions(_env) == {}
+    (home / "agents").mkdir(parents=True)
+    (home / "agents" / "reviewer.md").write_text("---\nname: reviewer\ntools: Read\nmodel: inherit\n---\nMine.\n")
+    from meshpool_harness import trust as TR
+    TR.trust(_env)
+    d = SA.definitions(_env)["reviewer"]
+    assert d["prompt"] == "Mine." and d["own"] and d["tools"] == ["Read"] and d["model"] is None   # yours win
+
+
+def test_a_saved_sub_agent_preloads_skills_sets_effort_and_can_leave_out_project_instructions(monkeypatch, _env):
+    home = _env.parent / "mphome"
+    monkeypatch.setenv("MESHPOOL_HOME", str(home))
+    from meshpool_harness import skills as SK
+    monkeypatch.setattr(SK, "ensure_defaults", lambda: None)
+    (home / "skills" / "house-style").mkdir(parents=True)
+    (home / "skills" / "house-style" / "SKILL.md").write_text("---\nname: house-style\ndescription: Our style.\n---\n"
+                                                             "Always use tabs in house code.\n")
+    (_env / "AGENTS.md").write_text("PROJECT RULE: never touch vendor/.")
+    (home / "agents").mkdir(parents=True)
+    (home / "agents" / "styler.md").write_text("---\nname: styler\ndescription: Applies our style\nskills:\n"
+                                               "  - house-style\n  - no-such-skill\neffort: high\n"
+                                               "omit-project-instructions: true\n---\nFix the style.\n")
+    (home / "agents" / "plain.md").write_text("---\nname: plain\ndescription: Plain\n---\nDo it.\n")
+    seen, efforts = [], []
+    orig = K.Agent._post
+
+    def post(self, base, key, body, stream):
+        if "You are a focused sub-agent" in body["messages"][0]["content"]:
+            efforts.append(getattr(self, "effort", None))
+        return orig(self, base, key, body, stream)
+    fake(monkeypatch, lambda b: _msg("styled"), seen=seen)
+    D.run_tool(_agent(_env), {"tasks": [{"goal": "Restyle calc.py please", "agent": "styler"},
+                                        {"goal": "Restyle util.py please", "agent": "plain"}]})
+    kids = {("styler" if "YOUR ROLE (styler)" in s["system"] else "plain"): s["system"] for s in seen if s["child"]}
+    assert "SKILLS LOADED FOR YOU" in kids["styler"] and "Always use tabs in house code" in kids["styler"]
+    assert "PROJECT RULE" not in kids["styler"] and "instructions above apply" not in kids["styler"]
+    assert "PROJECT RULE" in kids["plain"] and "SKILLS LOADED" not in kids["plain"]
+    from meshpool_harness.agent import subagents as SA
+    d = SA.definitions(_env)["styler"]
+    assert d["skills"] == ["house-style", "no-such-skill"] and d["effort"] == "high" and d["omit_instructions"]

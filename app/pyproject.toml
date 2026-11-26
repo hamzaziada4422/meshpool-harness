@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meshpool-harness"
-version = "0.0.16"
+version = "0.0.17"
 description = "Meshpool: a model-agnostic coding agent (terminal and local app, with MCP) plus one-shot engines for code, data, office and browser tasks."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -19,6 +19,7 @@ browser = ["playwright>=1.40"]
 powerbi = ["pbixray>=0.3"]                       # optional: read the data model of .pbix files (the schema is read without it)
 analysis = ["pymupdf"]                          # optional (AGPL): measure_office_file on a .pdf
 ocr = ["rapidocr>=3.0", "onnxruntime>=1.17"]      # optional: read text in pictures (needs macOS 13 or later); without it the viewer gives the file's own text
+office = ["cryptography>=41"]                     # meshpool office install: the localhost certificate (or the openssl command)
 dev = ["pytest>=8.0", "ruff", "jsonschema>=4.0"]
 
 [project.scripts]
@@ -26,8 +27,16 @@ meshpool = "meshpool_harness.cli:main"
 
 [project.entry-points."meshpool_harness.connectors"]
 
+# PA-packaging-10: the code reads defaults/ and profiles/ next to meshpool_harness (config.APP), so a plain
+# `pip install ./app` must ship them too, plus the deck fonts (.ttf) and the icon bundles (.json.gz).
 [tool.setuptools.packages.find]
-include = ["meshpool_harness*", "engines*"]
+include = ["meshpool_harness*", "engines*", "defaults", "profiles"]
 
 [tool.setuptools.package-data]
-"*" = ["*.yaml", "*.json", "*.md", "*.svg", "*.txt", "*.html", "*.sqlite", "*.js", "*.css", "*.png", "*.woff2", "*.xlsx", "*.pptx", "*.pdf"]
+"*" = ["*.yaml", "*.json", "*.md", "*.svg", "*.txt", "*.html", "*.sqlite", "*.js", "*.css", "*.png", "*.woff2", "*.xlsx", "*.pptx", "*.pdf",
+       "*.ttf", "*.gz"]
+"defaults" = ["**/*"]
+"profiles" = ["*"]
+
+[tool.setuptools.exclude-package-data]
+"defaults" = ["**/__pycache__/*", "**/*.pyc"]

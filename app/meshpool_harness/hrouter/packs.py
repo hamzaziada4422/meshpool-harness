@@ -207,8 +207,10 @@ def _tool(ws, name: str) -> str | None:
     """Where a check's executable is: the project's own (node_modules/.bin, .venv/bin) first, then PATH."""
     if not name:
         return ""
-    for rel in (f"node_modules/.bin/{name}", f".venv/bin/{name}", f"venv/bin/{name}",
-                f"node_modules/.bin/{name}.cmd", f".venv/Scripts/{name}.exe"):
+    from meshpool_harness import trust as TR
+    local = (f"node_modules/.bin/{name}", f".venv/bin/{name}", f"venv/bin/{name}", f"node_modules/.bin/{name}.cmd",
+             f".venv/Scripts/{name}.exe") if TR.is_trusted(ws.root) else ()   # a stranger's repo: never its programs
+    for rel in local:
         p = ws.root / rel
         if p.exists():
             return str(p)
@@ -230,7 +232,8 @@ def changed_files(ws) -> list[str]:
         if not rel.startswith("..") and (ws.root / rel).is_file():
             out.append(rel)
     try:
-        r = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=ws.root, capture_output=True,
+        from meshpool_harness.core.tools import safe_git
+        r = subprocess.run(safe_git("status", "--porcelain", "--untracked-files=all"), cwd=ws.root, capture_output=True,
                            text=True, timeout=10)
         for line in r.stdout.splitlines():
             rel = line[3:].split(" -> ")[-1].strip().strip('"')

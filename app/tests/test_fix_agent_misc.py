@@ -94,14 +94,14 @@ def test_bash_allow_rule_does_not_cover_chained_commands():
 def test_permissions_json_not_a_dict_does_not_crash(tmp_path):
     (tmp_path / ".meshpool").mkdir()
     (tmp_path / ".meshpool" / "permissions.json").write_text("[]", encoding="utf-8")
-    assert A._rules(tmp_path) == {"allow": [], "deny": []}
+    assert A._rules(tmp_path) == {"allow": [], "deny": [], "ask": []}      # 0.0.17: rules that always ask
 
 
 def test_untrusted_project_allow_rules_and_hooks_are_ignored(tmp_path):
     (tmp_path / ".meshpool").mkdir()
     (tmp_path / ".meshpool" / "permissions.json").write_text(json.dumps({"allow": ["bash:*"], "deny": ["x"]}), encoding="utf-8")
     (tmp_path / ".meshpool" / "hooks.json").write_text(json.dumps({"SessionStart": [{"command": "echo hi"}]}), encoding="utf-8")
-    assert A._rules(tmp_path) == {"allow": [], "deny": ["x"]}
+    assert A._rules(tmp_path) == {"allow": [], "deny": ["x"], "ask": []}
     assert EX.hooks(tmp_path)["SessionStart"] == []
     assert EX.untrusted_config(tmp_path)
     EX.trust_project(tmp_path)
@@ -129,10 +129,39 @@ def test_agent_import_outside_project_is_not_followed(tmp_path):
     assert "SECRET" not in EX.instruction_text(proj)
 
 
-def test_mention_of_huge_file_reads_only_a_prefix(tmp_path):
+def test_mention_of_huge_file_reads_only_a_prefix(tmp_path, monkeypatch):
+    """PA-agent-17: @file on a huge file reads only a prefix (at most 100000 bytes), never the whole file into
+    memory first. A read spy counts the bytes actually read: cutting only the output is not enough."""
     (tmp_path / "big.log").write_bytes(b"a" * 500000)
+    read = []
+    real_open = open
+
+    class Spy:
+        def __init__(self, fh):
+            self._fh = fh
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self._fh.close()
+            return False
+
+        def read(self, *a):
+            data = self._fh.read(*a)
+            read.append(len(data))
+            return data
+
+        def __getattr__(self, k):
+            return getattr(self._fh, k)
+
+    def spy_open(file, *a, **k):
+        fh = real_open(file, *a, **k)
+        return Spy(fh) if str(file).endswith("big.log") else fh
+    monkeypatch.setattr(EX, "open", spy_open, raising=False)       # the module's own open(), not the builtin
     out = EX.expand_mentions("see @big.log", tmp_path)
     assert "[@big.log]" in out and len(out) < 30000
+    assert read and 0 < sum(read) <= 100000, read
 
 
 def test_reset_gets_a_new_session_and_zero_usage(tmp_path):

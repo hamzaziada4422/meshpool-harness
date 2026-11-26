@@ -24,7 +24,7 @@ Node, Git, Pi, Chromium (`app/meshpool_harness/bundled.py`):
 |---|---|---|
 | Node | `<root>/node` only (`bundled.node_exe()`; `pi_rpc.node_exe()` has no PATH fallback) | `MH_NODE`, else PATH |
 | PATH | `use_bundled_tools()` (called from `config.load_into_env` and the desktop shell) puts bundled Node, Git (`git/cmd`, `git/mingw64/bin`, `git/usr/bin` on Windows, `git/bin` on macOS) and the LibreOffice folder FIRST | untouched |
-| Codex, OpenCode | **not shipped.** `harnesses.load_all()` lists them as unavailable and `hidden: true`, with no install note and no "Reinstall" text; starting one, or `login("codex")`, raises "... is not part of the Meshpool app." There is no `npx` and no look at the customer's PATH | `npx -y @agentclientprotocol/codex-acp@2.6.0`, `npx -y opencode-ai@1.19.5 acp`, `npx -y @openai/codex@latest login` (the benchmark `testkit/loop/bench.py` uses the same manifests) |
+| Codex, OpenCode | **not shipped.** `harnesses.load_all()` lists them as unavailable and `hidden: true`, with no install note and no "Reinstall" text; starting one, or `login("codex")`, raises "... is not part of the Meshpool app." There is no `npx` and no look at the customer's PATH | `npx -y @agentclientprotocol/codex-acp@2.6.0`, `npx -y opencode-ai@1.19.5 acp`, `npx -y @openai/codex@0.171.0 login` (the benchmark `testkit/loop/bench.py` uses the same manifests) |
 | Pi | `vendor/pi` + bundled Node (already so) | same |
 | Hermes | `app/vendor/hermes` (pruned copy) run by the bundled Python; `release.yml` clones the pinned `HERMES_COMMIT` | same |
 | Git / Bash | Windows `<root>/git` MinGit (`MH_BASH` = its bash; `find_bash()` never looks at Program Files in the packaged app); macOS `<Resources>/git` | PATH |

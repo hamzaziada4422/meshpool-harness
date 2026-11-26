@@ -222,7 +222,7 @@ def smoke(pw, url: str, launch=None, view=(1280, 800)) -> dict:
             if h.startswith("#") and len(h) > 1 and not page.evaluate("id => !!document.getElementById(id) || !!document.getElementsByName(id).length", h[1:]):
                 missing.append(a["name"])
         if missing:
-            add("dead-link", "must", f"links to a part of the page that does not exist: " + ", ".join(f'"{m}"' for m in missing[:6]))
+            add("dead-link", "must", "links to a part of the page that does not exist: " + ", ".join(f'"{m}"' for m in missing[:6]))
 
         # 3. forms: empty and bad input
         page.goto(addr, wait_until="load")

@@ -15,5 +15,7 @@ mkdir -p ~/.local/share/fonts ~/.config/fontconfig
 cp "$REPO"/app/engines/forge/fonts/Selawik-*.ttf ~/.local/share/fonts/
 printf '<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n<fontconfig><alias><family>Segoe UI</family><prefer><family>Selawik</family></prefer></alias></fontconfig>\n' > ~/.config/fontconfig/fonts.conf
 fc-cache -f >/dev/null; fc-match "Segoe UI"
-# 4. tests (CI: cd app; python -m pytest -q -p no:cacheprovider tests)
-cd "$REPO/app" && time "$PY" -m pytest -q -p no:cacheprovider tests "$@"
+# 4. tests, then the skip count (CI: cd app; pytest -rs --junitxml, then packaging/ci_skips.py on the report)
+REPORT="$(mktemp -t meshpool-pytest-XXXXXX.xml)"
+cd "$REPO/app" && time "$PY" -m pytest -q -p no:cacheprovider -rs --junitxml="$REPORT" tests "$@" && \
+  "$PY" "$REPO/packaging/ci_skips.py" "$REPORT"

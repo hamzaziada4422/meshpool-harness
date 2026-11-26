@@ -2,14 +2,29 @@
 parallel sub-agents. The data lives in the Meshpool data folder (see meshpool_harness.assistant)."""
 from __future__ import annotations
 
+import os
+
 from meshpool_harness import assistant as A
-from meshpool_harness.agent.mcp_stdio import Tool, ToolFailed, cancel_check, serve
+from meshpool_harness.agent.mcp_stdio import Tool, ToolFailed, cancel_check, private_args, serve
+
+
+def _project() -> str:
+    """The folder of the chat this call serves: the app sends it with each call (one process serves every chat), an
+    outside harness sets MESHPOOL_PROJECT for a process of its own."""
+    return str(private_args().get("_project") or os.environ.get("MESHPOOL_PROJECT", ""))
+
+
+def _chat() -> str:
+    """The chat this call serves (the app's _chat), else MH_CHAT_ID of an outside harness's own process."""
+    return str(private_args().get("_chat") or os.environ.get("MH_CHAT_ID", ""))
 
 
 def _wrap(fn):
     def call(**kw):
+        from meshpool_harness.core import usage as U
         try:
-            return fn(**kw)
+            with U.bind_chat(_chat()):             # a sub-agent's model calls count for the chat that asked
+                return fn(**kw)
         except (ValueError, KeyError) as e:
             raise ToolFailed(str(e))
     return call
@@ -22,10 +37,9 @@ def memory_save(fact: str) -> str:
 
 
 def project_note(note: str, folder: str = "") -> str:
-    import os
     if not A.settings()["memory_on"]:
         raise ToolFailed("The user turned memory off in Meshpool settings.")
-    root = folder or os.environ.get("MESHPOOL_PROJECT", "") or os.getcwd()
+    root = folder or _project() or os.getcwd()
     return A.remember_project(root, note)
 
 
@@ -38,18 +52,18 @@ def memory_forget(text: str) -> str:
 
 
 def schedule_task(prompt: str, when: str, name: str = "", time: str = "09:00", day: str = "mon", at: str = "",
-                  minutes: int = 60, folder: str = "", mode: str = "", only_on_change: bool = False) -> str:
-    import os
+                  minutes: int = 60, folder: str = "", mode: str = "", only_on_change: bool = False,
+                  cron: str = "") -> str:
     if not mode:                                     # a task made in a Code chat runs in Code mode
         mode = "code" if os.environ.get("MH_CHAT_KIND") == "code" else "cowork"
         try:
             from meshpool_harness.ui.agent_api import read_meta
-            if os.environ.get("MH_CHAT_ID") and read_meta(os.environ["MH_CHAT_ID"]).get("kind") == "code":
+            if _chat() and read_meta(_chat()).get("kind") == "code":
                 mode = "code"
         except Exception:  # noqa: BLE001
             pass
-    t = A.add_task(name, prompt, when, time, day, at, minutes, folder or os.environ.get("MESHPOOL_PROJECT", ""),
-                   "", mode, only_on_change)
+    t = A.add_task(name, prompt, when, time, day, at, minutes, folder or _project(),
+                   "", mode, only_on_change, cron=cron)
     return (f"Scheduled \"{t['name']}\" {A.describe(t)}. It runs while Meshpool is open on this computer; the user "
             "can change or delete it in Settings, Scheduled tasks. To also run it while Meshpool is closed, they can turn on "
             "\"Also run tasks when Meshpool is closed\" on the Scheduled tasks page.")
@@ -74,7 +88,6 @@ def search_chats(query: str) -> str:
 def run_subtasks(tasks: list, max_parallel: int = 0) -> str:
     """For Hermes, Codex, Pi and other harnesses: read-only sub-agents in this server's project. Meshpool's own chats
     run sub-agents in the app instead (agent/core.py _run_subtasks), where their mode and project are known."""
-    import os
     import time
     asked, t0 = cancel_check(), time.time()
 
@@ -91,7 +104,7 @@ def run_subtasks(tasks: list, max_parallel: int = 0) -> str:
                 return float(fh.read().strip() or 0) >= t0
         except (OSError, ValueError):
             return False
-    return A.run_subtasks(tasks, os.environ.get("MESHPOOL_PROJECT", ""), max_parallel, cancelled=cancelled)
+    return A.run_subtasks(tasks, _project(), max_parallel, cancelled=cancelled)
 
 
 TOOLS = {
@@ -113,11 +126,12 @@ TOOLS = {
     "schedule_task": Tool(_wrap(schedule_task), "Schedule work for later or on repeat, such as a daily news brief, a "
                           "weekly report or a one-time reminder. Each run starts a new chat with the prompt. "
                           "when: once (give `at` as a local date and time like 2026-11-20T09:00), hourly, daily, "
-                          "weekdays, weekly (give `day`), or every (give `minutes`, at least 15). `time` is local "
+                          "weekdays, weekly (give `day`), every (give `minutes`, at least 15), or cron (give `cron`, "
+                          "five fields in local time, like 30 8 * * 1-5). `time` is local "
                           "HH:MM. Write the prompt so it makes sense on its own later.",
                           {"prompt": {"type": "string"}, "when": {"type": "string", "enum": list(A.WHEN)},
                            "name": {"type": "string"}, "time": {"type": "string"}, "day": {"type": "string"},
-                           "at": {"type": "string"}, "minutes": {"type": "integer"},
+                           "at": {"type": "string"}, "minutes": {"type": "integer"}, "cron": {"type": "string"},
                            "mode": {"type": "string", "enum": ["cowork", "code"]},
                            "only_on_change": {"type": "boolean", "description": "Only tell the user when the result "
                                               "changed from the last run."}}, ["prompt", "when"]),
