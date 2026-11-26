@@ -30,8 +30,11 @@ RULES = """You are the model behind an agent harness. You cannot act yourself: y
 run its tools, listed below. Answer with ONE JSON object and nothing else (no prose around it, no code fence):
 {"content": "<text for the user, may be empty while you still work>", "tool_calls": [{"name": "<tool>", "arguments": {...}}]}
 Put the tool calls you want run now in tool_calls (several are fine when they do not depend on each other). Leave
-tool_calls empty only when the task is finished or you need the user; then content is your final answer.
-Arguments must match the tool's parameters exactly."""
+tool_calls empty only when the task is finished or you need the user; then content MUST be your complete final
+answer to the user (never empty). Arguments must match the tool's parameters exactly."""
+
+PLAIN = """You are the model behind an agent harness. No tools are available for this reply: answer the user directly in
+plain text (no JSON), with your complete final answer."""
 
 
 def _text(c) -> str:
@@ -64,6 +67,9 @@ def build_prompt(body: dict) -> tuple[str, str]:
         else:
             lines.append(f"[{role}]\n{_text(m.get('content'))}")
     lines.append("\n# Your turn: one JSON object, as the rules say.")
+    if not tools:
+        lines[-1] = "\n# Your turn: answer the user in plain text."
+        return system + "\n\n" + PLAIN, "\n\n".join(lines)
     return system + "\n\n" + RULES, "\n\n".join(lines)
 
 
@@ -123,12 +129,13 @@ class H(BaseHTTPRequestHandler):
             out = ask_claude(system, prompt)
         except Exception as e:  # noqa: BLE001
             return self._json(502, {"error": {"message": f"claude -p: {e}"}})
-        content, calls = parse(out)
+        content, calls = parse(out) if body.get("tools") else (out, [])
         usage = {"prompt_tokens": (len(system) + len(prompt)) // 4, "completion_tokens": len(out) // 4}
         usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
         with _LOCK, open(LOG, "a") as f:
             f.write(json.dumps({"t": round(time.time() - t0, 1), "n_tools": len(body.get("tools") or []),
-                                "calls": [c["function"]["name"] for c in calls], "content": content[:200]}) + "\n")
+                                "calls": [c["function"]["name"] for c in calls], "content": content[:200],
+                                "raw": out[:400]}) + "\n")
         finish = "tool_calls" if calls else "stop"
         msg = {"role": "assistant", "content": content or None}
         if calls:
