@@ -112,3 +112,34 @@ def test_pf03_agent_title_does_not_cut_a_path_at_80_characters(tmp_path):
     _script(b, [{"role": "assistant", "content": "Done."}])
     b.send("Hi!\nThe file budget.xlsx has errors")
     assert nice_title(b.title) == "The file budget.xlsx has errors"
+
+
+# ---------- PF-04: onboarding copied another app's chats unless unticked, said "1 chats", and began at step 2 -------
+
+APP_JS = Path(__file__).resolve().parents[1] / "meshpool_harness" / "ui" / "app.js"
+
+
+def test_pf04_chat_import_is_opt_in_with_a_plural_that_fits():
+    js = APP_JS.read_text(encoding="utf-8")
+    assert '<input type="checkbox" id="oLocal">' in js and 'id="oLocal" checked' not in js
+    assert "Copy my past chats from" in js and 'chat${n === 1 ? "" : "s"})' in js
+    assert 'chat${r.imported === 1 ? "" : "s"} imported.' in js and "} chats imported." not in js
+    assert 'store("onbFull", 1)' in js.split("function showOnboarding()", 1)[1].split("\n}", 1)[0]
+
+
+def test_pf04_a_start_without_the_model_step_says_step_1(tmp_path):
+    import re
+    import shutil
+    import subprocess
+    js = APP_JS.read_text(encoding="utf-8")
+    src = re.search(r"^const onbSteps = .*$", js, re.M).group(0)
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed: the read checks passed")
+    probe = tmp_path / "probe.js"
+    probe.write_text("let full = null; const store = k => k === 'onbFull' ? full : null;\n" + src + "\n"
+                     "const say = h => h.match(/<small>(.*?)<\\/small>/)[1] + ' ' + (h.match(/class=\"on\"/g) || []).length;\n"
+                     "console.log([say(onbSteps(2)), say(onbSteps(3))].join('|'));\n"
+                     "full = 1; console.log([say(onbSteps(1)), say(onbSteps(2)), say(onbSteps(3))].join('|'));\n")
+    out = subprocess.run([node, str(probe)], capture_output=True, text=True, timeout=30).stdout.splitlines()
+    assert out == ["Step 1 of 2 1|Step 2 of 2 2", "Step 1 of 3 1|Step 2 of 3 2|Step 3 of 3 3"]
