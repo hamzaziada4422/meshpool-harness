@@ -49,3 +49,18 @@ def test_the_hero_links_keep_the_full_stop_beside_them(page):
         document.body.appendChild(h); }""")
     pad = page.evaluate("() => getComputedStyle(document.querySelector('#vp')).paddingRight")
     assert pad == "0px", pad
+
+
+def test_a_checked_menu_item_grows_with_its_description(page):
+    page.evaluate("() => { S.mode = 'chat'; syncMode?.(); newThread(); }")
+    page.click("#aPill")
+    page.wait_for_selector("#ctx .mi")
+    page.wait_for_timeout(300)
+    got = page.evaluate("""() => Array.from(document.querySelectorAll('#ctx .mi')).map(m => {
+        const r = m.getBoundingClientRect(), l = m.querySelector('.ml');
+        return {h: r.height, need: l.scrollHeight, top: r.top, bottom: r.bottom}; })""")
+    assert len(got) >= 3 and any(g["need"] > 40 for g in got), got       # the checked item has a long description
+    for g in got:
+        assert g["h"] >= g["need"] - 1, got
+    for a, b in zip(got, got[1:]):
+        assert a["bottom"] <= b["top"] + 1, got

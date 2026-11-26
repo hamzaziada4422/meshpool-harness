@@ -427,3 +427,6 @@
 .ptabs button{padding:4px 8px}
 .linkbtn:hover{color:var(--ink);text-decoration-thickness:2px}
 .hero .sub .linkbtn{padding:0}
+/* The checked menu item carries the class "sel", which the composer pills use for height:32px, so a long description spilled
+   over the next item. */
+.ctx .mi.sel{display:flex;height:auto;color:var(--ink);white-space:normal}
