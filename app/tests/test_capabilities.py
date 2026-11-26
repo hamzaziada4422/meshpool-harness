@@ -144,7 +144,7 @@ def test_when_no_agent_can_the_chat_says_so(chat, monkeypatch):
     monkeypatch.setattr(HRT, "_ready", lambda kind: {"custom": dict(s.harness)})
     monkeypatch.setattr(HRT, "route", lambda text, kind: {"ranking": []})
     assert s._capability_turn("make a powerpoint") == []
-    assert any("No agent in Meshpool can make PowerPoint presentations" in (e.get("text") or "") for e in s.events)
+    assert any("No agent in meshpool can make PowerPoint presentations" in (e.get("text") or "") for e in s.events)
 
 
 def test_switching_agent_mid_chat_keeps_the_chat(chat):

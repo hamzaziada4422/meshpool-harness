@@ -185,7 +185,7 @@ def test_the_system_check_lists_the_bundled_tools_with_their_versions(app, monke
     _exe(app / "vendor" / "pandoc" / "pandoc", "#!/bin/sh\necho 'pandoc 2.19.2'\n")
     _model(app)
     rows = {r["name"]: r for r in config.system_check()}
-    assert rows["ffmpeg"]["ok"] and "ffmpeg version 7.0.2" in rows["ffmpeg"]["detail"] and "ships with Meshpool" in rows["ffmpeg"]["detail"]
+    assert rows["ffmpeg"]["ok"] and "ffmpeg version 7.0.2" in rows["ffmpeg"]["detail"] and "ships with meshpool" in rows["ffmpeg"]["detail"]
     assert rows["pandoc"]["ok"] and "pandoc 2.19.2" in rows["pandoc"]["detail"]
     assert "Speech to text" in rows and "Notebooks" in rows
     assert all(rows[k]["optional"] for k in ("ffmpeg", "pandoc", "Speech to text", "Notebooks"))
@@ -195,8 +195,8 @@ def test_the_system_check_says_when_a_program_is_missing_from_the_install(app, m
     monkeypatch.setattr(bundled.sys, "platform", "linux")
     monkeypatch.setattr("shutil.which", lambda *a, **k: "/usr/bin/pandoc")          # a pandoc on the PATH is not used
     rows = {r["name"]: r for r in config.system_check()}
-    assert not rows["pandoc"]["ok"] and "reinstall Meshpool" in rows["pandoc"]["fix"]
-    assert not rows["Speech to text"]["ok"] and "reinstall Meshpool" in rows["Speech to text"]["fix"]
+    assert not rows["pandoc"]["ok"] and "reinstall meshpool" in rows["pandoc"]["fix"]
+    assert not rows["Speech to text"]["ok"] and "reinstall meshpool" in rows["Speech to text"]["fix"]
 
 
 def test_a_broken_program_shows_as_a_row_not_a_crash(app, monkeypatch):
