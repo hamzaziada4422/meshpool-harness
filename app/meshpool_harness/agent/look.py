@@ -46,9 +46,9 @@ _BUILD = re.compile(r"\b(npm|pnpm|yarn|bun)\s+(run\s+)?build\b|\bvite\s+build\b|
                     r"\bng\s+build\b|\bparcel\s+build\b|\beleventy\b|\bhugo\b|\bjekyll\s+build\b", re.I)
 # a look after the last write already happened this turn: the engines' checks that draw the pages, and the viewing tools.
 # check_document, check_workbook, make_document and make_workbook only test the file's structure or values and never
-# draw a page, so a Word file or sheet they handled is still looked at once.
-_LOOKED = re.compile(r"(^|__)(check_deck|view_output|read_document|measure_office_file|"
-                     r"make_deck|make_report|build_deck|build_report|build_model)$")
+# draw a page, so a Word file or sheet they handled is still looked at once. make_report and build_* are not meshpool
+# tools: a connected server may name a tool that way and only write the file, so those names do not count as a look.
+_LOOKED = re.compile(r"(^|__)(check_deck|view_output|read_document|measure_office_file|make_deck)$")
 _WROTE = re.compile(r"^(write_file|write|edit|edit_file|apply_patch|bash|shell|exec_command|run_python|python)$")
 
 
@@ -83,11 +83,23 @@ RUBRIC_DOC = (
     "1. Does it do what was asked? Is every part the request names there, with the right content and numbers?\n"
     "2. Is anything cut off, overlapping, off the page or slide, or unreadable?\n"
     "3. Does it look finished: no placeholder text, no empty pages or slides, consistent fonts and spacing?")
-TAIL = ("List what is wrong or missing in a few short lines, then fix it in the files. If nothing is wrong, say so in "
+TAIL = ("The user's explicit choices win over these checks: if the request says something is a placeholder or does "
+        "nothing yet, leave it as it is. List what is wrong or missing in a few short lines, then fix it in the files. If nothing is wrong, say so in "
         "one line. Do not start servers or open other programs for this: meshpool looks again after your fix. End "
         "with your answer to the user as before: what you made and where it is.")
+HEAD = "[meshpool] "
 AGAIN = ("[meshpool] meshpool looked again after your fix. These problems are still there. Fix them, or say in one "
          "line why they are right as they are.")
+
+
+def _lead_again(msg: dict) -> None:
+    """Put AGAIN in front of a review message under one "[meshpool]" header, not two."""
+    def lead(t: str) -> str:
+        return AGAIN + "\n\n" + (t[len(HEAD):] if t.startswith(HEAD) else t)
+    if isinstance(msg["content"], str):
+        msg["content"] = lead(msg["content"])
+    else:
+        msg["content"][0]["text"] = lead(msg["content"][0]["text"])
 
 
 def _blind(agent) -> bool:
@@ -313,6 +325,39 @@ def _interact(target: str, request: str, out_dir: str, browser) -> dict:
                 "error": f"{type(e).__name__}: {str(e)[:120]}"}
 
 
+# the user's own choices: an element the request calls a placeholder is not a finding when it does nothing
+_INERT = re.compile(r"place-?holders?|\binert\b|does(?:n'?t| not) (?:do )?(?:anything|nothing)|does nothing|"
+                    r"\bdummy\b|not (?:yet )?(?:wired|hooked)|\bno action\b|\bfake\b|\bfor show\b", re.I)
+_CLAUSE = re.compile(r"[.;!?\n,]| and | but | then | while | with ", re.I)
+
+
+def _toks(text: str) -> list:
+    return re.findall(r"[a-z0-9]+", (text or "").lower())
+
+
+def inert_clauses(request: str) -> list:
+    """The words of each part of the request that says something is a placeholder, inert, "does nothing yet", "dummy"
+    or "not wired". Deterministic: split the request into short clauses and keep those with one of those phrases."""
+    return [set(_toks(c)) for c in _CLAUSE.split(request or "") if c and _INERT.search(c)]
+
+
+def apply_choices(findings: list, steps: list, request: str) -> tuple:
+    """Drop interaction findings and steps about a control the request itself calls a placeholder. A finding names its
+    control in quotes ('Buy now'); a control with no name is never dropped."""
+    clauses = inert_clauses(request)
+    if not clauses:
+        return list(findings), list(steps)
+
+    def inert(text: str) -> bool:
+        for m in re.finditer(r"'([^']{1,60})'", str(text)):
+            w = set(_toks(m.group(1)))
+            if w and any(w <= c for c in clauses):
+                return True
+        return False
+    return ([f for f in findings if not inert(f)],
+            [x for x in steps if not (isinstance(x, dict) and inert(x.get("action", "")))])
+
+
 def _launch(pw):
     """The headless Chromium meshpool already uses (ui_audit, previews): Playwright's own, else the newest one a
     Playwright install left on this computer. Never the user's own browser."""
@@ -394,8 +439,8 @@ def _web_once(url: str, out_dir: Path, tag: str, request: str, launch) -> dict:
     for e in it.get("console_errors") or []:
         merged.setdefault(("console", "", str(e)), {"rule": "console", "msg": str(e)[:200], "sel": "", "views": ["use"]})
     res["findings"] = sorted(merged.values(), key=lambda f: (f["rule"] != "console", f["rule"]))
-    res["interact"] = [str(x)[:240] for x in it.get("findings") or []]
-    res["steps"] = it.get("steps") or []
+    res["interact"], res["steps"] = apply_choices([str(x)[:240] for x in it.get("findings") or []],
+                                                  it.get("steps") or [], request)
     bad = [s.get("shot") for s in res["steps"] if s.get("shot") and not s.get("ok", True)]
     extra = list(dict.fromkeys(bad + [s for s in (it.get("shots") or []) if s]))[:2]
     res["shots"] = shots + [("using it", Path(s)) for s in extra if Path(s).is_file()]
@@ -515,41 +560,65 @@ def message(kind: str, target: dict, res: dict, request: str, blind: bool) -> di
 
 
 def _short(f: dict) -> str:
-    return {"sideways-scroll": "the page scrolled sideways", "past-the-edge": "content past the screen edge",
-            "console": "a console error", "load": "the page did not open", "contrast": "low contrast text",
+    base = {"sideways-scroll": "the page scrolled sideways", "past-the-edge": "content past the screen edge",
+            "console": "a console error", "load": "the page did not open", "contrast": "low contrast",
             "overlap": "overlapping elements", "text-cut-off": "cut-off text", "broken-image": "a broken image",
             "placeholder": "placeholder text", "left-over-text": "placeholder text", "empty": "an empty section",
             "empty-page": "an empty page", "viewport": "no phone viewport tag",
             "placeholder-link": "a placeholder link"}.get(f["rule"], f["rule"])
+    name = re.search(r'"([^"]{1,28})"', f.get("sel") or "")        # the element's own text: low contrast on 'See prices'
+    named = {"contrast": "low contrast", "overlap": "overlapping text", "text-cut-off": "cut-off text",
+             "past-the-edge": "text past the screen edge", "empty": "an empty section",
+             "placeholder-link": "a placeholder link"}
+    if name and f["rule"] in named:
+        return named[f["rule"]] + f" on '{name.group(1).strip()}'"
+    return base
+
+
+def _short_use(text: str) -> str:
+    """A use-it finding as a short phrase: "Keyboard focus is invisible on the nav links (6 of 8 ...): ..." becomes
+    "keyboard focus is invisible on the nav links"."""
+    t = re.split(r"\s\(|: |\. ", str(text), 1)[0].strip()
+    t = re.sub(r"^The (?=')", "", t)
+    t = re.sub(r"^The ", "the ", t)
+    if t[:1].isupper() and not t[:2].isupper():
+        t = t[:1].lower() + t[1:]
+    return t[:80]
+
+
+def _phrases(res: dict) -> list:
+    out = [_short(f) for f in res.get("findings") or []] + [_short_use(x) for x in res.get("interact") or []]
+    return list(dict.fromkeys(p for p in out if p))
 
 
 def summary_line(kind: str, st: dict) -> str:
-    """The closing line, e.g. "Checked: looked at the page at desktop and phone width; fixed the page scrolled
-    sideways and a console error"."""
+    """The closing line, from the measured findings before and after: "Checked: looked at the page at desktop and
+    phone width; fixed low contrast on 'See prices' and a console error; still open: keyboard focus is invisible on
+    the nav links"."""
     first, last = st.get("first") or {}, st.get("last") or {}
     if last.get("error"):
         return f"Checked: {last['error']}."
     where = "looked at the page at desktop and phone width" if kind == "web" else \
         f"looked at {st.get('label') or 'the file'}"
-    key = lambda f: (f["rule"], f.get("sel", ""), f["msg"])  # noqa: E731
-    now = {key(f) for f in last.get("findings") or []}
-    fixed = list(dict.fromkeys(_short(f) for f in first.get("findings") or [] if key(f) not in now))
-    left = list(dict.fromkeys(_short(f) for f in last.get("findings") or []))
+    before, after = _phrases(first), _phrases(last)
+    fixed = [x for x in before if x not in after]
     bits = []
     if fixed:
         bits.append("fixed " + _join(fixed))
     elif st.get("rounds") and st.get("changed"):
-        bits.append("updated it after the review")
-    if left:
-        bits.append("still open: " + _join(left))
+        bits.append("changed it after comparing it with your request" if not after else "changed it after the review")
+    if after:
+        bits.append("still open: " + _join(after))
     if not bits:
         bits.append("no problems found")
     return f"Checked: {where}; " + "; ".join(bits) + "."
 
 
 def _join(xs: list) -> str:
+    more = len(xs) - 4
     xs = xs[:4]
-    return xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1]
+    out = xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1]
+    return out + (f" (and {more} more)" if more > 0 else "")
 
 
 # ---------- the step in the agent's loop ---------------------------------------------------------------------------------
@@ -624,16 +693,13 @@ def gate(agent, g: dict, final: str, *, render_web_fn=None, render_doc_fn=None) 
         if st["rounds"] < MAX_ROUNDS and (st["rounds"] == 0 or found) and not res.get("error"):
             msg = message(kind, target, res, req, _blind(agent))
             if st["rounds"]:                               # a later round: lead with what is still wrong
-                head = AGAIN + "\n\n"
-                if isinstance(msg["content"], str):
-                    msg["content"] = head + msg["content"]
-                else:
-                    msg["content"][0]["text"] = head + msg["content"][0]["text"]
+                _lead_again(msg)
             st["rounds"] += 1
             if isinstance(msg["content"], list):            # only this look's pictures stay in the conversation
                 from meshpool_harness.agent.core import _drop_images
                 _drop_images(agent.messages, keep=0)
             agent.messages.append(msg)
+            agent.emit({"type": "review_round", "round": st["rounds"]})    # displays: the reply above was a first answer
             return True, final
         st["done"] = True
         return False, _close(agent, final, summary_line(kind, st))

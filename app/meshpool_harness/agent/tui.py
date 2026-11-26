@@ -158,6 +158,11 @@ def _tilde(path: str) -> str:
     return "~" + path[len(home):] if path == home or path.startswith(home + os.sep) else path
 
 
+
+# events that may arrive between a final answer and the review round that replaces it (print mode holds the answer)
+_HOLD_THROUGH = ("assistant", "review_round", "status", "usage", "model_start", "model_end", "text_delta", "thought",
+                 "stream_reset")
+
 class Terminal:
     """Draws the session. `emit` takes the agent's events; `approve` and `ask_questions` take its questions.
     out/err/width/depth/interactive/clock/keys_factory can be set for tests and screenshots."""
@@ -488,10 +493,18 @@ class Terminal:
         self._text_open = False
         self._md = R.MdState()
 
+    def _release_held(self):
+        h, self._held = getattr(self, "_held", None), None
+        if h is not None:
+            self._write(h, self.out)
+            self._write("\n", self.out)
+
     # ---------- agent events ----------
     def emit(self, ev: dict):
         ev = {k: (R.safe_text(v) if isinstance(v, str) else v) for k, v in ev.items()}   # model text never drives the tty
         t, st = ev.get("type"), self.st
+        if getattr(self, "_held", None) is not None and t not in _HOLD_THROUGH:
+            self._release_held()                       # something else came after it: it was the last answer
         if t == "model_start":
             if self.interactive and not self._turn:
                 self.turn_begin()
@@ -512,6 +525,22 @@ class Terminal:
                     self._pbuf, self._text_open = "", False
                 self._flush_text()
                 self.p(st.dim("[connection dropped; the reply restarts below]"))
+        elif t == "review_round":
+            if self.print_mode:
+                self._held = None                      # the answer above was written before the check: only the last prints
+            else:
+                self._flush_text()
+                self.p(st.dim("  (that was a first answer. meshpool is checking it, and the final answer follows)"))
+        elif t == "assistant" and self.print_mode and not ev.get("has_tools"):
+            if ev.get("append") and getattr(self, "_held", None) is not None:
+                self._held += "\n\n" + str(ev.get("text") or "")      # the Checked line joins the answer it ends
+            else:
+                self._release_held()
+                text = str(ev.get("text") or "") or getattr(self, "_pbuf", "")
+                self._pbuf, self._text_open = "", False
+                self._md = R.MdState()
+                if text.strip():
+                    self._held = text                   # written when the turn goes on without a review round
         elif t == "assistant":
             if not ev.get("streamed") and ev.get("text"):
                 if self.interactive:

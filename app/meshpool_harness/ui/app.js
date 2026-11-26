@@ -1293,11 +1293,18 @@ function drainQ(cur, all) {
 // A line meant to end the reply ("Checked: ...", agent/look.py) joins the reply's own log entry, as it does in the
 // saved history, so the reply reads the same live, after a reload, in a copy and in an export.
 function logEv(cur, ev) {
+  if (ev.type === "review_round") {                  // the reply above was a first answer: not the one to copy or join
+    for (let i = cur.log.length - 1; i >= 0; i--) {
+      const e = cur.log[i];
+      if (e.type === "user" && !e.steer) break;
+      if (e.type === "assistant" && (e.text || "").trim()) { e.folded = true; break; }
+    }
+  }
   if (ev.type === "assistant" && ev.append) {
     for (let i = cur.log.length - 1; i >= 0; i--) {
       const e = cur.log[i];
       if (e.type === "user" && !e.steer) break;
-      if (e.type === "assistant" && (e.text || "").trim()) { e.text = e.text.replace(/\s+$/, "") + "\n\n" + ev.text; ev.merged = true; break; }
+      if (e.type === "assistant" && !e.folded && (e.text || "").trim()) { e.text = e.text.replace(/\s+$/, "") + "\n\n" + ev.text; ev.merged = true; break; }
     }
   }
   if (!ev.merged) cur.log.push(ev);
@@ -1587,6 +1594,11 @@ function applyEv(ev) {
     try { console.warn("meshpool: could not show an item", ev && ev.type, e); const d = document.createElement("div"); d.className = "note"; d.textContent = "Could not show this item."; colEl().appendChild(d); } catch (_) {}
   }
 }
+// "Looking at the result..." must not stay in the thread when no Checked line follows (an error, a stop, a turn that ends)
+function endLook(cur, why) {
+  const n = cur.lookEl; cur.lookEl = null; if (!n) return;
+  if (why) n.textContent = "Could not finish the check: " + why; else n.remove();
+}
 function applyEvRaw(ev) {
   const cur = S.cur, col = colEl();
   const add = (html, cls) => { const d = document.createElement("div"); if (cls) d.className = cls; if (cls === "msg-ai" || cls === "msg-user") d.dir = "auto"; d.innerHTML = html; col.appendChild(d); return d; };
@@ -1624,6 +1636,13 @@ function applyEvRaw(ev) {
       else if (txt) { closeGroup(); cur.lastAi = add("", "msg-ai"); mdRender(cur.lastAi, txt); } }
       cur.lastText = stripGoal(ev.text || "") || cur.lastText;
       break;
+    case "review_round": {                               // the reply above was written before the check: fold it away
+      const el = cur.lastAi;
+      if (el && el.isConnected && !el.closest("details")) {
+        const d = document.createElement("details"); d.className = "notedet";
+        d.innerHTML = `<summary>First answer, before the check</summary>`; el.replaceWith(d); d.appendChild(el);
+      }
+      cur.lastAi = null; cur.lastText = ""; break; }
     case "tool_start": {
       clearRetry();
       const g = workGroup();
@@ -1743,8 +1762,9 @@ function applyEvRaw(ev) {
         if (cur.gateEl) cur.gateEl.innerHTML = esc(t); else cur.gateEl = add(esc(t), "note gate");
       } else if (cur.gateEl) { cur.gateEl.remove(); cur.gateEl = null; }
       break; }
-    case "error": { closeGroup(); const n = add(esc(ev.text) + (/settings/i.test(ev.text || "") ? ` <button class="linkbtn" data-os="1">Open Settings</button>` : "") + ` <button class="linkbtn" data-rp="1" title="Opens a GitHub issue with this error, your version and system. Your chat is not included.">Report this</button>`, "note bad"); $("[data-os]", n)?.addEventListener("click", () => openSettings("general")); $("[data-rp]", n)?.addEventListener("click", () => reportProblem(ev.text)); break; }
+    case "error": { endLook(cur, String(ev.text || "").split("\n")[0].slice(0, 120)); closeGroup(); const n = add(esc(ev.text) + (/settings/i.test(ev.text || "") ? ` <button class="linkbtn" data-os="1">Open Settings</button>` : "") + ` <button class="linkbtn" data-rp="1" title="Opens a GitHub issue with this error, your version and system. Your chat is not included.">Report this</button>`, "note bad"); $("[data-os]", n)?.addEventListener("click", () => openSettings("general")); $("[data-rp]", n)?.addEventListener("click", () => reportProblem(ev.text)); break; }
     case "interrupted": {
+      endLook(cur, "it was stopped");
       cur.gateEl?.remove(); cur.gateEl = null; cur.down = false; cur.downEl = null;
       settleSteps("stopped"); closeGroup();
       const n = add(esc(ev.text) + (ev.restarted ? ` <button class="linkbtn" data-cont="1">Continue</button>` : "") + (ev.resend ? ` <button class="linkbtn" data-resend="1">Put it back in the message box</button>` : ""), "note warn");
@@ -1758,6 +1778,7 @@ function applyEvRaw(ev) {
       if (t && cur.lastFoot && nf && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; safe(() => pvTurnCards(cur, cur.lastFoot, t.n)); cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${nf} file${nf === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }
       break; }
     case "turn_end": {
+      endLook(cur, "");
       cur.gateEl?.remove(); cur.gateEl = null; cur.jobStage = ""; cur.down = false; cur.downEl = null;
       settleSteps("");
       closeGroup();
