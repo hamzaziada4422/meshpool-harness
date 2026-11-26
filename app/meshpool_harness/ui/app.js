@@ -3320,7 +3320,7 @@ async function restartApp(bootBefore) {
   document.addEventListener("click", e => {          // the buttons that appear on hover under a message of yours
     const ma = e.target.closest("[data-ma]"); if (!ma || !ma.closest(".msg-user")) return;   // the MCP library's Add button also has data-ma
     const text = userText(ma.closest(".msg-user"));
-    if (ma.dataset.ma === "copy") navigator.clipboard.writeText(text).then(() => toast("Copied"), () => toast("Could not copy."));
+    if (ma.dataset.ma === "copy") navigator.clipboard.writeText(splitAtt(text).text)   // your words, not the files note.then(() => toast("Copied"), () => toast("Could not copy."));
     else if (ma.dataset.ma === "rewind" || ma.dataset.ma === "fork") rewindFork(ma.dataset.ma, ma.closest(".msg-user"));
     else { const i = $("#input"); i.value = text; i.focus(); i.dispatchEvent(new Event("input")); toast("Edit it and send to ask again.", 3500); }
   });

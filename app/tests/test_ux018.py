@@ -564,15 +564,17 @@ def test_a_turn_that_failed_offers_try_again_but_no_thumbs(page):
 def test_attached_files_show_as_chips_and_the_chats_folder_by_name(page):
     """UX-20: the note the server adds for the agent, "Attached files (in this chat's folder): a.csv", showed inside the
     user's own bubble, and a chat's private folder showed by its id (b3c8e781c617) in the Progress panel. The names
-    are file chips now, Copy and Edit give back what the user typed, and the folder reads "This chat's folder"."""
+    are file chips now, Copy gives back what the user typed (Edit gets the files back as chips, SR-07), and the folder
+    reads by the chat's name, "<title> (this chat's own folder)" (WF-H)."""
     _fake_chat(page)
     got = page.evaluate("""() => { S.cur.view.scratch = true; S.cur.view.workdir = '/tmp/x/chats/b3c8e781c617';
         applyEv({type: 'user', text: "Chart this\\n\\nAttached files (in this chat's folder): sales.csv, notes.pdf", i: 0});
         const mu = document.querySelector('#col .msg-user');
-        return {bubble: mu.querySelector('.b').textContent, chips: [...mu.querySelectorAll('.att-chip')].map(c => c.textContent), copy: userText(mu), folder: folderLabel()}; }""")
+        S.cur.view.title = 'Sales chart';
+        return {bubble: mu.querySelector('.b').textContent, chips: [...mu.querySelectorAll('.att .flink')].map(c => c.textContent), copy: splitAtt(userText(mu)).text, folder: rootLabel()}; }""")
     assert "Attached files" not in got["bubble"], got
     assert got["chips"] == ["sales.csv", "notes.pdf"] and got["copy"] == "Chart this", got
-    assert "b3c8" not in got["folder"] and "folder" in got["folder"], got
+    assert "b3c8" not in got["folder"] and "Sales chart" in got["folder"] and "folder" in got["folder"], got
     assert page.errors == [], page.errors
 
 
