@@ -1,0 +1,71 @@
+From 25acaee2e77bea51c023c9323127644723152f8d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 16:51:52 +0000
+Subject: [PATCH] Formula check: the cell the request calls wrong, handed back
+ unchanged while other formulas changed, is a miss
+
+sb9 (db824eaa) sb-56921 r4: the request says the formula in C15 gives a wrong result; the run changed only C16 and
+kept C15 as it was, so the check (which judges only changed formulas) said nothing. When the request says its
+formula is wrong, names the cell, and the turn changed formulas but no workbook it wrote changed that cell, the job
+goes back once. A scratch copy left as it was is not a miss when the output fixed the cell.
+
+Replayed on 334 saved SpreadsheetBench runs (246 passed, 88 failed), the whole formula check now fires on 10
+failures and on no passing run (an earlier draft flagged a passing run's probe.xlsx); median 0.009 s per answer.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pf4xaMqQSJYs9jXfPpQcsK
+---
+ app/meshpool_harness/agent/core.py     | 15 +++++++++++++++
+ app/tests/test_formula_result_check.py | 13 +++++++++++++
+ 2 files changed, 28 insertions(+)
+
+diff --git a/app/meshpool_harness/agent/core.py b/app/meshpool_harness/agent/core.py
+index 83d60cc7..5fef6861 100644
+--- a/app/meshpool_harness/agent/core.py
++++ b/app/meshpool_harness/agent/core.py
+@@ -1426,6 +1426,21 @@ def _formula_result_miss(asked: str, root, since: float) -> str:
+                 changed.append((f, fo))
+         if not changed:
+             return ""
++        # the turn changed formulas but kept the one the request names as wrong (sb9 sb-56921 r4: it changed only C16
++        # and handed back C15, the cell the request called wrong, as it was)
++        named = {c.upper() for c in re.findall(r"\b([A-Za-z]{1,3}[1-9]\d{0,6})\b", text)} if says_wrong else set()
++        kept = []
++        for f, fo in changed:
++            if not named:
++                break
++            kept += [f"{f.name} {k[0]}!{k[1]}" for k, v in fo.items() if k[1] in named and k in old_forms
++                     and old_forms[k].replace(" ", "") == v.replace(" ", "")]
++        fixed = {k[1] for _, fo in changed for k, v in fo.items() if k[1] in named and k in old_forms
++                 and old_forms[k].replace(" ", "") != v.replace(" ", "")}
++        kept = [x for x in kept if x.rsplit("!", 1)[1] not in fixed]   # a scratch copy left as it was is no miss
++        if kept:                                                       # when another file this turn fixed the cell
++            return ("The job is not done: the formula the user says is wrong is still the same (" + "; ".join(kept[:4]) +
++                    "). Change it so it computes what the request asks, save and check the recalculated value.")
+         deadline = time.time() + 60                       # the whole check, however many workbooks: one minute
+         with tempfile.TemporaryDirectory() as tmp:
+             base = {}
+diff --git a/app/tests/test_formula_result_check.py b/app/tests/test_formula_result_check.py
+index f0768aae..211ea983 100644
+--- a/app/tests/test_formula_result_check.py
++++ b/app/tests/test_formula_result_check.py
+@@ -65,3 +65,16 @@ def test_no_libreoffice_run_when_no_formula_changed(tmp_path, monkeypatch):
+     real = C._recalc_formulas
+     monkeypatch.setattr(C, "_recalc_formulas", lambda *a, **k: calls.append(a) or real(*a, **k))
+     assert _turn(tmp_path, OLD) == "" and calls == []
++
++
++def test_the_named_wrong_formula_left_as_it_was_is_caught(tmp_path):
++    _book(tmp_path / "in.xlsx", OLD)
++    os.utime(tmp_path / "in.xlsx", (1, 1))
++    t0 = time.time() - 1
++    _book(tmp_path / "out.xlsx", OLD)
++    wb = openpyxl.load_workbook(tmp_path / "out.xlsx")
++    wb.active["C16"] = GOOD.replace("B15", "B16")           # a different cell changed; C15 kept
++    wb.save(tmp_path / "out.xlsx")
++    C._recent_office.__dict__.pop("cache", None)
++    msg = C._formula_result_miss(ASK, tmp_path, t0)
++    assert "still the same" in msg and "C15" in msg
+-- 
+2.43.0
+

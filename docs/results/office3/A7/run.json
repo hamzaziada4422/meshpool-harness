@@ -1,0 +1,45 @@
+{
+ "date": "2026-11-24T21:22:54+00:00",
+ "model": "deepseek-v4.1-flash",
+ "prices": {
+  "gpt-6-luna": {
+   "in": 0.1,
+   "cached": 0.01,
+   "out": 0.5
+  },
+  "deepseek-v4.1-flash": {
+   "in": 0.33,
+   "cached": 0.0066,
+   "out": 1.32
+  }
+ },
+ "price_used": {
+  "in": 0.33,
+  "cached": 0.0066,
+  "out": 1.32
+ },
+ "upstream": "https://llm.meshpool.ai/v1",
+ "budget_usd": 1.0,
+ "reps": 2,
+ "tasks": [
+  "xlsx_edit",
+  "docx_tracked",
+  "invoices_fx",
+  "docx_mailmerge",
+  "xlsx_budget",
+  "pptx_chart",
+  "pdf_report"
+ ],
+ "arms": [
+  "codex",
+  "mp-work"
+ ],
+ "versions": {
+  "codex": "codex-cli 0.171.0",
+  "pi": "unavailable ([Errno 2] No such file or directory: 'pi')",
+  "meshpool_src": "<worktree>/app",
+  "meshpool_git": "aaabcc3310927b09c4cce01d3ba9915199f5b0c5",
+  "python": "/usr/local/bin/python3"
+ },
+ "meter": "testkit/loop/small_meter.py (no reasoning-token field; reasoning is reported as null)"
+}

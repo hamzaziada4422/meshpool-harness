@@ -1,0 +1,52 @@
+{
+ "run": "broad1",
+ "commit": "9d011d0e",
+ "meshpool_commit": "9d011d0e",
+ "codex": "codex-cli 0.171.0",
+ "model": "deepseek-v4.1-flash",
+ "gateway": "llm.meshpool.ai (one metering proxy for both arms)",
+ "price_table_usd_per_1M": {
+  "in": 0.15,
+  "cached": 0.003,
+  "out": 0.6
+ },
+ "suite": [
+  "build",
+  "dabench",
+  "debug",
+  "deep",
+  "hard",
+  "swe_sympy",
+  "v2_dev"
+ ],
+ "plan": "every task x (core, codex) x reps 0,1; one attempt per (task, arm, rep), no reruns",
+ "parallel": 3,
+ "timeout_s": 900,
+ "budget_cap_usd": 2.5,
+ "runs_per_arm": {
+  "codex": 172,
+  "core": 172
+ },
+ "requests": 3486,
+ "request_status_by_arm": {
+  "codex:200": 1467,
+  "core:200": 1675,
+  "core:404": 344
+ },
+ "results_written_at_utc": "2026-11-24T18:16:50Z",
+ "isolation": [
+  "private tmpfs /tmp and /root/work per run (mount namespace)",
+  "other worktrees, the task suites, hidden tests, the main checkout and session transcripts hidden by tmpfs",
+  "task JSON passed through a file deleted at start, never on a command line"
+ ],
+ "cost_formula": "usd = (prompt - cached) * in + cached * cached_price + completion * out, per request, summed per run",
+ "counting": {
+  "failed_requests": "a gateway error (e.g. 503) is a request with status != 200 and no tokens: it costs $0 but its seconds count in the run's time; the proxy retries upstream errors and records retries",
+  "budget_cap": "the driver stops scheduling new runs once the summed usd reaches the cap; runs already started finish; unstarted runs are missing for both arms of that task and the task is excluded from paired stats",
+  "timeouts": "a run past the timeout is killed and counted as failed (pass=false, why=timeout) with secs = the timeout",
+  "step_cap": "the bench caps the Meshpool arms at 60 tool steps (MH_BENCH_MAX_STEPS); the Codex arm has no step cap, only the wall timeout",
+  "non_model_requests": "status 404 rows from core are model-metadata lookups (no tokens, no cost)",
+  "cache_key": "in this run Meshpool sent no prompt_cache_key (the meter's 127.0.0.1 address is not a host it sends cache hints to); Codex always sends one. broad2 repeats swe_sympy with the hint on, as against llm.meshpool.ai"
+ },
+ "swe": "per-task shallow repositories holding only the issue's base commit (no future history)"
+}
