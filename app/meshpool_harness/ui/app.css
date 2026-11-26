@@ -449,7 +449,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .btn.danger{color:var(--del);border-color:color-mix(in srgb,var(--del) 40%,var(--line-3))}
 .btn.danger:hover{background:var(--del-bg)}
 .btn:disabled{opacity:.45;cursor:not-allowed}
-.btn:has(>svg){display:inline-flex;align-items:center;justify-content:center;gap:8px}   /* an icon in a button sits on the text line */
+.btn>svg{vertical-align:-3px}   /* an icon in a button sits on the text line (no :has(), which costs style work on every change) */
 .linkbtn{border:0;background:none;color:var(--ink-2);padding:4px;text-decoration:underline;text-underline-offset:3px;font-size:var(--fs-s)}
 .bigbtn{background:var(--ink);color:var(--bg);border:0;border-radius:var(--r-m);padding:8px 20px;font-weight:500}
 .bigbtn:hover{background:var(--ink-2)}
