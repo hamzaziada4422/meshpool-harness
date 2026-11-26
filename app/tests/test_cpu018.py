@@ -118,3 +118,57 @@ def test_cpu02_model_hints_are_not_reread_per_request(home, monkeypatch):
     os.utime(hints, (OLD + 60, OLD + 60))
     assert MC.resolve(base, "acme-1").efforts == ("medium",)
     MC.reset()
+
+
+# ---------------------------------------------------------------------------------------------------- CPU-03
+def test_cpu03_trust_check_reads_no_file_per_chat_poll(home, tmp_path, monkeypatch):
+    from meshpool_harness import trust as TR
+    from meshpool_harness.ui import agent_api as A
+    monkeypatch.delenv("MH_TRUST_PROJECT", raising=False)
+    proj = tmp_path / "proj"
+    (proj / ".meshpool").mkdir(parents=True)
+    (proj / ".meshpool" / "hooks.json").write_text(json.dumps({"PreToolUse": [{"command": "echo hi"}]}))
+    (proj / ".mcp.json").write_text(json.dumps({"mcpServers": {"x": {"command": "x"}}}))
+    (home / "trusted_projects.json").write_text(json.dumps([str(tmp_path / "elsewhere")]))
+    (home / "trusted-folders.json").write_text(json.dumps({"folders": {str(tmp_path / "other"): {"at": 1}}}))
+    _age(proj / ".meshpool" / "hooks.json", proj / ".mcp.json", home / "trusted_projects.json",
+         home / "trusted-folders.json")
+    first = A._trust_note(str(proj))
+    assert first and first["files"] == [".meshpool/hooks.json", ".mcp.json"]
+    box = count_opens(monkeypatch, lambda p: p.endswith(".json"))
+    for _ in range(25):                                # the page polls the chat view every 0.4 to 4 s
+        assert A._trust_note(str(proj)) == first
+        assert TR.is_trusted(proj) is False
+    assert box["n"] == 0, f"{box['n']} JSON reads for 25 polls: {sorted(set(box['paths']))}"
+    TR.trust(proj)                                     # trusting the folder is seen at once
+    assert A._trust_note(str(proj)) is None
+    assert TR.is_trusted(proj / "sub") is True
+
+
+# ---------------------------------------------------------------------------------------------------- CPU-04
+def test_cpu04_hooks_files_are_not_reread_per_tool_call(home, tmp_path, monkeypatch):
+    from meshpool_harness import trust as TR
+    from meshpool_harness.agent import extras as EX
+    proj = tmp_path / "proj"
+    (proj / ".meshpool").mkdir(parents=True)
+    (proj / ".meshpool" / "hooks.json").write_text(json.dumps({"PostToolUse": [{"command": "true", "matcher": "zz"}]}))
+    (home / "hooks.json").write_text(json.dumps({"PreToolUse": [{"command": "true", "matcher": "zz"}]}))
+    (home / "plugin-hooks").mkdir()
+    (home / "plugin-hooks" / "p.json").write_text(json.dumps({"Stop": [{"command": "true"}]}))
+    TR.trust(proj)
+    for f in (proj / ".meshpool" / "hooks.json", home / "hooks.json", home / "plugin-hooks" / "p.json",
+              home / "trusted-folders.json"):
+        _age(f)
+    EX.hooks(proj)
+    box = count_opens(monkeypatch, lambda p: p.endswith(".json"))
+    for _ in range(10):                                # a ten-call turn: hooks before and after each call
+        EX.run_hooks_full(proj, "PreToolUse", {}, tool="read_file", args={"path": "a"})
+        EX.run_hooks_full(proj, "PostToolUse", {}, tool="read_file", args={"path": "a"})
+    assert box["n"] == 0, f"{box['n']} hook file reads in a ten-call turn"
+    hs = EX.hooks(proj)
+    assert [h["command"] for h in hs["PreToolUse"]] == ["true"] and len(hs["PostToolUse"]) == 1 and hs["Stop"]
+    hs["PreToolUse"][0]["command"] = "changed"         # one caller's change is not the next caller's hooks
+    assert EX.hooks(proj)["PreToolUse"][0]["command"] == "true"
+    (home / "hooks.json").write_text(json.dumps({"PreToolUse": [{"command": "echo new"}]}))
+    os.utime(home / "hooks.json", (OLD + 60, OLD + 60))
+    assert [h["command"] for h in EX.hooks(proj)["PreToolUse"]] == ["echo new"]

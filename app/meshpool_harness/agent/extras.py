@@ -265,18 +265,29 @@ def hooks(root: Path) -> dict:
     # <home>/hooks.json and the hooks of plugins the user installed are global; a project's own file needs its trust
     files = ([C.home() / "hooks.json"] + sorted((C.home() / "plugin-hooks").glob("*.json"))
              + ([Path(root) / ".meshpool" / "hooks.json"] if project_trusted(root) else []))
+    # Asked before and after every tool call: each file's parse is kept while the file is unchanged
+    from meshpool_harness import fsio
     for f in files:
-        try:
-            d = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(d, dict):
-            continue
-        for e in EVENTS:
-            for h in (d.get(e) or []):
-                if isinstance(h, dict) and isinstance(h.get("command"), str) and \
-                        (h.get("args") is None or isinstance(h.get("args"), list)):
-                    out[e].append(h)
+        for e, hs in fsio.parse_cached(f, _hook_file, "hooks", missing={}).items():
+            out[e] += [dict(h) for h in hs]
+    return out
+
+
+def _hook_file(raw: bytes) -> dict:
+    """{event: [hook, ...]} of one hooks file; {} when it is not a JSON object."""
+    try:
+        d = json.loads(raw.decode("utf-8"))
+    except ValueError:
+        return {}
+    if not isinstance(d, dict):
+        return {}
+    out: dict = {}
+    for e in EVENTS:
+        rows = d.get(e) or []
+        for h in (rows if isinstance(rows, list) else []):
+            if isinstance(h, dict) and isinstance(h.get("command"), str) and \
+                    (h.get("args") is None or isinstance(h.get("args"), list)):
+                out.setdefault(e, []).append(h)
     return out
 
 
