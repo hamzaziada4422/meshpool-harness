@@ -42,7 +42,7 @@ Step 2. Become that person. Do not judge as a designer or a developer. Ask: can 
 Rules:
 - Judge only from what you are given. If you cannot tell something, say so in a problem. Do not invent things you did not see.
 - The request's own choices win. If it says something is a placeholder or does nothing yet, that is not a problem.
-- Write each problem in the words of the person: short and concrete. Say where it is (a section, a button, a page).
+- Write each problem as a short phrase that names what is wrong, in the words of the person, such as "no way to pick a delivery date" or "the order form shows an error after a valid email". Say where it is (a section, a button, a page).
 - severity: "blocker" means I cannot do what I came to do. "major" means I can, but it is confusing, broken or wrong. "minor" means it is rough or unfinished but does not stop me.
 - "pass" is true only when you can do the job and there is no blocker or major problem.
 - Answer with one JSON object and nothing else."""

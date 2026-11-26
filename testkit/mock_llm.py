@@ -54,8 +54,8 @@ def plan(messages, tools):
             return ("text", json.dumps({"persona": who, "actions": [{"do": "click", "target": "Order now", "width": "phone"}]
                                         if "bakery" in lt else []}))
         broken = "sideways" in lt or "initgallery" in lt or "did not work" in lt
-        probs = ([{"what": "the page scrolls sideways on my phone", "where": "the banner", "severity": "blocker"},
-                  {"what": "a script error shows where the gallery should be", "where": "gallery", "severity": "major"}]
+        probs = ([{"what": "sideways scrolling on the phone", "where": "the banner", "severity": "blocker"},
+                  {"what": "a script error in place of the gallery", "where": "gallery", "severity": "major"}]
                  if broken else [])
         return ("text", json.dumps({"persona": who, "can_do_the_job": not broken, "problems": probs, "pass": not broken}))
 

@@ -462,7 +462,7 @@ def test_mock_server_full_loop_with_the_independent_reviewer(proj, mock_server):
     final = a.send("landing page demo: " + ASK)
     assert "initGallery" not in (proj / "index.html").read_text()
     assert len(reviews(a)) == 1 and PERSONA in text_of(reviews(a)[0])
-    assert "Checked: " + PERSONA + " tried it; fixed the page scrolls sideways" in final, final
+    assert "Checked: " + PERSONA + " tried it; fixed sideways scrolling on the phone" in final, final
     sent = [json.loads(x) for x in log.read_text().splitlines()]
     reviewer = [r for r in sent if r["n_tools"] == 0 and r["n_msgs"] == 2]          # no tools, one system and one user message
     assert len(reviewer) == 3 and len(sent) >= 5
