@@ -537,13 +537,48 @@ def patch_from_shell(argv):
     script = shell_script(argv)
     m = _HEREDOC.match(script)
     if not m:
-        return None
+        q = _quoted_patch(script)
+        return (q[0], q[1]) if q and not q[2] else None
     cd = (m.group("cd") or "").strip("'\"") or None
     return m.group("body"), cd
 
 
 _PATCH_HEAD = re.compile(r"\A\s*(?:cd\s+(?P<cd>'[^']*'|\"[^\"]*\"|[^\s&;|<>]+)\s*&&\s*)?(?:apply_patch|applypatch)\s*"
                          r"<<-?\s*(?P<q>['\"]?)(?P<tag>\w+)(?P=q)(?P<inline>[^\n]*)\n")
+
+
+_PATCH_QUOTED = re.compile(r"\A\s*(?:cd\s+(?P<cd>'[^']*'|\"[^\"]*\"|[^\s&;|<>]+)\s*&&\s*)?(?:apply_patch|applypatch)\s+(?=[\"'])")
+
+
+def _quoted_patch(script):
+    """(patch, working folder or None, what follows the argument) for `[cd dir &&] apply_patch "*** Begin Patch ..."`: the
+    patch as one quoted argument, the form models use when they have no heredoc (Omar, 0.0.19: it ran as a command and
+    failed with "apply_patch: command not found"). None when it is not that form: the argument is not a patch, or it is
+    not closed."""
+    import shlex
+    m = _PATCH_QUOTED.match(script or "")
+    if not m:
+        return None
+    i, n = m.end(), len(script)
+    q = script[i]
+    j = i + 1
+    while j < n:
+        if script[j] == "\\" and q == '"':
+            j += 2
+            continue
+        if script[j] == q:
+            break
+        j += 1
+    if j >= n:
+        return None
+    try:
+        body = shlex.split(script[i:j + 1], posix=True)[0]
+    except ValueError:
+        return None
+    if not body.lstrip().startswith("*** Begin Patch"):
+        return None
+    cd = (m.group("cd") or "").strip("'\"") or None
+    return body, cd, script[j + 1:]
 
 
 def split_patch_script(argv):
@@ -555,7 +590,17 @@ def split_patch_script(argv):
     script = argv if isinstance(argv, str) else shell_script(argv)
     m = _PATCH_HEAD.match(script or "")
     if not m:
-        return None
+        q = _quoted_patch(script)
+        if not q or not q[2].strip():
+            return None
+        mm = re.match(r"\s*(&&|;|\n)\s*(.*)\Z", q[2], re.S)
+        if not mm or not mm.group(2).strip():
+            return None                                 # a pipe or a redirect after the argument: one command
+        rest = mm.group(2).strip()
+        if q[1]:
+            import shlex
+            rest = f"cd {shlex.quote(q[1])} && {rest}"
+        return q[0], q[1], rest, mm.group(1) == "&&"
     tag, lines = m.group("tag"), script[m.end():].split("\n")
     end = next((i for i, ln in enumerate(lines) if ln.strip() == tag), None)
     if end is None:
