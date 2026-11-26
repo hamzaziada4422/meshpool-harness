@@ -202,3 +202,37 @@ def test_cpu05_sidebar_refresh_reads_no_project_files(home, tmp_path, monkeypatc
     assert box["n"] == 0, f"{box['n']} project file reads for 10 sidebar refreshes"
     PS.delete(pids[0])
     assert pids[0] not in A._project_info()[1]
+
+
+# ---------------------------------------------------------------------------------------------------- CPU-06
+def test_cpu06_pdf_preview_opens_the_pdf_once_per_new_page(home, tmp_path, monkeypatch):
+    import pypdfium2 as pdfium
+
+    from meshpool_harness.ui import previews as P
+    from meshpool_harness.ui import workbench as W
+    root = tmp_path / "proj"
+    root.mkdir()
+    monkeypatch.setattr(W, "known_roots", lambda: [root])
+    doc = pdfium.PdfDocument.new()
+    for _ in range(8):
+        doc.new_page(400, 300)
+    doc.save(str(root / "r.pdf"))
+    doc.close()
+    opened = [0]
+    real = pdfium.PdfDocument
+
+    class Counting(real):
+        def __init__(self, *a, **k):
+            opened[0] += 1
+            super().__init__(*a, **k)
+    monkeypatch.setattr(pdfium, "PdfDocument", Counting)
+    assert P.meta(str(root), "r.pdf")["pages"] == 8
+    opened[0] = 0
+    for i in range(8):                                 # the page strip asks for every page
+        assert P.page_png(str(root), "r.pdf", i, 300).startswith(b"\x89PNG")
+    assert opened[0] == 8, f"{opened[0]} PDF opens to draw 8 pages"
+    for i in range(8):                                 # shown again: every page is in the PNG cache
+        P.page_png(str(root), "r.pdf", i, 300)
+    assert opened[0] == 8, f"{opened[0] - 8} PDF opens to show 8 cached pages"
+    with pytest.raises(ValueError):
+        P.page_png(str(root), "r.pdf", 8, 300)

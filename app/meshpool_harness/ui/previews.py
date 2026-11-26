@@ -105,6 +105,20 @@ def resolve(root: str, rel: str) -> Path:
 
 
 # ------------------------------------------------------------------ PDF pages
+_PAGES: dict = {}               # cache key -> page count: the strip asks for every page, and each ask opened the PDF
+
+
+def _page_count(pdf: Path, key: str) -> int:
+    """_pdf_pages, kept per cache key (path, modified time and size, or a converted PDF that never changes)."""
+    n = _PAGES.get(key)
+    if n is None:
+        n = _pdf_pages(pdf)
+        if len(_PAGES) > 500:
+            _PAGES.clear()
+        _PAGES[key] = n
+    return n
+
+
 def _pdf_pages(pdf: Path) -> int:
     import pypdfium2 as pdfium
     with _PDFIUM:
@@ -297,7 +311,7 @@ def meta(root: str, rel: str) -> dict:
             "kind": k}
     if k == "pdf":
         try:
-            n = _pdf_pages(p)
+            n = _page_count(p, _key(p))
         except Exception:  # noqa: BLE001
             raise ValueError("This PDF is damaged or protected, so it cannot be previewed here. Open it in its app.") from None
         return base | {"kind": "pages", "state": "ready", "pages": min(n, MAX_PAGES), "total": n}
@@ -349,19 +363,19 @@ def page_png(root: str, rel: str, page: int, width: int = MAX_WIDTH) -> bytes:
         pdf = _dir() / key / "doc.pdf"
     else:
         raise ValueError("This file has no pages.")
-    total = _pdf_pages(pdf)
-    if not 0 <= page < min(total, MAX_PAGES):
-        raise ValueError("No such page.")
     width = max(MIN_WIDTH, min(MAX_WIDTH, width))
     d = _dir() / key
-    d.mkdir(parents=True, exist_ok=True)
     f = d / f"p{page}_{width}.png"
-    if f.exists():
+    if 0 <= page < MAX_PAGES and f.exists():       # rendered before from this very file: no need to open the PDF
         try:
             f.touch()
             return f.read_bytes()
         except OSError:
             pass
+    total = _page_count(pdf, key)
+    if not 0 <= page < min(total, MAX_PAGES):
+        raise ValueError("No such page.")
+    d.mkdir(parents=True, exist_ok=True)
     data = _render(pdf, page, width)
     tmp = f.with_suffix(".tmp")
     tmp.write_bytes(data)
