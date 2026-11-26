@@ -8,12 +8,17 @@
 const SET_NAV = [
   [["account", "Account", "user", ["profile"]], ["billing", "Billing", "card", ["billing"]], ["usage", "Usage", "bolt", ["usage"]]],
   [["appearance", "Appearance", "palette", ["appearance"]], ["personal", "Your Meshpool", "brain", ["personal", "styles", "import"]], ["caps", "Capabilities", "tool", ["caps", "suggest", "web"]],
-   ["notify", "Notifications", "bell", ["notify"]], ["privacy", "Privacy", "shield", ["data", "permissions"]]],
+   ["notify", "Notifications", "bell", ["notify"]], ["permissions", "Permissions", "lock", ["permissions"]], ["privacy", "Privacy", "shield", ["data"]]],
   [["plugins", "Plugins", "plug", ["connectors", "skills", "plugins", "mcp", "office"]], ["code", "Code", "codebr", ["terminal", "advanced"]]],
   [["models", "Models and providers", "cpu", ["general", "models", "harnesses"]], ["scheduled", "Scheduled tasks", "clock", ["scheduled"]],
    ["company", "Company and brand", "stack", ["company"]], ["about", "About and updates", "help", ["about"]]],
 ];
 const SET_GROUPS = SET_NAV.flat().map(([k, lb, , subs]) => [k, lb, subs]);       // kept for company.js and old callers
+// Words people search for that are not in a page's name (persona runs, 0.0.18: "approval", "ask before" and "folder"
+// found nothing, and Permissions was a tab inside Privacy).
+const SET_WORDS = {permissions: "approvals approve approval ask asking ask before prompts questions allow deny rules folders folder access sandbox commands run without asking",
+  privacy: "data delete export history incognito", models: "model provider endpoint key api", notify: "alerts sounds",
+  personal: "memory instructions custom style", plugins: "connectors mcp tools skills office excel word powerpoint add-in", caps: "features web search browser computer"};
 const SET_NAMES = {profile: "Profile", appearance: "Appearance", notify: "Notifications", suggest: "Suggestions", caps: "Features", personal: "Instructions and memory", styles: "Styles", web: "Web search",
   connectors: "Directory", skills: "Skills", plugins: "Plugins", mcp: "Custom tools", general: "Connection", models: "Models", harnesses: "Agents",
   usage: "Usage", billing: "Plan and billing", permissions: "Permissions", data: "Your data", import: "Import chats",
@@ -40,7 +45,7 @@ function openSettings(sec = "profile") {
   if (!SECTIONS.some(x => x[0] === sec)) sec = groupOfSection(sec)[2].find(k => SECTIONS.some(x => x[0] === k)) || "profile";     // a group id (#settings/privacy) opens its first page
   const g0 = groupOfSection(sec);
   const sc = document.createElement("div"); sc.className = "scrim";
-  const item = ([k, lb, ic, subs]) => `<button data-g="${k}" data-first="${subs[0]}" data-l="${esc((lb + " " + subs.map(setName).join(" ")).toLowerCase())}" aria-selected="${k === g0[0]}">${ICON[ic] || ""}<span>${lb}</span></button>`;
+  const item = ([k, lb, ic, subs]) => `<button data-g="${k}" data-first="${subs[0]}" data-l="${esc((lb + " " + subs.map(setName).join(" ") + " " + (SET_WORDS[k] || "")).toLowerCase())}" aria-selected="${k === g0[0]}">${ICON[ic] || ""}<span>${lb}</span></button>`;
   sc.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-label="Settings"><header class="mhead2"><h2 id="mtitle">Settings</h2><button class="iconbtn mx" aria-label="Close settings">${ICON.x}</button></header>
     <nav class="mnav" aria-label="Settings sections"><label class="msearch">${ICON.search}<input id="mnavq" placeholder="Search" aria-label="Search settings" autocomplete="off" spellcheck="false"></label>
       ${SET_NAV.map(grp => `<div class="mgrp">${grp.map(item).join("")}</div>`).join("")}

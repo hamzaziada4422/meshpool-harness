@@ -659,6 +659,55 @@ def _patch_files(patch: str) -> list:
     return list(dict.fromkeys(x.strip() for x in out if x and x.strip()))
 
 
+_FILE_WORD = re.compile(r"[\w.()~-]+\.(?:pdf|docx?|xlsx?|xlsm|csv|tsv|pptx?|txt|md|json|png|jpe?g|html?|py|ipynb|zip)\b",
+                        re.I)
+_READERS = {"cat", "head", "tail", "less", "more", "wc", "file", "pdftotext", "pdfinfo", "grep", "rg", "sed", "awk",
+            "strings", "xxd", "od", "stat", "ls", "find", "tree", "du", "unzip", "zipinfo", "jq", "sort", "uniq", "cut"}
+_PROGRAMS = {"python": "Python", "python3": "Python", "node": "JavaScript", "Rscript": "R", "ruby": "Ruby",
+             "perl": "Perl", "soffice": "LibreOffice", "libreoffice": "LibreOffice", "pandoc": "Pandoc"}
+
+
+def _plain_command_title(script: str) -> str:
+    """What a command does, in words a person can judge, for the approval card (persona runs, 0.0.18: every card was
+    a raw `D=/tmp/...; python3 -I -c "..."` line nobody could judge). The command itself stays below the title."""
+    s = str(script or "")
+    files = list(dict.fromkeys(m.group(0).rsplit("/", 1)[-1] for m in _FILE_WORD.finditer(s)))[:3]
+    on = (" on " + ", ".join(files)) if files else ""
+    words = re.findall(r"(?:^|[;&|]\s*|\bdo\s+|\bthen\s+)([A-Za-z][\w.+-]*)", s)
+    progs = [os.path.basename(w) for w in words if w not in ("cd", "export", "set", "for", "do", "done", "if", "then",
+                                                              "fi", "echo", "true", "D", "mkdir")]
+    if re.search(r"\b(?:pip3?|npm|pnpm|yarn|cargo|gem|brew|apt|apt-get|conda|uv)\s+(?:install|add|i)\b", s):
+        return "Install software from the internet? (" + s.strip().splitlines()[0][:80] + ")"
+    if re.search(r"\bgit\s+push\b", s):
+        return "Send your commits to the remote repository?"
+    if re.search(r"\bgit\s+(?:clone|fetch|pull)\b", s):
+        return "Download from a git repository?"
+    if re.search(r"\b(?:curl|wget)\b|https?://", s):
+        host = re.search(r"https?://([^/\s'\"]+)", s)
+        return "Use the internet" + (f" ({host.group(1)})" if host else "") + "?"
+    lang = next((_PROGRAMS[p] for p in progs if p in _PROGRAMS), "")
+    if lang:
+        return f"Run a {lang} step{on}?"
+    if progs and all(p in ("which", "command", "type") for p in progs):
+        return "Check which programs are installed?"
+    if "find" in progs and re.search(r"\bfind\s+(?:/|~)", s):
+        return "Search your computer's files?"
+    if progs and all(p in _READERS for p in progs):
+        return ("Read " + ", ".join(files) + "?") if files else "Look at files in this folder?"
+    # the first real step (not cd, export or VAR=...), up to three words before an option or a quoted argument
+    seg = next((x.strip() for x in re.split(r"&&|\|\||[;|\n]", s)
+                if x.strip() and not re.match(r"(?:cd|export|set)\b|[A-Za-z_]\w*=", x.strip())), "")
+    first = []
+    for w in seg.split()[:3]:
+        if w.startswith(("-", "'", '"', "$")):
+            break
+        first.append(w)
+    first = " ".join(first)
+    if first and any(f in first for f in files):
+        on = ""
+    return f"Run {first}{on}?" if first else "Run this command?"
+
+
 def _summary_of(name: str, args: dict) -> str:
     if name == "shell":
         cmd = T.shell_script(args.get("command"))
@@ -1797,6 +1846,18 @@ def _norm_text(t: str) -> str:
     """Case, spacing and curly quotes aside: the words in order."""
     t = str(t or "").replace("\u201c", '"').replace("\u201d", '"').replace("\u2018", "'").replace("\u2019", "'")
     return " ".join(t.lower().split())
+
+
+def _sandbox_auto_on() -> bool:
+    """MH_SANDBOX_AUTO (Settings, Permissions: "Ask before every command and change" sets 0), read from the
+    environment or the settings file at call time, so a change in Settings reaches open chats."""
+    v = os.environ.get("MH_SANDBOX_AUTO")
+    if v is None:
+        try:
+            v = C.read().get("MH_SANDBOX_AUTO")
+        except Exception:  # noqa: BLE001
+            v = None
+    return str(v if v is not None else "1").strip().lower() not in ("0", "off", "false", "no")
 
 
 def _pptx_orphan_slides(path) -> list:
@@ -5600,7 +5661,7 @@ class Agent:
     def _work_without_asking(self) -> bool:
         """Ordinary work in the folder runs without a question: in the sandbox, or after the user's one yes for the
         chat where there is none. MH_SANDBOX_AUTO=0 asks as before 0.0.18."""
-        if os.environ.get("MH_SANDBOX_AUTO", "1") == "0":
+        if not _sandbox_auto_on():
             return False
         return self._sandboxed() or bool(getattr(self, "_folder_ok", False))
 
@@ -5874,13 +5935,13 @@ class Agent:
         elif risky:
             kind, title, detail = "read", risky, json.dumps(args, indent=1, ensure_ascii=False)[:3000]
         elif name == "bash":
-            kind, title, detail = "bash", "Run this command?", args.get("command", "")
+            kind, title, detail = "bash", _plain_command_title(args.get("command", "")), args.get("command", "")
         elif name == "bash_start":
             kind, title, detail = "bash", "Start this in the background?", args.get("command", "")
         elif name in ("probe", "trace"):        # FL-L13: they run a command, so they ask like bash (no MCP-style title)
             kind, title, detail = "bash", f"Run this command ({name})?", str(args.get("command") or args.get("cmd") or "")
         elif name in ("shell", "exec_command"):
-            kind, title, detail = "bash", "Run this command?", _summary_of(name, args)
+            kind, title, detail = "bash", _plain_command_title(_summary_of(name, args)), _summary_of(name, args)
         elif name == "apply_patch":
             files = _patch_files(args.get("input"))
             kind, title, detail = "edit", "Apply a patch to " + (", ".join(files[:3]) + (" and more" if len(files) > 3
@@ -5894,10 +5955,14 @@ class Agent:
                 self._diff(name, args)
         else:
             tool = name.split('__', 2)[-1]
-            target = str(args.get("filename") or args.get("path") or args.get("url") or "")[:80]
+            target = str(args.get("filename") or args.get("path") or args.get("url") or "")
+            target = (target.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1] if not target.startswith("http")
+                      else target)[:80]                     # the file's name, not a temp path
             nice = {"make_document": "Make a Word document", "make_pdf": "Make a PDF", "make_spreadsheet":
                     "Build a spreadsheet", "make_deck": "Make a PowerPoint deck", "convert_document": "Convert a file",
-                    "analyze_data": "Analyse data"}.get(tool) or ("Use " + tool.replace("_", " ") + " ("
+                    "analyze_data": "Analyse data", "edit_office_file": "Change", "read_document": "Read",
+                    "add_slides": "Add slides to", "fill_template": "Fill in", "merge_decks": "Combine decks into",
+                    "check_deck": "Check", "check_workbook": "Check", "check_document": "Check"}.get(tool) or ("Use " + tool.replace("_", " ") + " ("
                                                               + (name.split('__')[1] if '__' in name else name).replace("_", " ") + ")")
             kind, title = ("doc" if args.get("markdown") else "mcp"), f"{nice}{' ' + target if target else ''}?"
             if destr:
@@ -5913,7 +5978,7 @@ class Agent:
         pats = [p for c in cmds for p in PR.grant_patterns(c)] if group == "bash" and not _destructive(args, self.root) else []
         pats = list(dict.fromkeys(pats))
         folder = (group in ("bash", "edit") and not risky and not _destructive(args, self.root) and not destr
-                  and self.mode in ("ask", "edits") and os.environ.get("MH_SANDBOX_AUTO", "1") != "0"
+                  and self.mode in ("ask", "edits") and _sandbox_auto_on()
                   and not self._sandboxed() and (group == "edit" or
                                                  (cmds and all(PR.sandbox_auto_ok(c, self.root, wd) for c in cmds))))
         scope = ("once" if risky == "destructive" or _destructive(args, self.root) else   # a destructive command: this once only

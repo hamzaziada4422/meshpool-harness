@@ -346,7 +346,7 @@ def test_ask_mode_is_on_request_and_asks_before_shell_and_patch(tmp_path):
                 {"role": "assistant", "content": "done"}])
     a.send("go")
     assert "<approval_policy>on-request</approval_policy>" in a.bodies[0]["messages"][1]["content"]
-    assert asked[0][0] == "bash" and asked[0][1] == "Run this command?" and "make hi" in asked[0][2]
+    assert asked[0][0] == "bash" and asked[0][1] == "Run make hi?" and "make hi" in asked[0][2]
     assert asked[1][0] == "edit" and "f.txt" in asked[1][1] and "+2" in asked[1][2]
     assert len(asked) == 2                                    # the plan tool needs no approval
     assert (tmp_path / "f.txt").read_text() == "2\n"

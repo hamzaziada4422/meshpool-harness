@@ -154,7 +154,8 @@ def test_p2_agent_9_model_that_keeps_failing_says_so(tmp_path, monkeypatch):
     assert "in a moment" not in err and "keeps failing" in err and "another model" in err
     tail = err[err.index("(HTTP 503"):]
     assert tail.endswith("…)") and "upstream_service_unavailable…" in tail
-    assert all(w == "upstream_service_unavailable" for w in tail[len("(HTTP 503: "):-2].split())
+    said = tail[tail.index("the service said: ") + len("the service said: "):-2]
+    assert said.split() and all(w == "upstream_service_unavailable" for w in said.split())   # clipped on a word
     assert "—" not in err
 
 
@@ -171,7 +172,8 @@ def test_p2_agent_9_one_5xx_still_says_continue(tmp_path, monkeypatch):
     monkeypatch.setattr(a, "_chat", boom)
     a.send("hello")
     err = [e["text"] for e in events if e["type"] == "error"][-1]
-    assert "Send \"continue\" in a moment" in err and err.endswith("(HTTP 502: bad gateway)")
+    assert "Send \"continue\" in a moment" in err and err.startswith("The model service had a problem.")
+    assert err.endswith("the service said: bad gateway)") and "HTTP 502" in err and "…" not in err
 
 
 # ---------- P2-uiserver-2 (same shape): office_intent's own file-name regex ------------------------------------------

@@ -931,8 +931,13 @@ class Session:
         if running:
             self._set_state("waiting", token=tok, expect=_BUSY)
         from meshpool_harness.redact import redact
+        try:                                  # a chat with no folder of its own choosing: no "Always in this folder"
+            from meshpool_harness import project_store as _PS
+            folder = bool(getattr(self, "workdir", "")) and not _PS.is_scratch(self.workdir)
+        except Exception:  # noqa: BLE001
+            folder = True
         self.emit({"type": "approval", "id": aid, "kind": kind, "title": title, "detail": redact(detail),
-                   "options": options, "scope": scope})
+                   "options": options, "scope": scope, "folder": folder})
         if time.time() - getattr(self, "t_turn", time.time()) > 60:
             _notify(f"{self.agent.title or 'A task'} needs your approval", title)
         try:

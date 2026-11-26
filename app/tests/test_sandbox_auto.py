@@ -163,3 +163,34 @@ def test_the_persona_traces_run_without_a_question_and_the_risky_ones_still_ask(
              f"ls {tmp_path}"]                                # a folder above the user's home
     for c in risky:
         assert not PR.sandbox_auto_ok(c, proj), c
+
+
+def test_approval_cards_say_what_the_step_does():
+    """Persona runs: every card was a raw `D=/tmp/...; python3 -I -c "..."` line no one could judge."""
+    t = core._plain_command_title
+    assert t("D=/tmp/x; python3 -I -c \"import pandas as pd; pd.read_csv('sales.csv')\"") == \
+        "Run a Python step on sales.csv?"
+    assert t("pdftotext -layout Northfield-Report.pdf - | grep -n Revenue") == "Read Northfield-Report.pdf?"
+    assert t("ls -la && wc -l sales.csv && head -30 sales.csv") == "Read sales.csv?"
+    assert t("cd /tmp/c && which pdftotext") == "Check which programs are installed?"
+    assert t("find / -iname '*Q3*'") == "Search your computer's files?"
+    assert t("pip install seaborn").startswith("Install software from the internet?")
+    assert t("git push origin main") == "Send your commits to the remote repository?"
+    assert t("curl -s https://api.example.com/x") == "Use the internet (api.example.com)?"
+    assert t("cd . && make hi") == "Run make hi?"
+
+
+def test_office_tool_cards_name_the_action_and_the_file(tmp_path, monkeypatch):
+    proj = _home_project(tmp_path, monkeypatch)
+    a, asked = _agent(proj, True, monkeypatch)
+    monkeypatch.setattr(core.Agent, "_mcp_destructive", lambda self, n: False)
+    a._permit("mcp__meshpool-office__edit_office_file",
+              {"path": str(proj / "decks" / "ViDA deck.pptx"), "ops": [{"op": "replace_text", "find": "a", "replace": "b"}]})
+    assert asked and asked[-1]["title"] == "Change ViDA deck.pptx?"
+
+
+def test_always_in_this_folder_is_not_offered_in_a_chat_with_no_folder():
+    js = (Path(core.__file__).resolve().parents[1] / "ui" / "app.js").read_text()
+    assert 'ev.folder !== false && ["edit", "bash", "mcp"].includes(ev.kind)' in js
+    api = (Path(core.__file__).resolve().parents[1] / "ui" / "agent_api.py").read_text()
+    assert '"folder": folder' in api and "is_scratch(self.workdir)" in api
