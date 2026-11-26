@@ -30,17 +30,16 @@ added the rest. A row that repeats another is listed but counted once, where the
 | Developer command line and Code panel (OM) | 9 | 9 | 1 |
 | Approvals (AP) | 7 | 7 | 1 |
 | Pre-release review (RR) | 12 | 12 | 0 |
-| Merge fixes (MG) | 3 | 1 | 1 |
-| all | 239 | 236 | 18 |
+| Merge fixes (MG) | 3 | 2 | 0 |
+| all | 239 | 237 | 17 |
 
-"Still open" counts what the "Found, not fixed" section lists today: two questions for the owner and sixteen known
+"Still open" counts what the "Found, not fixed" section lists today: two questions for the owner and fifteen known
 limits and open bugs, all open for 0.0.19. What the first pass found but left was fixed in the later pass.
 
 Rows listed but not counted: WF-E (counted under WF-07), SR-12 (under UX-20), SR-14 (under AP), AP-08 (under UX-33),
 OM-07 (not a bug) and UI-14 (under LD-06).
 
-Three fixes have no test. LD-07: the race behind it could not be made to happen reliably. MG-02: a word list. MG-03:
-the test checks the words Copy is given, not the button.
+Two fixes have no test. LD-07: the race behind it could not be made to happen reliably. MG-02: a word list.
 
 The later pass fixed the items the first pass found but left, and closed PA-skills-13 from the 0.0.17 ledger (three
 tests that slept a fixed time now wait for an event).
@@ -395,7 +394,7 @@ A review of the release candidate by area, before the persona fixes were merged.
 |---|---|---|---|---|---|
 | MG-01 | settings | After the approvals branch was merged, settings2.js declared SET_WORDS twice, a SyntaxError that stops the settings script from loading. Never released. | One search list holds both sets of words (03fad180). | test_settings_search_finds_what_a_page_holds, test_permissions_is_its_own_page_and_search_finds_it | fixed |
 | MG-02 | settings | Settings search words named another brand. | Removed (3b3cf16e). | none | fixed |
-| MG-03 | chat | Copy on a message of yours gave the internal attachments line with the text. | Copy gives the typed words (f4821ab7). The same edit lost the "Copied" toast: see Found, not fixed. | test_attached_files_show_as_chips_and_the_chats_folder_by_name checks the words Copy is given, not the button | fixed, with a new open item |
+| MG-03 | chat | Copy on a message of yours gave the internal attachments line with the text. | Copy gives the typed words (f4821ab7), and says "Copied" again: that edit had put the toast inside a line comment. | test_copy_on_your_message_gives_your_words_and_says_copied | fixed |
 
 Tests changed with no product change: test_fix_pass2_open_server.py follows the ER detail wording, test_awake.py resets
 the holder's give-up flag that PF-05 added (4f3c9b2f), a panel test waits for the UX-14 slide to end (3b3cf16e), and the
@@ -441,6 +440,3 @@ Known limits and open bugs:
 - OM: The note the model gets when `-p` refuses a step (DENIED_NOTE in agent/tui_session.py) still suggests
   `--permission-mode edits`.
 - AP: Keynote and Pages leave no lock file, so a Keynote or Pages file open on a Mac can be replaced without a question.
-- MG: Copy on a message of yours gives the typed words now, but the edit that did it (f4821ab7) put the `.then(...)`
-  that shows "Copied" inside a line comment (ui/app.js, the click handler for data-ma). Copy no longer confirms, and
-  no longer says when it could not copy.
