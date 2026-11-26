@@ -151,7 +151,7 @@ def test_fallback_is_a_plain_argument_slide():
     fb = R.fallback(bad)
     assert fb["archetype"] == "argument_only" and fb["title"] == bad["title"]
     assert any("Revenue" in b["text"] for b in fb["blocks"][0]["bullets"])
-    assert "[QA]" in fb["notes"]
+    assert "[QA]" not in (fb.get("notes") or "") and fb["_qa"]   # for the checks, not the speaker notes
 
 
 # ------------------------------------------------------------------ drawing

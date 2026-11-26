@@ -234,8 +234,9 @@ def test_slots_as_list(lib, tmp_path):
 def test_text_too_long_is_cut_and_noted(lib, tmp_path):
     s = _slide(slots={"0": "Margin levers", "5": " ".join(["detail"] * 400)})
     out, res = _deck(tmp_path, [s])
-    notes = Presentation(out).slides[0].notes_slide.notes_text_frame.text
-    assert "[QA]" in notes
+    sl = Presentation(out).slides[0]
+    notes = sl.notes_slide.notes_text_frame.text if sl.has_notes_slide else ""
+    assert "[QA]" not in notes                       # the remark is for the checks, not the presenter (Daniel, 0.0.19)
     assert any("slot" in e and "library layout" in e for e in res["errors"])
 
 
@@ -249,8 +250,9 @@ def test_off_without_knowledge_base_draws_fallback(monkeypatch, tmp_path):
     assert "Unit cost fell 9% on the new line" in txt
     assert "arch:argument_only" in sl._element.find(
         "{http://schemas.openxmlformats.org/presentationml/2006/main}cSld").get("name")
-    notes = sl.notes_slide.notes_text_frame.text
-    assert "[QA]" in notes and "library" in notes and "off" in notes
+    notes = sl.notes_slide.notes_text_frame.text if sl.has_notes_slide else ""
+    assert "[QA]" not in notes                       # why the library was not used goes to the build's errors
+    assert any("library" in e and "off" in e for e in res["errors"]), res["errors"]
     assert not [s for s in sl.shapes if s.name.startswith("ov_Lib")]
 
 
@@ -260,8 +262,9 @@ def test_bad_item_and_missing_item_draw_fallback(lib, tmp_path):
         sl = Presentation(out).slides[0]
         txt = " ".join(s.text_frame.text for s in sl.shapes if s.has_text_frame)
         assert "Unit cost fell 9% on the new line" in txt, item
-        assert "[QA]" in sl.notes_slide.notes_text_frame.text
-        assert item not in sl.notes_slide.notes_text_frame.text and item not in _slide_xml(out)
+        notes = sl.notes_slide.notes_text_frame.text if sl.has_notes_slide else ""
+        assert "[QA]" not in notes and any("library layout was not used" in e for e in res["errors"]), res["errors"]
+        assert item not in notes and item not in _slide_xml(out)
 
 
 def test_no_fallback_given_uses_slot_texts(lib, tmp_path, monkeypatch):
