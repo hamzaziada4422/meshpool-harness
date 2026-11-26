@@ -161,3 +161,22 @@ def test_readme_browser_claim_is_not_stated_as_measured():
 
 def test_benchmarks_link_the_loop_history_branch():
     assert "/tree/loop-history" in _text("docs/BENCHMARKS.md")
+
+
+# ---- doc/reality: one version number, one routing table ---------------------------------------------------------------
+def test_version_agrees_across_pyproject_package_and_readme():
+    """The badge reads the latest GitHub release; the release workflow refuses a tag that is not v<__init__ version>
+    (test_ledger017_packaging). This pins the other three places to each other."""
+    from meshpool_harness import __version__
+    assert _pyproject()["project"]["version"] == __version__
+    m = re.search(r"Meshpool is a beta \(currently ([0-9][^)]*)\)", _text("README.md"))
+    assert m and m.group(1) == __version__
+
+
+def test_routing_table_the_docs_name_exists_and_no_csv_contradicts_it():
+    import subprocess
+    assert "`app/defaults/routing.json`" in _text("docs/ROUTING.md")
+    assert (ROOT / "app" / "defaults" / "routing.json").is_file()
+    tracked = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True)
+    if tracked.returncode == 0:
+        assert not [f for f in tracked.stdout.splitlines() if f.endswith("routing.csv")]
