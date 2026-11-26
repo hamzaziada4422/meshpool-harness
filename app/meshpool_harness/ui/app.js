@@ -1220,11 +1220,10 @@ function openThread(id, fresh, find) {
 // A command's approval card for a person who does not read shell: one plain line, the file it writes shown under its name,
 // and the exact command (scratch paths and all) folded under "Details".
 // release review, 0.0.18: "in <folder>" only for a file that goes there; a temporary or outside place is named as such
-function plainApproval(ev, folder) {
-  const f = ev.file;
-  const where = !f ? "" : f.where === "outside" ? ` outside this folder (${f.path})` : f.where === "temp" ? " in a temporary folder" : ` in ${folder}`;
-  const line = f ? `Save ${f.name}${where}${f.run ? " and run it" : ""}` : String(ev.sum || "");
-  return `<p class="apone">${esc(line)}</p>${f ? `<div class="apfile"><span class="apfn">${esc(f.name)}</span><pre>${esc(f.text)}</pre></div>` : ""}<details class="apdet"><summary>Details</summary><pre>${esc(ev.detail)}</pre></details>`;
+function apWhere(f, folder) { return f.where === "outside" ? ` outside this folder (${f.path})` : f.where === "temp" ? " in a temporary folder" : ` in ${folder}`; }
+function plainApproval(ev, folder) {   // the plain line, never the title twice
+  const f = ev.file, line = f ? `Save ${f.name}${apWhere(f, folder)}${f.run ? " and run it" : ""}` : String(ev.sum || "");
+  return `${!f && line.replace(/\?$/, "") === String(ev.title || "").replace(/\?$/, "") ? "" : `<p class="apone">${esc(line)}</p>`}${f ? `<div class="apfile"><span class="apfn">${esc(f.name)}</span><pre>${esc(f.text)}</pre></div>` : ""}<details class="apdet"><summary>Details</summary><pre>${esc(ev.detail)}</pre></details>`;
 }
 function resetChat(cur) {                        // the history changed under us (undo, rewind): rebuild from the start
   stopStream(cur); cur.total = 0; cur.next = 0; cur.log = []; cur.epoch = -2; cur.turn = 0; beginStage(cur);
