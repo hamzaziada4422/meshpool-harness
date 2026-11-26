@@ -25,8 +25,8 @@ const SECTIONS = Object.entries(SET_NAMES);
 // starts a word of a page's name or keywords.
 const SET_WORDS = {permissions: "permission permissions folder folders allow ask before approval approvals approve rules deny access sandbox",
   data: "data export delete history privacy retention", general: "api key keys connection endpoint base url provider", models: "model models favorite default",
-  harnesses: "agent agents codex claude pi hermes sign in login", notify: "notification notifications sound alert", appearance: "theme dark light font text size density language",
-  caps: "feature features capability memory plan first", personal: "instructions memory about me", styles: "style styles writing tone", import: "import chatgpt claude export zip",
+  harnesses: "agent agents codex pi hermes sign in login", notify: "notification notifications sound alert", appearance: "theme dark light font text size density language",
+  caps: "feature features capability memory plan first", personal: "instructions memory about me", styles: "style styles writing tone", import: "import chatgpt export zip",
   connectors: "connector connectors github gmail drive", skills: "skill skills", plugins: "plugin plugins marketplace", mcp: "mcp tools server servers", office: "office word excel powerpoint add-in",
   terminal: "terminal shell command", advanced: "advanced options", scheduled: "schedule scheduled task tasks routine", about: "about update updates version",
   usage: "usage cost spend tokens", billing: "billing plan budget", web: "web search browse internet", suggest: "suggestion suggestions next steps", profile: "profile name account"};
