@@ -303,7 +303,7 @@ def _plugins(a):
 def _mcp(a):
     from meshpool_harness import chats
     pos, o = _split(a, (), ("--json",))
-    sub, js = pos[0], bool(o.get("--json"))
+    sub, js = (pos[0] if pos else "list"), bool(o.get("--json"))   # `meshpool mcp --json`: the list, as JSON
     pos = pos[1:]
     if sub == "list":
         r = chats.mcp_info()

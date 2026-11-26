@@ -444,27 +444,29 @@ def key_owner(key: str) -> str:
     return next((p for pre, p in _KEY_PREFIXES if k.startswith(pre)), "")
 
 
-def _msg(body) -> tuple[str, str]:
-    """(message, code) out of an error body of any common shape, short and single-line."""
+def _msg(body, key: str = "") -> tuple[str, str]:
+    """(message, code) out of an error body of any common shape, short and single-line. `key` is taken out before the
+    text is cut to length: a key cut in two by the limit no longer matches and would be shown in part."""
     d = body
     if isinstance(body, (bytes, str)):
         s = body.decode("utf-8", "replace") if isinstance(body, bytes) else body
         try:
             d = json.loads(s)
         except ValueError:
-            return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", s)).strip()[:200], ""
+            return redact_key(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", s)).strip(), key)[:200], ""
     if isinstance(d, list) and d:
         d = d[0]
     if isinstance(d, dict) and set(d) == {"raw"} and isinstance(d["raw"], str):
-        return _msg(d["raw"])                    # a caller's wrapper around a body that was not JSON
+        return _msg(d["raw"], key)               # a caller's wrapper around a body that was not JSON
     if not isinstance(d, dict):
         return "", ""
     e = d.get("error", d)
     if isinstance(e, str):
-        return e[:200], ""
+        return redact_key(e, key)[:200], ""
     if isinstance(e, dict):
-        return str(e.get("message") or e.get("detail") or "")[:200], str(e.get("code") or e.get("type") or "")
-    return str(d.get("message") or d.get("detail") or "")[:200], str(d.get("code") or "")
+        return (redact_key(str(e.get("message") or e.get("detail") or ""), key)[:200],
+                str(e.get("code") or e.get("type") or ""))
+    return redact_key(str(d.get("message") or d.get("detail") or ""), key)[:200], str(d.get("code") or "")
 
 
 def redact_key(text: str, key: str) -> str:
@@ -480,7 +482,7 @@ def redact_key(text: str, key: str) -> str:
 def explain(status: int, body=None, *, kind: str = "generic", host: str = "", model: str = "", key: str = "",
             api_version: str = "") -> str:
     """A failed call in words the user can act on: what to check, not the raw reply."""
-    msg, code = _msg(body)
+    msg, code = _msg(body, key)
     low = f"{msg} {code}".lower()
     c = caps(kind)
     who = c["label"] if kind != "generic" else (host or "The endpoint")
