@@ -185,7 +185,7 @@ function pvBody() {
     b.setAttribute("data-reveal", "1"); b.onclick = () => edReveal(PVX.root, PVX.path);
     wrap.appendChild(b); st.appendChild(wrap); return;
   }
-  pvNote(m.note || "Meshpool cannot show this kind of file yet.");
+  pvNote(m.note || "meshpool cannot show this kind of file yet.");
 }
 function pvCode(text) {
   const pre = document.createElement("pre"); pre.className = "pv-code"; pre.tabIndex = 0; pre.textContent = text;

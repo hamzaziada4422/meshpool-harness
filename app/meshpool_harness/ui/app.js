@@ -32,6 +32,15 @@ function routeMenu(anchor) {
   });
   m.querySelector("button")?.focus();
 }
+// One cost format: "$0.42", and "<$0.01" for anything under a cent (never "$0.0005"). One duration format: "<1 s",
+// "42 s", "3 min 45 s", "1 h 5 min" (receipts.py writes the same).
+// "Summarized 12 earlier messages so the task can keep going." (agent/core.py) in the words of the chat.
+const plainStatus = t => String(t || "").replace(/^Summarized \d+ earlier messages so the task can keep going( \(from the log only\))?\.$/, "Made room to keep going: the earlier steps are now a short summary.");
+function fmtCost(x) { x = Number(x) || 0; return x > 0 && x < 0.01 ? "<$0.01" : "$" + x.toFixed(2); }
+function fmtDur(s) {
+  s = Number(s); if (!(s >= 0)) return ""; if (s < 1) return "<1 s";
+  s = Math.round(s); return s < 60 ? `${s} s` : s < 3600 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${Math.floor(s / 3600)} h ${Math.floor(s % 3600 / 60)} min`;
+}
 function ago(t) {
   if (typeof t === "string") t = isNaN(Number(t)) ? Date.parse(t) / 1000 : Number(t);   // ISO or numeric text
   if (!t || isNaN(t)) return "";
@@ -170,12 +179,12 @@ const ICON = {
 async function api(path, opts = {}) {
   let r;
   try { r = await fetch(path, {...opts, headers: {"X-Meshpool-Token": MP.token, ...(opts.body ? {"Content-Type": "application/json"} : {}), ...(opts.headers || {})}}); }
-  catch (e) { throw new Error("Meshpool isn't responding. If this keeps happening, quit and reopen Meshpool."); }
+  catch (e) { throw new Error("meshpool isn't responding. If this keeps happening, quit and reopen meshpool."); }
   let j = null, unread = false; try { const t = await r.text(); if (t) j = JSON.parse(t); else unread = r.status !== 204; } catch (e) { unread = true; }   /* not JSON */
   if (j && j.inapp && r.ok && typeof showSignIn === "function") { try { showSignIn(); } catch (e) { /* the page still opened */ } }   // a sign-in page opened inside Meshpool
   if (!r.ok) {
     if (j && typeof j.error === "string" && j.error.trim()) throw new Error(j.error);   // the server's own plain words
-    if (r.status === 403) throw new Error("This page lost its connection to Meshpool. Reload the window.");
+    if (r.status === 403) throw new Error("This page lost its connection to meshpool. Reload the window.");
     if (r.status === 404) throw new Error("meshpool does not know this request: the window may be from an older version. Reload the window.");
     throw new Error(`meshpool's background service failed on this request and sent no explanation (status ${r.status}). Try again; if it keeps happening, quit and reopen meshpool.`);
   }
@@ -407,7 +416,7 @@ function threadMenu(e, id) {
 }
 async function confirmDelete(id) {
   const t = S.threads.find(x => x.id === id) || {};
-  if (await ask({title: "Delete this chat?", text: `“${clip(t.title || "This chat", 60)}” is removed from Meshpool. Files it made in a project folder stay where they are.`, ok: "Delete chat", cancel: "Keep chat", danger: true})) threadAct(id, "delete");
+  if (await ask({title: "Delete this chat?", text: `“${clip(t.title || "This chat", 60)}” is removed from meshpool. Files it made in a project folder stay where they are.`, ok: "Delete chat", cancel: "Keep chat", danger: true})) threadAct(id, "delete");
 }
 async function moveChat(id, pid) {
   const t = S.threads.find(x => x.id === id), prev = t?.project_id || "";
@@ -953,7 +962,7 @@ function modelPop(anchor) {
   const M = S.models || {models: [], favorites: [], groups: []};
   const own = S.cur && h.models !== "meshpool" ? (S.cur.view?.harness_models || []) : [];   // models a running agent offers itself
   // First choose where the model runs (a tab per provider), then the model.
-  const keyName = (M.groups || []).find(g => g.id === "key")?.name || "Meshpool";
+  const keyName = (M.groups || []).find(g => g.id === "key")?.name || "meshpool";
   const TABS = [["key", keyName, ["key"]], ["chatgpt", "ChatGPT", ["chatgpt"]]];
   let tab = (TABS.find(t => t[2].includes(provOf(c.model))) || TABS[0])[0];
   const tabBtn = ([id, name, gs]) => { const on = (M.groups || []).some(g => gs.includes(g.id) && g.ready); return `<button type="button" role="tab" data-tab="${id}" aria-selected="${id === tab}" style="flex:1;padding:8px 4px;border-radius:var(--r-s);border:1px solid ${id === tab ? "var(--pool)" : "var(--line)"};background:${id === tab ? "var(--pool-soft)" : "transparent"};color:var(--ink);font:inherit;font-size:13px;cursor:pointer">${esc(name)}${on ? "" : ` <span style="color:var(--ink-3)">· set up</span>`}</button>`; };
@@ -1327,11 +1336,11 @@ function setWorking(text, secs) {
   if (!wk) { wk = document.createElement("span"); wk.id = "working"; wk.className = "working"; wk.setAttribute("role", "status"); wk.innerHTML = `<span class="dot run"></span><span class="wt"></span><span class="el"></span>`; slot.appendChild(wk); }
   const wt = $(".wt", wk), el = $(".el", wk);
   if (wt.textContent !== text) wt.textContent = text;
-  const e = secs == null ? "" : secs + "s"; if (el.textContent !== e) el.textContent = e;
+  const e = secs == null ? "" : fmtDur(secs); if (el.textContent !== e) el.textContent = e;
 }
 function workTick(cur) {
   if (!cur) return;
-  const g = cur.group; if (g && g.isConnected && !g.dataset.done && g._t0) { const el = $(".gel", g), s = Math.round((Date.now() - g._t0) / 1000) + "s"; if (el && el.textContent !== s) el.textContent = s; }
+  const g = cur.group; if (g && g.isConnected && !g.dataset.done && g._t0) { const el = $(".gel", g), s = fmtDur((Date.now() - g._t0) / 1000); if (el && el.textContent !== s) el.textContent = s; }
   const waiting = cur.view?.state === "waiting";   // the server says what it waits on; a stale card in the column must not hide Working
   const pd = cur.working ? planData() : null;
   if (cur.working && !waiting) setWorking(cur.down ? "Waiting for the model service" : cur.jobStage && !cur.live ? cur.jobStage : pd ? planLine(pd) : cur.live ? "Writing" : String(cur.activity || "Working").split(" ").slice(0, 3).join(" ").replace(/[:,]$/, ""), Math.round((Date.now() - (cur.since || Date.now())) / 1000));
@@ -1345,7 +1354,7 @@ function workTick(cur) {
 function waitNote(secs) {
   let n = $("#waitNote");
   if (!secs) { n?.remove(); return; }
-  const t = secs < 60 ? `${secs} s` : `${Math.floor(secs / 60)} min`;
+  const t = fmtDur(secs);
   if (!n) {
     const col = $("#col"); if (!col) return;
     n = document.createElement("div"); n.id = "waitNote"; n.className = "note waitnote"; n.setAttribute("role", "status");
@@ -1656,7 +1665,7 @@ function applyEvRaw(ev) {
       });
       scrollConv(true); break; }
     case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /approval|waiting/i.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
-      const d = cardEl("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.closed ? "Closed when Meshpool restarted." : ev.decision === "stopped" ? "Stopped before running." : ev.decision === "timeout" ? "No answer in time." : ev.reason ? esc(ev.reason) : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "save" ? "Allowed, and saved for this folder." : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
+      const d = cardEl("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.closed ? "Closed when meshpool restarted." : ev.decision === "stopped" ? "Stopped before running." : ev.decision === "timeout" ? "No answer in time." : ev.reason ? esc(ev.reason) : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "save" ? "Allowed, and saved for this folder." : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
         const g = d.previousElementSibling; if (g?.classList.contains("work") && d === col.lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
       if (ev.final && cur.thoughtLive) {      // the saved copy of what streamed live: add only what this page missed
@@ -1695,7 +1704,8 @@ function applyEvRaw(ev) {
         // Auto's reason is the router's own note ("Best benchmark quality for a data task (csv)"): it stays out of the
         // transcript, on the line's tooltip and in the Session panel's Agent section.
         const why = ev.auto && ev.auto.reason ? String(ev.auto.reason) : "";
-        const un = add(`<span${why ? ` title="${esc(why)}"` : ""}>${esc(ev.text)}</span>` + (ev.back ? ` <button class="linkbtn" data-back="1">Use ${esc(ev.back.name)} instead</button>` : ""), "note using");
+        if (/^Using meshpool\b/i.test(ev.text || "") && !ev.back && !ev.handoff) { sessionSoon(); break; }   // meshpool's own agent: nothing to announce
+        const un = add(`<span${why ? ` title="${esc(why)}"` : ""}>${esc(lowBrand(ev.text))}</span>` + (ev.back ? ` <button class="linkbtn" data-back="1">Use ${esc(lowBrand(ev.back.name))} instead</button>` : ""), "note using");
         $("[data-back]", un)?.addEventListener("click", async () => {   // one click back to the mode's own agent, history kept
           try { const v = await post(`/api/agent/${cur.id}/harness`, {harness: ev.back.harness, since: 1e9}); cur.view.harness = v.harness || harness(ev.back.harness); $("[data-back]", un)?.remove(); renderBar(); }
           catch (e) { toast(e.message); } });
@@ -1709,7 +1719,7 @@ function applyEvRaw(ev) {
         if (cur.downEl) cur.downEl.textContent = ev.text; else cur.downEl = add(esc(ev.text), ev.down ? "note retry" : "note");
         cur.down = !!ev.down; if (!ev.down) cur.downEl = null;
         break; }
-      { const nn = add(esc(ev.text) + (ev.detail ? ` <details class="notedet"><summary>Details</summary><div>${esc(ev.detail).replace(/\n/g, "<br>")}</div></details>` : ""), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); } break; }
+      { const nn = add(esc(plainStatus(ev.text)) + (ev.detail ? ` <details class="notedet"><summary>Details</summary><div>${esc(ev.detail).replace(/\n/g, "<br>")}</div></details>` : ""), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); } break; }
     case "gate": {                                      // all model slots busy: say so while it waits, drop the line once it runs
       if (cur.gateEl && !cur.gateEl.isConnected) cur.gateEl = null;
       if (ev.state === "waiting") {
@@ -1915,7 +1925,7 @@ function fillInput(text, opts = {}) {
   toast("Your message is back in the box as a draft. Edit it, then send it again if you want to.", 6000);
 }
 async function undoTurn(n) {
-  if (!await ask({title: "Undo this reply?", text: "Files Meshpool changed go back to how they were before it, and the conversation goes back to that point. Replies after it are undone too.", ok: "Undo changes", danger: true})) return;
+  if (!await ask({title: "Undo this reply?", text: "Files meshpool changed go back to how they were before it, and the conversation goes back to that point. Replies after it are undone too.", ok: "Undo changes", danger: true})) return;
   const t = (S.cur.view?.turns || []).find(x => x.n === n) || {};
   const ue = threadLog().find(e => e.type === "user" && (t.message_index != null && e.mi === t.message_index)) ||
     threadLog().find(e => e.type === "user" && t.event_index != null && e.i === t.event_index);
@@ -1941,7 +1951,7 @@ async function rewindFork(kind, el) {
       await loadThreads(); openThread(r.id); toast("Forked into a new chat. Nothing changed in your files.", 4000); return;
     }
     const a = await ask({title: "Rewind to here?", text: "The conversation goes back to just before this message, and the reply and everything after it are removed. The message goes back into the box so you can change it.",
-      ok: "Rewind", danger: true, check: "Also undo the file changes Meshpool made from here on"});
+      ok: "Rewind", danger: true, check: "Also undo the file changes meshpool made from here on"});
     if (!a) return;
     const r = await post(`/api/agent/${cur.id}/rewind`, {event_index: ei, files: a.checked, since: 1e9});
     if (r.forked) { await loadThreads(); openThread(r.forked); toast("This agent cannot go back in place, so the conversation up to there is a new chat.", 5000); return; }
@@ -2061,7 +2071,7 @@ function progressUpdate() {
     if (!ul) { fbox.innerHTML = ""; fbox._h = null; ul = document.createElement("ul"); ul.className = "outs"; fbox.appendChild(ul); }
     reconcile(ul, outs, o => o.path, o => { const li = document.createElement("li"); li.innerHTML = `<button data-open="${esc(o.path)}" title="Open ${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button>`; $("button", li).onclick = () => openPreview(curRoot(), o.path); return li; }, () => {});
   }
-  setTxt($("#pgHarness", body), v.harness?.name || ""); setTxt($("#pgModel", body), modelName(v.model || ""));
+  setTxt($("#pgHarness", body), lowBrand(v.harness?.name || "")); setTxt($("#pgModel", body), modelName(v.model || ""));
 }
 function panelProgress(body) {
   if (!S.cur) { body.innerHTML = `<div class="pnote">Start a task and its progress shows here: the plan, each step as it finishes, the files it makes and what it can reach.</div>`; return; }
@@ -2290,7 +2300,7 @@ async function gitAct(b) {
 }
 function panelPreview(body) {
   const url = store("preview") || "http://localhost:3000";
-  body.innerHTML = `<div class="pbar"><input id="purl" value="${esc(url)}" aria-label="Address"><button class="btn" id="pgo">Open</button><button class="btn" id="pext" title="Open in your browser">${ICON.globe}</button></div><div class="pnote" id="pempty" style="padding:8px 12px">Start your app first (for example ask Meshpool to run it), then enter its address.</div><iframe class="preview" id="pframe" hidden title="Preview" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`;
+  body.innerHTML = `<div class="pbar"><input id="purl" value="${esc(url)}" aria-label="Address"><button class="btn" id="pgo">Open</button><button class="btn" id="pext" title="Open in your browser">${ICON.globe}</button></div><div class="pnote" id="pempty" style="padding:8px 12px">Start your app first (for example ask meshpool to run it), then enter its address.</div><iframe class="preview" id="pframe" hidden title="Preview" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`;
   const go = () => {
     let u = $("#purl").value.trim(); if (!/^https?:\/\//.test(u)) u = "http://" + u; store("preview", u);
     const fr = $("#pframe"), msg = $("#pempty");
@@ -2305,7 +2315,7 @@ function panelPreview(body) {
 
 /* ================================== session panel + GitHub sessions ================================== */
 const isMgd = p => !!S.projects.find(x => x.path === p)?.managed;
-const spDur = s => { s = Math.max(0, Math.round(s)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`; };
+const spDur = fmtDur;
 const spOpen = k => { const o = store("sp_open") || {}; return o[k] !== false; };
 const spTok = n => n >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M" : n >= 1e3 ? Math.round(n / 1e3) + "K" : String(n);
 // ---- the plan: the agent's checklist. In the Session panel, patched by row; in the chat only one quiet line (the status slot).
@@ -2352,7 +2362,7 @@ function spHTML(d, pr) {
     <div class="spnum"><b>${cx.percent}%</b><span>${spTok(cx.used)} of ${spTok(cx.size)} tokens${/estimate/.test(cx.source) ? " (window estimated)" : ""}</span></div></div>`;
   const cRows = cn.servers.map(c => `<li><span class="cidot ${c.status === "connected" ? (c.used ? "ok" : "") : c.error || c.status === "error" ? "bad" : "run"}"></span><span class="cn">${esc(c.name)}</span><span class="cs">${c.used ? `used ${c.used}×` : c.status === "connected" ? `${c.tools} tools` : esc(c.status)}</span></li>`).join("");
   const outs = d.outputs;
-  const outHTML = outs.length ? `<ul class="outs">${outs.map(o => `<li><button data-open="${esc(o.path)}" title="${esc(o.path)}"><span class="fi">${ICON.file}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span><span class="spc">${esc(o.how)}</span></button></li>`).join("")}</ul>` : `<div class="pnote">Documents, spreadsheets, decks and other files Meshpool makes show up here.</div>`;
+  const outHTML = outs.length ? `<ul class="outs">${outs.map(o => `<li><button data-open="${esc(o.path)}" title="${esc(o.path)}"><span class="fi">${ICON.file}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span><span class="spc">${esc(o.how)}</span></button></li>`).join("")}</ul>` : `<div class="pnote">Documents, spreadsheets, decks and other files meshpool makes show up here.</div>`;
   const num = (v, c, sg) => `<span class="${v ? c : "zero"}">${sg}${v}</span>`;
   let chg = `<div class="sprow">${ICON.diff}<span><b>${tr.files ? `${tr.files} file${tr.files === 1 ? "" : "s"} changed` : "Working tree is clean"}</b>${tr.files ? `<small class="nw">${num(tr.added, "plus", "+")} ${num(tr.removed, "minus", "−")} not committed</small>` : ""}</span></div>`;
   if (!pr) chg += `<div class="pnote spmini">Checking GitHub...</div>`;
@@ -2434,7 +2444,7 @@ function openGithubPicker(opts = {}) {
   const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
   const gtitle = opts.title || "Work on a GitHub repository";
   sc.innerHTML = `<div class="dlg fb ghp" role="dialog" aria-modal="true" aria-label="${esc(gtitle)}"><h3>${esc(gtitle)}</h3>
-    <p>Pick a repository. Meshpool keeps its own copy and works there, so it doesn’t need to be on this computer first.</p>
+    <p>Pick a repository. meshpool keeps its own copy and works there, so it doesn’t need to be on this computer first.</p>
     <input id="ghQ" placeholder="Search your repositories, or type owner/name" spellcheck="false" autocomplete="off" aria-label="Search repositories">
     <ul class="fblist" id="ghList" role="listbox"><li class="pnote">Loading...</li></ul>
     <div id="ghBr" class="ghbr" hidden><label>Branch<select id="ghSel"></select></label><label class="chk"><input type="checkbox" id="ghNewOn"> New branch from it</label><input id="ghNewName" placeholder="New branch name" hidden></div>
@@ -2511,7 +2521,7 @@ async function renderSection(sec) {
       <label class="switchrow"><input type="checkbox" id="paInsOn" ${a.settings.instructions_on ? "checked" : ""}> Use these instructions</label>
       <div class="field" style="max-width:none;margin-top:16px"><span>Memory</span><p class="lead" style="margin:4px 0 8px">${a.memory.split("\n").filter(x => x.trim()).length} things remembered.</p><button class="btn" id="paMemPage">Open What meshpool knows</button></div>
       <label class="switchrow"><input type="checkbox" id="paMemOn" ${a.settings.memory_on ? "checked" : ""}> Let agents use and add to memory</label>
-      <label class="switchrow"><input type="checkbox" id="paEdits" ${a.settings.learn_from_edits ? "checked" : ""}> Learn from my edits to files Meshpool makes</label>
+      <label class="switchrow"><input type="checkbox" id="paEdits" ${a.settings.learn_from_edits ? "checked" : ""}> Learn from my edits to files meshpool makes</label>
       <div style="display:flex;gap:8px;margin-top:12px"><button class="btn primary" id="paSave">Save</button></div><div class="res" id="paRes"></div>
       <p class="lead" style="margin-top:16px">Coming from ChatGPT, Codex or another assistant? <button class="linkbtn" id="paImport">Import your chats and context</button></p>`;
     $("#paImport").onclick = () => renderSection("import");
@@ -2533,7 +2543,7 @@ async function renderSection(sec) {
   } else if (sec === "scheduled") {
     const draw = a => {
       const proj = S.projects.map(p => `<option value="${esc(p.path)}">${esc(p.name)}</option>`).join("");
-      b.innerHTML = `${close}<h3>Scheduled tasks</h3><p class="lead">Work that runs by itself: a morning news brief, a weekly pipeline report, a reminder. Each run opens a new chat and notifies you when it is done. Tasks run while Meshpool is open on this computer. You can also ask any agent to schedule something.</p>
+      b.innerHTML = `${close}<h3>Scheduled tasks</h3><p class="lead">Work that runs by itself: a morning news brief, a weekly pipeline report, a reminder. Each run opens a new chat and notifies you when it is done. Tasks run while meshpool is open on this computer. You can also ask any agent to schedule something.</p>
         <ul class="rows2">${a.tasks.map(t => `<li><span class="tg"><b>${esc(t.name)}</b><small>${esc(t.describe)} · ${t.kind === "code" ? "Code" : "Work"}</small><small class="clip2">${esc(t.prompt)}</small></span>
           <label class="switch" title="On or off"><input type="checkbox" data-ton="${esc(t.id)}" ${t.enabled ? "checked" : ""} aria-label="Run ${esc(t.name)}"><span></span></label>
           <button class="btn" data-trun="${esc(t.id)}">Run now</button>${t.last_thread ? `<button class="btn" data-topen="${esc(t.last_thread)}">Last run</button>` : ""}<button class="iconbtn" data-tdel="${esc(t.id)}" aria-label="Delete">${ICON.x}</button></li>`).join("") || `<li class="pnote">No scheduled tasks yet.</li>`}</ul>
@@ -2561,7 +2571,7 @@ async function renderSection(sec) {
     draw(await api("/api/assistant")); return;
   } else if (sec === "about") {
     const a = await api("/api/about");
-    b.innerHTML = `${close}<img class="logo" src="${logoSrc()}" alt="Meshpool" style="height:30px;margin-bottom:12px"><h3>Meshpool ${esc(a.version)}${/^0\./.test(a.version) ? " beta" : ""}</h3>
+    b.innerHTML = `${close}<img class="logo" src="${logoSrc()}" alt="meshpool" style="height:30px;margin-bottom:12px"><h3>meshpool ${esc(a.version)}${/^0\./.test(a.version) ? " beta" : ""}</h3>
       <p class="lead">Made by ${esc(a.author)}. <a href="https://meshpool.ai" target="_blank" rel="noopener">meshpool.ai</a> · <a href="https://github.com/hamzaziada4422/meshpool-harness/releases" target="_blank" rel="noopener">All releases</a> · <button class="linkbtn" id="aboutReport">Report a problem</button></p>
       <div class="updbox" id="updBox"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn" id="updCheck">Check for updates</button><span class="res" id="updRes" style="margin:0"></span></div><div id="updMore"></div></div>
       <details style="margin-top:16px"><summary class="linkbtn" style="display:inline">Third-party software</summary><pre class="lic">${esc(a.third_party)}</pre></details>`;
@@ -2589,7 +2599,7 @@ async function renderSection(sec) {
         : c.auth === "none" ? `<button class="btn primary" data-turnon="${esc(c.id)}">Turn on</button>`
         : c.auth === "oauth" && !own ? `<button class="btn primary" data-go="${esc(c.id)}">${c.expired ? "Sign in again" : "Connect"}</button>` : "";
       return `<li data-id="${esc(c.id)}" data-cat="${esc(cat)}" data-text="${esc((c.name + " " + c.description + " " + (c.category || "")).toLowerCase())}"><span class="tg"><b>${esc(c.name)}</b>${c.connected ? ` <span class="badge added">${c.auth === "none" ? "On" : "Connected"}</span>` : c.expired ? ` <span class="badge deleted">Sign in again</span>` : c.auth === "none" ? ` <span class="badge">No sign-in</span>` : ""}<small>${esc(c.description)}</small>
-        ${c.id === "github" && !c.connected ? `<span class="row" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">${c.can_sign_in ? `<button class="btn primary" data-ghdev="1">Sign in with GitHub</button>` : ""}<button class="btn ${c.can_sign_in ? "" : "primary"}" data-ghfound="1">Use the GitHub login on this computer</button><a class="btn" href="https://github.com/settings/tokens/new?scopes=repo,workflow,read:org&amp;description=Meshpool" target="_blank" rel="noopener">Create a token</a></span>` : ""}
+        ${c.id === "github" && !c.connected ? `<span class="row" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">${c.can_sign_in ? `<button class="btn primary" data-ghdev="1">Sign in with GitHub</button>` : ""}<button class="btn ${c.can_sign_in ? "" : "primary"}" data-ghfound="1">Use the GitHub login on this computer</button><a class="btn" href="https://github.com/settings/tokens/new?scopes=repo,workflow,read:org&amp;description=meshpool" target="_blank" rel="noopener">Create a token</a></span>` : ""}
         ${c.auth === "token" && !c.connected ? `<span class="keyrow" style="margin-top:4px"><input type="password" data-tok="${esc(c.id)}" placeholder="Paste a token" autocomplete="off" spellcheck="false"><button class="btn" data-save="${esc(c.id)}">Save</button></span><small>${esc(c.token_help)}</small>` : ""}
         ${own || S.cnNeedClient === c.id ? clientForm(c) : ""}</span>${btn}</li>`;
     };
@@ -2612,11 +2622,11 @@ async function renderSection(sec) {
     };
     const draw = rows => {
       const order = c => (c.connected ? 0 : 1);
-      b.innerHTML = `${close}<h3>Connectors</h3><p class="lead">Connect the apps you work in. Every agent can then use them as tools. Sign-in happens between this computer and the app itself: Meshpool keeps the access on this computer only and runs no server in between.</p>
+      b.innerHTML = `${close}<h3>Connectors</h3><p class="lead">Connect the apps you work in. Every agent can then use them as tools. Sign-in happens between this computer and the app itself: meshpool keeps the access on this computer only and runs no server in between.</p>
         <div class="cnbar"><input id="cnq" placeholder="Search ${rows.length} apps" spellcheck="false" value="${esc(S.cnQ || "")}"><span class="cnchips"><button class="btn${S.cnCat ? "" : " primary"}" data-cncat="">All</button>${cats.filter(k => rows.some(c => (c.connected ? "Connected" : c.custom ? "Yours" : c.category) === k)).map(k => `<button class="btn" data-cncat="${esc(k)}">${esc(k)}</button>`).join("")}</span></div>
         <div class="res" id="cnRes"></div>
         <ul class="rows2" id="cnl">${[...rows].sort((x, z) => order(x) - order(z)).map(row).join("")}</ul>
-        <h3 style="font-size:16px;margin:16px 0 4px">Add another app</h3><p class="lead" style="font-size:13px">Any app with a remote MCP server works. Paste its address; Meshpool works out whether it needs nothing, a token or a browser sign-in. For a key that goes in another header, paste it as <code>Header-Name: value</code>.</p>
+        <h3 style="font-size:16px;margin:16px 0 4px">Add another app</h3><p class="lead" style="font-size:13px">Any app with a remote MCP server works. Paste its address; meshpool works out whether it needs nothing, a token or a browser sign-in. For a key that goes in another header, paste it as <code>Header-Name: value</code>.</p>
         <div class="cform"><input id="cxName" placeholder="Name" spellcheck="false"><input id="cxUrl" placeholder="https://mcp.example.com/mcp" spellcheck="false"><input id="cxTok" type="password" placeholder="Token or API key (optional)" autocomplete="off"><button class="btn primary" id="cxAdd">Add</button></div>
         <details style="margin-top:8px"><summary class="linkbtn" style="display:inline;padding-left:0">More options: your own sign-in client</summary><span class="keyrow" style="margin-top:4px"><input id="cxCid" placeholder="Client ID" autocomplete="off" spellcheck="false"><input id="cxSec" type="password" placeholder="Client secret" autocomplete="off" spellcheck="false"></span><small class="muted">For apps that only sign in apps they know. Redirect URL: <code>${esc(redirect)}</code></small></details>`;
       done();
@@ -2681,7 +2691,7 @@ async function renderSection(sec) {
     return;
   } else if (sec === "skills") {
     await loadSkills();
-    b.innerHTML = `${close}<h3>Skills</h3><p class="lead">Skills are instructions the agent loads when a task matches, or when you type <code>$name</code> in the message box. They use the same SKILL.md format as Codex and Hermes, and Meshpool shares them with every agent.</p>
+    b.innerHTML = `${close}<h3>Skills</h3><p class="lead">Skills are instructions the agent loads when a task matches, or when you type <code>$name</code> in the message box. They use the same SKILL.md format as Codex and Hermes, and meshpool shares them with every agent.</p>
       <div class="dropzone" id="skDrop" tabindex="0" role="button">Drop a skill folder, a .zip or a SKILL.md here, or click to choose files<input type="file" id="skFile" multiple hidden></div>
       <ul class="rows2" id="skl"></ul>
       <details><summary class="btn" style="display:inline-block">Write a new skill</summary>
@@ -2735,8 +2745,8 @@ async function renderSection(sec) {
   } else if (sec === "harnesses") {
     await loadHarnesses();
     const ex = S.hInfo.examples || [];
-    b.innerHTML = `${close}<h3>Agents</h3><p class="lead">The agent is who does the work in a chat. What it runs on is your provider (Settings, Account): ${esc((S.settings.providers || {})[S.settings.provider || "meshpool"] || "")}. Meshpool Auto picks a good agent for each task. Each agent runs on the provider of the model you pick in the message box: your API key or your ChatGPT sign-in. Other agents can be added too.</p>
-      <div class="dflt">${[["cowork", "Work"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error && h.ready !== false).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name)}${h.mode !== m && h.type !== "auto" ? " · made for " + (h.mode === "code" ? "Code" : "Work") : ""}</option>`).join("")}</select><small>${m === "code" ? "Meshpool Code and Pi both solve most coding tasks; Pi is a little faster and cheaper, Meshpool Code has the full toolset (browser, connectors, skills)." : "Meshpool Work makes Word, Excel and PowerPoint files and does research. Hermes adds long-term memory for ongoing work."}</small></label>`).join("")}</div>
+    b.innerHTML = `${close}<h3>Agents</h3><p class="lead">The agent is who does the work in a chat. What it runs on is your provider (Settings, Account): ${esc((S.settings.providers || {})[S.settings.provider || "meshpool"] || "")}. meshpool Auto picks a good agent for each task. Each agent runs on the provider of the model you pick in the message box: your API key or your ChatGPT sign-in. Other agents can be added too.</p>
+      <div class="dflt">${[["cowork", "Work"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error && h.ready !== false).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name)}${h.mode !== m && h.type !== "auto" ? " · made for " + (h.mode === "code" ? "Code" : "Work") : ""}</option>`).join("")}</select><small>${m === "code" ? "meshpool Code and Pi both solve most coding tasks; Pi is a little faster and cheaper, meshpool Code has the full toolset (browser, connectors, skills)." : "meshpool Work makes Word, Excel and PowerPoint files and does research. Hermes adds long-term memory for ongoing work."}</small></label>`).join("")}</div>
       <ul class="rows2">${S.harnesses.filter(h => !h.hidden).map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.mode === "cowork" ? "Work" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">${h.unsupported ? "Not available" : "Not installed"}</span>` : h.ready === false ? ` <span class="badge deleted">Needs setup</span>` : ""}<small>${esc(h.description || "")}</small>${h.runs_on && h.ready !== false ? `<small>Runs on ${esc(h.runs_on)}.</small>` : ""}${h.ready === false && h.setup ? `<small>${esc(h.setup)}</small>` : ""}${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}</span>${h.login ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}" ${h.available === false ? `disabled title="Not available on this computer."` : ""}>Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
       ${ex.length ? `<h3 style="font-size:16px;margin:16px 0 8px">Add one</h3><div style="display:flex;gap:8px;flex-wrap:wrap">${ex.map(e => `<button class="btn" data-ex="${esc(e.id)}">${esc(e.name)}</button>`).join("")}</div>` : ""}
       <div class="dropzone" id="hDrop" style="margin-top:16px" tabindex="0" role="button">Or drop an agent's .json file here<input type="file" id="hFile" accept=".json" hidden></div><div class="res" id="hRes"></div>`;
@@ -2774,13 +2784,13 @@ async function renderSection(sec) {
       const autoOn = !["0", "off", "false", "no"].includes(String(get0("MH_SANDBOX_AUTO") ?? "1").toLowerCase());
       const fullOn = normMode(get0("MH_AGENT_PERMISSIONS")) === "auto";   // Full access: new chats never ask
       b.innerHTML = `${close}<h3>Permissions</h3>
-        <h3 style="font-size:16px;margin:4px 0 4px">When Meshpool asks you</h3>
-        <p class="lead">${fullOn ? "New chats start in Full access: Meshpool edits files and runs commands without asking, including deleting, using the internet and installing. Undo keeps every file change." : autoOn ? "Meshpool reads, runs and writes files in the chat's folder on its own (Undo keeps every change). It asks before it deletes files, uses the internet, installs something, or goes outside the folder." : "Meshpool asks before every command and every file change."}</p>
-        <div class="row" style="gap:8px;margin-bottom:4px"><select class="sr-sel" id="permAuto" aria-label="When Meshpool asks you"><option value="1" ${!fullOn && autoOn ? "selected" : ""}>Only for risky actions (recommended)</option><option value="0" ${!fullOn && !autoOn ? "selected" : ""}>Before every command and change</option><option value="full" ${fullOn ? "selected" : ""}>Never (Full access)</option></select><span class="res" id="permAutoRes"></span></div>
-        <p class="lead">${esc(r.note || "")} Meshpool works only in the folders you add.${r.platform === "darwin" ? " When an agent opens a protected folder such as Desktop, Documents or Downloads for the first time, your Mac asks you to allow it." : ""}</p>
+        <h3 style="font-size:16px;margin:4px 0 4px">When meshpool asks you</h3>
+        <p class="lead">${fullOn ? "New chats start in Full access: meshpool edits files and runs commands without asking, including deleting, using the internet and installing. Undo keeps every file change." : autoOn ? "meshpool reads, runs and writes files in the chat's folder on its own (Undo keeps every change). It asks before it deletes files, uses the internet, installs something, or goes outside the folder." : "meshpool asks before every command and every file change."}</p>
+        <div class="row" style="gap:8px;margin-bottom:4px"><select class="sr-sel" id="permAuto" aria-label="When meshpool asks you"><option value="1" ${!fullOn && autoOn ? "selected" : ""}>Only for risky actions (recommended)</option><option value="0" ${!fullOn && !autoOn ? "selected" : ""}>Before every command and change</option><option value="full" ${fullOn ? "selected" : ""}>Never (Full access)</option></select><span class="res" id="permAutoRes"></span></div>
+        <p class="lead">${esc(r.note || "")} meshpool works only in the folders you add.${r.platform === "darwin" ? " When an agent opens a protected folder such as Desktop, Documents or Downloads for the first time, your Mac asks you to allow it." : ""}</p>
         ${r.platform === "darwin" ? `<button class="btn primary" id="permAll" style="margin-bottom:8px">Allow all</button>` : ""}
         <ul class="rows2">${r.rows.map(x => `<li><span class="dot ${x.ok === true ? "" : "wait"}" style="margin-top:8px;${x.ok === true ? "background:var(--add)" : ""}"></span><span class="tg"><b>${esc(x.name)}</b><small>${x.ok === true ? "Allowed. " : x.ok === false ? "Not allowed yet. " : ""}${esc(x.why)}</small></span>${x.ok === true || r.platform !== "darwin" ? "" : `<button class="btn" data-perm="${esc(x.id)}">${x.ok === false ? "Allow" : "Open settings"}</button>`}</li>`).join("")}</ul>
-        <h3 style="font-size:16px;margin:16px 0 8px">Folders Meshpool works in</h3>
+        <h3 style="font-size:16px;margin:16px 0 8px">Folders meshpool works in</h3>
         <ul class="rows2">${S.projects.map(p => `<li><span class="tg"><b>${esc(p.name)}</b><small>${esc(p.managed ? "GitHub" : p.path)}</small></span><button class="iconbtn" data-rmp="${esc(p.path)}" aria-label="Remove">${ICON.x}</button></li>`).join("") || `<li class="pnote">No folders yet.</li>`}</ul>
         <button class="btn" id="addP">${ICON.folder} Add a folder</button>
         <div id="rulesBox"></div>`;
@@ -2802,13 +2812,13 @@ async function renderSection(sec) {
   } else if (sec === "usage") {
     const u = await api("/api/usage"); const t = u.total;
     // Cost: "$0.42" when every call was priced, "$0.42 + 3 unpriced calls" when some were not, "unpriced" when none were. Never $0.00 for unpriced.
-    const usd = x => x < 0.01 && x > 0 ? "$" + x.toFixed(4) : "$" + x.toFixed(2);
+    const usd = fmtCost;
     const money = r => !r.calls ? "-" : r.unpriced_calls >= r.calls ? "unpriced" : usd(r.cost || 0) + (r.unpriced_calls ? ` + ${r.unpriced_calls} unpriced call${r.unpriced_calls === 1 ? "" : "s"}` : "");
     const SRC = [["Chat", /^chat$/], ["Engines", /^engine:/], ["Reviewers and grader", /^(review|grader)/], ["Helpers", /^helper:/], ["Sub-agents", /^subagent/], ["External agents", /^external:/], ["Background", /^background/]];
     const bySrc = {}; for (const [k, r] of Object.entries(u.by_source || {})) { const name = (SRC.find(([, re]) => re.test(k)) || ["Other"])[0]; const b = bySrc[name] || (bySrc[name] = {in: 0, cached: 0, out: 0, calls: 0, cost: 0, unpriced_calls: 0}); for (const f in b) b[f] += r[f] || 0; }
     const srcRows = [...SRC.map(x => x[0]), "Other"].filter(n => bySrc[n]);
     const gw = (u.gateway || []).filter(g => g.inflight || g.waiting);
-    b.innerHTML = `${close}<h3>Usage</h3><p class="lead">Every model call Meshpool's own agents made on this computer, including the ones its tools, checks and sub-agents made. A cost shows only where the model's price is known.</p>
+    b.innerHTML = `${close}<h3>Usage</h3><p class="lead">Every model call meshpool's own agents made on this computer, including the ones its tools, checks and sub-agents made. A cost shows only where the model's price is known.</p>
       <div class="statgrid"><div><b>${fmt(t.in)}</b><span>Input tokens</span></div><div><b>${t.in ? Math.round(100 * t.cached / t.in) : 0}%</b><span>Served from cache</span></div><div><b>${fmt(t.out)}</b><span>Output tokens</span></div><div><b>${fmt(t.calls)}</b><span>Model calls</span></div><div><b>${esc(money(t))}</b><span>Cost</span></div></div>
       ${t.unreported_calls ? `<p class="pnote">${fmt(t.unreported_calls)} call${t.unreported_calls === 1 ? "" : "s"} did not report their tokens, so those are estimated.</p>` : ""}
       ${gw.map(g => `<p class="pnote">Model calls running: ${g.inflight} of ${g.limit} on ${esc(g.endpoint)}${g.waiting ? `, ${g.waiting} waiting` : ""}</p>`).join("")}
@@ -2816,8 +2826,8 @@ async function renderSection(sec) {
       <h3 style="font-size:16px;margin:16px 0 8px">By source</h3><table class="t"><tr><th>Source</th><th>Calls</th><th>In</th><th>Cached</th><th>Out</th><th>Cost</th></tr>${srcRows.map(n => { const r = bySrc[n]; return `<tr><td>${esc(n)}</td><td class="n">${fmt(r.calls)}</td><td class="n">${fmt(r.in)}</td><td class="n">${fmt(r.cached)}</td><td class="n">${fmt(r.out)}</td><td class="n">${esc(money(r))}</td></tr>`; }).join("")}</table>`;
   } else if (sec === "terminal") {
     const c = S.settings.cli || {};
-    b.innerHTML = `${close}<h3>Terminal command</h3><p class="lead">The same agent works in any terminal. Go to a project folder and type <code>meshpool</code>. Use <code>meshpool -p "..."</code> for one answer, and <code>meshpool acp</code> to plug Meshpool into Zed, JetBrains or other ACP apps.</p>
-      <div class="res ${c.installed ? "ok" : ""}">${c.available ? (c.installed ? (c.new_window ? "Installed. Open a new terminal window and type meshpool." : "Installed. In any terminal window, type meshpool.") : "Not on your PATH yet.") : "The meshpool command comes with the Meshpool app for Mac and Windows. On other computers, install it with the one-line installer on the Meshpool download page."}</div>
+    b.innerHTML = `${close}<h3>Terminal command</h3><p class="lead">The same agent works in any terminal. Go to a project folder and type <code>meshpool</code>. Use <code>meshpool -p "..."</code> for one answer, and <code>meshpool acp</code> to plug meshpool into Zed, JetBrains or other ACP apps.</p>
+      <div class="res ${c.installed ? "ok" : ""}">${c.available ? (c.installed ? (c.new_window ? "Installed. Open a new terminal window and type meshpool." : "Installed. In any terminal window, type meshpool.") : "Not on your PATH yet.") : "The meshpool command comes with the meshpool app for Mac and Windows. On other computers, install it with the one-line installer on the meshpool download page."}</div>
       ${c.available && !c.installed ? `<button class="btn primary" id="cliBtn" style="margin-top:8px">Install the meshpool command</button>` : ""}`;
     $("#cliBtn")?.addEventListener("click", async () => { try { const r = await post("/api/install-cli"); $(".res", b).textContent = r.message; } catch (e) { $(".res", b).textContent = e.message; } });
   } else if (sec === "office") {
@@ -2861,20 +2871,20 @@ async function renderSection(sec) {
 // Three steps when the model step is shown; two when Meshpool already had a key, so a fresh start says step 1.
 const onbSteps = n => { const t = store("onbFull") ? 3 : 2, k = n - 3 + t; return `<div class="onb-steps" aria-label="Step ${k} of ${t}">${Array.from({length: t}, (_, i) => `<span class="${i < k ? "on" : ""}"></span>`).join("")}<small>Step ${k} of ${t}</small></div>`; };
 // Providers: what the models run on. Agents (harnesses) are picked separately.
-const PROVIDERS = [["meshpool", "Meshpool API key", "Recommended. Every model on one key, 20% cheaper."],
+const PROVIDERS = [["meshpool", "meshpool API key", "Recommended. Every model on one key, 20% cheaper."],
   ["custom", "Another API key", "OpenAI, OpenRouter or any OpenAI-compatible provider."],
-  ["chatgpt", "ChatGPT subscription", "Your ChatGPT Plus, Pro or Business plan, for Meshpool's agents, Pi, Hermes and Codex. No API key needed."]];
+  ["chatgpt", "ChatGPT subscription", "Your ChatGPT Plus, Pro or Business plan, for meshpool's agents, Pi, Hermes and Codex. No API key needed."]];
 const SIGNIN = {chatgpt: {name: "ChatGPT", harness: "codex"}};
 function showOnboarding() {
   if ($("#onb")) return;
   store("onbFull", 1);
   const o = document.createElement("div"); o.className = "onb"; o.id = "onb";
   o.innerHTML = `<div class="onb-card" id="onbKey">
-    <img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
-    ${onbSteps(1)}<h1>Welcome to Meshpool</h1><p>Choose what Meshpool runs on. It stays on this computer, and you can change it any time in Settings.</p>
-    <div class="scope prov" role="radiogroup" aria-label="What Meshpool runs on">${PROVIDERS.filter(p => p[0] !== "chatgpt" || !chatgptSignInGone()).map(([id, name, desc], i) => `<button class="scopeopt" data-prov="${id}" role="radio" aria-checked="${i === 0}"><b>${name}</b><small>${desc}</small></button>`).join("")}</div>
+    <img class="logo mlogo" src="${logoSrc()}" alt="meshpool">
+    ${onbSteps(1)}<h1>Choose what meshpool runs on</h1><p>It stays on this computer, and you can change it any time in Settings.</p>
+    <div class="scope prov" role="radiogroup" aria-label="What meshpool runs on">${PROVIDERS.filter(p => p[0] !== "chatgpt" || !chatgptSignInGone()).map(([id, name, desc], i) => `<button class="scopeopt" data-prov="${id}" role="radio" aria-checked="${i === 0}"><b>${name}</b><small>${desc}</small></button>`).join("")}</div>
     <div id="oKeyBox">
-      <p class="credit" id="oCredit">No key yet? <a href="https://meshpool.ai" target="_blank" rel="noopener">Get one at meshpool.ai</a> and run every model 20% cheaper.</p>
+      <p class="credit" id="oCredit">No key yet? <a href="https://meshpool.ai" target="_blank" rel="noopener">Get one at meshpool.ai</a></p>
       <label class="field" id="oBaseF" style="max-width:none" hidden><span>Provider address (base URL)</span><input id="oBase" spellcheck="false" placeholder="https://api.openai.com/v1"></label>
       <label class="field" id="oModelF" style="max-width:none" hidden><span>Model</span><input id="oModel" spellcheck="false" placeholder="gpt-4.1-mini"></label>
       <label class="field" style="max-width:none"><span>API key</span><span class="keyrow"><input id="oKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key"><button class="btn" id="oShow" type="button">Show</button></span></label>
@@ -2889,9 +2899,9 @@ function showOnboarding() {
   const sub = () => SIGNIN[prov] && (S.harnesses || []).find(h => h.id === SIGNIN[prov].harness);
   const drawSub = () => {
     const h = sub(); const name = SIGNIN[prov]?.name || "";
-    const what = " Meshpool Code, Meshpool Work, Pi, Hermes and Codex all run on it.";
+    const what = " meshpool Code, meshpool Work, Pi, Hermes and Codex all run on it.";
     $("#oSign").hidden = !h || h.signed_in || h.available === false;
-    $("#oSubTxt").textContent = !h ? "Loading…" : h.available === false ? (h.unsupported ? `Signing in with ${name} needs Codex, which is not part of the Meshpool app. Use a Meshpool API key or another API key.` : `Signing in to ${name} needs Node.js. The desktop app includes it; otherwise install it from nodejs.org.`)
+    $("#oSubTxt").textContent = !h ? "Loading…" : h.available === false ? (h.unsupported ? `Signing in with ${name} needs Codex, which is not part of the meshpool app. Use a meshpool API key or another API key.` : `Signing in to ${name} needs Node.js. The desktop app includes it; otherwise install it from nodejs.org.`)
       : (h.signed_in ? `You are signed in to ${name} on this computer. Usage comes out of your plan.` : `Sign in with your ${name} account. Usage comes out of your plan, not an API key.`) + what;
     $("#oGo").disabled = !(h && h.signed_in);
   };
@@ -3121,14 +3131,14 @@ function permStep(host) {
   let card = $("#onbPerm", o);
   if (!card) { card = document.createElement("div"); card.className = "onb-card"; card.id = "onbPerm"; o.appendChild(card); }
   card.hidden = false;
-  card.innerHTML = `<img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
-    ${onbSteps(2)}<h1>Choose where Meshpool can work</h1><p>Meshpool only works in the places you allow. You can change this any time in Settings → Permissions.</p>
-    <div class="scope" role="radiogroup" aria-label="Where Meshpool can work">
+  card.innerHTML = `<img class="logo mlogo" src="${logoSrc()}" alt="meshpool">
+    ${onbSteps(2)}<h1>Choose where meshpool can work</h1><p>meshpool only works in the places you allow. You can change this any time in Settings → Permissions.</p>
+    <div class="scope" role="radiogroup" aria-label="Where meshpool can work">
       <button class="scopeopt" data-scope="pick" role="radio"><b>Folders I choose</b><small>Add one or more folders now.</small></button>
       <button class="scopeopt" data-scope="home" role="radio"><b>My whole home folder</b><small>Documents, Desktop, Downloads and everything else in your user folder.</small></button>
       <button class="scopeopt" data-scope="later" role="radio"><b>Start without a folder</b><small>Each chat keeps its files in its own folder. Open it from the chat's Files panel.</small></button>
     </div><div class="res" id="oScope"></div>
-    <div id="oPermH"><h3 class="onb-h">What Meshpool can do</h3>
+    <div id="oPermH"><h3 class="onb-h">What meshpool can do</h3>
     <ul class="rows2" id="oPerms"></ul></div>
     <div class="onb-go"><button class="bigbtn" id="oAll">Allow all</button><button class="btn" id="oDone">Continue</button></div>`;
   const draw = async body => {
@@ -3152,8 +3162,8 @@ function permStep(host) {
         const mine = S.pj.filter(q => q.link?.type === "folder" && q.pinned);
         res.className = mine.length ? "res ok" : "res"; res.textContent = mine.length ? `Added ${mine.map(q => q.name).join(", ")}. New chats work in ${p ? p.name : mine[0].name}. Add more any time with Add a folder in the sidebar.` : "No folder added yet.";
       }
-      else if (x.dataset.scope === "home") { const r = await post("/api/projects", {action: "home"}); S.projects = r.projects; renderSide(); newThread(r.picked); res.className = "res ok"; res.textContent = "Meshpool can work anywhere in your home folder. It asks before deleting files, using the internet or installing anything."; }
-      else { res.className = "res"; res.textContent = "Each chat keeps its files in its own folder; open it from the chat's Files panel. Add your own folders any time from the sidebar."; }
+      else if (x.dataset.scope === "home") { const r = await post("/api/projects", {action: "home"}); S.projects = r.projects; renderSide(); newThread(r.picked); res.className = "res ok"; res.textContent = "meshpool can work anywhere in your home folder. It asks before deleting files, using the internet or installing anything."; }
+      else { res.className = "res"; res.textContent = "Add your own folders any time from the sidebar."; }
       if (mac && x.dataset.scope !== "later") draw({id: "folders"});
     } catch (e) { res.className = "res bad"; res.textContent = e.message; }
   });
@@ -3162,19 +3172,19 @@ function permStep(host) {
   window._permVis = () => { if (!document.hidden && $("#onbPerm")) draw(); };
   document.addEventListener("visibilitychange", window._permVis);
   $("#oDone", card).onclick = () => setupStep(o, card);
-  if (!S.projects.length) { const later = $("[data-scope=later]", card); later.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Each chat keeps its files in its own folder; open it from the chat's Files panel. Add your own folders any time from the sidebar."; }
+  if (!S.projects.length) { const later = $("[data-scope=later]", card); later.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Add your own folders any time from the sidebar."; }
   draw();
 }
 
 function setupStep(o, prev) {
   prev?.remove();
   const card = document.createElement("div"); card.className = "onb-card"; card.id = "onbSetup"; o.appendChild(card);
-  card.innerHTML = `<img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
+  card.innerHTML = `<img class="logo mlogo" src="${logoSrc()}" alt="meshpool">
     ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. You can skip this.</p>
     <div id="oImport"></div>
     <div id="oContext"></div>
     <label class="switchrow" id="oLocalRow" hidden><input type="checkbox" id="oLocal"> <span id="oLocalTxt"></span></label>
-    <div class="onb-go"><button class="bigbtn" id="oFinish">Start using Meshpool</button></div>`;
+    <div class="onb-go"><button class="bigbtn" id="oFinish">Start using meshpool</button></div>`;
   importPanel($("#oImport", card)).then(() => { const b = $("#impGo", card); if (b) b.hidden = true; });
   contextPanel($("#oContext", card));
   let found = {};
@@ -3203,7 +3213,7 @@ async function updStatus() {
   if (c && (!S.upd || !S.upd.ok || (c.checked_at || 0) > (S.upd.checked_at || 0))) S.upd = Object.assign({}, c, {ok: true});
   renderUpdBar(); if ($("#updMore") && !S.updBusy) updatePanel(curUpd());
   const r = S.ust?.last_result;
-  if (r) toast(r.message || (r.ok ? "Meshpool was updated." : "The update did not finish."), r.ok ? 5000 : 12000);
+  if (r) toast(r.message || (r.ok ? "meshpool was updated." : "The update did not finish."), r.ok ? 5000 : 12000);
   clearTimeout(S.ustT); S.ustT = 0;
   // Not while the tab is hidden: the poll stops there, and coming back to the tab starts it again at once.
   const next = () => { S.ustT = 0; if (document.hidden) S.ustOff = true; else updStatus(); };
@@ -3228,7 +3238,7 @@ function renderUpdBar() {
   else if (s?.state === "installing") { bar.hidden = false; bar.dataset.act = "about"; bar.innerHTML = `<span class="dot"></span>Installing update...`; }
   else if (s?.state === "ready") { bar.hidden = false; bar.dataset.act = "apply"; bar.innerHTML = `<span class="dot"></span>Update ready<span class="go">Restart</span>`; }
   else if (["downloading", "verifying", "staging"].includes(s?.state)) { bar.hidden = false; bar.dataset.act = "about"; bar.innerHTML = `<span class="dot"></span>Downloading update${s.state === "downloading" && s.total ? " " + updPct(s) + "%" : "..."}`; }
-  else if (u?.ok && u.newer) { bar.hidden = false; bar.dataset.act = "about"; bar.innerHTML = `<span class="dot"></span>Meshpool ${esc(u.latest || "")} is available<span class="go">Update</span>`; }
+  else if (u?.ok && u.newer) { bar.hidden = false; bar.dataset.act = "about"; bar.innerHTML = `<span class="dot"></span>meshpool ${esc(u.latest || "")} is available<span class="go">Update</span>`; }
   else bar.hidden = true;
 }
 async function bootId() {
@@ -3245,7 +3255,7 @@ function waitForNewServer(oldBoot, out) {
       try { const r = await fetch("/healthz", {cache: "no-store"}); if (r.ok) b = (await r.json()).boot || null; else down = true; } catch (e) { down = true; }
       if (b && (oldBoot ? b !== oldBoot : down)) { location.reload(); resolve(true); return; }
       if (Date.now() - t0 < 90000) setTimeout(tick, 1000);
-      else { say("Meshpool closed. Open it again to use the new version."); resolve(false); }
+      else { say("meshpool closed. Open it again to use the new version."); resolve(false); }
     };
     setTimeout(tick, 1000);
   });
@@ -3254,41 +3264,41 @@ async function applyUpdate() {
   const before = await bootId();
   let r; try { r = await post("/api/update/apply", {}); } catch (e) { r = {ok: false, error: e.message}; }
   if (!r.ok) { toast(r.error || "Could not restart to update.", 8000); return; }
-  if (r.mode === "code") { toast("Restarting Meshpool...", 60000); waitForNewServer(r.boot || before); return; }
-  toast("Updating Meshpool. It reopens in a moment.", 60000);
+  if (r.mode === "code") { toast("Restarting meshpool...", 60000); waitForNewServer(r.boot || before); return; }
+  toast("Updating meshpool. It reopens in a moment.", 60000);
 }
 function updatePanel(u) {
   const res = RES("updRes"), more = $("#updMore"); if (!res || !more) return;
   const s = S.ust || {}, st = s.settings || {};
   const cerr = s.check_error ? `<div><small style="color:var(--ink-3)">The last check for updates did not work: ${esc(s.check_error)}</small></div>` : "";
-  const opts = `<div style="margin-top:12px"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="updAuto" ${st.auto_download === false ? "" : "checked"}> Download updates automatically</label><small style="color:var(--ink-3)">An update that is ready installs when you quit Meshpool, or when you press Restart.</small></div>${cerr}`;
+  const opts = `<div style="margin-top:12px"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="updAuto" ${st.auto_download === false ? "" : "checked"}> Download updates automatically</label><small style="color:var(--ink-3)">An update that is ready installs when you quit meshpool, or when you press Restart.</small></div>${cerr}`;
   const bindOpts = () => { const c = $("#updAuto"); if (c) c.onchange = () => post("/api/update/settings", {auto_download: c.checked}).catch(() => {}); };
   const ver = s.latest || s.tag || u?.latest || "";
   const link = url => url ? `<a class="btn" href="${esc(url)}" target="_blank" rel="noopener">What's new</a>` : "";
-  if (s.state === "installing") { res.className = "res"; res.textContent = `Installing Meshpool ${ver}. Meshpool restarts when it is done.`; more.innerHTML = opts; bindOpts(); return; }
+  if (s.state === "installing") { res.className = "res"; res.textContent = `Installing meshpool ${ver}. meshpool restarts when it is done.`; more.innerHTML = opts; bindOpts(); return; }
   if (s.state === "ready") {
     const err = s.error || s.fail?.error || "";
     if ((s.install_failures || 0) > 0) { res.className = "res bad"; res.textContent = `${err || "The last install did not finish."} It will not install automatically when you quit. Press Restart to try again.`; }
-    else { res.className = "res ok"; res.textContent = s.manual ? `Meshpool ${ver} is ready. It installs when you press Restart.` : `Meshpool ${ver} is ready to install.`; }
+    else { res.className = "res ok"; res.textContent = s.manual ? `meshpool ${ver} is ready. It installs when you press Restart.` : `meshpool ${ver} is ready to install.`; }
     more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn primary" id="updGo">Restart to update</button>${link(s.url)}</div>${opts}`;
     $("#updGo").onclick = applyUpdate; bindOpts(); return; }
-  if (["downloading", "verifying", "staging"].includes(s.state)) { res.className = "res"; res.textContent = s.state === "downloading" ? `Downloading Meshpool ${ver}${s.total ? " (" + updPct(s) + "%)" : ""}. You can keep working.` : `Checking Meshpool ${ver}...`; more.innerHTML = opts; bindOpts(); return; }
+  if (["downloading", "verifying", "staging"].includes(s.state)) { res.className = "res"; res.textContent = s.state === "downloading" ? `Downloading meshpool ${ver}${s.total ? " (" + updPct(s) + "%)" : ""}. You can keep working.` : `Checking meshpool ${ver}...`; more.innerHTML = opts; bindOpts(); return; }
   if (s.state === "failed" || (s.state === "error" && s.error && u?.newer !== false)) {
     const nt = updWhen(s.fail?.next_try || s.next_try);
     res.className = "res bad"; res.textContent = s.error || s.fail?.error || "The update did not finish.";
-    more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn" id="updGo">Try again</button>${s.url ? `<a class="btn" href="${esc(s.url)}" target="_blank" rel="noopener">Release page</a>` : ""}${nt ? `<small id="updNext" style="color:var(--ink-3)">Meshpool tries again at ${esc(nt)}.</small>` : ""}</div>${opts}`;
+    more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn" id="updGo">Try again</button>${s.url ? `<a class="btn" href="${esc(s.url)}" target="_blank" rel="noopener">Release page</a>` : ""}${nt ? `<small id="updNext" style="color:var(--ink-3)">meshpool tries again at ${esc(nt)}.</small>` : ""}</div>${opts}`;
     $("#updGo").onclick = async () => { await post("/api/update/download", {}).catch(() => {}); setTimeout(updStatus, 800); }; bindOpts(); return; }
-  if (s.state === "withdrawn") { res.className = "res bad"; res.textContent = s.error || `Meshpool ${ver} was withdrawn. Stay on your current version.`; more.innerHTML = opts; bindOpts(); return; }
+  if (s.state === "withdrawn") { res.className = "res bad"; res.textContent = s.error || `meshpool ${ver} was withdrawn. Stay on your current version.`; more.innerHTML = opts; bindOpts(); return; }
   if (!u) { res.textContent = ""; more.innerHTML = cerr; return; }
   if (!u.ok) { res.className = "res bad"; res.textContent = u.error; more.innerHTML = cerr; return; }
   if (!u.newer) { res.className = "res ok"; res.textContent = `You have the latest version (${u.current}).`; more.innerHTML = opts; bindOpts(); return; }
   const kind = u.kind || s.kind;
   if (kind === "dev") {
-    res.className = "res"; res.textContent = `Meshpool ${u.latest} is available. This copy runs from a git checkout: run git pull in it to update.`;
+    res.className = "res"; res.textContent = `meshpool ${u.latest} is available. This copy runs from a git checkout: run git pull in it to update.`;
     more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn" id="updCopy">Copy</button>${link(u.url)}</div>${cerr}`;
     $("#updCopy").onclick = () => { try { navigator.clipboard.writeText("git pull").then(() => toast("Copied: git pull"), () => toast("Could not copy.")); } catch (e) { toast("Could not copy."); } };
     return; }
-  res.className = "res"; res.textContent = `Meshpool ${u.latest} is available. You have ${u.current}.`;
+  res.className = "res"; res.textContent = `meshpool ${u.latest} is available. You have ${u.current}.`;
   const how = ["mac-app", "win-app"].includes(kind) ? "Downloads in the background; installs when you restart." : "Installs in place in under a minute, then restarts.";
   const busy = !!S.updBusy;
   more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn primary" id="updGo" ${busy ? `disabled title="Wait until the current work finishes."` : ""}>${busy ? "Installing..." : ["mac-app", "win-app"].includes(kind) ? "Download update" : "Update now"}</button>${link(u.url)}<small style="color:var(--ink-3)">${esc(how)}</small></div><div class="res" id="updOut"></div>${["mac-app", "win-app"].includes(kind) ? opts : cerr}`;
@@ -3301,7 +3311,7 @@ function updatePanel(u) {
     let r; try { r = await post("/api/update/install", {}); } catch (err) { r = {ok: false, error: err.message}; }
     S.updBusy = false;
     if (!r.ok) { btn.disabled = false; btn.textContent = ["mac-app", "win-app"].includes(kind) ? "Download update" : "Update now"; out.className = "res bad"; out.textContent = r.error; return; }
-    out.className = "res ok"; out.textContent = r.message || "Restarting Meshpool...";
+    out.className = "res ok"; out.textContent = r.message || "Restarting meshpool...";
     if (r.action === "restarting") { btn.disabled = true; waitForNewServer(r.boot || before, out); }
     else if (r.action === "downloading" || r.action === "ready") { btn.remove(); updStatus(); }
     else if (r.action === "restart") { btn.disabled = false; btn.textContent = "Restart now"; btn.onclick = () => restartApp(); }
@@ -3310,7 +3320,7 @@ function updatePanel(u) {
   };
 }
 async function restartApp(bootBefore) {
-  const out = RES("updOut"); if (out) { out.className = "res"; out.textContent = "Restarting Meshpool..."; }
+  const out = RES("updOut"); if (out) { out.className = "res"; out.textContent = "Restarting meshpool..."; }
   const before = (typeof bootBefore === "string" && bootBefore) || await bootId();
   let r = {}; try { r = await post("/api/update/restart", {}); } catch (e) {}
   waitForNewServer(before || r.boot, out && out.id ? out : null);
@@ -3332,7 +3342,7 @@ async function restartApp(bootBefore) {
   new MutationObserver(ms => { if (!S.cur?.ready) return; for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1 && n.id !== "working" && !n.classList.contains("hist")) n.classList.add("enter"); })
     .observe($("#col"), {childList: true});
   try { await Promise.all([loadSettings(), loadProjects(), loadHarnesses(), loadSkills(), loadPj()]); }
-  catch (e) { $("#col").innerHTML = `<div class="hero"><h1>Meshpool could not start</h1><p class="sub">${esc(e.message)}</p></div>`; return; }
+  catch (e) { $("#col").innerHTML = `<div class="hero"><h1>meshpool could not start</h1><p class="sub">${esc(e.message)}</p></div>`; return; }
   await loadThreads();
   await loadPj();
   loadAccount(); loadCaps(); loadConnectors(); loadStyles().then(() => renderBar());
@@ -3432,7 +3442,7 @@ async function prLoad(fresh) {
   $$(".prv-item", L).forEach(b => b.onclick = () => { PRV.n = +b.dataset.n; $$(".prv-item", L).forEach(x => x.classList.toggle("on", x === b)); prDetail(); });
   await prDetail();
 }
-function prEmpty(msg) { return `<div class="prv-empty"><h3>Pull requests</h3><p>${esc(msg || "Pull requests Meshpool or you open for this repository show here, with what they change and how their checks are doing.")}</p></div>`; }
+function prEmpty(msg) { return `<div class="prv-empty"><h3>Pull requests</h3><p>${esc(msg || "Pull requests meshpool or you open for this repository show here, with what they change and how their checks are doing.")}</p></div>`; }
 async function prDetail() {
   clearTimeout(PRV.timer);
   const M = $("#prvMain"); if (!M) return; const n = PRV.n;

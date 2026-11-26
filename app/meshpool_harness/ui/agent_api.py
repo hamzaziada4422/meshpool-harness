@@ -26,7 +26,7 @@ LIVE: dict[str, "Session"] = {}
 # Update gate: while an update is being installed no turn or scheduled run may start (M11-02).
 GATE = threading.Lock()
 QUIESCING = [False]
-_GATE_MSG = "Meshpool is restarting to install an update. Send this again in a moment."
+_GATE_MSG = "meshpool is restarting to install an update. Send this again in a moment."
 
 
 def quiesce() -> bool:
@@ -567,7 +567,7 @@ class Session:
                 if tr.get("running"):
                     last = next((e.get("text") for e in reversed(tr["events"]) if e.get("type") == "user"), "")
                     self.emit({"type": "interrupted", "restarted": True, "resend": last,
-                               "text": "Meshpool closed while this was running, so it stopped. Everything done so far "
+                               "text": "meshpool closed while this was running, so it stopped. Everything done so far "
                                        "is kept: press Continue to pick it up, or send your message again."})
                     self._persist(running=False)
             try:                                     # an approval, question or step left open when the app closed
@@ -603,7 +603,7 @@ class Session:
                            + (self.harness.get("settings_note") or "")})
         else:
             if legacy:
-                self.emit({"type": "status", "text": f"Meshpool no longer includes the agent this chat started with. "
+                self.emit({"type": "status", "text": f"meshpool no longer includes the agent this chat started with. "
                                                      f"It continues in {self.harness['name']}."})
                 self.agent.save()
             if no_mcp:                                   # the terminal's --no-mcp: no servers, ready at once
@@ -645,10 +645,10 @@ class Session:
                 out.append({"type": "approval_done", "id": e["id"], "decision": "stopped", "closed": True})
             elif t == "question" and e.get("timeout_s") and i not in done["question"]:
                 out.append({"type": "question_done", "id": e["id"], "source": "stopped", "answers": [],
-                            "text": "Meshpool closed before you answered.", "closed": True})
+                            "text": "meshpool closed before you answered.", "closed": True})
             elif t == "tool_start" and i not in done["tool"] and n > last_end:   # steps of finished turns stay as they were
                 out.append({"type": "tool_end", "id": e["id"], "name": e.get("name", ""), "ok": False,
-                            "stopped": True, "output": "Not run: Meshpool closed before this step finished."})
+                            "stopped": True, "output": "Not run: meshpool closed before this step finished."})
             else:
                 continue
             seen.add((t, i))
@@ -891,7 +891,7 @@ class Session:
             self._persist_err = e.strerror or str(e) or "write failed"
             if first:                                # one notice per failure streak
                 self.emit({"type": "status", "save_error": True, "text": (
-                    f"Couldn't save this chat ({self._persist_err}). Free some disk space; Meshpool keeps trying.")})
+                    f"Couldn't save this chat ({self._persist_err}). Free some disk space; meshpool keeps trying.")})
         else:
             if getattr(self, "_persist_err", None):
                 self._persist_err = None
@@ -1254,7 +1254,7 @@ class Session:
                 ranked = []
             target = CAP.pick(caps, cur, [*ranked, "meshpool-work", "meshpool-code"], ready)
             if target is None:
-                self.emit({"type": "status", "text": f"No agent in Meshpool can make {CAP.labels(caps)}."})
+                self.emit({"type": "status", "text": f"No agent in meshpool can make {CAP.labels(caps)}."})
                 return []
             if target != cur:
                 self.handoff(target, f"{self.harness.get('name', 'This agent')} cannot make {CAP.labels(caps)}")
@@ -1877,7 +1877,7 @@ class Session:
         if self.state in _BUSY:
             raise ValueError(busy)
         if not hasattr(self.agent, "grade_now"):
-            raise ValueError("This agent cannot be checked by Meshpool's reviewer.")
+            raise ValueError("This agent cannot be checked by meshpool's reviewer.")
         token = self._claim_turn()
         if token is None:
             raise ValueError(busy)
@@ -2378,7 +2378,7 @@ def _create(body: dict, made: list) -> dict:
             WT.discard(wt["id"])
         if isinstance(e, OSError) and e.errno in (errno.EMFILE, errno.ENFILE):
             # not "[Errno 24] Too many open files": say what to do (the page shows this text where Send was pressed)
-            raise ValueError("Meshpool cannot start another chat: this computer's limit of open files was reached. "
+            raise ValueError("meshpool cannot start another chat: this computer's limit of open files was reached. "
                              "Close the chats you are not using, then send again.") from e
         raise
     made.clear()                                    # the chat exists: it owns its folder now
@@ -2495,7 +2495,7 @@ def _known_models(prov: str) -> set | None:
 
 def _short_harness(name: str) -> str:
     """'Meshpool Work' and 'Meshpool Code' read as Meshpool; Codex, Pi, OpenCode and Hermes keep their names."""
-    return "Meshpool" if str(name).lower().startswith("meshpool") else str(name)
+    return "meshpool" if str(name).lower().startswith("meshpool") else str(name)
 
 
 _REAPER: list = []
@@ -2557,7 +2557,7 @@ def _claim(sid: str, write: bool = True) -> None:
         rec = {}
     pid = rec.get("pid")
     if isinstance(pid, int) and pid != os.getpid() and HR._pid_alive(pid):
-        where = "the terminal" if rec.get("frontend") == "terminal" else "the Meshpool app"
+        where = "the terminal" if rec.get("frontend") == "terminal" else "the meshpool app"
         raise ChatBusy(f"This chat is open in {where} (process {pid}). Close it there, or fork it: "
                        f"meshpool chats fork {sid}")
     if not write or not f.parent.is_dir():
@@ -3268,7 +3268,7 @@ def run_scheduled(t: dict) -> str:
         late = ""
         if t.get("late"):
             h = float(t.get("late_s") or 0) / 3600
-            late = (f"This run was due {h:.0f} hours ago: Meshpool was closed or the computer was off. "
+            late = (f"This run was due {h:.0f} hours ago: meshpool was closed or the computer was off. "
                     "It ran as soon as it could.")
             s.emit({"type": "status", "text": late})
         write_meta(s.id, title=f"{t.get('name') or 'Scheduled task'} ({time.strftime('%d %b %H:%M')})"

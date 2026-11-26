@@ -9,6 +9,8 @@ async function loadAccount() {
   paintDots();
 }
 const firstName = () => S.acct?.first_name || "";
+// The product name as people see it: always "meshpool", also in names that come from the server ("Meshpool Work").
+const lowBrand = s => typeof s === "string" ? s.replace(/\bMeshpool\b/g, "meshpool") : s;
 // The dots that say "something needs you": on the Code button, on Scheduled, and on the toggle of a hidden sidebar.
 function paintDots() {
   const a = S.acct || {}, code = $("#modeCode");
@@ -29,7 +31,7 @@ function shell() {
      <div class="side-in">
       <div class="side-head">
         <button class="iconbtn" id="hideSide" data-tip="Hide sidebar" data-kbd="${MOD}B" data-tip-pos="below" aria-label="Hide sidebar">${ICON.side}</button>
-        <span class="wm" id="wordmark"><img class="mlogo" src="${logoSrc()}" alt="Meshpool" width="102" height="20"><span class="wmode" id="wmode"></span></span>
+        <span class="wm" id="wordmark"><img class="mlogo" src="${logoSrc()}" alt="meshpool" width="102" height="20"><span class="wmode" id="wmode"></span></span>
         <span class="modesw" role="tablist" aria-label="Mode">
           <button id="modeChat" role="tab" data-tip="Chat" data-tip-pos="below" aria-label="Chat">${ICON.chat}</button>
           <button id="modeCode" role="tab" data-tip="Code" data-tip-pos="below" aria-label="Code">${ICON.codebr}<i class="odot"></i></button>
@@ -52,7 +54,7 @@ function shell() {
         <div class="composer" id="composer">
           <div class="attach-row" id="attachRow"></div>
           <label class="sr" for="input">Message</label>
-          <textarea id="input" dir="auto" rows="1" placeholder="Message Meshpool"></textarea>
+          <textarea id="input" dir="auto" rows="1" placeholder="Message meshpool"></textarea>
           <div class="cbar" id="cbar"></div>
           <input type="file" id="fileIn" multiple hidden>
         </div>
@@ -191,9 +193,9 @@ async function loadThreads() {
   const t = S.cur?.view && S.threads.find(x => x.id === S.cur.id);
   if (t && t.title && t.title !== S.cur.view.title && !$("#ttl[contenteditable=true]")) { S.cur.view.title = t.title; renderTop(); }
 }
-async function loadHarnesses() { const r = await api("/api/harnesses"); S.harnesses = r.harnesses; S.defaults = r.defaults; S.hInfo = r; }
+async function loadHarnesses() { const r = await api("/api/harnesses"); S.harnesses = (r.harnesses || []).map(h => ({...h, name: lowBrand(h.name)})); S.defaults = r.defaults; S.hInfo = r; }
 async function loadSkills() { try { S.skills = (await api("/api/skills")).skills; } catch (e) { S.skills = []; } }
-const harness = id => S.harnesses.find(h => h.id === id) || S.harnesses[0] || {id: "meshpool-code", name: "Meshpool Code", models: "meshpool"};
+const harness = id => S.harnesses.find(h => h.id === id) || S.harnesses[0] || {id: "meshpool-code", name: "meshpool Code", models: "meshpool"};
 // ChatGPT sign-in runs Codex's login, which the installed app does not carry (server: codex row has `unsupported`)
 const chatgptSignInGone = () => { const c = (S.harnesses || []).find(h => h.id === "codex"); return !!(c && c.unsupported) && !S.settings?.signed_in?.chatgpt; };
 const projName = p => (S.projects.find(x => x.path === p) || {}).name || (p || "").split(/[\\/]/).filter(Boolean).pop() || p;
@@ -489,11 +491,11 @@ function openSearch(tab = "all", q0 = "") {
 function appsMenu(e) {
   const a = S.acct || {};
   ctxMenu({type: "click", currentTarget: e.currentTarget}, [
-    {head: "Meshpool on this computer"},
+    {head: "meshpool on this computer"},
     {label: "Install the command line tool", icon: ICON.term, fn: async () => { try { const r = await post("/api/install-cli", {}); toast(r.message || "Installed. Open a new terminal and type meshpool.", 5000); } catch (err) { toast(err.message, 5000); } }},
-    {label: "Download Meshpool apps", icon: ICON.dl, fn: () => openExternal(a.billing_url || "https://meshpool.ai")},
+    {label: "Download meshpool apps", icon: ICON.dl, fn: () => openExternal(a.billing_url || "https://meshpool.ai")},
     {label: "Check for updates", icon: ICON.refresh, fn: () => openSettings("about")},
-    ...(MP.desktop && !S.settings?.native ? [{sep: true}, {label: "Quit Meshpool", icon: ICON.logout, fn: () => post("/api/quit").then(() => document.body.innerHTML = `<div class="onb"><div class="onb-card"><h1>Meshpool has stopped</h1><p>You can close this window.</p></div></div>`)}] : []),
+    ...(MP.desktop && !S.settings?.native ? [{sep: true}, {label: "Quit meshpool", icon: ICON.logout, fn: () => post("/api/quit").then(() => document.body.innerHTML = `<div class="onb"><div class="onb-card"><h1>meshpool has stopped</h1><p>You can close this window.</p></div></div>`)}] : []),
   ], {cls: "acctmenu", up: true});
 }
 
@@ -617,8 +619,8 @@ function devPop(e) {
   const a = S.acct || {}, v = S.cur?.view || {}, root = curRoot();
   const own = !!v.scratch;
   ctxMenu({type: "click", currentTarget: e.currentTarget}, [
-    {head: `<b>${esc(a.device?.name || "This computer")}</b><span class="conn"><i class="gdot"></i>Connected</span><small>${own ? "This chat works in its own private folder on this computer." : `Meshpool can read and change files in ${esc(shortPath(root))} on this computer.`}</small>`, html: true},
-    {label: own ? "Browse the chat's folder" : "Open in Meshpool editor", icon: ICON.folderopen, fn: () => root && openFolderInApp(root, "")},
+    {head: `<b>${esc(a.device?.name || "This computer")}</b><span class="conn"><i class="gdot"></i>Connected</span><small>${own ? "This chat works in its own private folder on this computer." : `meshpool can read and change files in ${esc(shortPath(root))} on this computer.`}</small>`, html: true},
+    {label: own ? "Browse the chat's folder" : "Open in meshpool editor", icon: ICON.folderopen, fn: () => root && openFolderInApp(root, "")},
   ], {cls: "devmenu"});
 }
 // What the chat says, as Markdown: copied, or saved as a file.
@@ -626,7 +628,7 @@ function chatMarkdown() {
   const out = [`# ${S.cur?.view?.title || "Chat"}`];
   for (const e of S.cur?.log || []) {
     if (e.type === "user" && !e.steer && !/^Continue (working|where)/.test(e.text || "")) out.push(`**You**\n\n${e.text}`);
-    else if (e.type === "assistant" && e.text) out.push(`**Meshpool**\n\n${stripGoal(e.text)}`);
+    else if (e.type === "assistant" && e.text) out.push(`**meshpool**\n\n${stripGoal(e.text)}`);
   }
   return out.join("\n\n---\n\n") + "\n";
 }

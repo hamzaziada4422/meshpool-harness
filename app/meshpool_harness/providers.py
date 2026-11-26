@@ -347,7 +347,7 @@ def key_problem(k: str | None) -> str:
 
 def key_name() -> str:
     h = host(key_base())
-    return "Meshpool" if "meshpool" in h else (h or "Your endpoint")
+    return "meshpool" if "meshpool" in h else (h or "Your endpoint")
 
 
 def agent_endpoint(prov: str = "key") -> tuple[str, str]:

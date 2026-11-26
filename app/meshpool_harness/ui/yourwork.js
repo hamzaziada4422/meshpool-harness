@@ -85,7 +85,7 @@
       </div>
       ${sec("What you worked on", d.topics.length ? `<div class="mw-chips">${d.topics.map(x => `<span class="mw-chip">${esc(x.topic)}<b>${x.chats}</b></span>`).join("")}</div>` : "")}
       <div class="mw-cols">
-        ${sec("Kinds of work", d.kinds.length ? bars(d.kinds, k => k.label, k => k.count) : `<p class="mw-note">Kinds of work show once Meshpool has routed a few requests.</p>`)}
+        ${sec("Kinds of work", d.kinds.length ? bars(d.kinds, k => k.label, k => k.count) : `<p class="mw-note">Kinds of work show once meshpool has routed a few requests.</p>`)}
         ${sec("Agents", d.agents.length ? bars(d.agents, a => a.name, a => a.chats) + (d.models.length ? `<p class="mw-note">Models: ${d.models.map(m => `${esc(m.name)} (${m.chats})`).join(", ")}</p>` : "") : "")}
       </div>
       ${sec("When you work", `<div class="mw-hours" role="img" aria-label="Requests by hour of the day">${w.hour.map((n, h) => `<span class="${h === w.busiest_hour ? "top" : ""}" style="height:${Math.round(100 * n / maxH)}%" title="${hourLabel(h)}: ${n}"></span>`).join("")}</div>
@@ -96,8 +96,8 @@
         ${sec("Skills and connectors", (d.skills.length || d.connectors.length) ? `<div class="mw-chips">${d.skills.map(s => `<span class="mw-chip">Skill ${esc(s.name)}<b>${s.chats}</b></span>`).join("")}${d.connectors.map(s => `<span class="mw-chip">${esc(s.name)}<b>${s.chats}</b></span>`).join("")}</div>` : "")}
         ${sec("Cost", `<p class="mw-note">${esc(u.note)}</p>`)}
       </div>
-      ${sec("What you taught Meshpool", d.taught.length ? d.taught.slice(0, 12).map(x => `<div class="mw-line"><small>${day(x.ts)}</small><span>${esc(x.what)}: ${esc(x.text)}</span></div>`).join("") : "")}
-      ${sec("Worth doing next", d.suggestions.length ? d.suggestions.map((s, i) => `<div class="mw-sug"><div><b>${esc(s.title)}</b><span>${esc(s.detail)}</span></div>${actionButton(s, i)}</div>`).join("") : `<p class="mw-note">No repeated pattern worth a change yet. Meshpool stays quiet when it has nothing real to suggest.</p>`)}
+      ${sec("What you taught meshpool", d.taught.length ? d.taught.slice(0, 12).map(x => `<div class="mw-line"><small>${day(x.ts)}</small><span>${esc(x.what)}: ${esc(x.text)}</span></div>`).join("") : "")}
+      ${sec("Worth doing next", d.suggestions.length ? d.suggestions.map((s, i) => `<div class="mw-sug"><div><b>${esc(s.title)}</b><span>${esc(s.detail)}</span></div>${actionButton(s, i)}</div>`).join("") : `<p class="mw-note">No repeated pattern worth a change yet. meshpool stays quiet when it has nothing real to suggest.</p>`)}
       <section class="mw-sec"><h2>Share a recap</h2><div class="mw-recap"><div><button class="btn" id="mwRecap">Preview recap image</button><p class="mw-note">Drawn on your computer from counts and categories only. No chat text, file names or memory.</p></div><div id="mwPrev"></div></div></section>
       <p class="mw-note">${esc(d.privacy)}</p>`;
     box.querySelectorAll("[data-mw-act]").forEach(b => b.onclick = () => {

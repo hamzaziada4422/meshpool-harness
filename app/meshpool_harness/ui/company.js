@@ -95,10 +95,10 @@
     const p = current();
     const roles = D.roles;
     b.innerHTML = `${close}<h3>Company and brand</h3>
-      <p class="lead">Decks are built in your company's look. Add a few of your existing decks and Meshpool learns the colours, fonts, logo, name and slide master from them. Check what it found and change anything; the deck content is still written fresh each time.</p>
+      <p class="lead">Decks are built in your company's look. Add a few of your existing decks and meshpool learns the colours, fonts, logo, name and slide master from them. Check what it found and change anything; the deck content is still written fresh each time.</p>
       <div class="co-h">Style</div>
       <p class="co-note">No company decks to learn from? Pick a ready-made look for new decks. It is used when no company look below is set to be used.</p>
-      <div class="co-styles" id="coStyles">${[{name: "", label: "Meshpool default", description: "Navy and blue on white, Segoe UI.", palette: {dk2: "0A2540", accent1: "1E5BD8", accent2: "D6E3F8", accent3: "29B6E8", accent4: "1A73B8"}}, ...(D.styles || [])].map(s => `<button type="button" class="co-style" data-style="${esc(s.name)}" aria-pressed="${(D.style || "") === s.name}"><span class="sw">${["dk2", "accent1", "accent2", "accent3", "accent4"].map(k => `<i style="background:${hex(s.palette[k])}"></i>`).join("")}</span><b>${esc(s.label)}</b><small>${esc(s.description)}</small></button>`).join("")}</div>
+      <div class="co-styles" id="coStyles">${[{name: "", label: "meshpool default", description: "Navy and blue on white, Segoe UI.", palette: {dk2: "0A2540", accent1: "1E5BD8", accent2: "D6E3F8", accent3: "29B6E8", accent4: "1A73B8"}}, ...(D.styles || [])].map(s => `<button type="button" class="co-style" data-style="${esc(s.name)}" aria-pressed="${(D.style || "") === s.name}"><span class="sw">${["dk2", "accent1", "accent2", "accent3", "accent4"].map(k => `<i style="background:${hex(s.palette[k])}"></i>`).join("")}</span><b>${esc(s.label)}</b><small>${esc(s.description)}</small></button>`).join("")}</div>
       <div class="res" id="coStyleRes"></div>
       ${ps.length ? `<div class="co-top"><select id="coSel" aria-label="Company">${ps.map(x => `<option value="${esc(x.id)}" ${x.id === CO.sel ? "selected" : ""}>${esc(x.name || "Unnamed company")}${x.id === D.active ? " (used for new decks)" : ""}</option>`).join("")}</select>
         <label class="switchrow" style="margin:0"><input type="checkbox" id="coActive" ${p && p.id === D.active ? "checked" : ""}> Use for new decks</label>
@@ -122,8 +122,8 @@
         <datalist id="coFonts">${fontsList.map(f => `<option value="${f}">`).join("")}</datalist></div>
       <div class="co-h">Layout</div>
       <div class="co-opts">
-        <label><input type="radio" name="coMode" value="master" ${p.template_mode === "master" ? "checked" : ""} ${p.has_master ? "" : "disabled"}><span>Your slide master<small>${p.has_master ? "Your master's background and artwork, with Meshpool's page layouts on top." : esc("Not available: " + (p.master_note || "learn from a deck to use its master."))}</small></span></label>
-        <label><input type="radio" name="coMode" value="forge" ${p.template_mode !== "master" ? "checked" : ""}><span>Meshpool layout in your colours<small>A clean white master with your colours, fonts and logo.</small></span></label></div>
+        <label><input type="radio" name="coMode" value="master" ${p.template_mode === "master" ? "checked" : ""} ${p.has_master ? "" : "disabled"}><span>Your slide master<small>${p.has_master ? "Your master's background and artwork, with meshpool's page layouts on top." : esc("Not available: " + (p.master_note || "learn from a deck to use its master."))}</small></span></label>
+        <label><input type="radio" name="coMode" value="forge" ${p.template_mode !== "master" ? "checked" : ""}><span>meshpool layout in your colours<small>A clean white master with your colours, fonts and logo.</small></span></label></div>
       <div class="co-h">Preview</div>
       <div class="co-prev" id="coPrev" aria-label="Preview of a slide in this look"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" id="coSave">Save</button><button class="btn" id="coSample">Build a sample deck</button></div>
@@ -164,7 +164,7 @@
     const p = current(); if (!p) return;
     $("#coSel", b).onchange = e => { CO.sel = e.target.value; redraw(); };
     $("#coActive", b).onchange = async e => {
-      try { CO.data = await post("/api/company/activate", {id: e.target.checked ? p.id : null}); redraw(); toast(e.target.checked ? "New decks use this look" : "New decks use the Meshpool look"); }
+      try { CO.data = await post("/api/company/activate", {id: e.target.checked ? p.id : null}); redraw(); toast(e.target.checked ? "New decks use this look" : "New decks use the meshpool look"); }
       catch (err) { toast(err.message); }
     };
     $("#coDel", b).onclick = async () => {

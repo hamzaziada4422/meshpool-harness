@@ -17,7 +17,7 @@ async function fresh010(my) {
   try { r = await api("/api/firstrun/scan?folder=" + encodeURIComponent(S.draft.project || "")); } catch (e) { r = {starters: [], files: 0}; }
   if (my !== hero010Token || !$(".starters")) return;
   if (r.starters.length) {
-    $(".starters").innerHTML = r.starters.map(s => `<button data-s="${esc(s.prompt)}" title="Meshpool has only seen the file's name, not what is inside">${esc(s.prompt.replace(/\.$/, ""))}</button>`).join("") + `<button data-fr="more">Something else</button>`;
+    $(".starters").innerHTML = r.starters.map(s => `<button data-s="${esc(s.prompt)}" title="meshpool has only seen the file's name, not what is inside">${esc(s.prompt.replace(/\.$/, ""))}</button>`).join("") + `<button data-fr="more">Something else</button>`;
   } else if (!r.files) {
     $(".starters").insertAdjacentHTML("afterbegin", `<button data-fr="samples" class="primary">Try it with sample files</button>`);
   }
