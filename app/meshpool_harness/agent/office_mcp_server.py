@@ -830,6 +830,8 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                f"Saved a copy as {out} instead, and the original is unchanged. ")
     else:
         msg = f"{'Changed' if out == p else 'Saved a copy as'} {out}. "
+        if out == p:                                 # no backup copy in a scratch folder the user cannot see (Sara)
+            msg += "Undo in meshpool takes this change back; no backup copy is needed. "
     msg += "; ".join(done)
     if lost:
         msg += (f"\nThe copy lacks the original's {what} (openpyxl cannot keep them). Tell the user before the copy "
@@ -1304,9 +1306,45 @@ def convert_document(path: str, to: str = "pdf", output: str | None = None):
             made = Path(tmp) / (src.stem + "." + to)
             if r.returncode != 0 or not made.exists():
                 return f"LibreOffice could not convert {src.name}: {(r.stderr or r.stdout or '')[-500:]}", True
-        dst = _dest(output, made.name, "." + to, bool(output))
-        shutil.move(str(made), str(dst))
+        key = (_scope(), str(src.resolve()), to)
+        with _convert_lock(key):
+            dst = _own_conversion(key, output) or _dest(output, made.name, "." + to, bool(output))
+            shutil.move(str(made), str(dst))
+            CONVERTED[key] = (str(dst), _sha_of(dst))
     return f"Saved: {dst}", False
+
+
+# The file each conversion made, per (chat, source, format): a conversion of the same source in the same chat replaces
+# its own earlier output instead of adding "name (2).pdf" (Sara: two identical calls made Board_Update_Q3.pdf and
+# Board_Update_Q3 (2).pdf). Only while that file still holds what the conversion wrote: one the user changed stays.
+CONVERTED: dict = {}
+_CONVERT_LOCKS: dict = {}
+_CONVERT_GUARD = threading.Lock()
+
+
+def _convert_lock(key) -> threading.Lock:
+    with _CONVERT_GUARD:
+        return _CONVERT_LOCKS.setdefault(key, threading.Lock())
+
+
+def _sha_of(p: Path) -> str:
+    import hashlib
+    try:
+        return hashlib.sha1(Path(p).read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def _own_conversion(key, output: str | None) -> Path | None:
+    prev = CONVERTED.get(key)
+    if not prev:
+        return None
+    old = Path(prev[0])
+    if output and Path(str(output)).name != old.name:
+        return None                                  # a different name was asked for: a file of its own
+    if old.is_file() and _sha_of(old) == prev[1]:
+        return old
+    return None
 
 
 def find_icon(query: str = "", set: str | None = None, limit: int = 8, style: str | None = None,

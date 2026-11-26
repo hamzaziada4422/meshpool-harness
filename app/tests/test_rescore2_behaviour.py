@@ -572,3 +572,80 @@ def test_a_file_too_big_to_copy_is_still_removed_and_a_changed_one_is_named_plai
     assert "removed 1 file (region_summary.xlsx)" in msg.lower() and "sales.csv" in msg, msg
     assert "sales.csv: Undo can't put back its earlier version: the file is too large to keep a copy of" in detail
     assert "aren't tracked" not in detail and "2 MB" not in detail, detail
+
+
+# ============================================================ 9 to 12: Sara's board folder
+@pytest.fixture
+def board(office, monkeypatch):
+    """The office server on Sara's folder, with LibreOffice stood in for by a converter that writes a small PDF."""
+    O, proj = office
+    from meshpool_harness import lo_session
+
+    def fake_convert(exe, src, to, out_dir, timeout=240, recalc=False, infilter=""):
+        time.sleep(0.2)                                   # long enough for two calls at once to overlap
+        out = Path(out_dir) / (Path(src).stem + "." + to)
+        out.write_bytes(b"%PDF-1.4 " + Path(src).read_bytes()[:50])
+        return out
+    monkeypatch.setattr(lo_session, "convert", fake_convert)
+    monkeypatch.setattr(O, "_soffice", lambda: "soffice")
+    monkeypatch.setattr(O, "CONVERTED", {})
+    (proj / "Board_Update_Q3.pptx").write_bytes(b"PK deck bytes")
+    return O, proj
+
+
+def test_converting_the_same_deck_twice_in_a_chat_replaces_its_own_pdf(board):
+    O, proj = board
+    outs = []
+    ts = [threading.Thread(target=lambda: outs.append(O.convert_document("Board_Update_Q3.pptx", "pdf")))
+          for _ in range(2)]                              # Sara: the model sent the same call twice at once
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert all(not failed for _, failed in outs), outs
+    assert sorted(x.name for x in proj.iterdir()) == ["Board_Update_Q3.pdf", "Board_Update_Q3.pptx"], outs
+    O.convert_document("Board_Update_Q3.pptx", "pdf")       # and again later in the same chat
+    assert sorted(x.name for x in proj.iterdir()) == ["Board_Update_Q3.pdf", "Board_Update_Q3.pptx"]
+    (proj / "Board_Update_Q3.pdf").write_bytes(b"%PDF the user's own annotated copy")
+    text, _ = O.convert_document("Board_Update_Q3.pptx", "pdf")
+    assert text.endswith("Board_Update_Q3 (2).pdf"), text   # a file the user changed is never replaced
+    assert (proj / "Board_Update_Q3.pdf").read_bytes() == b"%PDF the user's own annotated copy"
+
+
+def test_an_in_place_edit_points_to_undo_not_to_a_backup(office):
+    O, proj = office
+    from meshpool_harness.agent import core as CORE
+    wb = openpyxl.Workbook()
+    wb.active.title = "Budget 2026"
+    wb.active.append(["Cost line", "Q1"])
+    wb.save(proj / "Budget_2026.xlsx")
+    text, failed = O.edit_office_file("Budget_2026.xlsx", [{"op": "set_cell", "sheet": "Budget 2026", "cell": "B2",
+                                                            "value": 5}], in_place=True)
+    assert not failed and "Undo in meshpool takes this change back; no backup copy is needed." in text, text
+    assert "never point them to a file there (a backup or a copy)" in CORE.SCRATCH_RULE
+
+
+def test_removing_an_office_lock_file_is_titled_as_that():
+    from meshpool_harness.agent.core import _plain_command_title as title
+    sara = ("rm -f '~$Budget_2026.xlsx' && mkdir -p /tmp/claude-0/-tmp/32e3/scratchpad/bx && cd "
+            "/tmp/claude-0/-tmp/32e3/scratchpad/bx && unzip -o -q \"$OLDPWD/Budget_2026.xlsx\" && find . -type f && "
+            "cat xl/worksheets/sheet1.xml && echo && cat xl/charts/chart1.xml")
+    assert title(sara) == "Remove the Office lock file for Budget_2026.xlsx?"
+    assert title("rm -f '.~lock.Budget_2026.xlsx#'") == "Remove the Office lock file for Budget_2026.xlsx?"
+    assert title("rm report.docx") == "Delete report.docx?"
+    assert "a.xlsx" not in title("cd $TMPDIR/x && unzip -o -q a.xlsx && cat xl/sheet1.xml")   # a scratch copy only
+
+
+def test_the_open_in_office_card_says_a_copy_will_be_saved(office):
+    import types
+    O, proj = office
+    from meshpool_harness.agent.core import Agent
+    wb = openpyxl.Workbook()
+    wb.active.title = "Budget 2026"
+    wb.save(proj / "Budget_2026.xlsx")
+    (proj / "~$Budget_2026.xlsx").write_bytes(b"lock")
+    args = {"path": "Budget_2026.xlsx", "in_place": True,
+            "operations": [{"op": "set_cell", "sheet": "Budget 2026", "cell": "A1", "value": 1}]}
+    me = types.SimpleNamespace(root=proj, _outside_path=lambda t: False)
+    card = Agent._office_write_risk(me, "mcp__meshpool-office__edit_office_file", args)
+    assert card == "Budget_2026.xlsx is open in Office. Save your changes as a copy, Budget_2026 (edited).xlsx?", card
+    text, failed = O.edit_office_file(**args)                 # and that is what the tool does
+    assert not failed and (proj / "Budget_2026 (edited).xlsx").exists(), text
