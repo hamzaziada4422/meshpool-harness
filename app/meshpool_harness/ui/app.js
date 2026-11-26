@@ -1452,7 +1452,7 @@ function mdRender(node, text) {
 function inline(s) {
   return linkBare(s.replace(/`([^`\n]+)`/g, (m, c) => `<code${c.length <= 32 && !/\s/.test(c) ? ' class="nw"' : ""}>${c}</code>`).replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>")
-    .replace(/!\[([^\]]*)\]\(([^()\s]+)\)/g, (m, alt, src) => mdImg(alt, src) || m)
+    .split(/(<code\b[^>]*>[\s\S]*?<\/code>)/).map((seg, i) => i % 2 ? seg : seg.replace(/!\[([^\]]*)\]\(([^()\s]+)\)/g, (m, alt, src) => mdImg(alt, src) || m)).join("")   // not inside inline code
     .replace(/\[([^\]]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>'));
 }
 // A Markdown image of a file in the chat's folder (a chart the agent saved) shows as the image, through the same
@@ -1577,7 +1577,7 @@ function workGroup() {
 }
 function bumpGroup(g, done) {
   const n = $$(".tool", g).length; const fails = $$(".tool .st.bad", g).length;
-  $(".wl", g).textContent = `${n} step${n === 1 ? "" : "s"}${fails ? `, ${fails} did not work` : ""}`;
+  $(".wl", g).textContent = `${n} step${n === 1 ? "" : "s"}${fails ? `, ${fails} had a problem` : ""}`;
   if (done) { g.dataset.done = "1"; g.open = !!S.steps || !!$(".appr:not(.done)", g); const el = $(".gel", g); if (el) el.textContent = ""; $(".gdots", g)?.remove(); }
 }
 function closeGroup() { const g = S.cur.group; if (inCol(g)) bumpGroup(g, true); S.cur.group = null; }
@@ -1747,6 +1747,8 @@ function applyEvRaw(ev) {
       // Housekeeping stays out of the transcript: which agent was picked and why, connector start-up, "ready". It is in the Session panel.
       if (ev.route) { cur.route = {label: String(ev.text || "").replace(/^(Harness|Working as): /, "").replace(/ \(.*$/, "").replace(/\.$/, ""), why: ""}; sessionSoon(); break; }
       if (/^Starting MCP|^MCP:|^MCP did not start|^No MCP servers/.test(ev.text || "")) { cur.mcpNote = ev.text; sessionSoon(); break; }
+      // "context 1,049k (from the model table); older steps are summarized above 120k tokens" is a model detail: it stays out of the chat (priya018).
+      if (/^context [\d,]+k? \([^)]*\); older steps are summarized above/.test(ev.text || "")) { cur.ctxNote = ev.text; break; }
       if (/ is ready\. ?/.test(ev.text || "") && !cur.turn) break;
       if (ev.down !== undefined) {                     // the model service is down: one line, updated at each check
         if (cur.downEl && !cur.downEl.isConnected) cur.downEl = null;
@@ -1907,7 +1909,7 @@ async function drawRules(box, r) {
   try { r = r || await api("/api/rules"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
   const NAMES = {allow: ["Always allowed", "Runs without asking."], ask: ["Always asks", "Asks first, even with full access or an allow rule."], deny: ["Never allowed", "Refused, whatever the mode."]};
   const row = (lst, rule, folder) => `<li><span class="tg"><code>${esc(rule)}</code></span><button class="iconbtn" data-rrm="${esc(lst)}" data-rule="${esc(rule)}" ${folder ? `data-folder="${esc(folder)}"` : ""} aria-label="Remove ${esc(rule)}">${ICON.x}</button></li>`;
-  box.innerHTML = `<h3 style="font-size:16px;margin:16px 0 4px">Saved rules</h3><p class="pnote">A rule is a tool name (<code>edit</code>), or <code>bash:</code> and a command with * for any text (<code>bash:git push*</code>). Saved in ${esc(r.path)}.</p>
+  box.innerHTML = `<h3 style="font-size:16px;margin:16px 0 4px">Saved rules</h3><p class="pnote plain-rules">These are the things you told meshpool to always allow, always ask about, or never do. Most people never need to change them.</p><p class="pnote adv-rules">For people who want the exact syntax: a rule is a tool name (<code>edit</code>), or <code>bash:</code> and a command with * for any text (<code>bash:git push*</code>). Saved in ${esc(r.path)}.</p>
     ${Object.entries(NAMES).map(([k, [h, d]]) => `<h4 style="margin:12px 0 4px">${h}</h4><small class="pnote">${d}</small><ul class="rows2">${(r[k] || []).map(x => row(k, x)).join("") || `<li class="pnote">None.</li>`}</ul>`).join("")}
     ${r.folders.length ? `<h4 style="margin:12px 0 4px">Allowed in one folder</h4>${r.folders.map(f => `<small class="pnote">${esc(f.folder)}</small><ul class="rows2">${f.allow.map(x => row("allow", x, f.folder)).join("")}</ul>`).join("")}` : ""}
     <div class="srow" style="margin-top:8px"><select id="ruleList" aria-label="Kind of rule"><option value="ask">Always ask</option><option value="deny">Never allow</option><option value="allow">Always allow</option></select><input id="ruleText" placeholder="bash:git push*" spellcheck="false"><button class="btn" id="ruleAdd">Add rule</button></div><div class="res" id="ruleRes"></div>`;
@@ -2019,9 +2021,36 @@ const PTABS_ALL = {session: "Session", progress: "Progress", outputs: "Artifacts
    reserved. A column that would have to shrink does not: fitPanel folds the sidebar first, so the text keeps its
    width and only its position changes. Reduced motion commits the change at once. */
 let flipBusy = false;
+// The reader's place in the chat across a layout change (a panel opening or closing, the sidebar folding): a reader at
+// the end stays at the end; anyone else keeps the same line at the same height. Returns the function that puts it back
+// after the change. Without it the text re-wrapped, the chat scrolled, and "Jump to latest" showed over the reply.
+function readerAnchor() {
+  const c = $("#conv"), col = $("#col");
+  if (!c || !col || S.view !== "chat") return () => {};
+  const gap = c.scrollHeight - c.scrollTop - c.clientHeight, top = c.getBoundingClientRect().top;
+  const atEnd = gap < 80;
+  let el = null, off = 0;
+  if (!atEnd) for (const k of col.children) { const r = k.getBoundingClientRect(); if (r.bottom > top + 1) { el = k; off = r.top - top; break; } }
+  const was = c.scrollTop;
+  const put = () => {
+    if (!c.isConnected) return;
+    if (atEnd) { if (S.pinned) c.scrollTop = c.scrollHeight; return; }
+    if (el && el.isConnected) c.scrollTop += (el.getBoundingClientRect().top - c.getBoundingClientRect().top) - off;
+    else c.scrollTop = was;
+    const g = c.scrollHeight - c.scrollTop - c.clientHeight; $(".jumpdown")?.toggleAttribute("hidden", g < 160);
+  };
+  // The layout keeps settling for a moment (the column eases to its new width): hold the place until the reader scrolls.
+  return () => {
+    put();
+    let n = 0, stop = false; const quit = () => { stop = true; };
+    for (const ev of ["wheel", "touchstart", "keydown", "mousedown"]) c.addEventListener(ev, quit, {once: true, passive: true});
+    const tick = () => { if (stop || ++n > 45) return; put(); requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  };
+}
 function flipLayout(change) {
   const main = $("#main");
-  if (flipBusy || !main || !main.animate) return change();
+  if (flipBusy || !main || !main.animate) { const keep = readerAnchor(); const r = change(); keep(); return r; }
   flipBusy = true;
   try {
     // Every piece that can move, keyed by its place in the tree (the top bar is drawn again by renderTop, so ids are not enough).
@@ -2038,7 +2067,9 @@ function flipLayout(change) {
     const clear = m => { for (const e of m.values()) for (const a of e.getAnimations()) if (a.id === "flip") a.cancel(); };
     const was = pick(), wasLeft = left(was);
     clear(was);
+    const keep = readerAnchor();
     change();
+    keep();
     if (lessMotion()) return;
     const now = pick(), nowLeft = left(now);
     clear(now);
@@ -2050,6 +2081,7 @@ function flipLayout(change) {
       if (!moved.has(k)) continue;
       const up = near(e), from = -(moved.get(k) - (up ? moved.get(up) : 0));
       if (Math.abs(from) < 0.5) continue;
+      { const tf = getComputedStyle(e).transform; if (tf && tf !== "none") continue; }   // an element placed with its own transform (Jump to latest, translateX(-50%)) rides its parent instead
       e.animate({transform: [`translateX(${from}px)`, "none"]}, {duration, easing}).id = "flip";
     }
   } finally { flipBusy = false; }
@@ -2068,11 +2100,24 @@ function setupPanelResize() {
     document.addEventListener("mousemove", move); document.addEventListener("mouseup", () => document.removeEventListener("mousemove", move), {once: true});
   });
 }
+// The room the chat would have with the sidebar kept and the side panel (or the preview) open: the sidebar folds only
+// when that drops under about 640px, not at a fixed window width (priya018). The panel widths are the CSS ones
+// (app.css .panel, .pvp), worked out for the sidebar being open so the answer does not flip when it folds.
+const CHAT_ROOM_MIN = 640;
+function chatRoomWithSide() {
+  const vw = innerWidth, side = 288, pv = typeof PVX !== "undefined" && PVX.open;
+  let w = 0;
+  if (vw > 980) {
+    if (pv) w = Math.max(360, Math.min(Math.min(920, Math.max(480, vw * 0.46)), vw - side - 560));
+    else { const pw = Number(store("pw")) || 460; w = vw < 1440 ? Math.min(pw, Math.max(340, vw * 0.32)) : pw; }
+  }
+  return vw - side - w;
+}
 function fitPanel() {
   // The sidebar folds while the panel or the preview is open wherever the chat column would otherwise get narrower than
   // it is (656px): the text keeps its width and the column only moves, which is also what keeps the open and close smooth.
   const pv = typeof PVX !== "undefined" && PVX.open;
-  const want = ((!!S.panel || pv) && innerWidth < 1366) && innerWidth > 760 && !S.keepSide;
+  const want = (!!S.panel || pv) && innerWidth > 760 && !S.keepSide && chatRoomWithSide() < CHAT_ROOM_MIN;
   if ($("#app").classList.contains("autoside") !== want) { $("#app").classList.toggle("autoside", want); renderTop(); }
 }
 // Each drawing of the side panel gets a number. A tab that loads its data (Git and CI, Changes) checks it after the

@@ -1439,7 +1439,9 @@ class Session:
                 CK.end(run)
                 line = CK.final_line(run)
                 if line:
-                    self.emit({"type": "checks_line", "text": line, "items": CK.summary(run).get("items", [])})
+                    sm = CK.summary(run)
+                    self.emit({"type": "checks_line", "text": line, "items": sm.get("items", []),
+                               "details": sm.get("details", [])})
             except Exception:  # noqa: BLE001
                 pass
             self._ck_run = ""
@@ -1858,7 +1860,8 @@ class Session:
         try:
             self.cp.end_turn()
             write_meta(self.id, turn_seq=self.cp.seq)
-            self.emit({"type": "checkpoint", "turns": self.cp.turns()[-1:]})
+            from meshpool_harness.ui import workbench as W
+            self.emit({"type": "checkpoint", "turns": W.own_changes(self.cp.turns()[-1:], self.cp.root)})
         except Exception:  # noqa: BLE001
             pass
 
@@ -2254,7 +2257,7 @@ class Session:
                 "effort": self.effort,
                 "style": self.style_id() or _default_style(), "incognito": bool(self.incognito),
                 "worktree": meta.get("worktree") or None, "versions": meta.get("versions") or {},
-                "epoch": self.epoch, "turns": self.cp.turns() if self.cp else [],
+                "epoch": self.epoch, "turns": _own_turns(self.cp),
                 "checkpoints_note": self.cp.disabled if self.cp else "",
                 "events": evs, "total": since + len(raw) if since <= n else n,
                 "mcp": self.mcp.status() if self.mcp else None, "trust": _trust_note(self.workdir)}
@@ -2444,7 +2447,8 @@ def _create(body: dict, made: list) -> dict:
             s.emit({"type": "status", "using": True, "text": f"Using {_short_harness(HR.get(harness or HR.default_for(kind))['name'])}"})
         except (KeyError, ValueError):
             pass
-    write_meta(s.id, project_id=pid or "", scratch=bool(scratch))
+    write_meta(s.id, project_id=pid or "", scratch=bool(scratch),
+               code_mode=(kind_given == "code") if kind == "code" else None)     # made from the Code tab, or only in a folder
     if body.get("memory_exclude"):                  # facts left out before the first message (the context X-ray)
         write_meta(s.id, memory_exclude=[str(i) for i in body["memory_exclude"]][:200])
     if body.get("incognito"):                       # no memory read or written, no learning, nothing logged for insights
@@ -2807,6 +2811,7 @@ def _decorate(r: dict, m: dict, legacy: dict, live_pids: set) -> dict:
     _list_project(r, m, legacy, live_pids)
     r["_m"] = m                                   # kept for the cached rows: projects are re-resolved on every call
     r["scratch"] = bool(m.get("scratch"))
+    r["code_mode"] = m.get("code_mode")           # False: a chat in a folder that was never started from the Code tab
     r["kind"] = m.get("kind") or r.get("kind") or "code"
     if m.get("worktree"):                         # a chat in an isolated copy is listed under the folder it came from
         r["worktree"] = m["worktree"].get("id")
@@ -2861,6 +2866,14 @@ def _disk_rows() -> tuple:
         res = (base, legacy, live_pids)
         _LIST_CACHE[:] = [time.monotonic(), res, str(SESSIONS)]
         return res
+
+
+def _own_turns(cp) -> list:
+    """The checkpoint turns for the page: copies of unchanged files left out of "changed" (workbench.own_changes)."""
+    if not cp:
+        return []
+    from meshpool_harness.ui import workbench as W
+    return W.own_changes(cp.turns(), cp.root)
 
 
 def listing() -> list:

@@ -2317,6 +2317,12 @@ REQ_NOTE = ("\n\n\u200b[Meshpool] Before you finish, list each rule the request 
 KEEP_NOTE = ("\n\n\u200b[Meshpool] This request says existing behaviour must stay the same. Before your first edit, run "
              "the current code and save its exact output; after your edits, run it again and compare line by line.")
 
+# Office tools that build or change a file from what the model sends: called with nothing, they are failed back to the
+# model before any approval card is drawn.
+_NEEDS_CONTENT = {"make_document", "make_pdf", "make_spreadsheet", "make_deck", "add_slides", "fill_template",
+                  "merge_decks", "convert_document", "edit_office_file"}
+
+
 class Agent:
     office_on = False      # a message in this chat asked for an office file: Codex style shows the office tools too
     browser_on = False     # a message in this chat is about a web page or app UI: Codex style shows the browser tools
@@ -6292,6 +6298,12 @@ class Agent:
         elif self.plan and name.replace("-", "_") not in PLAN_MCP:
             bad = ToolError(f"{name} is not available in plan mode: it can change things. Investigate with "
                             "read-only tools and write the plan; the user switches to building to run it.")
+        elif is_mcp and name.split("__", 2)[-1] in _NEEDS_CONTENT and not any(
+                v not in (None, "", [], {}) for v in args.values()):
+            # an empty call (priya018: the card read "Make a Word document? {}"): not put to the user to approve,
+            # and sent back to the model to send again with what the file should hold
+            bad = ToolError(f"this {name.split('__', 2)[-1]} call had no content, so nothing was made and the user "
+                            "was not asked. Call it again with the text or the request the file is to be built from.")
         from meshpool_harness.redact import redact as _rd
         self._open_calls[cid] = name
         self.emit({"type": "tool_start", "id": cid, "name": name, "summary": _rd(_summary(name, args)), "mcp": is_mcp,

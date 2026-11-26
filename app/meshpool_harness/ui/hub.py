@@ -29,7 +29,7 @@ _ART: dict[str, tuple] = {}                     # session id -> (mtime_ns of ses
 def is_code_session(r: dict) -> bool:
     """A coding session: it works in a real folder or a GitHub workspace. A chat that only has its own private
     folder is a chat, whichever agent the router picked."""
-    return r.get("kind") == "code" and not r.get("scratch")
+    return r.get("kind") == "code" and not r.get("scratch") and r.get("code_mode") is not False
 
 
 def _events(sid: str) -> list:

@@ -70,8 +70,10 @@ function pvShell(name, type, altLabel) {
   pvFree(); PVX.open = true; PVX.id++; PVX.m = null; PVX.page = 0; PVX.code = false; PVX.sheet = 0;
   PVX.back = PVX.backNext; PVX.backNext = null; $("#pvBack").hidden = !PVX.back;
   const sb = $$("#pvSeg button"); sb[0].textContent = "Preview"; sb[1].textContent = "Code";
+  const keep = readerAnchor();                                  // the reader keeps their place when the panel takes room
   el.hidden = false; app.classList.add("pvopen");
   if (typeof fitPanel === "function") fitPanel();
+  keep();
   $("#pvName").textContent = name; $("#pvName").title = PVX.path || name; $("#pvType").textContent = type;
   $("#pvDl").hidden = !PVX.root || !PVX.path || type === "Folder";
   const ob = $("#pvAlt"); ob.hidden = !altLabel; ob.textContent = altLabel || "";
@@ -89,9 +91,11 @@ function closePreview(quiet) {
   if (typeof EDX !== "undefined" && EDX.dirty) { edGuard().then(ok => ok && closePreview(quiet)); return; }
   if (typeof edStop === "function") edStop();
   PVX.open = false; PVX.id++; pvFree();
+  const keep = readerAnchor();
   const el = $("#pvp"); if (el) { el.hidden = true; $("#pvStage").innerHTML = ""; $("#pvThumbs").innerHTML = ""; }
   $("#app")?.classList.remove("pvopen");
   if (typeof fitPanel === "function") fitPanel();
+  keep();
   if (typeof renderTop === "function") renderTop();
   if (!quiet && PVX.opener?.isConnected) try { PVX.opener.focus({preventScroll: true}); } catch (e) {}
   PVX.opener = null;
@@ -354,16 +358,16 @@ function pvTurnCards(cur, foot, turn) {
   const shown = paths.slice(0, 6);
   if (row && row.dataset.k === shown.join("|")) return;
   if (!row) { row = document.createElement("div"); row.className = "pvcards"; foot.after(row); }
-  row.dataset.k = shown.join("|");
+  row.dataset.k = shown.join("|"); row.dataset.root = root;
   // In a chat with its own folder, every file is in that folder, and a file you attached is a copy of yours there:
   // the card says so, so "I fixed Budget.xlsx" is not read as a change to your own file. Download gets it back.
   const own = !!cur.view?.scratch, att = pvAttached(cur);
   row.innerHTML = shown.map(p => { const ty = pvType(p), thumb = PV_THUMB_RX.test(p), img = /\.(png|jpe?g|gif|webp|svg)$/i.test(p), nm = p.split("/").pop();
     const where = own ? (att.has(p) || att.has(nm) ? "Copy of your file, in this chat" : "In this chat") : "";
-    return `<span class="pvwrap"><button class="pvcard" data-pv="${esc(p)}" title="${esc(p)}"><span class="pvth${thumb ? " wait" : ""}">${img ? `<img alt="" loading="lazy" src="/raw?t=${encodeURIComponent(MP.token)}&${pvQuery(root, p)}">` : `<span class="pvi">${ICON.files}</span>`}</span><span class="pvcm"><b>${esc(nm)}</b><small>${esc(ty.label)}${ty.ext ? " · ." + esc(ty.ext) : ""}</small>${where ? `<small class="pvwhere">${esc(where)}</small>` : ""}</span></button><button class="iconbtn pvdl" data-pvdl="${esc(p)}" aria-label="Download ${esc(nm)}" data-tip="Download" data-tip-pos="above">${ICON.dl}</button></span>`; }).join("")
+    return `<span class="pvwrap"><button class="pvcard" data-pv="${esc(p)}" title="${esc(p)}"><span class="pvth${thumb ? " wait" : ""}">${img ? `<img alt="" loading="lazy" src="/raw?t=${encodeURIComponent(MP.token)}&${pvQuery(root, p)}">` : `<span class="pvi ${ty.ext && /^html?$/.test(ty.ext) ? "html" : ""}">${/^html?$/.test(ty.ext) ? ICON.globe : ICON.files}</span>`}</span><span class="pvcm"><b>${esc(nm)}</b><small>${esc(ty.label)}${ty.ext ? " · ." + esc(ty.ext) : ""}</small>${where ? `<small class="pvwhere">${esc(where)}</small>` : ""}</span></button><button class="iconbtn pvdl" data-pvdl="${esc(p)}" aria-label="Download ${esc(nm)}" data-tip="Download" data-tip-pos="above">${ICON.dl}</button></span>`; }).join("")
     + (paths.length > shown.length ? `<span class="pvmore">+${paths.length - shown.length} more under Artifacts</span>` : "");
   $$(".pvcard", row).forEach(b => {
-    b.onclick = () => openPreview(root, b.dataset.pv);
+    // opening is delegated (the click listener below), so a card whose handlers were lost in a rebuild still opens
     if (PV_THUMB_RX.test(b.dataset.pv)) pvThumb(root, b.dataset.pv, $(".pvth", b));
   });
   $$("[data-pvdl]", row).forEach(b => b.onclick = e => { e.stopPropagation(); pvDownload(root, b.dataset.pvdl); });
@@ -391,6 +395,13 @@ async function pvThumb(root, path, box) {
 }
 
 // ---- global hooks
+// A file card opens its file whatever happened to the row that holds it (priya018: the "Open house.html" card did
+// nothing when clicked, three times; cards of a chat rebuilt off-screen lose handlers set on the buttons).
+document.addEventListener("click", e => {
+  const b = e.target.closest?.(".pvcards .pvcard"); if (!b || e.target.closest("[data-pvdl]")) return;
+  const row = b.closest(".pvcards");
+  openPreview(row?.dataset.root || (typeof curRoot === "function" ? curRoot() : ""), b.dataset.pv);
+});
 document.addEventListener("click", e => {
   const b = e.target.closest?.(".pvbtn[data-pvcode]"); if (!b) return;
   e.preventDefault();

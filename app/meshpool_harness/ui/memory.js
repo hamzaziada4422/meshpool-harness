@@ -170,7 +170,7 @@ function bindMemory(d) {
   const col = $("#col");
   $$("[data-mtab]").forEach(b => b.onclick = () => { MEM.tab = b.dataset.mtab; pageMemory(true); });
   $("#memQ")?.addEventListener("input", e => { MEM.q = e.target.value; clearTimeout(memT); memT = setTimeout(() => memLoad(true), 120); });
-  $("#memAdd")?.addEventListener("click", memAddFlow); $("#memAddEmpty")?.addEventListener("click", memAddFlow);
+  $("#memAdd")?.addEventListener("click", memAddFlow);
   $("#memOn")?.addEventListener("click", async () => { await post("/api/memory", {action: "settings", memory_on: true}); memLoad(true); });
   $("#memExp")?.addEventListener("click", e => ctxMenu(e, [{label: "Export all", fn: () => memExport("md")}, {label: "How I work (1 page)", fn: () => memExport("onepager")}]));
   $("#memConsolidate")?.addEventListener("click", async () => { const r = await memAct({action: "consolidate"}); toast(`Tidied up: ${r?.archived || 0} archived. They stay in History, where you can restore them.`); });

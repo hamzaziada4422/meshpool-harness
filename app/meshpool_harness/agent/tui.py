@@ -586,7 +586,8 @@ class Terminal:
             self.scroll([""] + ["  " + st.dim(R.clip(ln, self.width - 4)) for ln in lines])
         elif t == "checks_line":
             self._flush_text()
-            self.p(st.dim("  Checked: " + str(ev.get("text", ""))))
+            tx = str(ev.get("text", ""))
+            self.p(st.dim("  " + (tx if tx.startswith("Checked") else "Checked: " + tx)))
         elif t == "task_receipt":
             self._flush_text()
             from meshpool_harness import receipts as RC

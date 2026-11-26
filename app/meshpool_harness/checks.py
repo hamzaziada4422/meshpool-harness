@@ -36,6 +36,11 @@ _LABELS = {                                   # kind -> (singular, plural) wordi
     "workbook_rules": ("workbook rule", "workbook rules"),
     "sources": ("source", "sources"),
 }
+# Plain words for the person reading the chat (priya018). A kind with a "the <thing>" noun counts its checks:
+# "Checked the workbook: 16 of 20 checks passed". The others are one fixed sentence.
+_NOUN = {"deck_rules": "deck", "workbook_rules": "workbook"}
+_SAID = {"office_structure": ("the file opens and reads correctly", "the file may not open cleanly"),
+         "office_schema": ("the file follows Office's own format rules", "the file breaks Office's format rules")}
 
 
 _RUN: contextvars.ContextVar = contextvars.ContextVar("meshpool_check_run", default="")
@@ -166,9 +171,9 @@ def failed(kind: str, label: str, count: int | None = None, subject: str = "") -
     return record(kind, label, count, False, subject)
 
 
-def rules_ran(kind: str, label: str, statuses: dict, subject: str = "") -> None:
+def rules_ran(kind: str, label: str, statuses: dict, subject: str = "", names: dict | None = None) -> None:
     """From a validator's per-rule status dict ({"P3": "pass" | "fail" | "warn" | "not_run"}): the rules that ran.
-    Rules marked not_run are not counted."""
+    Rules marked not_run are not counted. `names` ({"P3": "what is wrong"}) is kept for the details line."""
     try:
         ran = [s for s in (statuses or {}).values() if s != "not_run"]
         ok = sum(1 for s in ran if s in ("pass", "warn"))
@@ -177,8 +182,16 @@ def rules_ran(kind: str, label: str, statuses: dict, subject: str = "") -> None:
             passed(kind, label, ok, subject)
         if bad:
             failed(kind, label, bad, subject)
+            det = [f"{k}: {str(v)[:110]}" for k, v in (names or {}).items() if (statuses or {}).get(k) == "fail"][:8]
+            if det:
+                _detail(kind, subject, det)
     except Exception:  # noqa: BLE001
         pass
+
+
+def _detail(kind: str, subject: str, lines: list) -> None:
+    """The names of what did not pass, for the "details" line. Not a check: never counted."""
+    record("detail", kind, None, True, json.dumps({"kind": kind, "subject": subject, "lines": lines}))
 
 
 def _rows(run_id: str) -> list[dict]:
@@ -215,25 +228,70 @@ def _phrase(kind: str, label: str, n: int | None) -> str:
     return f"{n} {one if n == 1 else many}"
 
 
+def _row_text(r: dict) -> str:
+    """One check row in plain words: "16 checks on the workbook passed", "the file opens and reads correctly"."""
+    kind, n, ok = r["kind"], r.get("count"), r["ok"]
+    if kind in _NOUN and n is not None:
+        return f"{n} {'check' if n == 1 else 'checks'} on the {_NOUN[kind]} {'passed' if ok else 'did not pass'}"
+    if kind in _SAID:
+        return _SAID[kind][0 if ok else 1]
+    return _phrase(kind, r["label"], n) + (" passed" if ok else " did not pass")
+
+
+def _checked_rows(run_id: str) -> list[dict]:
+    return [r for r in _rows(run_id) if r.get("kind") not in ("stage", "detail")]
+
+
+def _details(run_id: str) -> list[str]:
+    """What did not pass, by name: one line per failing check, for those who want to know."""
+    out: list = []
+    for r in _rows(run_id):
+        if r.get("kind") == "detail":
+            try:
+                d = json.loads(r.get("subject") or "{}")
+            except ValueError:
+                continue
+            out += [str(x) for x in d.get("lines", []) if x not in out]
+    return out
+
+
 def summary(run_id: str) -> dict:
-    """{"line": "Checked: 20 design rules, Office schema, 14 sources", "items": [...], "failed": n}.
-    The line lists what passed; checks that did not pass are counted in "failed" and named in the items."""
-    rows = _latest([r for r in _rows(run_id) if r.get("kind") != "stage"])
-    ok_rows = [r for r in rows if r["ok"]]
-    bad_rows = [r for r in rows if not r["ok"]]
-    merged: dict = {}
-    for r in ok_rows:                                  # same kind from several files: add their counts
-        m = merged.setdefault(r["kind"], {"label": r["label"], "count": None})
-        if r.get("count") is not None:
-            m["count"] = (m["count"] or 0) + int(r["count"])
-    parts = [_phrase(k, m["label"], m["count"]) for k, m in merged.items()]
-    nbad = sum(int(r.get("count") or 1) for r in bad_rows)
-    line = ("Checked: " + ", ".join(parts)) if parts else ""
-    if line and nbad:
-        line += f" ({nbad} did not pass)"
-    return {"line": line, "items": [{"kind": r["kind"], "label": _phrase(r["kind"], r["label"], r.get("count")),
-                                      "ok": r["ok"], "subject": r.get("subject", "")} for r in rows],
-            "failed": nbad}
+    """{"line": "Checked the workbook: 16 of 20 checks passed. Checked the file opens and reads correctly.",
+    "items": [...], "details": [...], "failed": n}. The line says what was checked in plain words; "details" names the
+    checks that did not pass."""
+    rows = _latest(_checked_rows(run_id))
+    kinds: dict = {}
+    for r in rows:                                     # same kind from several files: add their counts
+        k = kinds.setdefault(r["kind"], {"label": r["label"], "ok": 0, "bad": 0, "okn": False, "okrow": False,
+                                         "badrow": False})
+        n = r.get("count")
+        if r["ok"]:
+            k["ok"] += int(n or 0)
+            k["okn"] = k["okn"] or n is not None
+            k["okrow"] = True
+        else:
+            k["bad"] += int(n or 1)
+            k["badrow"] = True
+    sents = []
+    for kind, k in sorted(kinds.items(), key=lambda kv: kv[0] not in _NOUN):      # what was checked in the file first
+        if kind in _NOUN:
+            total = k["ok"] + k["bad"]
+            noun = _NOUN[kind]
+            if not k["bad"]:
+                sents.append(f"Checked the {noun}: " + ("the 1 check passed" if total == 1 else f"all {total} checks passed"))
+            else:
+                sents.append(f"Checked the {noun}: {k['ok']} of {total} checks passed")
+        elif kind in _SAID:
+            if k["okrow"]:                            # a check that failed alone is in the items, not the line
+                sents.append("Checked " + _SAID[kind][0])
+        elif k["okrow"]:
+            sents.append(f"Checked {_phrase(kind, k['label'], k['ok'] if k['okn'] else None)}"
+                         + (f" ({k['bad']} did not hold up)" if k["bad"] else ""))
+    nbad = sum(k["bad"] for k in kinds.values())
+    line = " ".join(x.rstrip(".") + "." for x in sents)
+    return {"line": line, "items": [{"kind": r["kind"], "label": _row_text(r), "ok": r["ok"],
+                                      "subject": r.get("subject", "")} for r in rows],
+            "details": _details(run_id) if nbad else [], "failed": nbad}
 
 
 def final_line(run_id: str) -> str:
@@ -247,6 +305,8 @@ def events_for(run_id: str, since: int = 0) -> list[dict]:
         if r.get("kind") == "stage":                   # an engine's stage: the working line, not a check row
             out.append({"type": "job_stage", "text": r.get("label", "")})
             continue
+        if r.get("kind") == "detail":                  # names of what failed: shown with the final line, not as a row
+            continue
         out.append({"type": "check", "kind": r["kind"], "ok": r["ok"], "subject": r.get("subject", ""),
-                    "text": _phrase(r["kind"], r["label"], r.get("count")) + (" passed" if r["ok"] else " did not pass")})
+                    "text": _row_text(r)})
     return out

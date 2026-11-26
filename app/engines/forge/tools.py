@@ -85,15 +85,29 @@ def check_document(path: str) -> tuple[str, bool]:
     if not p.exists():
         return f"File not found: {path}", True
     r = check(str(p))
-    if r["ok"]:
-        if r["schema_validation"] == "run":
-            return (f"{p.name}: schema-valid, no problems found in {r['parts_validated']} parts; Office should open it "
-                    "without repair."), False
-        return (f"{p.name}: the package checks passed (relationships, content types, well-formed XML). Schema "
-                "validation did not run (schemas not installed), so Office may still offer to repair it."), False
-    lines = [f"{p.name}: {len(r['problems'])} problem(s) that would make Office offer to repair the file:"]
-    lines += [f"- {x['part']} ({x['check']}): {x['detail']}" for x in r["problems"][:20]]
+    if r["ok"]:                                    # one plain sentence; nothing about repair, nothing about schemas
+        return f"{p.name}: checked that the file opens and reads correctly. No problems found.", False
+    n = len(r["problems"])
+    lines = [f"{p.name}: found {n} problem{'' if n == 1 else 's'} that could stop the file opening cleanly:"]
+    lines += [f"- {_problem_words(x)}" for x in r["problems"][:20]]
     return "\n".join(lines), False
+
+
+_PROBLEM_WORDS = {
+    "zip": "the file is not a readable Office file",
+    "content_type": "a part of the file has no type listed",
+    "broken_relationship": "a part of the file points to something that is missing",
+    "xml_syntax": "a part of the file cannot be read",
+    "duplicate_shape_id": "two shapes share the same number",
+    "slide_ids": "the slide numbers are not valid",
+    "table_grid": "a table does not line up with its columns",
+    "schema": "a part of the file does not follow the Office format",
+}
+
+
+def _problem_words(x: dict) -> str:
+    """A real problem in plain words, with the part and the detail after it for the one who fixes it."""
+    return f"{_PROBLEM_WORDS.get(x['check'], 'a part of the file has a problem')} ({x['part']}: {x['detail']})"
 
 
 def measure_office_file(path: str, pages: str | None = None) -> tuple[str, bool]:
@@ -134,8 +148,8 @@ def qa_summary(files: list[str], data_files=None, request: str | None = None) ->
             elif f.endswith(".docx"):
                 from .ooxml_check import check
                 d = check(f)
-                lines.append(f"- {Path(f).name}: " + ("opens without repair" if d["ok"] else
-                             f"{len(d['problems'])} problem(s) Office would repair (run check_document)"))
+                lines.append(f"- {Path(f).name}: " + ("opens and reads correctly" if d["ok"] else
+                             f"{len(d['problems'])} problem(s) that could stop it opening cleanly (run check_document)"))
                 continue
             else:
                 continue

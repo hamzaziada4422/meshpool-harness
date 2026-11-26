@@ -136,8 +136,6 @@ function appearancePage(b, close) {
 }
 
 /* ---------- Models and providers > Connection ---------- */
-// Base URL and key -> Test connection -> the endpoint's models -> pick the default -> Save. Logins already on this
-// computer come first. The key is never shown: a saved one reads "•••• 1234" with a Change link.
 // Plan and billing: what this computer runs on. The key field holds any provider's key, so "A Meshpool key is saved"
 // was shown to someone using another provider's key or a ChatGPT plan.
 function billingText(key) {
@@ -150,6 +148,8 @@ function billingText(key) {
   }
   return key.set ? "A meshpool key is saved on this computer. Open your account to add credit, see invoices or create another key." : "No meshpool key is saved yet. Open your account to get one.";
 }
+// Base URL and key -> Test connection -> the endpoint's models -> pick the default -> Save. Logins already on this
+// computer come first. The key is never shown: a saved one reads "•••• 1234" with a Change link.
 async function providerPage(b, close) {
   b.innerHTML = `${close}<h3>Models and providers</h3><p class="lead">Connect meshpool to a model endpoint: yours, or a login you already have on this computer.</p><div class="pnote">Loading…</div>`;
   let cur, lg;
