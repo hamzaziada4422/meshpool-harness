@@ -308,7 +308,8 @@ def test_glob_never_enters_skipped_folders_and_finds_the_same_files(tmp_path, mo
             "./src/*.py", "src/**/*.md", "*/*/", "**/pkg/**/*.py"]
     for pat in pats:
         want = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.glob(pat)
-                      if T.SKIP_DIRS.isdisjoint(p.relative_to(tmp_path).parts) and ".run" not in str(p))
+                      if T.SKIP_DIRS.isdisjoint(p.relative_to(tmp_path).parts) and ".run" not in str(p)
+                      and (not pat.endswith("/") or p.is_dir()))   # a trailing / means folders (3.10 pathlib: all)
         got = [x for x in ws.glob(pat).split("\n") if x and x != "no files" and ".run" not in x]
         assert got == want, pat
     seen = []

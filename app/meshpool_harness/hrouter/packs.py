@@ -92,7 +92,10 @@ for f in sys.argv[1:]:
             try:
                 import tomllib
             except ImportError:
-                continue
+                try:
+                    import tomli as tomllib          # Python 3.10 has no tomllib: TOML was never checked there
+                except ImportError:
+                    continue
             tomllib.loads(text)
         elif f.endswith((".yml", ".yaml")):
             try:

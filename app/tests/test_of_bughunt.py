@@ -267,6 +267,13 @@ def test_of10_view_table_reads_only_the_start_of_a_big_file(tmp_path, monkeypatc
         return Spy(fh) if str(file) == str(f) else fh
     monkeypatch.setattr(_io, "open", spy_open)
     monkeypatch.setattr(builtins, "open", spy_open)
+    import pathlib
+    real_path_open = pathlib.Path.open                    # Python 3.10's Path.open does not go through io.open
+
+    def path_open(self, *a, **k):
+        fh = real_path_open(self, *a, **k)
+        return Spy(fh) if str(self) == str(f) and not isinstance(fh, Spy) else fh
+    monkeypatch.setattr(pathlib.Path, "open", path_open)
     html = V._table_html(f)
     assert html.count("<tr>") == 200
     assert 0 < sum(read) <= 2_000_001
