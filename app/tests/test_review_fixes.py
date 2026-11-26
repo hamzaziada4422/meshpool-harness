@@ -620,3 +620,28 @@ def test_first_message_and_receipt_git_never_run_the_repos_own_programs(env):   
     assert out.returncode == 0 and not marker.exists()
     subprocess.run(["git", "status", "--short"], cwd=r, capture_output=True)   # plain git does run it: the test is real
     assert marker.exists()
+
+
+def test_receipt_git_diff_never_runs_the_repos_own_programs(env):
+    """Agent.receipt() itself (not just safe_git): a file changed outside the edit tools is filled in from
+    `git diff --numstat HEAD`, and a repository whose config names an fsmonitor or diff program runs neither."""
+    from types import SimpleNamespace
+    r = env / "repo"
+    r.mkdir()
+    (r / "a.txt").write_text("one\n")
+    subprocess.run("git init -q && git add a.txt && git -c user.email=t@t -c user.name=t commit -q -m i", shell=True,
+                   cwd=r, check=True)
+    (r / "a.txt").write_text("one\ntwo\n")                              # changed by a script, not an edit tool
+    marker = env / "pwned"
+    prog = env / "prog.sh"
+    prog.write_text(f"#!/bin/sh\ntouch '{marker}'\n")
+    prog.chmod(0o755)
+    for key in ("core.fsmonitor", "diff.external", "core.pager"):
+        subprocess.run(["git", "-C", str(r), "config", key, str(prog)], check=True)
+    ws = SimpleNamespace(turn_files={str(r / "a.txt")}, turn_new=set(), commands=[], edits=0)
+    fake = SimpleNamespace(ws=ws, root=str(r), checkpoint=None)
+    out = core.Agent.receipt(fake)
+    assert "a.txt (+1 -0)" in out                                       # the numstat still comes through
+    assert not marker.exists()                                          # but no program of the repo's ran
+    subprocess.run(["git", "status", "--short"], cwd=r, capture_output=True)   # plain git does run it: the test is real
+    assert marker.exists()
