@@ -437,3 +437,30 @@ def test_om08_undo_picker_numbers_each_turn_once_and_says_what_was_undone(home, 
     assert [m["content"] for m in s.agent.messages if m["role"] == "user"][-1].startswith("explain storage.py")
     assert A.undo_message({"conversation": False})[0].startswith("Nothing to undo")
     assert A.undo_message({"conversation": True})[0] == "Undone. No files in this chat's folder had changed."
+
+
+# ---------------------------------------------------------------------------------------------------- OM-03
+def test_om03_undo_of_a_turn_removes_the_copy_of_a_file_dropped_into_it(home, proj, monkeypatch):
+    """OM-03: dragging sample.csv into a Code chat left an untracked "sample (2).csv" in the repository, and Undo of
+    that turn did not remove it. The same file dropped again is used where it is (WF-02); a different file is still
+    copied, and Undo of the turn now removes the copy while it holds what was dropped."""
+    import base64
+    script(monkeypatch, "Biggest payee: rent co.", "Again: rent co.")
+    (proj / "sample.csv").write_text("date,payee,amount\n2026-01-01,rent co,1200\n")
+    v = chats.create({"workdir": str(proj), "no_mcp": True})
+    s = chats.get(v["id"])
+    dropped = b"date,payee,amount\n2026-02-01,blue cafe,13\n"            # his newer export, same name
+    s.send("which payee is the biggest expense?", files=[{"name": "sample.csv",
+                                                          "data": base64.b64encode(dropped).decode()}])
+    _idle(s)
+    assert (proj / "sample (2).csv").read_bytes() == dropped
+    r = s.revert(s.cp.turns()[-1]["n"])
+    assert not (proj / "sample (2).csv").exists() and "sample (2).csv" in r["deleted"]
+    assert (proj / "sample.csv").exists()                                  # his own file stays
+    assert "removed 1 file (sample (2).csv)" in A.undo_message(r)[0].lower()
+    # a copy he changed after dropping it is his: Undo leaves it
+    s.send("again", files=[{"name": "sample.csv", "data": base64.b64encode(dropped).decode()}])
+    _idle(s)
+    (proj / "sample (2).csv").write_text("edited by hand\n")
+    r = s.revert(s.cp.turns()[-1]["n"])
+    assert (proj / "sample (2).csv").read_text() == "edited by hand\n" and "sample (2).csv" in r["kept"]

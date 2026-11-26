@@ -1151,6 +1151,7 @@ class Session:
                 self._after_stop.append((text, images))
                 queued_as, n = "after", len(self._after_stop)
             elif hasattr(self.agent, "steer") and not acp and self._undo_token != self._turn_id:
+                self._attach_to_turn(getattr(self, "_turn_n", None))         # added to the running turn: its copies too
                 self.agent.steer(self._body(text, images), images=images)    # emits an event: the lock is re-entrant
                 from meshpool_harness import pace as PACE
                 if PACE.classify(text, bool(images)) != "quick":
@@ -1167,6 +1168,15 @@ class Session:
             return {"queued": True}
         self._start_turn(text, images, token)
         return {"queued": False}
+
+    def _attach_to_turn(self, n) -> None:
+        """The copies of attached files made for the message that starts (or joins) checkpoint turn n (OM-03)."""
+        made = self.__dict__.pop("_attach_made", None)
+        if made and n and self.cp:
+            try:
+                self.cp.note_attached(n, made)
+            except Exception:  # noqa: BLE001 - never stops a turn
+                pass
 
     def take_back(self) -> dict:
         """The last message sent while the agent worked, back to the user: from the queue, or from the running
@@ -1201,6 +1211,8 @@ class Session:
                 notes.append({"name": name, "path": r["path"], "reused": True})
             else:
                 notes.append({"name": name, "path": r["path"], "copy": True})
+                # the copy belongs to the turn this message starts: Undo of that turn removes it (OM-03)
+                self.__dict__.setdefault("_attach_made", []).append(str(Path(self.workdir) / r["path"]))
         self._attached = notes                       # the app says where each one is (session_action "attached")
         where = "this chat's folder" if PS.is_scratch(self.workdir) else "the project folder"
         return text.rstrip() + f"\n\nAttached files (in {where}): {', '.join(saved)}"
@@ -1566,6 +1578,7 @@ class Session:
                         t = self.cp.begin_turn(text.strip().splitlines()[0] if text.strip() else "Images", idx,
                                                event_index=ev0)
                         self._turn_n = (t or {}).get("n")
+                        self._attach_to_turn(self._turn_n)
                         if t is None and self.cp.disabled and not getattr(self, "_cp_noted", False):
                             self._cp_noted = True          # say it once per thread, not on every turn
                             self.emit({"type": "status", "text": self.cp.disabled})
