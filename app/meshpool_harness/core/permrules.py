@@ -20,6 +20,13 @@ _NO_GRANT = frozenset("bash sh zsh dash fish eval exec env xargs sudo su doas ss
                       "timeout nice nohup command time stdbuf watch find awk gawk mawk sed parallel "
                       "busybox chroot unshare nsenter setsid script strace ltrace".split())
 _RUNNERS = {"npm", "yarn", "pnpm"}
+# Runners that start whatever program follows them: a grant names that program too ("uv run pytest", "npx eslint"),
+# else "Allow uv run" covered `uv run bash -c "rm -rf ~"`. docker and kubectl run or exec a command in a container.
+_EXEC_VERBS = {"uv": {"run"}, "poetry": {"run"}, "pipenv": {"run"}, "pdm": {"run"}, "hatch": {"run"},
+               "conda": {"run"}, "pixi": {"run"}, "npm": {"exec", "x"}, "pnpm": {"exec", "dlx"},
+               "yarn": {"exec", "dlx", "node"}, "bun": {"x"}, "pipx": {"run"}, "dotnet": {"exec"}}
+_EXEC_PROGS = frozenset({"npx", "bunx", "uvx", "pnpx"})
+_NO_GRANT_VERBS = {"docker": {"run", "exec"}, "kubectl": {"run", "exec", "debug"}}
 _OKREDIR = re.compile(r"\d?>\s*/dev/null|\d?>&\d|&>\s*/dev/null")
 
 
@@ -225,6 +232,16 @@ def grant_patterns(cmd: str) -> list[str]:
     if prog in _NO_GRANT:
         return []
     pos = [a for a in rest if not a.startswith("-")]
+    if prog in _EXEC_PROGS or (pos and pos[0] in _EXEC_VERBS.get(prog, ())):
+        head = [prog] if prog in _EXEC_PROGS else [prog, pos[0]]
+        inner = rest if prog in _EXEC_PROGS else rest[1:]
+        if prog not in _EXEC_PROGS and rest[:1] != pos[:1]:
+            return []                     # an option before the verb (uv --directory x run ...): not judged
+        if not inner or inner[0].startswith("-"):
+            return []                     # options of the runner (npx -y, uvx --from): what runs is not plain
+        return [" ".join(head) + " " + p for p in grant_patterns(shlex.join(inner))]
+    if pos and pos[0] in _NO_GRANT_VERBS.get(prog, ()):
+        return []
     if prog in _SUBCMD:
         if not pos:
             return []
@@ -251,17 +268,18 @@ def granted(cmd: str, patterns) -> bool:
     return any(c == p or c.startswith(p + " ") for p in patterns)
 
 
-def _inside(arg: str, root) -> bool:
+def _inside(arg: str, root, cwd=None) -> bool:
     """The path resolves inside the project with symlinks followed: a relative `docs/id_rsa` where docs -> ~/.ssh is
-    outside. A drive-relative Windows path (C:x, relative to that drive's own current folder) is never inside, nor is
-    a drive or UNC path when checked off Windows."""
+    outside. A relative path is taken from cwd (default: the project root). A drive-relative Windows path (C:x,
+    relative to that drive's own current folder) is never inside, nor is a drive or UNC path when checked off
+    Windows."""
     p = os.path.expanduser(arg)
     if re.match(r"^[A-Za-z]:(?![\\/])", p):
         return False
     if (re.match(r"^[A-Za-z]:[\\/]", p) or p.startswith("\\")) and os.name != "nt":
         return False                                  # a drive or UNC path is never inside a POSIX project root
     try:
-        rp = Path(os.path.realpath(p if os.path.isabs(p) else os.path.join(str(root), p)))
+        rp = Path(os.path.realpath(p if os.path.isabs(p) else os.path.join(str(cwd or root), p)))
         r = Path(os.path.realpath(str(root)))
         return rp == r or r in rp.parents
     except (OSError, ValueError):
@@ -282,12 +300,15 @@ def _arg_paths(a: str) -> list[str]:
     return [v for v in out if v]
 
 
-def safe_read(cmd: str, root) -> bool:
+def safe_read(cmd: str, root, cwd=None) -> bool:
     """H-15: a single plain read-only command (tools.read_only, which already refuses writes and unknown programs)
-    whose paths stay inside the project. Compound commands, substitutions and `$` never qualify."""
+    whose paths stay inside the project. Compound commands, substitutions and `$` never qualify. cwd: the folder the
+    command runs in (a shell call's workdir); it must be inside the project too, and relative paths start there."""
     from meshpool_harness.core import tools as T
     if not cmd or "$" in cmd or compound(cmd) or writes(cmd) or not T.read_only(cmd):
         return False
+    if cwd is not None and not _inside(str(cwd), root):
+        return False                      # `cat id_rsa` with workdir ~/.ssh reads outside the project
     w = _tokens(cmd)
     if not w or re.match(r"^[A-Za-z_]\w*=", w[0]):
         return False
@@ -301,7 +322,7 @@ def safe_read(cmd: str, root) -> bool:
         return False
     if prog in ("xxd", "less") and (prog == "less" or "-r" in rest or len(pos) > 1):
         return False
-    return all(_inside(v, root) for a in rest for v in _arg_paths(a))
+    return all(_inside(v, root, cwd) for a in rest for v in _arg_paths(a))
 
 
 def approve_with_scope(approve, kind, title, detail, scope: str):

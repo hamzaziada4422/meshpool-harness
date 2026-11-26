@@ -5614,7 +5614,7 @@ class Agent:
             answered = True
             notes.append(note or "")
         guard = self._power_file(name, args)
-        if guard and name in ("bash", "shell", "bash_start", "bash_many", "exec_command") and self.mode == "auto":
+        if guard and name in ("bash", "shell", "bash_start", "bash_many", "exec_command", "probe", "trace") and self.mode == "auto":
             guard = ""                             # full access: commands run as the user chose
         if guard:                                  # hooks, allow rules, MCP servers: the agent never grants itself these
             if not self.approve:
@@ -5658,8 +5658,14 @@ class Agent:
         if risky:
             group = "outside-" + name
         cmds = PR.commands_of(name, args) if group == "bash" and not risky else []
-        if cmds and self.mode in ("ask", "edits") and not _destructive(args, self.root) and \
-                all(PR.safe_read(c, self.root) for c in cmds):
+        wd, wd_ok = None, True                     # shell and exec_command run in their workdir: paths start there
+        if cmds and name in ("shell", "exec_command") and args.get("workdir"):
+            try:
+                wd = self.ws._path(str(args["workdir"]))
+            except Exception:  # noqa: BLE001
+                wd_ok = False                      # unresolvable: never the shortcut
+        if cmds and wd_ok and self.mode in ("ask", "edits") and not _destructive(args, self.root) and \
+                all(PR.safe_read(c, self.root, wd) for c in cmds):
             return True, ""                    # H-15: a plain read-only command inside the project needs no question
         if group == "bash":
             pats = [x[5:] for x in self.always if x.startswith("bash:")]
@@ -5748,9 +5754,11 @@ class Agent:
             s = os.path.normcase(str(x)).casefold()
             s = re.sub(r"::\$data$", "", s)
             return re.sub(r"[. ]+$", "", s)
-        if name in ("bash", "shell", "bash_start", "bash_many"):
+        if name in ("bash", "shell", "bash_start", "bash_many", "exec_command", "probe", "trace"):
+            # every shell tool, each with its own argument (exec_command's script is `cmd`)
             text = " ".join(str(x) for x in ([args.get("command")] if not isinstance(args.get("command"), list)
-                                             else args.get("command")) + list(args.get("commands") or []))
+                                             else args.get("command")) + list(args.get("commands") or [])
+                            + [args.get("cmd") or ""])
             low = text.casefold().replace("\\", "/")
             return next((f for f in (".meshpool", ".mcp", "hooks.json", "permissions.json", "mcp.json",
                                      "trusted-folders.json") if f in low), "")   # globs and writers included
