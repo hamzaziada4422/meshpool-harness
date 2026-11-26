@@ -604,7 +604,7 @@ def _main(argv=None):
                               json_out=fmt if fmt in ("json", "stream-json") else False, mode=mode,
                               agent=a.agent_id, project=a.project, incognito=a.incognito, attach=a.attach or None,
                               output_last_message=a.output_last_message, effort=getattr(a, "effort", None),
-                              **({"worktree_id": wt["id"]} if wt else {}))
+                              model=a.model or None, **({"worktree_id": wt["id"]} if wt else {}))
         finally:
             _worktree_done(wt)
     if argv[:2] == ["mcp", "add-json"]:          # meshpool mcp add-json NAME '{"command": ...}'  (or - for stdin)

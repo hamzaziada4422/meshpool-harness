@@ -659,6 +659,30 @@ def _patch_files(patch: str) -> list:
     return list(dict.fromkeys(x.strip() for x in out if x and x.strip()))
 
 
+def _unknown_model_text(bare: str, prov: str = "key") -> str:
+    """OM-04: the error for a model named with --model that the endpoint does not serve, with the closest names it
+    does serve (one read of the endpoint's model list, made only now that the call failed)."""
+    import difflib
+    ids: list = []
+    try:
+        if prov == "chatgpt":
+            from meshpool_harness.core import chatgpt as CG
+            ids = list(CG.models())
+        else:
+            from meshpool_harness.ui import workbench as W
+            ids = [str(r.get("id")) for r in W.models().get("models") or [] if r.get("id")]
+            ids = [i.split(":", 1)[1] if i.startswith("chatgpt:") else i for i in ids]
+    except Exception:  # noqa: BLE001 - the list is a help, never a second failure
+        ids = []
+    ids = list(dict.fromkeys(ids))
+    close = difflib.get_close_matches(bare, ids, n=5, cutoff=0.4) or \
+        [i for i in ids if bare.lower().split("-")[0] in i.lower()][:5]
+    text = f"The endpoint does not serve the model {bare}."
+    if close:
+        text += " Close names it does serve: " + ", ".join(close) + "."
+    return text + " Pick one with --model, or run `meshpool models` to see them all."
+
+
 def _summary_of(name: str, args: dict) -> str:
     if name == "shell":
         cmd = T.shell_script(args.get("command"))
@@ -4921,6 +4945,10 @@ class Agent:
                         continue
                     raise RuntimeError("The endpoint rejected the API key. Check it in settings. " + msg[:200])
                 if kind == "model_missing":
+                    if getattr(self, "model_named", False):
+                        # OM-04: a model the user named on the command line (--model) is not swapped for another one
+                        # without a word: the run stops and says which names the endpoint does serve.
+                        raise RuntimeError(_unknown_model_text(body["model"], prov))
                     # A chat from weeks ago on a model the endpoint has dropped: continue on today's default for
                     # its provider, once per call. Otherwise say so at once; retrying the same model cannot help.
                     C.load_into_env(override=True)

@@ -1914,6 +1914,27 @@ def _trust_step(term: "Terminal", wd: str, interactive: bool) -> None:
         term.p(st.dim("  Trusted. Its hooks and rules are on. Undo with: meshpool trust --revoke"))
     else:
         term.p(st.dim("  Its hooks and allow rules are off. Trust it later with: meshpool trust"))
+def _resume_access(term, s, mode: str | None, model: str | None) -> None:
+    """OM-09: -c and --resume take the access mode and model given on the command line. Without a mode flag the chat
+    resumes in the default mode, never in full access without a word: a chat left in full access comes back asking,
+    and a default of full access (set in Settings) is said on screen."""
+    st = term.st
+    before = getattr(s, "mode", None) or getattr(s.agent, "mode", None)
+    want = mode or C.permission_mode()
+    if want != before:
+        s.set_mode(want)
+    if want == "auto" and not mode:
+        term.p(st.amber("  Full access is on: it is your default access mode in Settings."))
+    elif before == "auto" and want != "auto":
+        term.p(st.dim(f"  This chat was in full access. It resumes in {_MODE_NAMES.get(want, want)}; add --auto for "
+                      "full access."))
+    if model:
+        s.set_model(model)
+
+
+_MODE_NAMES = {"ask": "ask before changes", "edits": "accept edits", "auto": "full access"}
+
+
 def _resume_target(wd: str, session: str | None) -> str | None:
     """The chat -c / --resume means: the id given, or the newest chat of this folder (the app's own listing)."""
     from pathlib import Path
@@ -1991,11 +2012,14 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
                     old, sid = sid, CRW.fork(sid, None)
                     term.p(st.dim(f"Continuing {old} as a new session, {sid}."))
                 s = chats.get(sid, no_mcp=no_mcp)
+                _resume_access(term, s, body.get("mode"), model)
         if sid is None:
             s = chats.get(chats.create(body)["id"], no_mcp=no_mcp)
     except (ValueError, KeyError) as e:           # a missing folder, an agent that cannot run, a chat open elsewhere
         term.p(st.red(str(e).strip("'\"")))
         return 1
+    if model:
+        s.agent.model_named = True                # --model: a name the endpoint lacks stops the run (OM-04)
     if not s.harness.get("ready", True):
         term.p(st.red(f"{s.harness['name']} cannot run yet. {s.harness.get('setup') or ''} Run: meshpool setup"))
         return 1

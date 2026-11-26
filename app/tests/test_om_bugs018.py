@@ -141,3 +141,101 @@ def test_om01_in_the_sandbox_p_runs_ordinary_commands_without_a_question(monkeyp
     monkeypatch.setattr(SB, "available", lambda *a, **k: True)
     rc, err, res = _om01_run(monkeypatch, proj, capfd)
     assert rc == 0 and res["denied"] == [] and "not allowed" not in err, err
+
+
+# ---------------------------------------------------------------------------------------------------- OM-04
+@pytest.fixture
+def endpoint(monkeypatch):
+    """A local OpenAI-style endpoint that serves two models and answers 404 model_not_found for any other name."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    served, asked = ["mock-edit", "mock-slow"], []
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _json(self, code, obj):
+            b = json.dumps(obj).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+
+        def do_GET(self):
+            self._json(200, {"data": [{"id": m, "object": "model"} for m in served]})
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+            asked.append(body.get("model"))
+            if body.get("model") not in served:
+                return self._json(404, {"error": {"message": f"The model `{body.get('model')}` does not exist",
+                                                  "type": "invalid_request_error", "code": "model_not_found"}})
+            self._json(200, {"id": "x", "object": "chat.completion", "model": body["model"], "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "hello from " + body["model"]},
+                 "finish_reason": "stop"}], "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}})
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setenv("MESHPOOL_BASE_URL", f"http://127.0.0.1:{srv.server_address[1]}/v1")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    monkeypatch.setenv("MH_STREAM", "0")
+    yield asked
+    srv.shutdown()
+
+
+def test_om04_a_model_named_on_the_command_line_that_does_not_exist_stops_with_close_names(home, proj, capfd,
+                                                                                            endpoint):
+    """OM-04: `--model nope-model` printed "no longer available" and carried on with another model. A name given on
+    the command line now stops the run with an error that lists the close names the endpoint serves."""
+    rc = T.main(str(proj), no_mcp=True, prompt="hi", json_out="json", model="mock-sloww")
+    cap = capfd.readouterr()
+    res = json.loads(cap.out.strip().splitlines()[-1])
+    assert rc == 1 and not res["ok"]
+    assert "mock-sloww" in res["error"] and "mock-slow" in res["error"].replace("mock-sloww", ""), res["error"]
+    assert "no longer available" not in cap.err
+    assert set(endpoint) == {"mock-sloww"}                 # never carried on with another model
+    A.LIVE.clear()
+    from meshpool_harness import cli
+    rc = cli.main(["--dir", str(proj), "-p", "hi", "--model", "nope-model", "--json", "--no-mcp"])   # the flag itself
+    res = json.loads(capfd.readouterr().out.strip().splitlines()[-1])
+    assert rc == 1 and "does not serve the model nope-model" in res["error"]
+
+
+def test_om04_a_saved_model_that_disappeared_still_falls_back(home, proj, capfd, endpoint, monkeypatch):
+    """The fallback stays for a chat's saved model that the endpoint dropped (no --model given)."""
+    v = chats.create({"workdir": str(proj), "no_mcp": True, "model": "gone-model"})
+    A.LIVE.pop(v["id"]).close()
+    monkeypatch.setenv("MH_MODEL", "mock-edit")
+    rc = T.main(str(proj), no_mcp=True, prompt="hi", json_out="json", session=v["id"])
+    cap = capfd.readouterr()
+    res = json.loads(cap.out.strip().splitlines()[-1])
+    assert rc == 0 and res["result"] == "hello from mock-edit"
+    assert "no longer available" in cap.err and endpoint[0] == "gone-model"
+
+
+# ---------------------------------------------------------------------------------------------------- OM-09
+def test_om09_a_resumed_chat_takes_the_mode_and_model_from_the_command_line(home, proj, capfd, monkeypatch):
+    """OM-09: -c ignored --model, and a chat last used in full access came back in full access without a word. It
+    now resumes in the mode given (or the default mode) and on the model given."""
+    script(monkeypatch, "first", "second", "third")
+    v = chats.create({"workdir": str(proj), "no_mcp": True, "mode": "auto", "model": "mock-edit"})
+    s = chats.get(v["id"])
+    s.send("one")
+    with s.changed:
+        while s.state in ("working", "waiting"):
+            s.changed.wait(0.2)
+    s.close()
+    A.LIVE.clear()
+    assert chats.read_meta(v["id"])["mode"] == "auto"
+    rc = T.main(str(proj), resume=True, no_mcp=True, prompt="two", json_out="json", model="mock-slow")
+    cap = capfd.readouterr()
+    assert rc == 0, cap.err
+    meta = chats.read_meta(v["id"])
+    assert meta["mode"] == "ask" and meta["model"] == "mock-slow"
+    assert "This chat was in full access. It resumes in ask before changes" in cap.err
+    A.LIVE.clear()
+    rc = T.main(str(proj), resume=True, auto=True, no_mcp=True, prompt="three", json_out="json")
+    assert rc == 0 and chats.read_meta(v["id"])["mode"] == "auto"     # --auto asked for it: full access
