@@ -78,7 +78,7 @@ def describe() -> dict:
     """For the doctor row: {path, source, note}."""
     path, source = resolve()
     if path:
-        note = {"bundled": "the copy that ships with Meshpool", "MH_SOFFICE": "set by MH_SOFFICE"}.get(source, source)
+        note = {"bundled": "the copy that ships with meshpool", "MH_SOFFICE": "set by MH_SOFFICE"}.get(source, source)
         return {"path": path, "source": source, "note": note}
     if is_packaged():
         return {"path": None, "source": "", "note": "missing from this install (Meshpool never uses a LibreOffice "

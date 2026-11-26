@@ -559,7 +559,7 @@ jobs:
             # `meshpool check` exits 1 here because no API key is set; what matters is where each tool comes from
             out=$(env -i HOME=/root PATH=/usr/bin:/bin /tmp/Meshpool/meshpool check || true); echo "$out"
             for t in "Git " "Node.js " "LibreOffice "; do
-              echo "$out" | grep -E "\[ok\] $t.*/tmp/Meshpool/.*ships with Meshpool" >/dev/null || { echo "meshpool check: $t is not the bundled copy"; exit 1; }
+              echo "$out" | grep -iE "\[ok\] $t.*/tmp/Meshpool/.*ships with meshpool" >/dev/null || { echo "meshpool check: $t is not the bundled copy"; exit 1; }
             done
           '
       - uses: actions/upload-artifact@v4
