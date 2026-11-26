@@ -419,3 +419,14 @@
 /* phone width: the tab strip gets its own row so no tab is hidden off-screen */
 @media (max-width:640px){.gbar{flex-wrap:wrap}.gbar .gtabs{order:-1;flex:1 0 100%;overflow-x:auto}}
 .pvadv{margin:4px 0 8px}.pvadv>summary{cursor:pointer;color:var(--ink-3);font-size:var(--fs-s);margin-bottom:4px}.pvadv select{width:100%}
+
+/* Design-pass check (0.0.18): the step chevron sat 3px above its text (an inline svg on the text baseline), four panel
+   tabs wrapped at 1024px after the tab padding went to 12px, links with no hover looked dead, and the hero links kept
+   the 4px link padding so the full stop floated away from "Home". */
+.work>summary .chev{display:inline-grid}
+.ptabs button{padding:4px 8px}
+.linkbtn:hover{color:var(--ink);text-decoration-thickness:2px}
+.hero .sub .linkbtn{padding:0}
+/* The checked menu item carries the class "sel", which the composer pills use for height:32px, so a long description spilled
+   over the next item. */
+.ctx .mi.sel{display:flex;height:auto;color:var(--ink);white-space:normal}
