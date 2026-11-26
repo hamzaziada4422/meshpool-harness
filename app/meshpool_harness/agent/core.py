@@ -1753,6 +1753,21 @@ _STASH_PUSH = re.compile(_GIT_PRE + r"stash(?:\s+(?:push|save)\b.*|(?:\s+-[-\w]+
 _STASH_BACK = re.compile(_GIT_PRE + r"stash\s+(?:pop|apply)\b")
 
 
+_HIST_MOVE = re.compile(_GIT_PRE + r"(?:reset|rebase|revert|stash\s+drop|branch\s+(?:-\w*[dD]\w*|--delete)\b|"
+                        r"commit\b.*--amend|checkout\s+(?!-[^-]|--\s)(?!.*\s--\s)[^-\s])")
+
+
+def _history_key(cmds) -> str:
+    """A normal form of a shell command that moves git history (reset, rebase, checkout of a ref, revert, commit
+    --amend, branch -D, stash drop), else "". Two calls with the same key are the same history move."""
+    for cmd in cmds or []:
+        for seg in PR._segments(str(cmd or "")):
+            seg = re.sub(r"^cd\s+(\"[^\"]*\"|'[^']*'|\S+)\s*&&\s*", "", seg).strip()
+            if _HIST_MOVE.match(seg):
+                return " && ".join(" ".join(str(x).split()) for x in cmds)
+    return ""
+
+
 def _leaves_tree_as_it_was(cmd: str) -> bool:
     """A command whose only effect on the files is a round trip, or none: git status, diff and log, a test run, and
     a `git stash` that its own `git stash pop` puts back. It is not an edit, so a passing test run before it is still
@@ -4735,7 +4750,7 @@ class Agent:
     _LOOP_EXACT = 3      # the same call, with no file changed since, is refused from its 3rd run
     _LOOP_SHAPE = 5      # the same call with only numbers changed (od -c | sed -n '8,9p', '9,10p', ...): from the 5th
 
-    _REFUSED = ("[Meshpool] Not run", "[Meshpool] Shell checks stopped")
+    _REFUSED = ("[Meshpool] Not run", "[Meshpool] Shell checks stopped", "Skipped: this is the same command")
     _FAILED = re.compile(r"(?:ERROR: |\[exit [1-9]\d*\]"
                          r"|Chunk ID: \w+\nWall time: [^\n]*\nProcess exited with code (?!0\n))")   # exec_command
 
@@ -4757,7 +4772,23 @@ class Agent:
                 g["rseq"] = g.get("rseq", 0) + 1          # a refusal like the others: the refused-streak guard counts it
                 return (f"[Meshpool] Not run: {short} already ran {cap} times for this request. Fix what it reported "
                         "and answer, or answer now if it found nothing to fix.")
+        hist = ""
+        try:
+            fa = json.loads((c.get("function") or {}).get("arguments") or "{}")
+            hist = _history_key(PR.commands_of(name, fa if isinstance(fa, dict) else {}))
+        except (ValueError, TypeError):
+            pass
+        last_hist = g.pop("hist_last", None)             # only the call right before this one counts
+        if hist and last_hist == (hist, getattr(self.ws, "edits", 0)):
+            # the model sent the same `git reset --mixed HEAD~1` twice in one reply: both ran, and a commit was lost
+            g["rseq"] = g.get("rseq", 0) + 1
+            g["hist_last"] = last_hist
+            return ("Skipped: this is the same command you just ran. It already moved git history, and running it "
+                    "again would move it a second time. Check `git log` and `git status`, then run something "
+                    "different if you still need to.")
         out = self._guarded_tool_inner(c, g, cut)
+        if hist and not str(out).lstrip().startswith(("ERROR", "Denied", "Not allowed", "Blocked")):
+            g["hist_last"] = (hist, getattr(self.ws, "edits", 0))
         # consecutive refused calls (a model re-sending a call the guards just refused); any call that runs resets it
         refused = str(out).startswith(self._REFUSED)
         if not refused:
