@@ -283,7 +283,8 @@ class TermFrontend:
         elif kinds <= {"destructive"}:
             hint = DESTRUCTIVE_HINT
         else:
-            hint = "re-run with --auto (full access), or allow each one as shown above."
+            hint = ("re-run with --permission-mode auto (full access, the same as --auto), or allow each one as "
+                    "shown above.")
             if "destructive" in kinds:
                 hint += " " + DESTRUCTIVE_HINT
         if "command" in kinds and getattr(self.s.agent, "mode", "ask") in ("ask", "edits"):
@@ -322,14 +323,14 @@ def _allow_hint(d: dict, mode: str) -> tuple[str, str, str]:
                 return shown, f'--allowed-tools "{rule}"', "command"
         if K._allow_hit(["bash"], "bash", {"command": cmd}):
             return shown, "--allowed-tools bash (every command that does not delete things)", "command"
-        return shown, "--auto", "command"
+        return shown, "--permission-mode auto", "command"
     if d.get("kind") == "edit":
         if title.startswith("Change "):
             return title, "it changes meshpool's own rule files; make that change yourself", "rule"
         return title, "--permission-mode edits", "edit"
     if d.get("kind") == "read":
-        return title, "--auto (it reaches outside the folder)", "other"
-    return title, "--auto", "other"
+        return title, "--permission-mode auto (it reaches outside the folder)", "other"
+    return title, "--permission-mode auto", "other"
 
 
 _IMAGES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}

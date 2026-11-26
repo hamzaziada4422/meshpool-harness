@@ -124,7 +124,7 @@ def test_om01_p_names_each_refused_command_and_a_flag_that_really_allows_it(monk
     assert '--allowed-tools "bash:python3 -m pytest*"' in note
     assert "--allowed-tools bash (every command" in note                  # a pipe or && needs the whole tool
     assert note.count("--permission-mode edits") == 1 and "Write notes.md: --permission-mode edits" in note
-    assert "command sandbox" in note
+    assert "command sandbox" in note and "re-run with --permission-mode auto" in note    # what works on Windows
     # the advice works: the same run with the rules it named refuses nothing
     A.LIVE.clear()
     monkeypatch.setenv("MH_ALLOW", "bash")                             # --allowed-tools bash
