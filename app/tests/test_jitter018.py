@@ -83,3 +83,16 @@ def test_the_move_is_a_transform_that_ends_and_reduced_motion_commits_at_once(ap
     assert page.evaluate("() => document.getAnimations().filter(a => a.id === 'flip').length") == 0
 
 
+# ---------------------------------------------------------------------------------------------------- J-02
+def test_opening_a_chat_shifts_the_layout_by_0_01_or_less(app, page):
+    """J-02: opening a chat shifted the layout by about 0.04 while its first messages came in: the newest items were drawn
+    at their real size with no containment for two frames, and when that was lifted the margins inside no longer collapsed
+    through them, moving the text by 27 px. The first bold and the first code text also swapped their font in. Settled items
+    keep the containment, and the two fonts are preloaded."""
+    ids = _chats(app, page, 2)
+    page.evaluate(CLS)
+    got = [_shift(page, f"() => openThread('{i}')", 1100) for i in (ids[0], ids[1], ids[0])]
+    assert all(v <= 0.01 for v in got), got
+    assert page.errors == [], page.errors
+
+

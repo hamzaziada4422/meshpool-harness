@@ -1088,8 +1088,10 @@ details .keyrow input{flex:1;min-width:0;padding:8px 12px;border:1px solid var(-
    message of the user, whose top margin is the larger one, so the last item's bottom margin is dropped. */
 .hist { content-visibility: auto; contain-intrinsic-size: auto 2000px; }
 #pjBrief:empty { display: none; }   /* the brief card before (or without) its text: no empty pill above Instructions */
-/* A chat that just opened: its newest items are laid out at their real size before the first paint (commitStage). */
-#col.settle > :nth-last-child(-n+12) { content-visibility: visible; }
+/* A chat that just opened: its newest items are laid out at their real size before the first paint (commitStage).
+   They keep the containment that content-visibility:auto applies (layout, style, paint), so dropping .settle two frames later changes
+   nothing: without it the margins inside no longer collapsed through the item and the text moved by 27 px (CLS 0.04 on every open). */
+#col.settle > :nth-last-child(-n+12) { content-visibility: visible; contain: layout style paint; }
 .hist > :last-child { margin-bottom:0; }
 .msg-ai p, .msg-ai li, .msg-ai h3, .msg-ai blockquote, .msg-user .b, .sidelist .tt, .tt { unicode-bidi: plaintext; text-align: start; }
 /* In-app files: the folder tree and the editor (editor.js). Colours come from the theme tokens, so both themes work. */
