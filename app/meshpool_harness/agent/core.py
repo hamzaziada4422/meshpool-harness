@@ -1666,7 +1666,14 @@ def _total_row_miss(asked: str, root, since: float) -> str:
             "with a live =SUM formula and a \"Total\" label in that row, save it and check again.")
 
 
-_TEMPLATE = re.compile(r"[\w][\w.()-]*template[\w.()-]*\.docx\b|\btemplate\b", re.I)
+# File names in a message: a match starts only where a run of name characters starts ("(a.docx" gives "a.docx").
+# The old form, [\w][\w.()-]*\.docx, retried from every character of one long token: quadratic, so a pasted
+# 100 KB token held the turn for minutes (pass-2 audit P2-uiserver-2, same shape).
+def _names_re(ext: str) -> str:
+    return r"(?<![\w.()-])[.()-]*(\w[\w.()-]*\.(?:" + ext + r"))\b"
+
+
+_TEMPLATE = re.compile(r"(?<![\w.()-])[.()-]*\w[\w.()-]*template[\w.()-]*\.docx\b|\btemplate\b", re.I)
 
 
 def _template_format_miss(asked: str, root, since: float) -> str:
@@ -1677,7 +1684,7 @@ def _template_format_miss(asked: str, root, since: float) -> str:
     text = str(asked or "").split(_SEP)[0]
     if not _TEMPLATE.search(text):
         return ""
-    names = re.findall(r"[\w][\w.()-]*\.docx\b", text)
+    names = re.findall(_names_re("docx"), text)
     tpl = next((Path(root) / n for n in names if "template" in n.lower() and (Path(root) / n).is_file()), None)
     if tpl is None:
         return ""
@@ -1803,7 +1810,7 @@ def _docx_hidden_text_miss(asked: str, root, since: float) -> str:
       the text and does not ask to summarise, rewrite, translate or restyle it."""
     from meshpool_harness.capabilities import SEP as _SEP
     text = str(asked or "").split(_SEP)[0]
-    names = re.findall(r"[\w][\w.()-]*\.(?:txt|md)\b", text)
+    names = re.findall(_names_re("txt|md"), text)
     if not names:
         return ""
     verbatim = bool(_ADD_TEXT.search(text)) and not _REWORD.search(text)
@@ -1870,11 +1877,11 @@ def _unchanged_output_miss(asked: str, root, since: float) -> str:
                   str(getattr(getattr(c.fill, "fgColor", None), "rgb", "")) if c.fill else "", c.number_format)
                  for c in row] for ws in wb.worksheets for row in ws.iter_rows()]
     try:
-        names = {n.lower() for n in re.findall(r"[\w][\w.()-]*\.xlsx\b", text)}
+        names = {n.lower() for n in re.findall(_names_re("xlsx"), text)}
         outs = _recent_office(root, since, ".xlsx")
         if not outs:
             return ""
-        inputs = [Path(root) / n for n in re.findall(r"[\w][\w.()-]*\.xlsx\b", text)
+        inputs = [Path(root) / n for n in re.findall(_names_re("xlsx"), text)
                   if (Path(root) / n).is_file() and (Path(root) / n).stat().st_mtime < since]
         if not inputs:
             return ""
@@ -1961,7 +1968,7 @@ def _formula_result_miss(asked: str, root, since: float) -> str:
         outs = _recent_office(root, since, ".xlsx")[:4]
         if not outs:
             return ""
-        inputs = [Path(root) / n for n in re.findall(r"[\w][\w.()-]*\.xlsx\b", text)
+        inputs = [Path(root) / n for n in re.findall(_names_re("xlsx"), text)
                   if (Path(root) / n).is_file() and (Path(root) / n).stat().st_mtime < since]
         says_wrong = bool(re.search(_SAYS_WRONG, text, re.I))
         errors, same = [], []

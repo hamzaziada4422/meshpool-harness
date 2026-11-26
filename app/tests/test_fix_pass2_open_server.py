@@ -169,3 +169,36 @@ def test_p2_agent_9_one_5xx_still_says_continue(tmp_path, monkeypatch):
     a.send("hello")
     err = [e["text"] for e in events if e["type"] == "error"][-1]
     assert "Send \"continue\" in a moment" in err and err.endswith("(HTTP 502: bad gateway)")
+
+
+# ---------- P2-uiserver-2 (same shape): office_intent's own file-name regex ------------------------------------------
+def test_p2_uiserver_2_office_intent_long_token_is_checked_fast():
+    from meshpool_harness import office_intent as OI
+    t0 = time.process_time()
+    for blob in ("a" * 300_000, "x." * 150_000, "(" + "b" * 300_000):
+        assert OI.styled_deliverable(blob) is False
+    assert time.process_time() - t0 < 1.0               # was minutes: the search retried from every character
+    # same answers as before on ordinary messages (the docstring cases)
+    assert OI.styled_deliverable("Make a 10-slide pitch deck for investors") is True
+    assert OI.styled_deliverable("Turn notes.docx into a presentation") is True
+    assert OI.styled_deliverable("Sort score.xlsx by midterm1 into sorted_score.xlsx") is False
+    assert OI.styled_deliverable("Make the report in q3.docx shorter") is False
+    assert OI.styled_deliverable("Add a chart of revenue to slide 3 of deck.pptx") is False
+    assert OI.styled_deliverable("Make the report in (q3.docx) shorter") is False
+
+
+def test_p2_uiserver_2_agent_file_name_scans_are_linear(tmp_path):
+    # The office checks in agent/core.py read file names out of the user's message with the same quadratic pattern.
+    from meshpool_harness.agent import core as K
+    import re as _re
+    t0 = time.process_time()
+    for blob in ("a" * 300_000, "a." * 150_000):
+        for ext in ("docx", "txt|md", "xlsx"):
+            assert _re.findall(K._names_re(ext), blob) == []
+        assert not K._TEMPLATE.search(blob)
+        assert K._docx_hidden_text_miss("Add " + blob, tmp_path, time.time()) == ""
+    assert time.process_time() - t0 < 2.0
+    # the names found are the same as before: punctuation in front of a name is not part of it
+    assert _re.findall(K._names_re("docx"), 'Fill "(template_a.docx)" and out.docx, not a.docxb') == \
+        ["template_a.docx", "out.docx"]
+    assert _re.findall(K._names_re("txt|md"), "Add notes.md and x.txt to report.docx") == ["notes.md", "x.txt"]

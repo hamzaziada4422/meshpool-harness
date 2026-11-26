@@ -17,7 +17,9 @@ from pathlib import Path
 SEP = "\n\n​"                  # notes only the model sees follow this (pace.SEP)
 
 # A file named in the message: "report.docx" is a file, not a request for a report.
-_FILE = re.compile(r"[\w][\w.()-]*\.(?:xlsx|xlsm|xls|csv|docx?|pptx?|pdf|od[tsp])\b", re.I)
+# A match starts only where a run of name characters starts: the old form ([\w][\w.()-]*) retried from every
+# character of one long unbroken token, which was quadratic (a 300 KB token held the server for minutes).
+_FILE = re.compile(r"(?<![\w.()-])[.()-]*\w[\w.()-]*\.(?:xlsx|xlsm|xls|csv|docx?|pptx?|pdf|od[tsp])\b", re.I)
 
 # The styled deliverables the engines build.
 _NOUN = (r"(?:(?:pitch |slide |board |investor |sales )?decks?|presentations?|slides|slideshows?|power ?points?"
@@ -90,7 +92,7 @@ def wants_revisions(text: str) -> bool:
 
 
 SHEET_SOURCES = (".xlsx", ".xlsm", ".xls", ".csv")
-_SHEET_NAME = re.compile(r"[\w][\w.()-]*\.(?:xlsx|xlsm|xls|csv)\b", re.I)
+_SHEET_NAME = re.compile(r"(?<![\w.()-])[.()-]*(\w[\w.()-]*\.(?:xlsx|xlsm|xls|csv))\b", re.I)   # linear, as _FILE
 # A name the request gives to the output, not a source: "save it as x.xlsx", "into x.xlsx", "output x.xlsx".
 _OUT_CUE = re.compile(r"\b(?:as|into|output(?:\s+(?:to|it\s+(?:to|as)))?|named|called)\s*[\"'`]?\s*$", re.I)
 
@@ -102,9 +104,9 @@ def _named_sources(request: str, files=(), workdir=None) -> list[str]:
     given = {Path(str(f)).name.lower() for f in files or []}
     out = []
     for m in _SHEET_NAME.finditer(t):
-        if _OUT_CUE.search(t[max(0, m.start() - 40):m.start()]):
+        if _OUT_CUE.search(t[max(0, m.start(1) - 40):m.start(1)]):
             continue
-        name = m.group(0)
+        name = m.group(1)
         if name.lower() in given or (workdir and (Path(workdir) / name).is_file()):
             out.append(name)
     return out
