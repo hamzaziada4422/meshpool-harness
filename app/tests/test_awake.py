@@ -35,6 +35,7 @@ def test_the_commands(monkeypatch):
 
 def test_a_real_holder_starts_and_stops(monkeypatch):
     monkeypatch.setattr(AW, "_count", 0)
+    monkeypatch.setattr(AW, "_gave_up", False)     # an earlier test's holder may have ended by itself (no D-Bus here)
     monkeypatch.setattr(AW, "_command", lambda: [sys.executable, "-c", "import time; time.sleep(60)"])
     monkeypatch.setattr(sys, "platform", "linux")
     AW.hold()
