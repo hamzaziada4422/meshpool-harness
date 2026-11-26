@@ -37,9 +37,25 @@ _CACHE_MAX = 300                         # files kept in the cache folder
 _NOT_CACHED = ("Could not read", "Meshpool cannot read", "[Meshpool] ")
 
 
+def _inside(p: Path, tree: Path) -> bool:
+    try:
+        p, tree = p.resolve(), tree.resolve()
+    except OSError:
+        return False
+    return p == tree or tree in p.parents
+
+
 def _cache_dir() -> Path:
+    """The text cache lives in the data folder (MESHPOOL_HOME, else the per-user folder), never in the source tree.
+    A MESHPOOL_HOME that is the checkout, or inside it, would put document text where git sees it (a cache/docread/
+    folder was once committed this way), so the cache then goes to the per-user folder, or the temp folder."""
+    import tempfile
     from meshpool_harness import config as C
-    return C.home() / "cache" / "docread"
+    src = C.APP.parent
+    for base in (C.home(), C.user_home_default(), Path(tempfile.gettempdir()) / "meshpool"):
+        if not _inside(base, src):
+            return base / "cache" / "docread"
+    raise OSError("no cache folder outside the source tree")   # callers treat this as "no cache": the file is read
 
 
 def _cache_key(p: Path, *args) -> str:

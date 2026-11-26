@@ -46,6 +46,63 @@ def test_spdx_licence_string_needs_setuptools_77():
 
 
 # ---- caches: cache/docread/ with document text was committed at the repo root ----------------------------------------
+def _home(monkeypatch, tmp_path, meshpool_home):
+    from meshpool_harness import config as C
+    monkeypatch.setenv("MESHPOOL_HOME", str(meshpool_home))
+    monkeypatch.setenv("HOME", str(tmp_path / "user"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setattr(C.sys, "platform", "linux")
+
+
+def _in_repo(p: Path) -> bool:
+    p = p.resolve()
+    return p == ROOT.resolve() or ROOT.resolve() in p.parents
+
+
+def test_docread_cache_is_under_meshpool_home_not_the_repo(tmp_path, monkeypatch):
+    from meshpool_harness import docread as D
+    _home(monkeypatch, tmp_path, tmp_path / "home")
+    d = D._cache_dir()
+    assert d == tmp_path / "home" / "cache" / "docread"
+    assert not _in_repo(d)
+
+
+def test_docread_cache_leaves_a_checkout_used_as_meshpool_home(tmp_path, monkeypatch):
+    """MESHPOOL_HOME pointing at the checkout (or a folder inside it) must not put document text where git sees it."""
+    from meshpool_harness import docread as D
+    for inside in (ROOT, ROOT / ".mhhome"):
+        _home(monkeypatch, tmp_path, inside)
+        d = D._cache_dir()
+        assert not _in_repo(d), d
+        assert d == tmp_path / "xdg" / "meshpool" / "cache" / "docread"
+
+
+def test_reading_a_file_writes_its_cache_outside_the_repo(tmp_path, monkeypatch):
+    from meshpool_harness import docread as D
+    _home(monkeypatch, tmp_path, ROOT)
+    monkeypatch.delenv("MH_DOC_CACHE", raising=False)
+    f = tmp_path / "names.csv"
+    f.write_text("name\nalice\nbob\n", encoding="utf-8")
+    text = D.extract(f)
+    assert "alice" in text
+    key = D._cache_key(f, D.MAX, None, None, "auto", "auto")
+    assert (tmp_path / "xdg" / "meshpool" / "cache" / "docread" / (key + ".txt")).read_text(encoding="utf-8") == text
+    assert not (ROOT / "cache" / "docread" / (key + ".txt")).exists()
+
+
+def test_no_cache_folder_outside_the_checkout_means_no_cache(tmp_path, monkeypatch):
+    from meshpool_harness import config as C
+    from meshpool_harness import docread as D
+    monkeypatch.setenv("MESHPOOL_HOME", str(ROOT))
+    monkeypatch.setattr(C, "user_home_default", lambda: ROOT / "user")
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(ROOT))
+    f = tmp_path / "a.csv"
+    f.write_text("x\n1\n", encoding="utf-8")
+    assert "1" in D.extract(f)                       # still reads; it just does not keep the text
+    assert not (ROOT / "meshpool").exists() and not (ROOT / "user").exists()
+
+
 def test_cache_folder_is_gitignored_and_not_tracked():
     import subprocess
     assert "/cache/" in _text(".gitignore").splitlines()
