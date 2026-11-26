@@ -41,13 +41,13 @@ Meshpool runs on your own computer. It does research, writing, analysis, spreads
 
 ### Measured, not claimed
 
-Each agent ran on the same model (DeepSeek V4.1 Flash), on the same tasks with the same graders, at the same time. The full tables are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+Each agent ran on the same model (DeepSeek V4.1 Flash), on the same tasks with the same graders, at the same time. The full tables are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md). The code and office numbers below recompute from raw rows stored in `docs/results/`; [BENCHMARKS.md](docs/BENCHMARKS.md#check-the-headline-claims-yourself) shows how to check the SWE-bench one and rerun it.
 
 | Agent | Best at | Result |
 |---|---|---|
 | **Meshpool Code** | Coding in your project | Against Codex CLI 0.171 on the same model, gateway and hour (0.0.16): SWE-bench Verified (SymPy) 22 vs 22 solved at 0.76x Codex's cost per solved task; 144 vs 145 on 156 coding runs at 0.71x; 39 vs 38 on v2_dev at 0.79x. |
 | **Meshpool Work** | Word, Excel, PowerPoint and PDF work, data tasks | Data tasks: 45 vs 44 solved at 0.51x Codex's cost per solved task. Office (0.0.16): Office-7 42 vs 41 at 0.94x; SpreadsheetBench 31 vs 35 at 0.90x; OfficeBench 21 vs 24 at 0.83x. Cheaper than Codex on every suite, but it still solves fewer SpreadsheetBench and OfficeBench tasks; see [BENCHMARKS.md](docs/BENCHMARKS.md). |
-| **Meshpool's agent loop, browser use** | Web forms and web apps | MiniWoB++: 97 of 102 at $0.0027 and 17 s per solved task. In a same-time round, $0.0009 per solved task against $0.0025 for Codex CLI. |
+| **Browser use** | Web forms and web apps | Not measured on the shipped agent. An earlier engine loop (before 0.0.7) solved 97 of 102 MiniWoB++ runs, but no raw rows were kept, so treat that as unverified ([why](docs/BENCHMARKS.md#browser-use-miniwob-downgraded)). |
 
 ## Install
 

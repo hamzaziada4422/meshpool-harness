@@ -128,3 +128,36 @@ def test_issue_chooser_sends_security_reports_to_a_private_advisory():
     cfg = yaml.safe_load(_text(".github/ISSUE_TEMPLATE/config.yml"))
     links = [l["url"] for l in cfg.get("contact_links", [])]
     assert any(u.endswith("/hamzaziada4422/meshpool-harness/security/advisories/new") for u in links)
+
+
+# ---- evidence: the headline numbers must recompute from stored raw rows -----------------------------------------------
+def _verify_paired(*files: str, a: str = "MP", b: str = "codex") -> str:
+    import subprocess
+    cp = subprocess.run([sys.executable, str(ROOT / "testkit" / "verify_paired.py"), *[str(ROOT / f) for f in files],
+                         "--a", a, "--b", b], capture_output=True, text=True, timeout=120)
+    assert cp.returncode == 0, cp.stderr
+    return cp.stdout
+
+
+def test_readme_swe_bench_claim_recomputes_from_the_stored_rows():
+    m = re.search(r"SWE-bench Verified \(SymPy\) (\d+) vs (\d+) solved at ([0-9.]+)x", _text("README.md"))
+    assert m, "the README's SWE-bench claim changed shape; update this test with it"
+    out = _verify_paired("docs/results/release016/swe_sympy/results.jsonl")
+    assert re.search(rf"MP: solved {m.group(1)}/24\b", out)
+    assert re.search(rf"codex: solved {m.group(2)}/24\b", out)
+    assert f"cost per solved ratio {m.group(3)}x" in out
+    bench = _text("docs/BENCHMARKS.md")
+    assert "1c0b6df59a3928f51ebfde171c07dba5feedbbdf" in bench                       # the exact commit
+    assert "verify_paired.py docs/results/release016/swe_sympy/results.jsonl" in bench
+
+
+def test_readme_browser_claim_is_not_stated_as_measured():
+    """No raw rows exist for the MiniWoB++ runs, so the README may not present them as a measured result."""
+    readme = _text("README.md")
+    row = next(l for l in readme.splitlines() if l.startswith("| **Browser use**"))
+    assert "unverified" in row
+    assert "$0.0009 per solved task against $0.0025" not in readme
+
+
+def test_benchmarks_link_the_loop_history_branch():
+    assert "/tree/loop-history" in _text("docs/BENCHMARKS.md")

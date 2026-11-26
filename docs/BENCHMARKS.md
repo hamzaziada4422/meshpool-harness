@@ -8,6 +8,71 @@ Meshpool Auto uses the results on this page to choose a harness for each task (s
 engine). Meshpool Code and Meshpool Work in the app run the app's own chat agent, which shares that loop's tools but
 not its loop. Since 12 November 2026 the app agent is measured directly (next section).
 
+## Check the headline claims yourself
+
+These numbers were measured by us, not by a third party. This section shows what you can check without trusting us,
+and what you cannot.
+
+### SWE-bench Verified (SymPy): 22 vs 22 solved at 0.76x Codex's cost per solved task
+
+| | |
+|---|---|
+| Claim (README) | Meshpool 22/24, Codex CLI 22/24; cost per solved 0.76x Codex's (95% CI 0.69-0.84); median per-task time 0.93x |
+| Meshpool commit | [`1c0b6df5`](https://github.com/hamzaziada4422/meshpool-harness/commit/1c0b6df59a3928f51ebfde171c07dba5feedbbdf) (the 0.0.16 work; it is on a work branch, not on `main`) |
+| Other arm | Codex CLI 0.171.0 |
+| Model | `deepseek-v4.1-flash` through `llm.meshpool.ai`, one metering proxy for both arms |
+| Date | 25 November 2026 (results written 07:15 UTC) |
+| Tasks | 12 SymPy tasks from SWE-bench Verified x 2 runs per arm, no reruns: `testkit/loop/suites/swe_sympy.json` |
+| Grading | the official way: the hidden test patch is applied after the agent finishes, and every FAIL_TO_PASS and PASS_TO_PASS test must pass (`testkit/loop/swe_local.py`) |
+| Raw output | [`docs/results/release016/swe_sympy/`](results/release016/swe_sympy/): `results.jsonl` (48 rows, one per run), `meter.jsonl` (every model request), `run.json` (settings and price table) |
+
+**Recompute the claim from the raw rows** (no key, no model, a few seconds):
+
+```sh
+python testkit/verify_paired.py docs/results/release016/swe_sympy/results.jsonl --a MP --b codex
+```
+
+It prints `solved 22/24` for both arms and `cost per solved ratio 0.76x (95% CI 0.69-0.84)`.
+
+**Run it again.** You need a key for an OpenAI-compatible endpoint that serves the model, Codex CLI 0.171.0 (the
+`codex` arm runs it through Meshpool's own ACP integration), and about $0.30 at list price ($0.13 Meshpool, $0.17
+Codex on the stored run; that gateway billed 2x list). Build the SymPy checkout and its Python once, then run both arms:
+
+```sh
+git checkout 1c0b6df59a3928f51ebfde171c07dba5feedbbdf
+python testkit/loop/swe_local.py --n 12 --seed 7 --min-version 1.9
+python testkit/loop/bench.py --arms MP,codex --suites swe_sympy --repeats 2 --parallel 3 --timeout 600 --budget 1.3 --out /tmp/swe_sympy
+python testkit/verify_paired.py /tmp/swe_sympy/results.jsonl --a MP --b codex
+```
+
+Limits, stated plainly:
+
+- The driver that wrote the stored rows was not committed. `bench.py` runs the same tasks, the same grading and the
+  same metering proxy, with the product's default settings for the Meshpool arm, but its rows have a slightly
+  different shape. Expect the same order of result, not the same bytes.
+- Two runs per task is small. A rerun can move by one or two tasks. The cost interval is the part to compare.
+- Commit `1c0b6df5` lives on a work branch. If that branch is deleted, the commit can disappear from GitHub.
+
+### Browser use (MiniWoB++): downgraded
+
+The README used to claim "MiniWoB++: 97 of 102 at $0.0027 and 17 s per solved task" and "$0.0009 per solved task
+against $0.0025 for Codex CLI". Neither can be checked:
+
+- Both were measured before 0.0.7 on the one-shot engine loop, not on the agent the app ships.
+- No raw rows were kept for either run, in this repository or its history.
+- The 10-task round was one run per task on dev tasks.
+
+The README now calls these numbers unverified. They stay in the tables below as history. A browser claim comes back
+when a rerun on the shipped agent stores its `results.jsonl` next to the others in `docs/results/`.
+
+### The trend over time
+
+The harness loop (`.github/workflows/harness-loop.yml`) keeps each run's full table and raw rows on the
+[`loop-history`](https://github.com/hamzaziada4422/meshpool-harness/tree/loop-history) branch
+([index](https://github.com/hamzaziada4422/meshpool-harness/blob/loop-history/INDEX.md)). It holds three runs so far,
+all from 18 November 2026, on small graded code tasks. That is too few to show a trend yet. The loop runs when
+started by hand or by a commit message with `[loop]`; it has no schedule.
+
 ## Office work against Codex and Pi (23 November 2026)
 
 Seven office tasks a user would type (edit a workbook in place, tracked changes in Word, invoices in three
