@@ -515,6 +515,14 @@ def test_the_reviewers_instructions_name_the_rules():
     assert "—" not in s and "–" not in s                                  # plain punctuation
 
 
+def test_problem_phrases_in_the_checked_line_are_short_and_end_on_a_word():
+    p = {"what": "keyboard focus is invisible on the Pickup date field, so a keyboard user cannot see where they are "
+                 "when tabbing through the order form", "where": "", "severity": "major"}
+    assert LR._phrase(p) == "keyboard focus is invisible on the Pickup date field"
+    long = {"what": "word " * 40, "where": "", "severity": "minor"}
+    assert len(LR._phrase(long)) <= 90 and LR._phrase(long).endswith("word")
+
+
 def test_action_sentences_are_read():
     assert [a["do"] for a in LR.plan_actions([{"do": "tap", "target": "Buy"}, "dance wildly"])] == ["click"]
     acts = LR.plan_actions(["click 'Order now'", "fill the email field with 'x' and submit", "open the menu at phone width",

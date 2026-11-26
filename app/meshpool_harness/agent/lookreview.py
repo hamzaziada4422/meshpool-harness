@@ -733,7 +733,10 @@ def _same(a: dict, b: dict) -> bool:
 def _phrase(p: dict) -> str:
     t = re.sub(r"\s+", " ", p["what"]).strip().rstrip(".")
     t = t[:1].lower() + t[1:] if t[:2] != t[:2].upper() else t
-    return t[:90]
+    t = re.split(r",? so (?:i|she|he|they|a|the|keyboard)\b|, which\b|, because\b", t, 1)[0].rstrip(" ,;")   # the thing, not the why
+    if len(t) > 90:
+        t = t[:90].rsplit(" ", 1)[0].rstrip(" ,;")                       # never in the middle of a word
+    return t
 
 
 def _join(xs: list) -> str:
