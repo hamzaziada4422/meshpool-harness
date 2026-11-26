@@ -1390,9 +1390,12 @@ function stepSummary(name, ev) {
   catch (e) { return ""; }
 }
 const TOOL_LABEL = {bash: "Ran", read_file: "Read", write_file: "Wrote", edit: "Edited", grep: "Searched", glob: "Listed", fetch_url: "Fetched", web_search: "Searched the web", web_research: "Researched", mcp__meshpool_web__web_search: "Searched the web", mcp__meshpool_web__web_fetch: "Read", mcp__meshpool_web__web_research: "Researched", mcp__meshpool_assistant__memory_save: "Saved to memory", mcp__meshpool_assistant__run_subtasks: "Ran sub-agents", run_subtasks: "Ran sub-agents", delegate_task: "Handed off to sub-agents", mcp__meshpool_assistant__schedule_task: "Scheduled", todo_write: "Updated the plan", use_skill: "Loaded skill", office_task: "Office"};
+// A reopened chat is built in a detached column (cur.stage), where isConnected is false for every node: a check on it
+// started a new "1 step" group for each step and left each group spinning. inCol asks the column being built instead.
+const inCol = n => !!n && (n.isConnected || !!S.cur?.stage?.contains(n));
 function workGroup() {
   const cur = S.cur;
-  if (cur.group && cur.group.isConnected && cur.group === colEl().lastElementChild) return cur.group;
+  if (cur.group && cur.group === colEl().lastElementChild) return cur.group;
   const d = document.createElement("details"); d.className = "work"; d.open = !!S.steps; d.dataset.n = "0";
   d.innerHTML = `<summary><span class="chev">${ICON.chevR}</span><span class="gdots" aria-hidden="true"><i></i><i></i><i></i></span><span class="wl">Working</span><span class="gel"></span></summary><div class="rows"></div>`;
   d._t0 = Date.now();
@@ -1403,7 +1406,7 @@ function bumpGroup(g, done) {
   $(".wl", g).textContent = `${n} step${n === 1 ? "" : "s"}${fails ? `, ${fails} failed` : ""}`;
   if (done) { g.dataset.done = "1"; g.open = !!S.steps || !!$(".appr:not(.done)", g); const el = $(".gel", g); if (el) el.textContent = ""; $(".gdots", g)?.remove(); }
 }
-function closeGroup() { const g = S.cur.group; if (g && g.isConnected) bumpGroup(g, true); S.cur.group = null; }
+function closeGroup() { const g = S.cur.group; if (inCol(g)) bumpGroup(g, true); S.cur.group = null; }
 const GOAL_NEXT = "Continue working toward the goal.";
 const RESUME_NEXT = "Continue where you left off.";
 const stripGoal = t => String(t || "").replace(/\n*^\W*GOAL:\s*(DONE|CONTINUE)\b.*$/gim, "").trimEnd();
@@ -1483,7 +1486,7 @@ function applyEvRaw(ev) {
       const g = d.closest(".work"); if (g) bumpGroup(g);
       break; }
     case "approval": {
-      const gKeep = cur.group && cur.group.isConnected && cur.group === col.lastElementChild ? cur.group : null;
+      const gKeep = cur.group && cur.group === col.lastElementChild ? cur.group : null;
       for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st) { st.textContent = "Needs your approval"; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_BASE[nm] || TOOL_LABEL[nm] || nm; } }
       closeGroup();
       const OPT = {allow_once: "Allow", allow_always: "Allow for this chat", reject_once: "Deny", reject_always: "Always deny"};
@@ -1521,7 +1524,7 @@ function applyEvRaw(ev) {
     case "subagent": {      // delegate_task progress: one row per sub-agent, live (agent/delegate.py)
       cur.subs = cur.subs || {};
       let box = cur.subs[ev.delegation];
-      if (!box || !box.isConnected) box = document.getElementById("sub-" + ev.delegation);
+      if (!inCol(box)) box = cardEl("sub-" + ev.delegation);
       if (!box) { closeGroup(); box = add(`<b>Sub-agents</b><ol></ol>`, "planbox"); box.id = "sub-" + ev.delegation; }   // the chat's Stop stops them
       cur.subs[ev.delegation] = box;
       let li = box.querySelector(`[data-sid="${CSS.escape(String(ev.sid || ""))}"]`);
