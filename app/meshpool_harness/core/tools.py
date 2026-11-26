@@ -1123,7 +1123,9 @@ class Workspace:
 
     def _cwrite(self, path: str, text: str, append=False):
         cp = self._cpath(path)
-        r = self._cexec(["sh", "-c", f'mkdir -p "$(dirname "{cp}")" && cat {">>" if append else ">"} "{cp}"'], input_text=text)
+        # the path goes in as $1, never inside the script: a name with $(...) or a quote in it is not run as code
+        r = self._cexec(["sh", "-c", f'mkdir -p "$(dirname -- "$1")" && cat {">>" if append else ">"} "$1"', "sh", cp],
+                        input_text=text)
         if r.returncode:
             raise ToolError(f"could not write {path} in container: {r.stderr[-200:]}")
 

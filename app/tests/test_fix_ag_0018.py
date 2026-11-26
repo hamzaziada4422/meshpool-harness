@@ -370,3 +370,24 @@ def test_sandboxed_commands_cannot_write_meshpool_settings(tmp_path, monkeypatch
     job = T.Workspace(str(data / "runs" / "job"), str(tmp_path / "out2"))    # an engine's folder in the data folder
     job.bash("echo hi > result.txt")
     assert (data / "runs" / "job" / "result.txt").exists()
+
+
+def test_container_writes_pass_the_path_as_data_not_as_shell_code(tmp_path):
+    """Workspace._cwrite put the path inside a sh -c string: a file name with $(...) ran as code in the container."""
+    import subprocess as sp
+    from meshpool_harness.core import tools as T
+    ws = T.Workspace.__new__(T.Workspace)
+    ws.cdir = "/work"
+    ws._cpath = lambda p: "/work/" + p
+    seen = []
+
+    def cexec(argv, input_text=None):
+        seen.append(argv)                                   # run the same script locally against a scratch folder
+        local = [a.replace("/work/", str(tmp_path) + "/") for a in argv]
+        return sp.run(local, input=input_text, capture_output=True, text=True, cwd=tmp_path)
+    ws._cexec = cexec
+    evil = 'x$(touch PWNED).txt'
+    T.Workspace._cwrite(ws, evil, "hi")
+    assert (tmp_path / evil).read_text() == "hi"
+    assert not (tmp_path / "PWNED").exists()
+    assert evil not in seen[0][2]                           # the script never contains the name
