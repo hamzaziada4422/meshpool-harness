@@ -301,3 +301,34 @@ def test_chat_mode_shows_no_engine_names_but_code_mode_keeps_them(app, page):
     page.evaluate("() => { S.cur.view.code_mode = true; S.cur.view.kind = 'code'; S.mode = 'code'; }")
     assert page.evaluate("() => { renderSel(); return document.querySelector('#mPill .lbl').textContent; }") != "Model"
     assert page.errors == [], page.errors
+
+
+# ------------------------------------------------------------------------------------------------------ item 7
+def test_settings_keeps_technical_pages_under_advanced_and_rule_syntax_behind_advanced_rules(app, page):
+    """"Models and providers", "API keys" and "Code" sat in the main list; Permissions showed "bash:git push*", "Always
+    allow" and "Linux does not need extra permissions". The technical pages are under Advanced, the rule syntax is behind
+    "Advanced rules", and the Linux line is gone."""
+    page.evaluate("() => openSettings('permissions')")
+    page.wait_for_selector("#mbody .advrules")
+    main = page.evaluate("() => [...document.querySelectorAll('.mnav > .mgrp:not(.madv) [data-g]')].map(b => b.textContent.trim())")
+    adv = page.evaluate("() => [...document.querySelectorAll('.mnav .madv [data-g], .mnav .madv .mext')].map(b => b.textContent.trim())")
+    assert not {"Models and providers", "Code", "API keys"} & set(main), main
+    assert {"Models and providers", "Code", "API keys"} <= set(adv), adv
+    assert page.evaluate("() => document.querySelector('#madv').open") is False
+    txt = page.inner_text("#mbody")
+    for bad in ("bash:git push", "Always allow", "Never allow", "Linux does not need extra permissions", "Always ask"):
+        assert bad not in txt, (bad, txt)
+    assert "Advanced rules" in txt
+    page.click(".advrules summary")
+    page.wait_for_function("() => document.querySelector('.advrules').open")
+    assert "bash:git push" in page.inner_text("#mbody")
+    # a search for a technical page finds it under Advanced and opens the group
+    page.fill("#mnavq", "api key")
+    assert page.evaluate("() => document.querySelector('#madv').open && !document.querySelector('#madv [data-g=models]').hidden")
+    assert page.errors == [], page.errors
+
+
+def test_permissions_has_no_linux_line():
+    from meshpool_harness.ui import desktop
+    if sys.platform.startswith("linux"):
+        assert desktop.permissions()["note"] == ""

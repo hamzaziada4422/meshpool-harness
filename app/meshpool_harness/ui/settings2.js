@@ -9,11 +9,12 @@ const SET_NAV = [
   [["account", "Account", "user", ["profile"]], ["billing", "Billing", "card", ["billing"]], ["usage", "Usage", "bolt", ["usage"]]],
   [["appearance", "Appearance", "palette", ["appearance"]], ["personal", "Your meshpool", "brain", ["personal", "styles", "import"]], ["caps", "Capabilities", "tool", ["caps", "suggest", "web"]],
    ["notify", "Notifications", "bell", ["notify"]], ["permissions", "Permissions", "lock", ["permissions"]], ["privacy", "Privacy", "shield", ["data"]]],
-  [["plugins", "Plugins", "plug", ["connectors", "skills", "plugins", "mcp", "office"]], ["code", "Code", "codebr", ["terminal", "advanced"]]],
-  [["models", "Models and providers", "cpu", ["general", "models", "harnesses"]], ["scheduled", "Scheduled tasks", "clock", ["scheduled"]],
+  [["plugins", "Plugins", "plug", ["connectors", "skills", "plugins", "mcp", "office"]], ["scheduled", "Scheduled tasks", "clock", ["scheduled"]],
    ["company", "Company and brand", "stack", ["company"]], ["about", "About and updates", "help", ["about"]]],
 ];
-const SET_GROUPS = SET_NAV.flat().map(([k, lb, , subs]) => [k, lb, subs]);       // kept for company.js and old callers
+// The technical pages sit together under "Advanced" in the list, closed until someone opens it or searches for them.
+const SET_ADV = [["models", "Models and providers", "cpu", ["general", "models", "harnesses"]], ["code", "Code", "codebr", ["terminal", "advanced"]]];
+const SET_GROUPS = [...SET_NAV.flat(), ...SET_ADV].map(([k, lb, , subs]) => [k, lb, subs]);       // kept for company.js and old callers
 const SET_NAMES = {profile: "Profile", appearance: "Appearance", notify: "Notifications", suggest: "Suggestions", caps: "Features", personal: "Instructions and memory", styles: "Styles", web: "Web search",
   connectors: "Directory", skills: "Skills", plugins: "Plugins", mcp: "Custom tools", general: "Connection", models: "Models", harnesses: "Agents",
   usage: "Usage", billing: "Plan and billing", permissions: "Permissions", data: "Your data", import: "Import chats",
@@ -75,8 +76,9 @@ function openSettings(sec = "profile") {
   sc.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-label="Settings"><header class="mhead2"><h2 id="mtitle">Settings</h2><button class="iconbtn mx" aria-label="Close settings">${ICON.x}</button></header>
     <nav class="mnav" aria-label="Settings sections"><label class="msearch">${ICON.search}<input id="mnavq" placeholder="Search" aria-label="Search settings" autocomplete="off" spellcheck="false"></label>
       ${SET_NAV.map(grp => `<div class="mgrp">${grp.map(item).join("")}</div>`).join("")}
-      <span class="sp"></span>${MP.desktop && !S.settings?.native ? `<button id="quitApp">${ICON.logout}<span>Quit meshpool</span></button>` : ""}
-      <button class="mext" id="apiKeys">API keys<span>${ICON.ext}</span></button></nav>
+      <details class="mgrp madv" id="madv" ${SET_ADV.some(a => a[0] === g0[0]) ? "open" : ""}><summary>Advanced<span class="mch">${ICON.chev}</span></summary>${SET_ADV.map(item).join("")}
+        <button class="mext" id="apiKeys">API keys<span>${ICON.ext}</span></button></details>
+      <span class="sp"></span>${MP.desktop && !S.settings?.native ? `<button id="quitApp">${ICON.logout}<span>Quit meshpool</span></button>` : ""}</nav>
     <div class="mmain"><div class="subtabs" id="subtabs" role="tablist" aria-label="Pages"></div><div class="mbody" id="mbody"></div></div></div>`;
   document.body.appendChild(sc);
   sc.addEventListener("mousedown", e => { if (e.target === sc) closeSettings(); });
@@ -90,7 +92,8 @@ function openSettings(sec = "profile") {
       const hit = q ? (setMatch(b.textContent.toLowerCase(), q) ? subs[0] : subs.find(k => setMatch(setWords(k), q))) : "";
       b.hidden = !!q && !hit; b.dataset.hit = hit || "";               // a click opens the matching page (Privacy > Permissions)
     });
-    $$(".mgrp", sc).forEach(g => g.hidden = !$("[data-g]:not([hidden])", g)); };
+    $$(".mgrp", sc).forEach(g => g.hidden = !$("[data-g]:not([hidden])", g));
+    const adv = $("#madv", sc); if (adv && q && !adv.hidden) adv.open = true; };           // a search that finds an Advanced page shows it
   $("#mnavq", sc).addEventListener("input", e => { const nav = $(".mnav", sc); let n = $("#mnavNone", nav); const none = !!e.target.value.trim() && !$(".mnav [data-g]:not([hidden])", sc); if (none && !n) { n = document.createElement("p"); n.id = "mnavNone"; n.className = "muted"; n.style.padding = "8px 12px"; n.textContent = "No settings match."; $(".mgrp", nav).before(n); } else if (!none) n?.remove(); });
   $("#mnavq", sc).onkeydown = e => { if (e.key === "Enter") { const first = $(".mnav [data-g]:not([hidden])", sc); if (first) first.click(); } };
   $("#quitApp")?.addEventListener("click", () => post("/api/quit").then(() => document.body.innerHTML = `<div class="onb"><div class="onb-card"><h1>meshpool has stopped</h1><p>You can close this window.</p></div></div>`));
