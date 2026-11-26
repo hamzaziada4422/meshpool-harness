@@ -348,6 +348,7 @@ def test_dev_server_the_turn_started_is_used_and_none_is_started(proj, monkeypat
         assert t["url"] == "http://localhost:5173/" and t["served"]
     finally:
         p.kill()
+        p.wait(10)
     t = L.web_target(a, {"t0": time.time() - 5}, [proj / "src" / "App.tsx"])   # it stopped: nothing to render
     assert "none" in t
 
