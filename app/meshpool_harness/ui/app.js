@@ -1367,20 +1367,37 @@ function workTick(cur) {
   // drawn by this same tick, so it costs no timer of its own.
   const steps = Object.values(cur.tools || {}).some(d => !d.dataset.done);
   const quiet = cur.working && !waiting && !cur.live && !cur.stage && !steps ? Math.round((Date.now() - Math.max(cur.since || 0, cur.lastEvAt || 0)) / 1000) : 0;
-  waitNote(quiet >= 20 ? quiet : 0);
+  // The server says whether a model request is in flight (view.model_inflight). None in flight and 60 s of quiet means
+  // the turn is stuck, not slow: say so and offer Try again. A real wait offers it after 3 minutes.
+  const stuck = quiet >= 60 && cur.view?.model_inflight === false && !cur.gateEl && !cur.down;
+  waitNote(quiet >= 20 ? quiet : 0, stuck, quiet >= 180);
 }
-function waitNote(secs) {
+// Stop the turn, then send the last message again.
+async function retryLast() {
+  const cur = S.cur; if (!cur) return;
+  let text = ""; for (let i = cur.log.length - 1; i >= 0; i--) { const e = cur.log[i]; if (e.type === "user" && !e.steer && String(e.text || "").trim()) { text = String(e.text); break; } }
+  if (!text) { stopNow(); return; }
+  await stopNow();
+  if (S.cur !== cur) return;
+  const inp = $("#input"), draft = inp.value;
+  inp.value = text; inp.dispatchEvent(new Event("input"));
+  await sendNow(false);
+  if (draft && S.cur === cur && !inp.value) { inp.value = draft; inp.dispatchEvent(new Event("input")); }
+}
+function waitNote(secs, stuck, again) {
   let n = $("#waitNote");
   if (!secs) { n?.remove(); return; }
   const t = fmtDur(secs < 60 ? secs : secs - secs % 60);   // whole minutes once past one: the line changes once a minute
   if (!n) {
     const col = $("#col"); if (!col) return;
     n = document.createElement("div"); n.id = "waitNote"; n.className = "note waitnote"; n.setAttribute("role", "status");
-    n.innerHTML = `<span class="dot run"></span><span class="wn"></span><button class="linkbtn" type="button">Stop</button>`;
-    $("button", n).onclick = () => stopNow();
+    n.innerHTML = `<span class="dot run"></span><span class="wn"></span><button class="linkbtn" data-retry type="button" hidden>Try again</button><button class="linkbtn" data-stop type="button">Stop</button>`;
+    $("[data-stop]", n).onclick = () => stopNow();
+    $("[data-retry]", n).onclick = () => retryLast();
     col.appendChild(n); scrollConv();
   }
-  setTxt($(".wn", n), `Still waiting for the model (${t}). Some answers take a while; you can stop it any time.`);
+  setTxt($(".wn", n), stuck ? "This is taking longer than it should. Try again?" : `Still waiting for the model (${t}). Some answers take a while; you can stop it any time.`);
+  const rb = $("[data-retry]", n); if (rb) rb.hidden = !(stuck || again);
 }
 // ---- scrolling: follow the end while the reader is at the end; never pull them back once they scroll up
 function scrollConv(force) { const c = $("#conv"); if (!c) return; if (force) S.pinned = true; if (S.pinned) { c.scrollTop = c.scrollHeight; $(".jumpdown")?.setAttribute("hidden", ""); } }

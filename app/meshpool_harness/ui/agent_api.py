@@ -769,6 +769,13 @@ class Session:
     def emit(self, ev: dict):
         self._question_state(ev)
         t = ev.get("type")
+        if t == "model_wait":                        # a note for the terminal (waiting for the model): not part of the chat,
+            for fn in list(self.listeners):          # and it must not reset the page's own quiet timer
+                try:
+                    fn(ev)
+                except Exception:  # noqa: BLE001
+                    pass
+            return
         if (t == "interrupted" and self._interrupting is not None and self._interrupting == self._turn_id
                 and getattr(self, "state", None) in _BUSY):
             self._interrupting = None                # the new message is being answered: do not say "send a message"
@@ -2258,6 +2265,8 @@ class Session:
         return {"id": self.id, "workdir": self.workdir, "state": self.state, "mode": a.mode,
                 "open": {"approvals": open_ids, "question": oq},
                 "turn_started": getattr(self, "t_turn", None) if self.state in ("working", "waiting") else None,
+                # True while a model request is made or waited on, False when none is; None when the harness cannot say
+                "model_inflight": (getattr(a, "model_req_at", None) is not None) if hasattr(a, "model_req_at") else None,
                 "title": meta.get("title") or nice_title(a.title), "pinned": bool(meta.get("pinned")),
                 "project_id": _project_of(meta, self.workdir), "scratch": bool(meta.get("scratch")),
                 "usage": a.usage, "context": getattr(a, "context", None), "kind": self.kind,

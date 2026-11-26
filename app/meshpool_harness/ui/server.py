@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from meshpool_harness import config as C
 from meshpool_harness import harnesses as HR
 from meshpool_harness.ui import agent_api as A
+from meshpool_harness.ui import instance as INST
 from meshpool_harness.ui import office_pair as OP
 from meshpool_harness.settings_api import _key_follows_host  # noqa: F401  (test_connection and the tests use it here)
 from meshpool_harness.ui import workbench as W
@@ -1519,6 +1520,11 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
         pass
     global DESKTOP
     DESKTOP = desktop
+    if not desktop:                                            # the desktop app has its own single-instance check
+        held = INST.claim()
+        if held is not None:
+            print(INST.already_running_text(held))
+            return 1
     RUNS.mkdir(parents=True, exist_ok=True)
     try:
         from meshpool_harness.harnesses import ensure_defaults
@@ -1540,7 +1546,11 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
             continue
     if httpd is None:
         print(f"Could not open a local port between {port} and {port + 19}.")
+        if not desktop:
+            INST.release()
         return 1
+    if not desktop:
+        INST.set_port(port)
     url = app_url(port)
     HTTPD[0] = httpd
     os.environ["MESHPOOL_UI_PORT"] = str(port)     # the agent's browser never opens the app's own window
@@ -1591,6 +1601,8 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     except KeyboardInterrupt:
         pass
     finally:
+        if not desktop:
+            INST.release()
         A.close_all()
         httpd.server_close()
         for srv in OFFICE_HTTPD:

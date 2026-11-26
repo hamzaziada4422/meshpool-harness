@@ -160,7 +160,7 @@ def _tilde(path: str) -> str:
 
 
 # events that may arrive between a final answer and the review round that replaces it (print mode holds the answer)
-_HOLD_THROUGH = ("assistant", "review_round", "status", "usage", "model_start", "model_end", "text_delta", "thought",
+_HOLD_THROUGH = ("model_wait", "assistant", "review_round", "status", "usage", "model_start", "model_end", "text_delta", "thought",
                  "stream_reset")
 
 class Terminal:
@@ -510,6 +510,14 @@ class Terminal:
         t, st = ev.get("type"), self.st
         if getattr(self, "_held", None) is not None and t not in _HOLD_THROUGH:
             self._release_held()                       # something else came after it: it was the last answer
+        if t == "model_wait":                          # the model has said nothing for a while: -p says so on stderr
+            secs = int(ev.get("secs") or 0)
+            say = f"waiting for the model ({secs // 60} min)" if secs >= 60 else f"waiting for the model ({secs} s)"
+            if self.print_mode:
+                print(say, file=self.info, flush=True)
+            else:
+                self._label = say[0].upper() + say[1:]      # the spinner line shows it
+            return
         if t == "model_start":
             if self.interactive and not self._turn:
                 self.turn_begin()
