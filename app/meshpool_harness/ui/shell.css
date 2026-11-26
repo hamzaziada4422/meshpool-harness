@@ -392,6 +392,10 @@
 .work[data-done] .gdots{display:none}
 .panel .ptabs{gap:0}.ptabs .pstrip{display:flex;gap:2px;min-width:0;overflow-x:auto;scrollbar-width:none}.ptabs .pstrip::-webkit-scrollbar{display:none}.ptabs #pclose{flex:none;margin-left:auto}
 .ptabs .sp{flex:0 0 0}.ptabs button[aria-selected="true"]{background:var(--sel);color:var(--ink)}
+/* OM-10: a narrow window (1024 px) cut "Git and CI" in half and hid the tabs after it; they wrap to a second row now.
+   The open tab no longer shares its look with a hovered one (two tabs looked open at once). */
+.panel .ptabs{height:auto;min-height:44px;align-items:flex-start}.ptabs .pstrip{flex-wrap:wrap;padding:8px 0;flex:1}
+.ptabs #pclose{margin-top:8px}.ptabs button[aria-selected="true"]:hover{background:var(--sel)}
 .pbody{background:var(--bg)}
 .col:has(>.gal){max-width:none;padding:0}
 .ctx .mi-i:empty{display:none}

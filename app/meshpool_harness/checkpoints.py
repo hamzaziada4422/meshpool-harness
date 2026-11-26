@@ -887,6 +887,21 @@ class Checkpoints:
             if d.exists():
                 shutil.rmtree(d, ignore_errors=True)
 
+    def note_attached(self, n: int, paths: list) -> None:
+        """OM-03: files the user attached to turn `n` that meshpool copied into the folder ("sample (2).csv"). They
+        were written before the turn began, so its scan does not count them; Undo of the turn removes them while they
+        still hold what was attached."""
+        with self._lk:
+            t = next((x for x in self._load()["turns"] if x.get("n") == n), None)
+            if t is None:
+                return
+            for p in paths:
+                rel = _rel_in_root(self.root, p)
+                if rel:
+                    t.setdefault("attached", []).append({"path": rel, "sha": _plain_sha(self.root, rel)})
+            self._dirty = True
+            self._flush()
+
     def turns(self) -> list:
         return [{"n": t.get("n"), "title": t.get("title"), "time": t.get("time"), "changed": t.get("changed"),
                  "done": self._done(t), "pruned": bool(t.get("pruned")), "message_index": t.get("message_index"),
@@ -1229,6 +1244,23 @@ class Checkpoints:
                     restored.append(path)
                 except OSError as e:
                     keep(path, f"couldn't put it back ({getattr(e, 'strerror', None) or e})")
+            # 2b. copies of files the user attached in those turns (OM-03), while they hold what was attached
+            for a in [a for x in later for a in (x.get("attached") or []) if isinstance(a, dict)]:
+                path = str(a.get("path") or "")
+                p = self.root / path
+                if not path or path in deleted or p.is_symlink() or not p.is_file() or not self._inside(p.parent):
+                    continue
+                if not a.get("sha") or _plain_sha(self.root, path) != a["sha"]:
+                    keep(path, "a copy of a file you attached; it changed after that, so it was left as is")
+                    continue
+                if not backup(path):
+                    keep(path, "couldn't save a copy of it first, so it was left as is")
+                    continue
+                try:
+                    p.unlink()
+                    deleted.append(path)
+                except OSError as e:
+                    keep(path, f"couldn't delete it ({e.strerror or e})")
             # 3. the folders those turns made, deepest first, once empty; one with anything in it stays
             removed_dirs = []
             for d in sorted(made, reverse=True):

@@ -25,14 +25,15 @@ OFFICE = frozenset(CAPS)
 # A file type named outright: enough on its own.
 _STRONG = {
     "presentation": r"power ?points?|pptx?s?|keynotes?|google slides|slide ?decks?|pitch ?decks?|slideshows?",
-    "document": r"word (?:docs?|documents?|files?)|docx?s?|google docs?",
+    # "docx" alone, not "doc" or "docs": in a code chat "docs" means documentation (docs/, "update the docs")
+    "document": r"word (?:docs?|documents?|files?)|docxs?|google docs?",
     "spreadsheet": r"excel(?: (?:files?|workbooks?|sheets?|models?))?|xlsx?s?|google sheets?",
     "pdf": r"pdfs?",
 }
 # A general word: counts when the message asks for something to be made.
 _WEAK = {
     "presentation": r"decks?|slides?|presentations?",
-    "document": r"documents?|docs?|memos?|reports?|proposals?|one[- ]pagers?|briefs?|letters?|white ?papers?",
+    "document": r"documents?|doc|memos?|reports?|proposals?|one[- ]pagers?|briefs?|letters?|white ?papers?",
     "spreadsheet": r"spreadsheets?|workbooks?|financial models?|trackers?",
     "pdf": r"",
 }
@@ -51,7 +52,9 @@ _DO_MAKE = re.compile(r"\b(make|create|build|generate|produce|prepare|put togeth
 
 
 def _rx(words: str) -> re.Pattern | None:
-    return re.compile(r"(?<![a-z0-9])(?:" + words + r")(?![a-z0-9])", re.I) if words else None
+    """A whole word that is not part of a path or a file name: "report" in report.py, "docs" in docs/index.md and
+    "slides" in src/slides/ name code, not a file to make. ".docx" on its own still counts."""
+    return re.compile(r"(?<![a-z0-9/\\])(?:" + words + r")(?![a-z0-9])(?![./\\]\w)", re.I) if words else None
 
 
 _STRONG_RX = {k: _rx(v) for k, v in _STRONG.items()}

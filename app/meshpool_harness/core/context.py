@@ -286,8 +286,9 @@ def _listed(base: str, key: str) -> dict:
     return out
 
 
-def window_info(model: str, base: str | None = None, key: str = "", probe_endpoint: bool = True) -> tuple[int, str]:
-    """(tokens, source) for this model. Source: override, learned, provider, profile, table, default."""
+def window_info(model: str, base: str | None = None, key: str = "", probe_endpoint=True) -> tuple[int, str]:
+    """(tokens, source) for this model. Source: override, learned, provider, profile, table, default.
+    probe_endpoint="cache": what the endpoint already said, without asking it (the side panel, OM-10)."""
     bare = (model or "").split(":", 1)[-1] if str(model).startswith(("chatgpt:", "meshpool:")) else (model or "")
     with _LOCK:
         learned = _LEARNED.get(bare)
@@ -314,7 +315,7 @@ def window_info(model: str, base: str | None = None, key: str = "", probe_endpoi
         k = (base, bare)
         with _LOCK:
             known = _PROBED.get(k)
-        if known is None and not _recently_failed(k):
+        if known is None and probe_endpoint != "cache" and not _recently_failed(k):   # "cache": no network call
             lst = _listed(base, key)
             got = (probe(base, bare, key) if local else 0) or lst.get(bare) or lst.get(bare.split("/")[-1]) or 0
             if got:
