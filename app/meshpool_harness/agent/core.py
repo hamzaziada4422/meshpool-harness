@@ -1922,11 +1922,14 @@ def _recalc_formulas(path, tmp: str, forms: dict | None = None, timeout: float =
             return {} if not forms else None
         out = Path(tmp) / Path(path).parent.name
         out.mkdir(parents=True, exist_ok=True)
-        kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
-        prof = Path(tmp) / "lo-profile"                   # its own profile: never blocked by a LibreOffice already open
-        subprocess.run([exe, f"-env:UserInstallation={prof.as_uri()}", "--headless", "--calc", "--convert-to", "xlsx",
-                        "--outdir", str(out), str(path)], capture_output=True, timeout=max(1, timeout), **kw)
-        made = out / Path(path).name
+        from meshpool_harness import lo_session          # the kept LibreOffice, else a one-off run
+        made = lo_session.convert(exe, str(path), "xlsx", str(out), max(1, timeout), recalc=True)
+        if made is None:
+            kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
+            prof = Path(tmp) / "lo-profile"               # its own profile: never blocked by a LibreOffice already open
+            subprocess.run([exe, f"-env:UserInstallation={prof.as_uri()}", "--headless", "--calc", "--convert-to",
+                            "xlsx", "--outdir", str(out), str(path)], capture_output=True, timeout=max(1, timeout), **kw)
+            made = out / (Path(path).stem + ".xlsx")
         if not made.is_file():
             return None
         vals = openpyxl.load_workbook(made, data_only=True)

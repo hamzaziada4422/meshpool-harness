@@ -140,9 +140,14 @@ def _kill_tree(proc) -> None:
 
 
 def kill_all_soffice() -> None:
-    """Stop every LibreOffice run this process started, with everything it started."""
+    """Stop every LibreOffice run this process started, with everything it started, and the kept one."""
     for pr in list(_LIVE):
         _kill_tree(pr)
+    try:
+        from meshpool_harness import lo_session
+        lo_session.kill_all()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 import atexit as _atexit
@@ -235,8 +240,9 @@ def convert_keep(key: str | None, made: Path) -> None:
 
 
 def soffice_convert(src: str, to: str, out_dir: str, timeout: int = 240) -> Path:
-    """Headless convert with a throwaway profile, so parallel runs never share a lock. The same input converted again
-    within CONVERT_TTL_S comes from the conversion cache (see above) without starting LibreOffice."""
+    """Headless convert. The same input converted again within CONVERT_TTL_S comes from the conversion cache (see
+    above); anything else goes to the kept LibreOffice (meshpool_harness.lo_session), and only when that is not
+    available to a one-off run with a throwaway profile, so parallel runs never share a lock."""
     from meshpool_harness import office_runtime
     exe = find_soffice()
     if not exe:
@@ -247,6 +253,11 @@ def soffice_convert(src: str, to: str, out_dir: str, timeout: int = 240) -> Path
     key = convert_key(src, to, exe, "forge-fonts")           # read before the run: out may be src itself
     if convert_cached(key, out):
         return out
+    from meshpool_harness import lo_session                  # the kept LibreOffice: no new process per conversion
+    made = lo_session.convert(exe, src, to, out_dir, timeout)
+    if made is not None and made.exists():
+        convert_keep(key, made)
+        return made
     t0 = time.time()
     with tempfile.TemporaryDirectory() as profile:
         _profile_fonts(Path(profile))

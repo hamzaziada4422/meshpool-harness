@@ -155,6 +155,29 @@ def main():
 
     bundled_media(proj)
 
+    step("kept LibreOffice session")
+    # One LibreOffice for many conversions (meshpool_harness/lo_session.py). It needs LibreOffice's own Python with
+    # uno next to the bundled copy; without it every conversion quietly falls back to a fresh LibreOffice, so the
+    # release must fail here instead.
+    from meshpool_harness import lo_session, office_runtime
+    from engines.forge.common import soffice_convert
+    exe = office_runtime.find_soffice()
+    if not exe or not lo_session.real_office(exe):
+        raise SystemExit(f"smoke: FAILED, no bundled LibreOffice ({exe!r})")
+    if not lo_session.lo_python(exe):
+        raise SystemExit(f"smoke: FAILED, LibreOffice's own Python with uno is missing next to {exe}")
+    os.environ["MH_CONVERT_CACHE"] = "0"
+    for i in range(2):
+        pdf = soffice_convert(str(proj / "smoke.docx"), "pdf", str(tmp / f"lo{i}"))
+        if pdf.read_bytes()[:4] != b"%PDF":
+            raise SystemExit("smoke: FAILED, the kept LibreOffice did not write a PDF")
+    st = lo_session.stats().get(exe) or {}
+    if st.get("starts") != 1 or st.get("jobs") != 2:
+        raise SystemExit(f"smoke: FAILED, the kept LibreOffice session did not do the work: {st}")
+    lo_session.close_all()
+    os.environ.pop("MH_CONVERT_CACHE")
+    step("kept LibreOffice converted 2 files with 1 start")
+
     step("server and a chat")
     mport, uport = free_port(), free_port()
     (home / "meshpool.config").write_text(f"MESHPOOL_API_KEY=test-key-1234\nMESHPOOL_BASE_URL=http://127.0.0.1:{mport}/v1\n")

@@ -912,12 +912,18 @@ def convert_document(path: str, to: str = "pdf", output: str | None = None):
     kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
     import shutil
     import tempfile
+    from meshpool_harness import lo_session
     with tempfile.TemporaryDirectory() as tmp:          # convert aside, then save under a free name: a conversion
-        r = subprocess.run([exe, "--headless", *infilter, "--convert-to", to, "--outdir", tmp, str(src)],   # never replaces a file
-                           capture_output=True, text=True, timeout=300, **kw)
-        made = Path(tmp) / (src.stem + "." + to)
-        if r.returncode != 0 or not made.exists():
-            return f"LibreOffice could not convert {src.name}: {(r.stderr or r.stdout)[-500:]}", True
+        made = lo_session.convert(exe, str(src), to, tmp, 300,                    # never replaces a file
+                                  infilter=infilter[0].split("=", 1)[1] if infilter else "")
+        if made is None:
+            # its own profile: without one, a LibreOffice the user has open took the job over and then quit
+            prof = Path(tmp) / "lo-profile"
+            r = subprocess.run([exe, f"-env:UserInstallation={prof.as_uri()}", "--headless", *infilter, "--convert-to",
+                                to, "--outdir", tmp, str(src)], capture_output=True, text=True, timeout=300, **kw)
+            made = Path(tmp) / (src.stem + "." + to)
+            if r.returncode != 0 or not made.exists():
+                return f"LibreOffice could not convert {src.name}: {(r.stderr or r.stdout)[-500:]}", True
         dst = _dest(output, made.name, "." + to, bool(output))
         shutil.move(str(made), str(dst))
     return f"Saved: {dst}", False
