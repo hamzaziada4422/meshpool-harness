@@ -206,3 +206,68 @@ def test_pf06_a_stated_fact_lands_under_how_you_like_work(tmp_path, monkeypatch)
     f, made = MS.add("Write in British English and sign emails as Daniel, Finance Director")
     assert made and f["category"] == "preferences"
     assert MS.CATEGORY_LABELS[f["category"]] == "How you like work"
+
+
+# ---------- PF-07 / PF-08: past-chat search and the chat count, after importing another app's chats ----------------
+
+@pytest.fixture
+def imported(tmp_path, monkeypatch):
+    """A fresh home with one chat (from a ChatGPT export) and one Claude Code session from this computer."""
+    import json
+    import meshpool_harness.agent.core as core
+    import meshpool_harness.ui.agent_api as A
+    from meshpool_harness import chat_import as CI
+    from test_chat_import import chatgpt_zip
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "mp"))
+    monkeypatch.setenv("MH_RUNS_DIR", str(tmp_path / "mp" / "runs"))
+    monkeypatch.setenv("HOME", str(tmp_path / "user"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "user" / ".claude"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "user" / ".codex"))
+    (tmp_path / "mp").mkdir()
+    proj = tmp_path / "user" / "code" / "etl"
+    proj.mkdir(parents=True)
+    monkeypatch.setattr(core, "SESSIONS", tmp_path / "mp" / "runs" / "sessions")
+    monkeypatch.setattr(A, "SESSIONS", tmp_path / "mp" / "runs" / "sessions")
+    monkeypatch.setattr(A, "_ROWS", {})
+    monkeypatch.setattr(A, "_RAW", {})
+    cc = tmp_path / "user" / ".claude" / "projects" / "-code-etl"
+    cc.mkdir(parents=True)
+    rows = [{"type": "summary", "summary": "Fix the loader"},
+            {"type": "user", "cwd": str(proj), "timestamp": "2026-05-01T09:00:00Z",
+             "message": {"role": "user", "content": "The loader dropped the header and many rows"}},
+            {"type": "assistant", "cwd": str(proj), "timestamp": "2026-05-01T09:00:05Z",
+             "message": {"role": "assistant", "content": [{"type": "text", "text": "Fixed the parser."}]}}]
+    (cc / "s1.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
+    CI.import_export(str(chatgpt_zip(tmp_path / "gpt.zip")), context=False)
+    assert CI.import_local(["claude-code"])["imported"] == 1
+    return tmp_path
+
+
+def test_pf07_search_finds_every_word_in_any_order(imported):
+    from meshpool_harness.ui import agent_api as A
+    from meshpool_harness.ui import hub as HUB
+    one = [h["title"] for h in A.search("dropped")]
+    assert one == ["Fix the loader"]
+    for q in ("dropped rows", "rows dropped", "ROWS   header dropped"):
+        hits = A.search(q)
+        assert [h["title"] for h in hits] == ["Fix the loader"], q
+        assert "dropped" in hits[0]["snippet"]
+    assert A.search("dropped columns") == []                   # every word must be there
+    assert [h["title"] for h in A.search("tier enterprise")] == ["Pricing the Q3 launch"]
+    groups = {g["key"]: [i["title"] for i in g["items"]] for g in HUB.search("rows dropped")["groups"]}
+    assert groups.get("code") == ["Fix the loader"]
+    groups = {g["key"]: [i["title"] for i in g["items"]] for g in HUB.search("launch pricing")["groups"]}
+    assert groups.get("sessions") == ["Pricing the Q3 launch"]
+
+
+def test_pf08_settings_counts_chats_as_the_sidebar_does(imported):
+    from meshpool_harness.ui import agent_api as A
+    from meshpool_harness.ui import hub as HUB
+    from meshpool_harness.ui import settings_v2 as SV
+    rows = A.listing()
+    sidebar_chats = [r for r in rows if not HUB.is_code_session(r)]
+    d = SV.data_info()
+    assert len(sidebar_chats) == 1 and d["chats"] == 1          # it said "2 chats" next to a list of one
+    assert d["code"] == 1 and d["total"] == 2
+    js = (Path(__file__).resolve().parents[1] / "meshpool_harness" / "ui" / "settings2.js").read_text(encoding="utf-8")
+    assert "code session${d.code === 1" in js and "d.total" in js

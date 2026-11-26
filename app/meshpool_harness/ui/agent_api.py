@@ -3016,8 +3016,11 @@ _RAW_CAP = 48 * 1024 * 1024          # characters x 2 copies; beyond it a file i
 
 
 def search(q: str) -> list:
+    """Chats that hold every word of q, in any order and anywhere in the chat ("dropped rows" finds "rows were
+    dropped"), newest first, with a snippet around the first place a word appears."""
     q = q.strip().lower()
-    if not q:
+    words = q.split()
+    if not words:
         return []
     hits = []
     quick = all(32 <= ord(c) < 127 for c in q) and not any(c in q for c in '"\\')     # plain ASCII text is never escaped in the saved JSON
@@ -3033,8 +3036,9 @@ def search(q: str) -> list:
                 if quick and not (p.parent / "session.journal").exists():
                     # P-07: a chat that cannot contain the words is skipped from its raw text (no parse, no re-dump)
                     try:
-                        if q not in p.read_text(encoding="utf-8", errors="replace").lower() \
-                                and q not in str(read_meta(p.parent.name).get("title") or "").lower():
+                        low0 = p.read_text(encoding="utf-8", errors="replace").lower() + "\n" + \
+                            str(read_meta(p.parent.name).get("title") or "").lower()
+                        if not all(w in low0 for w in words):
                             continue
                     except OSError:
                         continue
@@ -3049,8 +3053,8 @@ def search(q: str) -> list:
                     _RAW[str(p)] = (key, raw, low)
         except OSError:
             continue
-        i = low.find(q)
-        if i < 0 and q not in str(read_meta(p.parent.name).get("title") or "").lower():
+        named = str(read_meta(p.parent.name).get("title") or "").lower()
+        if not all(w in low or w in named for w in words):
             continue                                     # the name the person gave the chat counts too (F-07)
         try:
             d = json.loads(raw)
@@ -3072,10 +3076,13 @@ def search(q: str) -> list:
         for e in d.get("events") or []:
             if isinstance(e, dict) and e.get("type") in ("user", "assistant") and isinstance(e.get("text"), str):
                 texts.append(e["text"])
-        hit = next((s for s in texts if q in s.lower()), None)
-        if hit is None:
+        shown = "\n".join(texts).lower()
+        if not all(w in shown for w in words):
             continue
-        j = hit.lower().find(q)
+        hit = next((s for s in texts if q in s.lower()), None) or \
+            max(texts, key=lambda s: sum(w in s.lower() for w in words))
+        lo = hit.lower()
+        j = lo.find(q) if q in lo else min((lo.find(w) for w in words if w in lo), default=0)
         snippet = " ".join(hit[max(0, j - 60): j + 100].split())
         snippet = ("…" if j > 60 else "") + snippet + ("…" if j + 100 < len(hit) else "")
         hits.append({"id": d["id"], "title": title, "workdir": d.get("workdir"), "updated": d.get("updated", 0),
