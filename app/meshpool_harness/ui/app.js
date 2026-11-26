@@ -1639,7 +1639,7 @@ function applyEvRaw(ev) {
     case "review_round": {                               // the reply above was written before the check: fold it away
       const el = cur.lastAi;
       if (el && el.isConnected && !el.closest("details")) {
-        const d = document.createElement("details"); d.className = "notedet";
+        const d = document.createElement("details"); d.className = "notedet fold";
         d.innerHTML = `<summary>First answer, before the check</summary>`; el.replaceWith(d); d.appendChild(el);
       }
       cur.lastAi = null; cur.lastText = ""; break; }

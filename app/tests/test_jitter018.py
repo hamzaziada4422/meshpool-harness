@@ -129,3 +129,25 @@ def test_the_open_tab_is_brought_into_view_in_the_scrolling_tab_row(app, page):
     assert got["on"], got
 
 
+# ---------------------------------------------------------------------------------------------------- J-04
+def test_the_review_fold_is_a_quiet_note_and_its_text_reads_at_the_reply_size(app, page):
+    """J-04: "First answer, before the check" was louder than the grey "Looking at the result" line (ink coloured,
+    underlined, 14px) and its opened text was 12px. The summary is muted, not underlined, in the size of a note; the opened
+    reply is in the body size of replies."""
+    _fake_chat(page)
+    got = page.evaluate("""() => { applyEv({type: 'user', text: 'make it', i: 0});
+        applyEv({type: 'assistant', text: 'The first answer, written before the check.', i: 1});
+        applyEv({type: 'review_round', i: 2});
+        applyEv({type: 'assistant', text: 'The final answer.', i: 3});
+        const col = document.querySelector('#col'), d = col.querySelector('details.notedet'), sm = d.querySelector('summary');
+        const note = document.createElement('div'); note.className = 'note'; note.textContent = 'Looking at the result'; col.appendChild(note);
+        d.open = true;
+        const inner = d.querySelector('.msg-ai'), final = Array.from(col.querySelectorAll(':scope > .msg-ai')).pop();
+        const c = e => getComputedStyle(e);
+        return {sum: {color: c(sm).color, line: c(sm).textDecorationLine, size: c(sm).fontSize}, note: {color: c(note).color, size: c(note).fontSize},
+                inner: c(inner).fontSize, reply: c(final).fontSize, text: sm.textContent}; }""")
+    assert got["text"] == "First answer, before the check", got
+    assert got["sum"]["color"] == got["note"]["color"] and got["sum"]["line"] == "none" and got["sum"]["size"] == got["note"]["size"], got
+    assert got["inner"] == got["reply"] and got["reply"] == "14px", got
+
+
