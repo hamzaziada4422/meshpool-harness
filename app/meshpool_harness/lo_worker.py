@@ -110,6 +110,12 @@ def main(argv) -> int:
                         doc.dispose()
                     except Exception:  # noqa: BLE001
                         pass
+    # stdin closed: the app is gone (it quit, crashed or was killed). LibreOffice runs in a process group of its own,
+    # so nothing else stops it; without this it kept running with --accept, its profile in the temp folder (review).
+    try:
+        desk.terminate()
+    except Exception:  # noqa: BLE001 - already going away
+        pass
     return 0
 
 

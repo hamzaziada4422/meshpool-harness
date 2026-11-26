@@ -63,5 +63,6 @@ Section "Uninstall"
   !insertmacro WinSetup "" "" "$INSTDIR\bin;$INSTDIR"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Meshpool"
   DeleteRegKey HKCU "Software\Meshpool"
+  DeleteRegKey HKCU "Software\Classes\AppUserModelId\Meshpool.Desktop"
   ; settings and sessions in %APPDATA%\Meshpool are kept on purpose
 SectionEnd
