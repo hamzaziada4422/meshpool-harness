@@ -637,6 +637,7 @@ def _open_pr(r: Path, body: dict) -> dict:
 
 # ======================================== terminal ================================================================
 TERMS: dict[str, dict] = {}
+_TERMS_LOCK = threading.Lock()          # two commands started at once changed TERMS while the other walked it
 
 
 SHELLS_WIN = {"powershell": "PowerShell", "cmd": "Command Prompt", "bash": "Git Bash"}
@@ -677,10 +678,11 @@ def term_run(root: str, command: str, shell: str = "") -> dict:
     tid = uuid.uuid4().hex[:8]
     t = {"id": tid, "cwd": str(r), "command": command, "out": [], "base": 0, "rc": None, "start": time.time(),
          "p": None, "lock": threading.Lock()}
-    done = [k for k, v in TERMS.items() if v["rc"] is not None]
-    for k in done[:-20]:                         # finished commands keep their output, but only the last few
-        TERMS.pop(k, None)
-    TERMS[tid] = t
+    with _TERMS_LOCK:
+        done = [k for k, v in TERMS.items() if v["rc"] is not None]
+        for k in done[:-20]:                         # finished commands keep their output, but only the last few
+            TERMS.pop(k, None)
+        TERMS[tid] = t
     env = dict(C.user_env(), TERM="dumb", FORCE_COLOR="0", NO_COLOR="1")
     argv = _shell_cmd(command, shell)
     if argv[0] == os.environ.get("MH_BASH"):    # Git Bash on Windows (config.msys_lang)
