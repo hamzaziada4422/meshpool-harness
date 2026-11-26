@@ -134,6 +134,11 @@ function ev010(ev) {
     const d = document.createElement("div"); d.className = "chk010 " + (ev.ok ? "ok" : "bad"); d.innerHTML = `${ev.ok ? ICON.check : ICON.warn}<span>${esc(ev.text)}</span>`; r.appendChild(d); return;
   }
   if (ev.type === "checks_line") {
+    const c = S.cur;    // the look line under the reply is part of this line now: one line, not two
+    if (ev.look && c.lastAi && c.lastAi.isConnected && c.lastText && c.lastText.includes(ev.look)) {
+      const t = c.lastText.replace(ev.look, "").replace(/\n{3,}/g, "\n\n").trim();
+      mdRender(c.lastAi, t); c.lastText = t;
+    }
     under010(`<details class="chkline"><summary>${ICON.check2}<span>${esc(ev.text)}</span></summary><ul>${(ev.items || []).map(i => `<li>${esc(i.text || i.label || i)}</li>`).join("")}</ul>${(ev.details || []).length ? `<p class="chkdet">Did not pass:</p><ul class="chkdet">${ev.details.map(d => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}</details>`, "chkwrap"); return;
   }
   if (ev.type === "task_receipt") {

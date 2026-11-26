@@ -189,6 +189,12 @@ def rules_ran(kind: str, label: str, statuses: dict, subject: str = "", names: d
         pass
 
 
+def fact(name: str, value: bool, subject: str = "") -> bool:
+    """A fact about the file that decides what the closing line may say ("workbook_totals": it has a totals row or a SUM).
+    Not a check: never counted."""
+    return record("fact", name, None, bool(value), subject)
+
+
 def _detail(kind: str, subject: str, lines: list) -> None:
     """The names of what did not pass, for the "details" line. Not a check: never counted."""
     record("detail", kind, None, True, json.dumps({"kind": kind, "subject": subject, "lines": lines}))
@@ -239,7 +245,7 @@ def _row_text(r: dict) -> str:
 
 
 def _checked_rows(run_id: str) -> list[dict]:
-    return [r for r in _rows(run_id) if r.get("kind") not in ("stage", "detail")]
+    return [r for r in _rows(run_id) if r.get("kind") not in ("stage", "detail", "fact")]
 
 
 def _details(run_id: str) -> list[str]:
@@ -260,7 +266,7 @@ def _details(run_id: str) -> list[str]:
 
 
 # What a kind of check looks at, in plain words for the line under the reply.
-_WHAT = {"workbook_rules": "the totals and formulas", "deck_rules": "the slide layout and text",
+_WHAT = {"workbook_rules": "the formulas", "deck_rules": "the slide layout and text",
          "office_structure": "that the file opens cleanly", "office_schema": "that the file opens cleanly"}
 # The failures that are a real problem in the user's file, by rule, in plain words. Every other failing rule (number
 # formats, colours, a frozen header, a checks tab, a slide's word count) stays in the details fold only: "27 of 36
@@ -271,6 +277,20 @@ _REAL = {"X0": "the file may not open cleanly in Excel", "X3": "the balance shee
          "X14": "a cost is added where it should be taken away",
          "P0": "the file may not open cleanly in PowerPoint", "P1": "some slides did not draw",
          "P5": "some text runs past the edge of its box", "P14": "a chart and its text do not agree"}
+# The deck rules that name a real problem, by the plain name the details carry (validate_pptx RULE_NAMES and
+# visual_check NAMES), as the sentence the line says. The slide numbers are read from the message.
+_REAL_DECK = {"The file opens and follows Office's format": "the file may not open cleanly in PowerPoint",
+              "Nothing overlaps or runs off the page": "something overlaps or runs off the page",
+              "Text fits its box at a readable size": "some text runs past the edge of its box",
+              "Spacing is even and nothing collides": "some things collide",
+              "Text agrees with the charts": "a chart and its text do not agree",
+              "Blocks line up and fill the page": "some blocks do not line up",
+              "Chart labels clear of the bars": "a chart label sits on a bar",
+              "No empty column, box or placeholder": "an empty box or placeholder is left",
+              "Footnotes and source lines are whole sentences": "a footnote is cut off before the end of its sentence",
+              "Titles wrap without a lone last word": "a title leaves one word alone on its last line",
+              "No stamp the brief did not ask for": "there is a stamp you did not ask for",
+              "The brand the request asks for (footer, colours, fonts)": "something the brand asks for is missing"}
 _REAL_X12 = re.compile(r"integrity checks are FALSE|Master flag", re.I)   # the workbook's own checks fail
 
 
@@ -291,7 +311,14 @@ def _problems(run_id: str, kinds: dict) -> list[str]:
         for line in d.get("lines", []):
             rule, _, msg = str(line).partition(":")
             rule = rule.strip()
-            if rule in _REAL:
+            if rule in _REAL_DECK:
+                nums = list(dict.fromkeys(re.findall(r"\b[Ss]lides? (\d+)", msg)))
+                where = ""
+                if nums:
+                    where = (" on slide " + nums[0]) if len(nums) == 1 else \
+                        " on slides " + ", ".join(nums[:-1]) + " and " + nums[-1]
+                add(_REAL_DECK[rule] + where)
+            elif rule in _REAL:
                 add(_REAL[rule])
             elif rule == "X12" and _REAL_X12.search(msg):
                 add("some of the workbook's own checks fail")
@@ -320,24 +347,60 @@ def summary(run_id: str) -> dict:
         else:
             k["bad"] += int(n or 1)
             k["badrow"] = True
+    facts = {r.get("label"): bool(r.get("ok")) for r in _rows(run_id) if r.get("kind") == "fact"}
+    nbad = sum(k["bad"] for k in kinds.values())
+    probs = _problems(run_id, kinds) if nbad else []
     what, sents = [], []
     for kind, k in sorted(kinds.items(), key=lambda kv: kv[0] not in _NOUN):      # what was checked in the file first
         if kind in _WHAT:
-            if (k["okrow"] or kind in _NOUN) and _WHAT[kind] not in what:   # a structure check that failed alone
-                what.append(_WHAT[kind])                                       # is a problem below, not "checked"
+            if (k["okrow"] or kind in _NOUN) and _WHAT[kind] not in what \
+                    and not (probs and k["bad"] and kind == "deck_rules"):   # a deck rule that failed is named below
+                w = _WHAT[kind]
+                if kind == "workbook_rules":                       # "totals" only for a workbook that has a totals row or a SUM
+                    w = "the totals and formulas" if facts.get("workbook_totals") else \
+                        "the formulas" if facts.get("workbook_formulas", True) else ""
+                if w and w not in what:
+                    what.append(w)
         elif k["okrow"]:
             sents.append(f"Checked {_phrase(kind, k['label'], k['ok'] if k['okn'] else None)}"
                          + (f" ({k['bad']} did not hold up)" if k["bad"] else ""))
     if what:
         sents.insert(0, "Checked " + (what[0] if len(what) == 1 else ", ".join(what[:-1]) + ", and " + what[-1]))
-    nbad = sum(k["bad"] for k in kinds.values())
-    probs = _problems(run_id, kinds) if nbad else []
     if probs:
         sents.append(("One thing to look at: " if len(probs) == 1 else "Things to look at: ") + "; ".join(probs))
     line = " ".join(x.rstrip(".") + "." for x in sents)
     return {"line": line, "items": [{"kind": r["kind"], "label": _row_text(r), "ok": r["ok"],
                                       "subject": r.get("subject", "")} for r in rows],
             "details": _details(run_id) if nbad else [], "failed": nbad}
+
+
+_LOOK_RX = re.compile(r"Checked(?: as (?P<who>[^:]+?))?: (?P<body>.+)", re.S)
+_GENERIC_WHO = re.compile(r"^(?:someone|anyone|a (?:first-time )?(?:visitor|user)|the (?:visitor|user)|people|a person)\b", re.I)
+
+
+def merge_line(look: str, checks: str) -> str:
+    """One line from the look line ("Checked as a florist shop owner: found nothing to fix.") and the checks line ("Checked
+    the formulas, and that the file opens cleanly."): "Checked it the way a florist shop owner would, and the formulas, and
+    that the file opens: all good." The persona is left out when it adds nothing ("someone opening this file"). "" when the
+    look line is not in the shape this reads (the two lines then stay as they are)."""
+    m = _LOOK_RX.fullmatch(str(look or "").strip())
+    if not m or not str(checks or "").strip():
+        return ""
+    who, body = (m.group("who") or "").strip(), m.group("body").strip()
+    sents = [x.strip() for x in re.split(r"(?<=\.)\s+(?=[A-Z])", checks.strip()) if x.strip()]
+    what = ""
+    rest = []
+    for x in sents:
+        if x.startswith("Checked ") and not what:
+            what = re.sub(r"\bopens cleanly\b", "opens", x[len("Checked "):].rstrip("."))
+        else:
+            rest.append(x)
+    head = "Checked it" + (f" the way {who} would" if who and not _GENERIC_WHO.match(who) else "")
+    if what:
+        head += (", and " if what.startswith(("that ", "the ")) else ", ") + what
+    first = body.rstrip(".")
+    verdict = "all good" if first.lower() == "found nothing to fix" and not rest else first
+    return " ".join([f"{head}: {verdict}."] + rest)
 
 
 def final_line(run_id: str) -> str:
@@ -351,7 +414,7 @@ def events_for(run_id: str, since: int = 0) -> list[dict]:
         if r.get("kind") == "stage":                   # an engine's stage: the working line, not a check row
             out.append({"type": "job_stage", "text": r.get("label", "")})
             continue
-        if r.get("kind") == "detail":                  # names of what failed: shown with the final line, not as a row
+        if r.get("kind") in ("detail", "fact"):        # names of what failed: shown with the final line, not as a row
             continue
         out.append({"type": "check", "kind": r["kind"], "ok": r["ok"], "subject": r.get("subject", ""),
                     "text": _row_text(r)})

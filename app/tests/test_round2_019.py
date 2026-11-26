@@ -113,3 +113,94 @@ def test_a_harmless_failed_step_is_not_counted_as_a_problem(app, page):
     assert _turn(page, True, "All done.") == "3 steps, 2 had a problem"      # the last two failed: the turn ended with them
     assert _turn(page, False, "I could not open the second file, so I skipped it.") == "3 steps, 1 had a problem"
     assert page.errors == [], page.errors
+
+
+# ------------------------------------------------------------------------------------------------------ item 3
+@pytest.fixture()
+def ckhome(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path))
+    monkeypatch.delenv("MH_CHECK_RUN", raising=False)
+    yield tmp_path
+    monkeypatch.delenv("MH_CHECK_RUN", raising=False)
+
+
+def test_totals_are_named_only_for_a_workbook_that_has_them(ckhome):
+    from meshpool_harness import checks as K
+    for run, totals, want in (("a", False, "Checked the formulas, and that the file opens cleanly."),
+                              ("b", True, "Checked the totals and formulas, and that the file opens cleanly.")):
+        K.begin(run)
+        K.passed("office_structure", "the file opens and reads correctly", None, "p.xlsx")
+        K.rules_ran("workbook_rules", "workbook rules", {"X1": "pass", "X2": "pass"}, "p.xlsx")
+        K.fact("workbook_totals", totals, "p.xlsx")
+        K.fact("workbook_formulas", True, "p.xlsx")
+        assert K.summary(run)["line"] == want
+        K.end(run)
+
+
+def test_the_real_validator_records_whether_a_sheet_has_totals(ckhome, tmp_path):
+    from engines.forge import validate_xlsx as VX
+    from meshpool_harness import checks as K
+    from openpyxl import Workbook
+    for name, rows in (("flat.xlsx", [["Item", "Price"], ["Rose", 4], ["Tulip", 3]]),
+                       ("sum.xlsx", [["Item", "Price"], ["Rose", 4], ["Total", "=SUM(B2:B2)"]])):
+        wb = Workbook()
+        for r in rows:
+            wb.active.append(r)
+        p = tmp_path / name
+        wb.save(p)
+        K.begin(name)
+        VX.validate(str(p), do_recalc=False)
+        line = K.summary(name)["line"]
+        assert ("totals" in line) == (name == "sum.xlsx"), (name, line)
+        K.end(name)
+
+
+def test_a_failing_deck_rule_is_named_in_the_one_line(ckhome):
+    from meshpool_harness import checks as K
+    K.begin("d")
+    K.passed("office_structure", "the file opens and reads correctly", None, "d.pptx")
+    K.rules_ran("deck_rules", "design rules", {"P1": "pass", "P23": "fail"}, "d.pptx")
+    K._detail("deck_rules", "d.pptx", ["Chart labels clear of the bars: Slide 1: a label sits on a bar of the chart: 'Target 47%'."])
+    line = K.summary("d")["line"]
+    assert line == "Checked that the file opens cleanly. One thing to look at: a chart label sits on a bar on slide 1.", line
+
+
+def test_deck_problem_names_match_the_validators():
+    from engines.forge.validate_pptx import RULE_NAMES
+    from engines.forge.visual_check import NAMES
+    from meshpool_harness import checks as K
+    for rule in ("P0", "P1", "P5", "P8", "P14", "P20", "P23", "P24", "P25", "P26", "P27", "P28"):
+        assert {**RULE_NAMES, **NAMES}[rule] in K._REAL_DECK, rule
+
+
+def test_one_line_when_both_the_look_and_the_checks_ran():
+    from meshpool_harness import checks as K
+    m = K.merge_line("Checked as a florist shop owner: found nothing to fix.", "Checked the formulas, and that the file opens cleanly.")
+    assert m == "Checked it the way a florist shop owner would, and the formulas, and that the file opens: all good.", m
+    m = K.merge_line("Checked as someone opening this file: found nothing to fix.", "Checked that the file opens cleanly.")
+    assert m == "Checked it, and that the file opens: all good.", m           # the persona adds nothing
+    m = K.merge_line("Checked as a cook: fixed 2 things: a; b. Nothing left open.", "Checked the slide layout and text. One thing to look at: a title leaves one word alone on its last line on slide 2.")
+    assert m.startswith("Checked it the way a cook would, and the slide layout and text: fixed 2 things: a; b. Nothing left open. One thing to look at:"), m
+    assert K.merge_line("not a look line", "Checked it.") == ""
+
+
+def test_an_also_noticed_line_is_never_about_our_own_check():
+    from meshpool_harness.agent import lookreview as LR
+    assert LR._also_line("the scripted 'look at date' check could not find that text by label, but the confirmation shows it") == ""
+    assert LR._also_line("the footer link is a different colour from the rest") != ""
+    st = {"evals": [{"problems": [], "also": LR._also_line("a selector for the date field did not match")}]}
+    assert LR._also_offer(st) == ""
+
+
+def test_the_page_drops_the_look_line_that_the_merged_line_replaced(app, page):
+    _chat(page, app["work"], None, "merge")
+    _fake_chat(page, page.evaluate("() => S.cur.id"))
+    got = page.evaluate("""() => { $('#col').replaceChildren(); applyEv({type: 'user', text: 'go', i: 0});
+        applyEv({type: 'assistant', text: 'Done. Prices are up 10%.', streamed: false});
+        applyEv({type: 'assistant', text: 'Checked as a florist: found nothing to fix.', streamed: false, append: true, merged: true, look: true});
+        applyEv({type: 'turn_end'});
+        S.cur.lastFoot = document.querySelector('#col .msg-ai').insertAdjacentElement('afterend', Object.assign(document.createElement('div'), {className: 'foot'}));
+        ev010({type: 'checks_line', text: 'Checked it the way a florist would, and the formulas: all good.', items: [], details: [], look: 'Checked as a florist: found nothing to fix.'});
+        return [...document.querySelectorAll('#col .msg-ai')].map(x => x.textContent).join('|') + '#' + document.querySelectorAll('.chkline').length; }""")
+    assert "Checked as" not in got and got.endswith("#1") and "Prices are up 10%" in got, got
+    assert page.errors == [], page.errors

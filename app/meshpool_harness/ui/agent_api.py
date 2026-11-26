@@ -1527,8 +1527,15 @@ class Session:
                 line = CK.final_line(run)
                 if line:
                     sm = CK.summary(run)
+                    extra = {}
+                    ll = getattr(self.agent, "last_look", None)      # the look line of this turn is in the reply: one line, not two
+                    if isinstance(ll, dict) and ll.get("turn") == getattr(self.agent, "_turn_no", 0) and ll.get("line"):
+                        look = str(ll["line"]).split("\n\n")[0]
+                        merged = CK.merge_line(look, line)
+                        if merged:
+                            line, extra = merged, {"look": look}
                     self.emit({"type": "checks_line", "text": line, "items": sm.get("items", []),
-                               "details": sm.get("details", [])})
+                               "details": sm.get("details", []), **extra})
             except Exception:  # noqa: BLE001
                 pass
             self._ck_run = ""

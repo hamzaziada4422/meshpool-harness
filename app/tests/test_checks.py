@@ -94,7 +94,7 @@ def test_workbook_rules_are_recorded_and_the_result_is_unchanged(home):
     items = K.summary("w1")["items"]
     assert any(i["kind"] == "workbook_rules" for i in items if i["ok"]) == (ok > 0)
     if ok:
-        assert K.summary("w1")["line"].startswith("Checked the totals and formulas")
+        assert K.summary("w1")["line"].startswith("Checked ")
 
 
 def test_a_deck_build_records_its_rules(home):
@@ -111,7 +111,8 @@ def test_a_deck_build_records_its_rules(home):
     ok = sum(1 for s in ran if s in ("pass", "warn"))
     bad = sum(1 for s in ran if s == "fail")
     sm = K.summary("d1")
-    assert ok > 0 and sm["line"].startswith("Checked the slide layout and text")
+    assert ok > 0 and sm["line"].startswith("Checked the slide layout and text" if not bad else "Checked")
+    assert not bad or "One thing to look at" in sm["line"]      # a failing deck rule is named, not "checked"
     assert sm["failed"] == bad
     assert "P0" not in sm["line"] and not any(r == "not_run" for r in [])      # not_run rules are never counted
     nr = sum(1 for s in res["rules"].values() if s == "not_run")

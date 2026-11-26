@@ -222,7 +222,12 @@ def _also_line(x) -> str:
     if not isinstance(x, str):
         return ""
     t = re.sub(r"\s+", " ", x).strip().strip('"').rstrip(".")
+    if _OWN_CHECK.search(t):                       # meshpool's own check failing to find something is not about the user's file
+        return ""
     return "" if re.fullmatch(r"(?:none|nothing|n/?a|no|-+)?", t, re.I) else t[:160]
+
+
+_OWN_CHECK = re.compile(r"\bscripted\b|\bby label\b|\bselector\b|\b(?:check|checker|script|test|step)\b.{0,60}\b(?:could not|couldn'?t|can'?t|cannot|did not|didn'?t|unable to|failed to)\b.{0,30}\b(?:find|locate|match|click|read|see)\b", re.I)
 
 
 def apply_choices_to_verdict(v: dict, request: str) -> dict:
