@@ -90,8 +90,8 @@ def test_two_chats_at_once_keep_their_own_checks(ck_home):
     for t in ts:
         t.join(15)
     assert not errors
-    assert CK.summary("chatA:1")["line"] == "Checked: 3 sources"
-    assert CK.summary("chatB:2")["line"] == "Checked: 7 sources"
+    assert CK.summary("chatA:1")["line"] == "Checked 3 sources."   # plain wording (priya018); the terminal keys on the leading "Checked"
+    assert CK.summary("chatB:2")["line"] == "Checked 7 sources."
     assert CK.current() == ""
 
 
