@@ -96,3 +96,36 @@ def test_opening_a_chat_shifts_the_layout_by_0_01_or_less(app, page):
     assert page.errors == [], page.errors
 
 
+# ---------------------------------------------------------------------------------------------------- J-03
+def test_the_panel_tabs_are_one_row_without_cut_text_and_the_changes_select_fits_at_1024(app, page):
+    """J-03: at 1024px the seven Code tabs wrapped to two or three rows, and the Changes select showed "All changes in t".
+    The tabs are one row that scrolls sideways, each tab whole; the select fits or ends in an ellipsis with its text in the
+    tooltip."""
+    page.set_viewport_size({"width": 1024, "height": 700})
+    page.evaluate("""async w => { const v = await post('/api/agent', {workdir: w, kind: 'code', task: 'tabs'}); await loadThreads(); openThread(v.id); }""", app["work"])
+    page.wait_for_timeout(1200)
+    page.evaluate("() => togglePanel('diff', true)")
+    page.wait_for_selector("#dturn")
+    page.wait_for_timeout(400)
+    got = page.evaluate("""() => { const t = Array.from(document.querySelectorAll('#ptabs [data-t]')), st = document.querySelector('#ptabs .pstrip'), s = document.querySelector('#dturn');
+        const o = s.options[s.selectedIndex].text, cs = getComputedStyle(s);
+        return {n: t.length, rows: new Set(t.map(x => Math.round(x.getBoundingClientRect().top))).size,
+                cut: t.filter(x => x.scrollWidth > x.clientWidth + 1).map(x => x.textContent),
+                scrolls: st.scrollWidth >= st.clientWidth && getComputedStyle(st).overflowX === 'auto',
+                select: {text: o, fits: s.scrollWidth <= s.clientWidth + 1, title: s.title, ellipsis: cs.textOverflow === 'ellipsis'}}; }""")
+    assert got["n"] >= 7 and got["rows"] == 1 and got["cut"] == [] and got["scrolls"], got
+    assert got["select"]["fits"] or (got["select"]["title"] == got["select"]["text"] and got["select"]["ellipsis"]), got
+
+
+def test_the_open_tab_is_brought_into_view_in_the_scrolling_tab_row(app, page):
+    """J-03: a tab off the edge of the row is scrolled to when it opens."""
+    page.set_viewport_size({"width": 1024, "height": 700})
+    page.evaluate("""async w => { const v = await post('/api/agent', {workdir: w, kind: 'code', task: 'tabs'}); await loadThreads(); openThread(v.id); }""", app["work"])
+    page.wait_for_timeout(1200)
+    page.evaluate("() => togglePanel('preview', true)")
+    page.wait_for_timeout(400)
+    got = page.evaluate("""() => { const st = document.querySelector('#ptabs .pstrip').getBoundingClientRect(), on = document.querySelector('#ptabs [aria-selected="true"]').getBoundingClientRect();
+        return {on: on.left >= st.left - 1 && on.right <= st.right + 1, label: document.querySelector('#ptabs [aria-selected="true"]').textContent}; }""")
+    assert got["on"], got
+
+
