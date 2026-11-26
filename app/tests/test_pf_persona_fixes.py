@@ -175,3 +175,34 @@ def test_pf05_a_holder_that_exits_is_reaped_and_not_started_again(monkeypatch):
     AW.hold()                                                          # the next turn does not start a dead holder
     AW.release()
     assert len(made) == 1
+
+
+# ---------- PF-06: "Write in British English and sign emails ..." was filed under People -----------------------------
+
+@pytest.mark.parametrize("text, cat", [
+    ("Write in British English and sign emails as Daniel Okafor, Finance Director", "preferences"),
+    ('Write in British English and sign emails to clients "Best, Dan"', "preferences"),
+    ("Signs emails with Kind regards, Dan", "preferences"),
+    ("Use British spelling", "preferences"),
+    ("Replies in French to the Paris team", "preferences"),
+    ("My manager is Sara", "people"),                     # unchanged
+    ("Works with Omar on the launch", "people"),
+    ("Speaks Arabic and English", "about"),
+    ("Sara signs off the budget", "about"),
+    ("Uses Excel for the forecast", "tools"),
+])
+def test_pf06_writing_instructions_are_how_you_like_work(text, cat):
+    from meshpool_harness import memstore as MS
+    assert MS.classify(text) == cat
+
+
+def test_pf06_a_stated_fact_lands_under_how_you_like_work(tmp_path, monkeypatch):
+    from meshpool_harness import assistant as A
+    from meshpool_harness import memstore as MS
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path))
+    MS._ENSURED.clear()
+    MS._CACHE.clear()
+    A.save_settings(memory_on=True, instructions_on=True)
+    f, made = MS.add("Write in British English and sign emails as Daniel, Finance Director")
+    assert made and f["category"] == "preferences"
+    assert MS.CATEGORY_LABELS[f["category"]] == "How you like work"
