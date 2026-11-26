@@ -352,8 +352,29 @@ def attach(root: str, name: str, data: bytes) -> dict:
     return attach_to(check_root(root), name, data)
 
 
-def attach_to(r: Path, name: str, data: bytes) -> dict:
-    """The saving itself, for a folder that is already known to be the chat's own (no check_root)."""
+def find_same(r: Path, name: str, data: bytes, limit: int = 20000) -> str | None:
+    """A file inside the folder with this name and exactly these bytes (its path relative to the folder), else None.
+    A file dropped into a chat that already lives in the chat's folder is used where it is: a second copy at the
+    folder's top level was made before, without a word. Only same-named files of the same size are read."""
+    seen = 0
+    for dirpath, dirs, files in os.walk(r):
+        dirs[:] = [d for d in dirs if d not in HIDE and not d.startswith(".")]
+        seen += len(files) + len(dirs)
+        if seen > limit:
+            return None
+        if name in files:
+            p = Path(dirpath) / name
+            try:
+                if not p.is_symlink() and p.is_file() and p.stat().st_size == len(data) and p.read_bytes() == data:
+                    return p.relative_to(r).as_posix()
+            except OSError:
+                continue
+    return None
+
+
+def attach_to(r: Path, name: str, data: bytes, reuse: bool = False) -> dict:
+    """The saving itself, for a folder that is already known to be the chat's own (no check_root). reuse: a file with
+    the same name and contents already in the folder is used where it is ({"path", "reused": True})."""
     name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", Path(name or "file").name).strip().rstrip(". ") or "file"
     if name.strip(".") == "":
         name = "file"
@@ -365,6 +386,10 @@ def attach_to(r: Path, name: str, data: bytes) -> dict:
         name = name[:-1]
     if len(data) > 150 * 1024 * 1024:
         raise ValueError("Attachments can be up to 150 MB. Put bigger files in the project folder instead.")
+    if reuse:
+        same = find_same(r, name, data)
+        if same:
+            return {"path": same, "reused": True}
     sub = ""                                     # at the folder's root, so an edit in place lands where the file is
     base = r / sub if sub else r
     try:
@@ -1570,6 +1595,19 @@ def _found_in_events(evs, root: Path, found: dict) -> None:
                     found.setdefault(rel, {"path": rel, "how": "saved"})
 
 
+BUILD_SUFFIXES = {".json", ".jsonl", ".log", ".run", ".py"}
+
+
+def is_build_file(rel: str) -> bool:
+    """A file an engine keeps for its own build and checks, not the user's deliverable: the JSON, logs and scripts in
+    a "Meshpool outputs/<job>" folder (qa.json, clarity.json, facts.json, slides.json, frame.json...) and any
+    *.provenance.json. Artifacts, Your work, the outputs list and the "files changed" count leave them out (WF-04)."""
+    p = Path(str(rel).replace("\\", "/"))
+    if p.name.lower().endswith(".provenance.json"):
+        return True
+    return "Meshpool outputs" in p.parts[:-1] and p.suffix.lower() in BUILD_SUFFIXES
+
+
 def outputs_from(evs: list, turns: list, root: Path, found: dict | None = None) -> list[dict]:
     """Files a session created or changed, from its events (edits and writes, files its tools said they saved) and
     from what its checkpoints recorded per reply. Only files that still exist inside the folder. `found`: what the
@@ -1585,8 +1623,8 @@ def outputs_from(evs: list, turns: list, root: Path, found: dict | None = None) 
                 found.setdefault(str(c["path"]), {"path": str(c["path"]), "how": c.get("status") or "changed"})
     out = []
     for rel, row in found.items():
-        if any(part in HIDE or part.startswith(".") for part in Path(rel).parts):
-            continue                                   # caches and tool folders are not the user's files
+        if any(part in HIDE or part.startswith(".") for part in Path(rel).parts) or is_build_file(rel):
+            continue                                   # caches, tool folders and build files are not the user's files
         try:
             f = _inside(root, rel)
             if f.is_file():

@@ -151,6 +151,13 @@ def record(kind: str, label: str, count: int | None = None, ok: bool = True, sub
         return False
 
 
+def stage(text: str) -> bool:
+    """What a long engine job (deck, report, workbook) is doing now, e.g. "Deck: writing the slides". It goes into the
+    same record as the checks, so the turn's watcher (agent_api._turn_begin, every 1.5 s) brings it to the chat's
+    working line as a "job_stage" event: no extra polling. Not a check: never counted in the summary."""
+    return record("stage", str(text or "")[:120])
+
+
 def passed(kind: str, label: str, count: int | None = None, subject: str = "") -> bool:
     return record(kind, label, count, True, subject)
 
@@ -211,7 +218,7 @@ def _phrase(kind: str, label: str, n: int | None) -> str:
 def summary(run_id: str) -> dict:
     """{"line": "Checked: 20 design rules, Office schema, 14 sources", "items": [...], "failed": n}.
     The line lists what passed; checks that did not pass are counted in "failed" and named in the items."""
-    rows = _latest(_rows(run_id))
+    rows = _latest([r for r in _rows(run_id) if r.get("kind") != "stage"])
     ok_rows = [r for r in rows if r["ok"]]
     bad_rows = [r for r in rows if not r["ok"]]
     merged: dict = {}
@@ -237,6 +244,9 @@ def events_for(run_id: str, since: int = 0) -> list[dict]:
     """Events for the progress panel, one per recorded check after the first `since` records."""
     out = []
     for r in _rows(run_id)[since:]:
+        if r.get("kind") == "stage":                   # an engine's stage: the working line, not a check row
+            out.append({"type": "job_stage", "text": r.get("label", "")})
+            continue
         out.append({"type": "check", "kind": r["kind"], "ok": r["ok"], "subject": r.get("subject", ""),
                     "text": _phrase(r["kind"], r["label"], r.get("count")) + (" passed" if r["ok"] else " did not pass")})
     return out

@@ -49,11 +49,16 @@ def _session_files(r: dict) -> list[dict]:
     sid, root = r["id"], r.get("workdir") or ""
     if not root or not Path(root).is_dir():
         return []
-    p = A.SESSIONS / sid / "session.json"
-    try:
-        stamp = p.stat().st_mtime_ns
-    except OSError:
-        stamp = 0
+    stamp = []
+    # the cache follows the transcript and the checkpoints (a turn's files, an Undo): either one changing means new
+    # rows. With session.json alone, Artifacts kept a file Undo had removed and missed a deck an edit had changed.
+    for p in (A.SESSIONS / sid / "session.json", A.SESSIONS / sid / "checkpoints" / "turns.json",
+              A.SESSIONS / sid / "transcript.jsonl"):
+        try:
+            stamp.append(p.stat().st_mtime_ns)
+        except OSError:
+            stamp.append(0)
+    stamp = tuple(stamp)
     live = sid in A.LIVE and r.get("state") in ("working", "waiting")
     hit = _ART.get(sid)
     if hit and hit[0] == stamp and not live:
@@ -65,7 +70,7 @@ def _session_files(r: dict) -> list[dict]:
     except Exception:  # noqa: BLE001
         turns = []
     rows = []
-    for o in W.outputs_from(_events(sid), turns, Path(root).resolve()):
+    for o in W.outputs_from(_events(sid), turns, Path(root).resolve()):     # files that still exist, user files only
         ext = o["path"].rsplit(".", 1)[-1].lower() if "." in o["path"] else ""
         if ext not in KINDS or (o["how"] == "edited" and r.get("kind") == "code"):
             continue

@@ -926,6 +926,7 @@ class Checkpoints:
         args = args if isinstance(args, dict) else {}
         if name in WRITE_TOOLS or name == "apply_patch":
             rels = self._targets(name, args)
+            self._note_outside(t, name, args)
             rules = _ignore_rules(self.root)
 
             def val(r, durable=False):
@@ -950,6 +951,22 @@ class Checkpoints:
             self._book(t, *self._end_window(w))
             self._flush()
             self._save_cache()
+
+    def _note_outside(self, t: dict, name: str, args: dict) -> None:
+        """A write to a file outside this folder: Undo cannot put it back, so the turn keeps its path and Undo names it
+        (WF-C: Undo said "Files are back to how they were" while the user's own file outside the chat's folder still
+        had the agent's change)."""
+        raw = _patch_paths(args) if name == "apply_patch" else next(
+            ([args[k]] for k in ("path", "file_path", "notebook_path") if isinstance(args.get(k), str) and args[k]), [])
+        out = []
+        for p in raw:
+            if _rel_in_root(self.root, p) is None and Path(str(p)).is_absolute():
+                out.append(str(p))
+        if out:
+            with self._lk:
+                have = t.setdefault("outside", [])
+                have += [p for p in out if p not in have][:50]
+                self._dirty = True
 
     def window_open(self) -> None:
         """Keep a scan window open (journal mode): a background process the chat started may still change files."""
@@ -1098,8 +1115,10 @@ class Checkpoints:
             target: dict = {}          # path -> value before the agent's first change
             amb: set = set()
             made: set = set()          # folders those turns made
+            outside: list = []         # files those turns wrote outside this folder: Undo cannot restore them
             for x in sorted((x for x in later if self._done(x)), key=lambda x: x["n"]):
                 made.update(x.get("dirs") or [])
+                outside += [p for p in x.get("outside") or [] if p not in outside]
                 pre, post = self._pre_post(x)
                 for ch in x.get("changed") or []:
                     p = ch["path"]
@@ -1240,6 +1259,8 @@ class Checkpoints:
             self._trim_backups()
         self.gc()
         out = {"restored": restored, "deleted": deleted, "kept": kept, "message_index": t.get("message_index")}
+        if outside:
+            out["outside"] = outside
         if removed_dirs:
             out["removed_folders"] = removed_dirs
         if notes:

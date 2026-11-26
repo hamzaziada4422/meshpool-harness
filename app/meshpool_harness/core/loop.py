@@ -156,6 +156,26 @@ class _KeepWarm:
             usage[k] = usage.get(k, 0) + v
 
 
+_STAGE_WORDS = {"write_file": "writing a file", "edit": "editing a file", "read_file": "reading", "bash": "running a step",
+                "python": "calculating", "run_python": "calculating", "web_search": "searching the web",
+                "fetch_url": "reading a page", "finish": "finishing", "todo": "planning"}
+
+
+def _stage_step(turn: int, calls: list) -> None:
+    """An office job's engine (MH_STAGE_LABEL set by cli.run_request): each step goes to the chat's working line, as
+    "Workbook: step 4, writing a file". A no-op anywhere else."""
+    label = os.environ.get("MH_STAGE_LABEL")
+    if not label:
+        return
+    try:
+        names = [(c.get("function") or {}).get("name", "") for c in calls]
+        what = ", ".join(dict.fromkeys(_STAGE_WORDS.get(n, n.replace("_", " ")) for n in names if n))[:60]
+        from meshpool_harness import checks as CK
+        CK.stage(f"{label}: step {turn}" + (f", {what}" if what else ""))
+    except Exception:  # noqa: BLE001 - a progress line never breaks a job
+        pass
+
+
 def run(*a, **kw):
     """Full-history archive (Meta-Harness / Harness²): every run's transcript is saved next to its workspace so an
     offline optimizer can grep raw traces instead of summaries. Local disk only; no tokens."""
@@ -305,6 +325,7 @@ def _run_loop(task_text: str, *, client, model: str, profile, ws: Workspace, ctx
             continue
         bad_format = 0
         injected = [nag] if nag else []
+        _stage_step(turn, calls)
         _tt = time.time()
         turn_failed = False
         _kw_s = float(os.environ.get("MH_KEEPWARM_S", "0") or 0)

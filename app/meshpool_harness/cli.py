@@ -40,6 +40,11 @@ from meshpool_harness import config as _config  # noqa: E402
 ENGINES = ("research", "credit", "code", "data", "sheets", "slides", "forge", "general", "browser")
 
 
+# what each engine makes, as the chat's working line names it while a long job runs ("Deck: writing the slides")
+STAGE_LABELS = {"slides": "Deck", "forge": "Deck", "sheets": "Workbook", "general": "Report", "research": "Research",
+                "data": "Data analysis", "credit": "Credit memo", "code": "Code", "browser": "Browser"}
+
+
 def _engine(name):
     import importlib
     return importlib.import_module(f"engines.{name}.engine")
@@ -107,6 +112,13 @@ def _run_request(request: str, files: list[str], out: str, engine: str | None = 
         if model:                                # the model chosen in settings or in the chat, for every engine
             kw["model"] = model
         saved = dict(os.environ)
+        label = STAGE_LABELS.get(name, name.title())
+        os.environ["MH_STAGE_LABEL"] = label          # loop engines add their steps to it (core/loop.py)
+        try:                                          # the chat's working line: which engine step this is
+            from meshpool_harness import checks as CK
+            CK.stage(f"{label}: starting" + (f" (step {i + 1} of {len(r.engines)})" if len(r.engines) > 1 else ""))
+        except Exception:  # noqa: BLE001
+            pass
         if name in ("code", "browser"):
             for k, v in ENGINE_FLAGS.items():     # explicit MH_* settings win
                 os.environ.setdefault(k, v)

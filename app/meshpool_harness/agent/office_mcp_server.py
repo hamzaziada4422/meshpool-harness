@@ -92,7 +92,9 @@ def _report(jid: str, reused: str = "") -> tuple[str, bool]:
 def _save_copy(jid: str, want: str) -> str:
     """Copy the job's file to the name the user asked for (save_as), in the project folder. office3 trace (pptx_chart):
     the deck stayed at "Meshpool outputs/<job>/deck.pptx", the user's ./deck.pptx never existed and the task failed.
-    An existing file is not replaced (_dest picks "name (2).ext"); the same job is copied once."""
+    An existing file is not replaced (_dest picks "name (2).ext"); the same job is saved once. The file is moved, not
+    copied: a copy left deck.pptx beside the named deck, stale after the first edit (WF-04). _made then lists the
+    named file in its place."""
     import shutil
     ext = Path(want).suffix.lower()
     made = [m for m in OJ._made(OJ.JOBS[jid]) if m.suffix.lower() == ext]
@@ -101,13 +103,16 @@ def _save_copy(jid: str, want: str) -> str:
     done = OJ.JOBS[jid].get("saved_as")
     if not done:
         dest = _dest(want, made[0].name, ext, named=True)
-        shutil.copy2(made[0], dest)
+        try:
+            shutil.move(str(made[0]), str(dest))
+        except OSError:                          # another disk, a locked file: a copy is better than nothing
+            shutil.copy2(made[0], dest)
         done = OJ.JOBS[jid]["saved_as"] = str(dest)
     try:
         shown = str(Path(done).relative_to(_project()))
     except ValueError:
         shown = done
-    return f"\nSaved as: {shown} (the file the user asked for; the job folder keeps the build)."
+    return f"\nSaved as: {shown} (the file the user asked for; edit this one)."
 
 
 def _scope() -> str:
