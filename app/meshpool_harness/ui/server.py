@@ -171,6 +171,14 @@ def assistant_action(b: dict) -> dict:
     return AS.api_action(b)
 
 
+def _not_reply(host: str, said: str) -> str:
+    """A 200 that carried an error instead of a reply: the service's words, where, and what to check."""
+    if said.startswith("The address answered"):
+        return said
+    return (f"{host or 'The endpoint'} answered, but not with a model reply. The service said: {said.rstrip('.')}. "
+            "Check the model name and the key, then test again.")
+
+
 def test_connection(values: dict | None = None, fresh: bool = False) -> dict:
     """Check the saved key and endpoint, or (with values) a key and endpoint before they are saved. Typed values go
     straight to the check: saved settings win over the environment, so setting them there would test the saved
@@ -216,7 +224,7 @@ def test_connection(values: dict | None = None, fresh: bool = False) -> dict:
     st, data, err = PS.probe_chat(base, key, model, wire, hdr, sch, ver, kind)
     secs = round(time.time() - t0, 1)
     if err or st not in (200, 429) or (st == 200 and not PS._is_reply(wire, data)):
-        why = (PS._net_error(err, base) if err else PS._not_reply_msg(data) if st == 200
+        why = (PS._net_error(err, base) if err else _not_reply(PV.host(base), PS._not_reply_msg(data)) if st == 200
                else PS.explain(st, data, base=base, model=model, version=ver))
         return {"ok": False, "detail": why[:400], "model": model, "seconds": secs, "endpoint": base,
                 "status": 0 if err else st}
@@ -467,7 +475,7 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             return None
         except Exception as e:  # noqa: BLE001 - keep the app alive, show the cause
-            return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+            return self._send(500, {"error": _unexpected(e)})
 
     def _company(self, u):
         from meshpool_harness.ui import company_api as CO
@@ -476,7 +484,7 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, KeyError, TypeError, AttributeError, zipfile.BadZipFile) as e:
             return self._send(400, {"error": _client_error(e)})
         except Exception as e:  # noqa: BLE001 - keep the app alive, show the cause
-            return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+            return self._send(500, {"error": _unexpected(e)})
 
     def _event_stream(self, sid: str, since: int):
         """Server-Sent Events for one chat: a JSON view of whatever is new, about 30 times a second at most, until the
@@ -658,7 +666,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
             except Exception as e:  # noqa: BLE001 - e.g. the chat's folder is gone: the page polls instead
-                return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+                return self._send(500, {"error": _unexpected(e)})
         if u.path == "/api/preview":                  # a file's preview: JSON, or one page as PNG (an <img> cannot send the header)
             q = parse_qs(u.query)
             if q.get("t", [""])[0] != TOKEN and self.headers.get("X-Meshpool-Token") != TOKEN:
@@ -675,7 +683,7 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 return None
             except Exception as e:  # noqa: BLE001 - a damaged file must not take the app down
-                return self._send(500, {"error": f"Could not preview this file ({type(e).__name__}: {str(e)[:200]})."})
+                return self._send(500, {"error": _preview_error(q, e)})
         if self.headers.get("X-Meshpool-Token") != TOKEN:
             return self._send(403, {"error": "forbidden"})
         if u.path.startswith("/api/company"):        # Settings > Company, the company look for decks
@@ -860,7 +868,7 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             return None                    # the page went away mid-answer; nothing left to tell it
         except Exception as e:  # keep the app alive, show the cause
-            return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+            return self._send(500, {"error": _unexpected(e)})
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):
@@ -1411,7 +1419,7 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             return None                    # the page went away mid-answer; nothing left to tell it
         except Exception as e:  # keep the app alive, show the cause
-            return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+            return self._send(500, {"error": _unexpected(e)})
         return self._send(404, {"error": "not found"})
 
 
@@ -1440,6 +1448,13 @@ def _open_web(url: str) -> bool:
 
 
 from meshpool_harness.errors import plain as _client_error  # noqa: E402  (the terminal says the same)
+from meshpool_harness.errors import unexpected as _unexpected  # noqa: E402  (a 500: plain words, never a bare class name)
+
+
+def _preview_error(q: dict, e: BaseException) -> str:
+    """A preview that failed in a way the preview code did not expect, in the same words as its other failures."""
+    from meshpool_harness.ui import previews as PVW
+    return PVW.friendly_error(Path(q.get("path", [""])[0] or "file"), e)
 
 
 class _Server(ThreadingHTTPServer):

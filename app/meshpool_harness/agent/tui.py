@@ -528,7 +528,9 @@ class Terminal:
             self.failed = True
             self._flush_text()
             paint = st.red if t == "error" else st.amber
-            self.scroll([""] + ["  " + paint(x) for x in R.wrap_inline(ev["text"], self.width - 4, Style(0))])
+            from meshpool_harness.core import errtext as ET        # no Settings page here; -p has no "continue"
+            text = ET.for_terminal(str(ev.get("text") or ""), bool(self.print_mode))
+            self.scroll([""] + ["  " + paint(x) for x in R.wrap_inline(text, self.width - 4, Style(0))])
         elif t == "turn_end":
             self.turn_finish()
 

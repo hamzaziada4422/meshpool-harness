@@ -1,4 +1,5 @@
-"""Recover tool calls that a model wrote as text in `content` (local / OpenAI-compatible servers, DeepSeek DSML).
+"""Recover tool calls that a model wrote as text in `content` (local / OpenAI-compatible servers, DeepSeek DSML, and
+Claude-style `<invoke name="..."><parameter name="...">` XML).
 
 `recover(msg, tool_names)` turns them into `msg["tool_calls"]` only when every call names a tool offered in this
 request; prose around tagged calls stays as content. Never raises."""
@@ -25,6 +26,18 @@ _DSML_PARAM = re.compile(_D + r'parameter\s+name\s*=\s*"([^"]+)"(?:\s+string\s*=
                          + _DE + r"parameter\s*>|(?=" + _D + r"parameter\b)|(?=" + _DE + r"invoke)|\Z)", re.S)
 _DSML_ANY = re.compile(r"[｜|]\s*DSML\s*[｜|]")
 _EOS = re.compile(r"<[｜|]end▁of▁sentence[｜|]>")
+# Claude-style calls written as text: <invoke name="x"><parameter name="k">v</parameter></invoke>, bare or inside a
+# <function_calls> or <tool_calls> wrapper, with an optional "prefix:" on each tag name.
+_XN = r"(?:[A-Za-z_][\w.-]*:)?"
+_XML_WRAP = re.compile(r"<\s*" + _XN + r"(function_calls|tool_calls)\s*>(.*?)(?:<\s*/\s*" + _XN + r"\1\s*>|\Z)",
+                       re.S | re.I)
+_XML_WRAP_END = re.compile(r"<\s*/\s*" + _XN + r"(?:function_calls|tool_calls)\s*>", re.I)
+_XML_INVOKE = re.compile(r"<\s*" + _XN + r"invoke\s+name\s*=\s*[\"']([^\"']+)[\"']\s*>(.*?)(?:<\s*/\s*" + _XN
+                         + r"invoke\s*>|(?=<\s*" + _XN + r"invoke\b)|(?=<\s*/\s*" + _XN
+                         + r"(?:function_calls|tool_calls)\s*>)|\Z)", re.S | re.I)
+_XML_PARAM = re.compile(r"<\s*" + _XN + r"parameter\s+name\s*=\s*[\"']([^\"']+)[\"']\s*>(.*?)(?:<\s*/\s*" + _XN
+                        + r"parameter\s*>|(?=<\s*" + _XN + r"parameter\b)|(?=<\s*/\s*" + _XN + r"invoke)|\Z)",
+                        re.S | re.I)
 _NAME_KEYS = ("name", "tool", "tool_name", "function")
 _ARG_KEYS = ("arguments", "parameters", "args", "input")
 
@@ -155,6 +168,30 @@ def _dsml_invokes(body: str, names):
     return out or None
 
 
+def _xml_invokes(body: str, names):
+    """[(name, args)] for the XML invoke blocks in body, or None when one names a tool not offered or nothing parses.
+    A value that is JSON (a number, list, object) is decoded; any other value is kept as written, less the newline
+    right after the opening tag and right before the closing one."""
+    out = []
+    for m in _XML_INVOKE.finditer(body):
+        name = m.group(1).strip()
+        if name not in names:
+            return None
+        inner = m.group(2)
+        params = _XML_PARAM.findall(inner)
+        if _XML_PARAM.sub("", inner).strip():             # loose text inside the invoke: not a call
+            return None
+        args = {}
+        for k, v in params:
+            try:
+                args[k] = json.loads(v.strip())
+            except ValueError:
+                v = v[1:] if v.startswith("\n") else v
+                args[k] = v[:-1] if v.endswith("\n") else v
+        out.append((name, args))
+    return out or None
+
+
 def _tagged_blocks(text: str, names):
     """Find calls in formats a-d. Returns (calls, spans) or None if nothing found / an unknown name appears."""
     masked = _mask_think(text)
@@ -178,6 +215,23 @@ def _tagged_blocks(text: str, names):
         for m in _EOS.finditer(masked):
             spans.append((m.start(), m.end()))
         return calls, spans
+    # Claude-style XML: <function_calls> / <tool_calls> wrappers around invoke blocks, or bare invoke blocks
+    if _XML_INVOKE.search(masked):
+        found = []
+        for m in _XML_WRAP.finditer(masked):
+            got = _xml_invokes(text[m.start(2):m.end(2)], names)
+            if not got:
+                return None
+            found.append((m.start(), m.end(), got))
+        for m in _XML_INVOKE.finditer(masked):
+            if any(a <= m.start() < b for a, b, _ in found):
+                continue
+            got = _xml_invokes(text[m.start():m.end()], names)
+            if not got:
+                return None
+            found.append((m.start(), m.end(), got))
+        found.sort(key=lambda x: x[0])
+        return [c for _, _, got in found for c in got], [(a, b) for a, b, _ in found]
     # <tool_call> ... </tool_call>, whose body is JSON or a <function=...> block
     for m in _TC_BLOCK.finditer(masked):
         body = text[m.start(1):m.end(1)].strip()
@@ -284,7 +338,8 @@ def recover(msg: dict, tool_names) -> bool:
             return False
         masked = _mask_think(content)
         tagged = None
-        if re.search(r"<tool_call>|<function=|<\|python_tag\|>|\[TOOL_CALLS\]", masked, re.I) or _DSML_ANY.search(masked):
+        if re.search(r"<tool_call>|<function=|<\|python_tag\|>|\[TOOL_CALLS\]", masked, re.I) or _DSML_ANY.search(masked) \
+                or _XML_INVOKE.search(masked):
             tagged = _tagged_blocks(content, names)
         if tagged:
             calls, spans = tagged
@@ -308,14 +363,25 @@ def recover(msg: dict, tool_names) -> bool:
 
 
 def strip_markup(text: str) -> str:
-    """Text with DeepSeek DSML call markup and end-of-sentence tokens removed: for a reply whose calls cannot run
-    (tools are off for the final answer), so the user never sees raw `<｜DSML｜ invoke ...>` lines."""
+    """Text with tool call markup removed: DeepSeek DSML calls and end-of-sentence tokens, and Claude-style
+    `<invoke name=...>` calls with their <function_calls> / <tool_calls> wrappers. For a reply whose calls cannot run
+    (tools are off for the final answer), so the user never sees raw call markup."""
     try:
-        if not isinstance(text, str) or not _DSML_ANY.search(text):
+        if not isinstance(text, str):
             return text
-        out = _DSML_WRAP.sub("", text)
-        out = _DSML_INVOKE.sub("", out)
-        out = re.sub(_DE + r"(?:tool_)?calls\s*>", "", out)
-        return _EOS.sub("", out).strip()
+        dsml, xml = bool(_DSML_ANY.search(text)), bool(_XML_INVOKE.search(text))
+        if not dsml and not xml:
+            return text
+        out = text
+        if dsml:
+            out = _DSML_WRAP.sub("", out)
+            out = _DSML_INVOKE.sub("", out)
+            out = re.sub(_DE + r"(?:tool_)?calls\s*>", "", out)
+            out = _EOS.sub("", out)
+        if xml:
+            out = _XML_WRAP.sub("", out)
+            out = _XML_INVOKE.sub("", out)
+            out = _XML_WRAP_END.sub("", out)
+        return out.strip()
     except Exception:  # noqa: BLE001
         return text

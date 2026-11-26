@@ -416,7 +416,8 @@ class LiveClient:
                     raise                                       # out of budget: the user sees the real error now
                 if not told and not side:
                     told = True
-                    (self.notify or _tell_retry)(f"The model did not answer ({msg[:120]}). Retrying for up to "
+                    from meshpool_harness.core import errtext as ET     # the cause in words, not the raw body
+                    (self.notify or _tell_retry)(f"The model did not answer ({ET.reason(msg)}). Retrying for up to "
                                                  f"{int(budget)} s.")
                 time.sleep(min(wait, 2.0) if side else wait)
         raise last

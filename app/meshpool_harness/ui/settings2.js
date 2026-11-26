@@ -362,7 +362,7 @@ const PV_host = u => { try { return new URL(u).host; } catch (e) { return String
     } else if (sec === "data") {
       const d = await api("/api/data");
       b.innerHTML = `${close}<h3>Your data</h3><p class="lead">Chats, memory, projects and settings are stored on this computer. Only what you send to the model service leaves it.</p>
-        <div class="card" style="max-width:560px"><div class="chd"><span class="ci">${ICON.folder}</span><h3>Where it is</h3></div><p class="muted" style="word-break:break-all">${esc(d.folder)}</p><p class="muted">${d.chats} chat${d.chats === 1 ? "" : "s"}, ${d.bytes > 1048576 ? (d.bytes / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(d.bytes / 1024)) + " KB"} of history.</p><div class="row"><button class="btn" id="dOpen">Browse the folder</button></div></div>
+        <div class="card" style="max-width:560px"><div class="chd"><span class="ci">${ICON.folder}</span><h3>Where it is</h3></div><p class="muted" style="word-break:break-all">${esc(d.folder)}</p><p class="muted">${d.chats} chat${d.chats === 1 ? "" : "s"}${d.code ? `, ${d.code} code session${d.code === 1 ? "" : "s"}` : ""}, ${d.bytes > 1048576 ? (d.bytes / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(d.bytes / 1024)) + " KB"} of history.</p><div class="row"><button class="btn" id="dOpen">Browse the folder</button></div></div>
         <div class="card" style="max-width:560px;margin-top:12px"><div class="chd"><span class="ci">${ICON.upload}</span><h3>Export</h3></div><p class="muted">A zip with your chats, memory and project settings. Project files you added are not included.</p><div class="row"><button class="btn" id="dExport">Export my data</button></div></div>
         <div class="card" style="max-width:560px;margin-top:12px"><div class="chd"><span class="ci">${ICON.trash}</span><h3>Delete chats</h3></div><p class="muted">Removes every chat and the files made in chats without a folder. Memory, projects and settings stay.</p><div class="row"><button class="btn danger" id="dClear">Delete all chats</button></div></div><div class="res" id="dRes"></div>`;
       $("#dOpen").onclick = () => openHomeFolder("");
@@ -371,7 +371,7 @@ const PV_host = u => { try { return new URL(u).host; } catch (e) { return String
         catch (e) { res("dRes", "bad", e.message); }
       };
       $("#dClear").onclick = async () => {
-        if (!await ask({title: "Delete all chats?", text: `All ${d.chats} chats are removed from this computer. This can’t be undone. Memory, projects and settings stay.`, ok: "Delete all chats", cancel: "Keep them", danger: true})) return;
+        if (!await ask({title: "Delete all chats?", text: `All ${d.total ?? d.chats} chats and code sessions are removed from this computer. This can’t be undone. Memory, projects and settings stay.`, ok: "Delete all chats", cancel: "Keep them", danger: true})) return;
         try { const r = await post("/api/data", {action: "clear_chats"}); await loadThreads(); newThread(); res("dRes", "ok", `${r.deleted} chat${r.deleted === 1 ? "" : "s"} deleted.`); } catch (e) { res("dRes", "bad", e.message); }
       };
     } else if (sec === "usage") {

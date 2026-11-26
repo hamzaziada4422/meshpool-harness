@@ -16,6 +16,7 @@ _lock = threading.Lock()
 _count = 0
 _proc: subprocess.Popen | None = None
 _win: threading.Event | None = None
+_gave_up = False                    # the holder ended by itself (no D-Bus, no logind): not started again this run
 
 
 def _command() -> list[str] | None:
@@ -42,13 +43,29 @@ def _start() -> None:
         _win = threading.Event()
         threading.Thread(target=_windows_keeper, args=(_win,), daemon=True).start()
         return
-    cmd = _command()
+    cmd = None if _gave_up else _command()
     if cmd:
         try:
             _proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL)
         except OSError:
             _proc = None
+            return
+        threading.Thread(target=_reap, args=(_proc,), name="awake-reap", daemon=True).start()
+
+
+def _reap(p: subprocess.Popen) -> None:
+    """Wait on the holder so it never stays a zombie: systemd-inhibit with no D-Bus (a container, a minimal desktop)
+    exits at once, and nothing else waited on it until the turn ended."""
+    global _proc, _gave_up
+    try:
+        p.wait()
+    except Exception:  # noqa: BLE001
+        return
+    with _lock:
+        if _proc is p:                          # it ended by itself, not through _stop: it cannot hold the computer
+            _proc = None
+            _gave_up = True
 
 
 def _stop() -> None:
@@ -56,16 +73,17 @@ def _stop() -> None:
     if _win is not None:
         _win.set()
         _win = None
-    if _proc is not None:
+    p, _proc = _proc, None
+    if p is not None:
         try:
-            _proc.terminate()
-            _proc.wait(timeout=5)
+            p.terminate()
+            p.wait(timeout=5)
         except Exception:  # noqa: BLE001
             try:
-                _proc.kill()
+                p.kill()
+                p.wait(timeout=5)
             except Exception:  # noqa: BLE001
                 pass
-        _proc = None
 
 
 def hold() -> None:

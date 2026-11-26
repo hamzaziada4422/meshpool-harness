@@ -553,7 +553,9 @@ def test_F_17_defaults_and_servers_stay_off_until_tested(home, tmp_path, monkeyp
     scan = CI.scan_local()
     assert scan["claude-code"]["default"] is True and scan["codex"]["default"] is False
     js = (Path(__file__).resolve().parents[1] / "meshpool_harness" / "ui" / "app.js").read_text(encoding="utf-8")
-    assert 'id="oLocal" checked' in js and "it.default === false" in js     # ticked unless known not to work
+    # agent items are ticked unless known not to work; another app's chats are copied only when the user ticks the
+    # box (PF-04: the import was opt-out)
+    assert 'id="oLocal">' in js and 'id="oLocal" checked' not in js and "it.default === false" in js
 
 
 # ---- F-32: the export's context uses the configured model and a checked answer -------------------------------------------------------------------------
