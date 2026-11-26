@@ -1261,7 +1261,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {"projects": W.projects(), "picked": str(Path(path).resolve()),
                                             **_as_project(b, path)})
                 if act == "dirs":                     # the in-app folder browser: the folders inside one folder
-                    here = Path(b.get("path") or Path.home()).expanduser()
+                    docs = Path.home() / "Documents"                  # the first stop is the Documents folder, if there is one
+                    here = Path(b.get("path") or (docs if docs.is_dir() else Path.home())).expanduser()
                     try:
                         here = here.resolve()
                         dirs = sorted((d.name for d in here.iterdir() if d.is_dir() and not d.name.startswith(".")),
@@ -1270,6 +1271,19 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError(f"Can't open that folder ({e.strerror or e}).")
                     return self._send(200, {"path": str(here), "parent": str(here.parent) if here.parent != here else "",
                                             "dirs": dirs[:500], "home": str(Path.home())})
+                if act == "mkdir":                    # the folder browser's "New folder": one folder inside the folder shown
+                    name = str(b.get("name") or "").strip()
+                    if not name or name in (".", "..") or len(name) > 120 or re.search(r"[\\/\x00-\x1f]", name):
+                        raise ValueError("Type a name for the new folder. It can't have a slash in it.")
+                    try:
+                        parent = Path(b.get("path") or Path.home()).expanduser().resolve()
+                        if not parent.is_dir():
+                            raise ValueError("That folder is not there any more.")
+                        made = parent / name
+                        made.mkdir(exist_ok=True)
+                    except OSError as e:
+                        raise ValueError(f"Can't make that folder ({e.strerror or e}).")
+                    return self._send(200, {"path": str(made.resolve()), "parent": str(parent)})
                 if act == "home":                     # the whole home folder ("the whole computer" for one user)
                     home = str(Path.home().resolve())
                     W.add_project(home, "Home")

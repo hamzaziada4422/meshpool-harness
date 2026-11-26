@@ -95,13 +95,27 @@
             ${d.memory ? `<ul class="mem">${d.memory.split("\n").map(l => `<li>${esc(l)}</li>`).join("")}</ul><button class="linkbtn danger" id="pjMemClear">Clear memory</button>`
               : `<p class="muted">Nothing yet. meshpool saves lasting facts about this project here as you work. It is separate from your general memory.</p>`}</section>
           <section class="card" aria-label="Folder"><div class="chd"><span class="ci">${ICON.link}</span><h3>${link?.type === "github" ? "GitHub repository" : "Folder"}</h3></div>
-            ${link ? `<p class="linked"><b title="${esc(link.path)}">${esc(link.type === "github" && link.repo ? link.repo : projName(link.path))}</b>${link.branch ? `<small>${esc(link.branch)}</small>` : ""}${link.missing ? `<small class="bad">This folder was moved or deleted.</small>` : `<small>${esc(shortPath(link.path))}</small>`}</p><p class="muted">Chats here read and change these files. The side panel shows the branch and changes.</p><div class="row"><button class="btn" id="pjLinkFolder">Change folder</button><button class="btn" id="pjUnlink">Unlink</button></div>`
+            ${link ? `<p class="linked"><b title="${esc(link.path)}">${esc(link.type === "github" && link.repo ? link.repo : projName(link.path))}</b>${link.branch ? `<small>${esc(link.branch)}</small>` : ""}${link.missing ? `<small class="bad">This folder was moved or deleted.</small>` : `<small>${esc(shortPath(link.path))}</small>`}</p><p class="muted">Chats here read and change these files.${link.type === "github" ? " The side panel shows the branch and changes." : ""}</p>${link.missing ? "" : `<ul class="pjfiles" id="pjFiles" aria-label="Files in the folder"><li class="muted">Looking at the folder...</li></ul>`}<div class="row">${link.missing ? "" : `<button class="btn" id="pjBrowse">Browse the folder</button>`}<button class="btn" id="pjLinkFolder">Change folder</button><button class="btn" id="pjUnlink">Unlink</button></div>`
               : `<p class="muted">Optional. Link a folder or a GitHub repository so chats here can work on your files and code.</p><div class="row"><button class="btn" id="pjLinkFolder">${ICON.dir} Link a folder</button><button class="btn" id="pjLinkGh">${ICON.pr} Link a repository</button></div>`}</section>
         </aside>
       </div></div>`;
     $("#conv").scrollTop = 0; $(".jumpdown")?.setAttribute("hidden", "");
     bindProject(pid, d);
+    fillProjectFiles(d.link);
   };
+
+  // The folder's own top-level files, a click opens one in the preview; "Browse the folder" opens the in-app file list.
+  async function fillProjectFiles(link) {
+    const ul = $("#pjFiles"); if (!ul || !link) return;
+    $("#pjBrowse")?.addEventListener("click", () => edFolderPane(link.path, ""));
+    try {
+      const r = await api(`/api/fs/list?root=${encodeURIComponent(link.path)}&path=`);
+      const files = (r.entries || []).filter(e => !e.dir && !String(e.name).startsWith(".")), more = files.length - 12;
+      if (!$("#pjFiles")) return;
+      ul.innerHTML = files.length ? files.slice(0, 12).map((e, i) => `<li><button type="button" class="linkbtn pjf" data-i="${i}" title="${esc(e.path)}">${ICON.file}<span>${esc(e.name)}</span></button></li>`).join("") + (more > 0 ? `<li class="muted">and ${more} more. Use Browse the folder.</li>` : "") : `<li class="muted">No files at the top of this folder yet.</li>`;
+      $$(".pjf", ul).forEach(b => b.onclick = () => openPreview(link.path, files[+b.dataset.i].path));
+    } catch (e) { if ($("#pjFiles")) ul.innerHTML = `<li class="muted">${esc(e.message)}</li>`; }
+  }
 
   function bindProject(pid, d) {
     const refresh = async () => { await loadPj(); renderSide(); renderTop(); await drawProject(pid); };

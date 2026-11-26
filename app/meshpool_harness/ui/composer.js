@@ -236,13 +236,11 @@ function renderHero() {
   const cardHTML = card ? `<div class="setupcard" data-card="${card.id}"><span class="sci">${ICON.spark || ICON.bolt}</span><div class="sct"><b>${esc(card.title)}</b><span>${esc(card.text)}</span></div><button class="btn" id="cardGo">${esc(card.cta)}</button><button class="iconbtn" id="cardX" aria-label="Dismiss">${ICON.x}</button></div>` : "";
   const f = S.draft.project;
   if (S.mode === "code") {
-    const w = waitingList(), tip = !(store("tips_off") || []).includes("plan");
+    const w = waitingList();   // no tip on a fresh page: the Plan tip comes after the first reply (chat010.js)
     col.innerHTML = `<div class="hero code"><div class="chome"><img class="mlogo-mark" src="/brand/mark.png" alt="" width="40" height="40">
       ${w.length ? `<div class="waitcard" role="list">${w.map(t => `<button class="wrow" role="listitem" data-open="${esc(t.id)}"><span class="wl">Waiting</span><span class="wt">${esc(t.title)}</span></button>`).join("")}</div>` : `<h1>Start a coding session</h1><p class="sub">${f ? `Working in <b>${esc(projName(f))}</b>.` : "Choose a folder or a repository below, then describe the task."}</p>`}</div>
-      ${tip ? `<div class="tipbar">${ICON.bolt}<span>Tip: for bigger changes, turn on Plan first in the plus menu. meshpool shows its plan before it edits anything.</span><button class="btn" id="tipTry">Try it</button><button class="iconbtn" id="tipX" aria-label="Dismiss">${ICON.x}</button></div>` : ""}</div>`;
+    </div>`;
     $$(".wrow", col).forEach(b => b.onclick = () => openThread(b.dataset.open));
-    $("#tipTry")?.addEventListener("click", () => { setPlan(true); store("tips_off", [...(store("tips_off") || []), "plan"]); renderHero(); });
-    $("#tipX")?.addEventListener("click", () => { store("tips_off", [...(store("tips_off") || []), "plan"]); renderHero(); });
     return;
   }
   col.innerHTML = `<div class="hero"><h1><img class="mlogo-mark" src="/brand/mark.png" alt="" width="28" height="28">${esc(heroTitle())}</h1>${f ? `<p class="sub">Working in <button class="linkbtn" id="heroProj" data-tip="Change folder">${esc(projName(f))}</button>. <button class="linkbtn" id="heroNoProj">Don’t use a folder</button></p>` : ""}

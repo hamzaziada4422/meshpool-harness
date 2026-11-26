@@ -153,13 +153,31 @@ def undo_message(r: dict) -> tuple[str, str]:
     and every changed file it could not put back; the folder holding copies of what Undo replaced is only in the
     details (WF-07: a full checkpoints path filled the chat; WF-C: "Files are back to how they were" while a file
     outside the chat's folder still had the agent's change)."""
+    def once(xs):
+        """Each file once, whatever order it came in: the same path listed twice (a file kept and also reported as
+        outside, or a list that repeated itself) is one file ("Not restored: a, b, a, b")."""
+        seen, out = set(), []
+        for x in xs:
+            key = re.sub(r"^(\./)+", "", str(x).replace("\\", "/").strip())
+            if key and key not in seen:
+                seen.add(key)
+                out.append(key)
+        return out
+
+    def named(x):
+        """A file as people read it: its name, and the folder it is in when it is not at the top ("a.xlsx (in Prices)")."""
+        name = Path(x).name or x
+        folder = str(Path(x).parent).replace("\\", "/")
+        return name if folder in ("", ".") else f"{name} (in {folder})"
+
     def names(xs, n=4):
-        xs = [Path(str(x)).name or str(x) for x in xs]
+        xs = [named(x) for x in once(xs)]
         return ", ".join(xs[:n]) + (f" and {len(xs) - n} more" if len(xs) > n else "")
 
     def count(xs, word):
-        return f"{word} {len(xs)} file{'' if len(xs) == 1 else 's'} ({names(xs)})"
-    restored, deleted, kept, outside = (list(r.get(k) or []) for k in ("restored", "deleted", "kept", "outside"))
+        n = len(once(xs))
+        return f"{word} {n} file{'' if n == 1 else 's'} ({names(xs)})"
+    restored, deleted, kept, outside = (once(r.get(k) or []) for k in ("restored", "deleted", "kept", "outside"))
     done = [s for s in (count(restored, "Restored") if restored else "",
                         count(deleted, "removed" if restored else "Removed") if deleted else "") if s]
     if not done and r.get("conversation") is False and not kept and not outside:
@@ -188,7 +206,7 @@ def undo_message(r: dict) -> tuple[str, str]:
     det = list(notes)                        # why each file was kept: changed later, never stored, a link...
     det += [f"{p}: {CHANGED_AFTER}" for p in kept if not why[p]]
     if outside:
-        det.append("Changed outside this chat's folder, not restored: " + ", ".join(outside))
+        det.append("Changed outside this chat's folder, not restored: " + ", ".join(once(outside)))
     if r.get("backup"):
         det.append(f"Copies of the files Undo replaced are in {r['backup']}")
     return msg, "\n".join(det)
@@ -341,6 +359,42 @@ def _paths_to_names(t: str) -> str:
             return _path_name(tok) + tail
         return m.group(0)
     return re.sub(r"(?<!\S)[^\s]*[/\\][^\s]*", one, t)
+
+
+_DELIVERABLE = (".pptx", ".xlsx", ".docx", ".pdf", ".html", ".csv", ".md")
+
+
+def deliverable_title(path: str) -> str:
+    """A file's name as a chat title: "Ridgeway_PdM_Client_Deck.pptx" reads "Ridgeway PdM Client Deck"."""
+    stem = Path(str(path).replace("\\", "/")).stem
+    return re.sub(r"\s+", " ", re.sub(r"[_\-]+", " ", stem)).strip()[:80]
+
+
+def retitle_from_work(sid: str, root: Path, made: list) -> str:
+    """Title a chat after the work: once a turn makes a file, the chat is named for the newest deliverable, not for the
+    first sentence the user typed. Never over a name the user gave (rename), never from a message ("go ahead", a retry):
+    only a file's name is used. Returns the new title, or "" when nothing changed."""
+    try:
+        meta = read_meta(sid)
+        if meta.get("renamed") or (meta.get("title") and not meta.get("auto_title")):
+            return ""
+        best, mt = "", -1.0
+        for o in made or []:
+            p = str(o.get("path") or "")
+            if p.lower().endswith(_DELIVERABLE):
+                try:
+                    t = (root / p).stat().st_mtime
+                except OSError:
+                    continue
+                if t >= mt:
+                    best, mt = p, t
+        title = deliverable_title(best) if best else ""
+        if title and title != meta.get("title"):
+            write_meta(sid, title=title, auto_title=True)
+            return title
+    except Exception:  # noqa: BLE001 - a title is never worth breaking the turn
+        pass
+    return ""
 
 
 def nice_title(text: str) -> str:
@@ -1505,9 +1559,11 @@ class Session:
                 root = Path(self.workdir).resolve()
                 with self.lock:
                     evs = list(self.events[ev0:])
-                for o in W.outputs_from(evs, [], root):
+                made = W.outputs_from(evs, [], root)
+                for o in made:
                     if o["path"].lower().endswith((".pptx", ".xlsx", ".docx")):
                         AR.register(str(root / o["path"]), self.id, incognito=self.incognito)
+                retitle_from_work(self.id, root, made)
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -2270,6 +2326,7 @@ class Session:
                 "model_inflight": (getattr(a, "model_req_at", None) is not None) if hasattr(a, "model_req_at") else None,
                 "title": meta.get("title") or nice_title(a.title), "pinned": bool(meta.get("pinned")),
                 "project_id": _project_of(meta, self.workdir), "scratch": bool(meta.get("scratch")),
+                "code_mode": meta.get("code_mode"),       # False: a chat in a folder that was never started from the Code tab
                 "usage": a.usage, "context": getattr(a, "context", None), "kind": self.kind,
                 "harness": {k: self.harness.get(k) for k in ("id", "name", "type", "description", "models", "provider",
                                                              "providers", "runs_on")},
@@ -3053,7 +3110,7 @@ def thread_action(sid: str, body: dict) -> dict:
     if not exists(sid):
         raise KeyError("That chat no longer exists. Refresh the list.")
     if act == "rename":
-        write_meta(sid, title=(body.get("title") or "").strip()[:120])
+        write_meta(sid, title=(body.get("title") or "").strip()[:120], renamed=True)    # the user's own name is never replaced
     elif act in ("pin", "unpin"):
         write_meta(sid, pinned=act == "pin")
     elif act in ("archive", "unarchive"):

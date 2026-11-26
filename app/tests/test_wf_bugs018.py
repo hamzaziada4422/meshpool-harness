@@ -222,7 +222,7 @@ def test_undo_says_what_it_restored_and_keeps_the_backup_path_in_the_details():
     msg, detail = A.undo_message({"restored": ["sales_clean.csv", "out/chart.png"], "deleted": ["monthly_revenue.png"],
                                   "outside": ["/home/lina/LinaData/sales.csv"],
                                   "backup": "/tmp/x/sessions/s1/checkpoints/undone/20261126-103934"})
-    assert msg.startswith("Undone. Restored 2 files (sales_clean.csv, chart.png) and removed 1 file "
+    assert msg.startswith("Undone. Restored 2 files (sales_clean.csv, chart.png (in out)) and removed 1 file "
                           "(monthly_revenue.png)."), msg
     assert "/tmp" not in msg and "checkpoints" not in msg
     assert "sales.csv" in msg and "Undo only covers this chat's folder" in msg

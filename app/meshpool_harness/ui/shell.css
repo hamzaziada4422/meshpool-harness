@@ -459,3 +459,32 @@
 .onb-card:has(>.onb-body){display:flex;flex-direction:column;padding-bottom:0;max-height:calc(100vh - 48px - min(12vh,112px));max-height:calc(100dvh - 48px - min(12vh,112px))}
 .onb-card>.onb-body{flex:0 1 auto;min-height:0;overflow-y:auto;margin:0 -4px;padding:0 4px 16px;-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 16px),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 16px),transparent)}
 .onb-card:has(>.onb-body)>.onb-go{flex:none;margin-top:0;padding:16px 0 24px;background:var(--bg)}
+
+/* ---- persona fixes (0.0.19) ---- */
+/* a picture the reply was asked to show: large, never wider than the column, a placeholder height until it loads */
+.pvbigs{display:flex;flex-direction:column;gap:8px;margin:0 0 16px;max-width:100%}
+.pvbig{display:block;padding:0;border:1px solid var(--line-3);border-radius:var(--r-m);overflow:hidden;background:#fff;max-width:100%;cursor:zoom-in}
+.pvbig img{display:block;max-width:100%;height:auto;max-height:520px;margin:0 auto}
+.pvbig.wait{min-height:200px}
+/* the Undo dialog's file list and the one toast an Undo makes */
+.asklist{list-style:none;margin:0 0 16px;padding:8px 12px;max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:var(--r-s);font-size:var(--fs-s);color:var(--ink-2)}
+.asklist li{padding:2px 0;overflow-wrap:anywhere}.asklist li.more{color:var(--ink-3)}
+.toast .tl{display:flex;flex-direction:column;gap:4px}
+/* the folder picker keeps one place and one size while its path changes: crumbs are one row that scrolls */
+.dlg.fb{display:flex;flex-direction:column;height:min(560px,calc(100vh - 48px))}
+.dlg.fb .fbcrumbs{flex:none;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;height:36px;margin:8px 0;white-space:nowrap;scrollbar-width:none}
+.dlg.fb .fbcrumbs button{flex:none}
+.dlg.fb #fbIn{flex:none}
+.dlg.fb .fblist{flex:1 1 0;height:auto;min-height:0}
+.dlg.fb .row{flex:none;min-height:36px}
+.dlg.fb .fbsel{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dlg.fb #fbNewIn{flex:1;min-width:0;width:auto;margin:0;padding:8px 12px}
+/* attaching a file on the home screen: the chips sit in the gap above the box and take no room, so the home block does not move */
+.homeview #attachRow:not(:empty){position:absolute;left:36px;right:36px;bottom:calc(100% + 4px);padding:0}
+/* the Changes picker keeps room for its words; the buttons wrap under it instead of squeezing it to a chevron */
+.pbar{flex-wrap:wrap}
+.pbar select{flex:1 1 140px;min-width:140px}
+/* the preview's name keeps room at 1024; its type badge gives way first */
+.pv-name{flex:0 1 auto;min-width:72px}
+@media (max-width:1100px){.pv-type{display:none}}
+.gcard.art .gm small.gwhere{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

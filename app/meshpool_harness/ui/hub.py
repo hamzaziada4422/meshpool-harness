@@ -96,6 +96,13 @@ def artifacts(limit: int = 300, listing: list | None = None) -> dict:
                         "project_id": r.get("project_id") or "", "kind": r.get("kind"),
                         "mime": mimetypes.guess_type(fp.name)[0] or ""})
     out.sort(key=lambda a: -a["updated"])
+    seen, once = set(), []                      # one entry per file: the same path in several chats is one (the newest)
+    for a in out:
+        key = (str(a["root"]).rstrip("/\\"), str(a["path"]).replace("\\", "/"))
+        if key not in seen:
+            seen.add(key)
+            once.append(a)
+    out = once
     counts: dict[str, int] = {}
     for a in out:
         counts[a["type"]] = counts.get(a["type"], 0) + 1
