@@ -1307,8 +1307,13 @@ def gate(agent, g: dict, final: str, *, render_web_fn=None, render_doc_fn=None, 
             res = (render_web_fn or render_web)(target["url"], out_dir(agent), tag, req, **kw)
         else:
             st["label"] = target["label"]
-            res = render_doc_fn(target["file"], out_dir(agent), tag) if render_doc_fn else \
-                render_doc(target["file"], out_dir(agent), tag, request=req)
+            fn = render_doc_fn or render_doc
+            try:                                       # the request picks the pages (changed_pages), where it is taken
+                import inspect
+                takes = "request" in inspect.signature(fn).parameters
+            except (TypeError, ValueError):
+                takes = False
+            res = fn(target["file"], out_dir(agent), tag, **({"request": req} if takes else {}))
         agent._check_stop()
         st.setdefault("first", res)
         st["last"] = res
