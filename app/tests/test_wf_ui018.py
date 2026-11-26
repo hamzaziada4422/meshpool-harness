@@ -202,7 +202,7 @@ def test_file_cards_keep_their_names_inside_and_their_thumbnails_after_a_rebuild
         $('#col').appendChild(off);                         // and swapped in a moment later
         for (let i = 0; i < 40 && !off.querySelector('.pvth img'); i++) await new Promise(r => setTimeout(r, 100));
         const card = off.querySelector('.pvcard'), b = card.querySelector('.pvcm b'), cr = card.getBoundingClientRect(), br = b.getBoundingClientRect();
-        return {thumb: !!card.querySelector('.pvth img'), clipped: b.scrollWidth > b.clientWidth,
+        return {thumb: !!card.querySelector('.pvth img'), clipped: b.scrollHeight > b.clientHeight + 1 || b.textContent.includes('\u2026'),
                 inside: br.right <= cr.right - 8, ellipsis: getComputedStyle(b).textOverflow,
                 thumbLeft: card.querySelector('.pvth').getBoundingClientRect().left >= cr.left - 1,
                 dl: off.querySelectorAll('[data-pvdl]').length};
@@ -268,7 +268,7 @@ def test_undo_shows_the_backup_path_only_in_details_and_puts_back_no_skill_chips
     page.evaluate("""() => applyEv({type: "status", i: 0, text: "Undone. Restored 1 file (deck.pptx).",
         detail: "Copies of the files Undo replaced are in /tmp/x/checkpoints/undone/20261126-104217"})""")
     note = page.inner_text("#col .note")
-    assert "/tmp" not in note.split("Details")[0] and page.query_selector("#col .note details"), note
+    assert "/tmp" not in note and "checkpoints" not in note, note      # round 2: not even in the details
     page.focus("#input")
     page.evaluate("() => fillInput('Change the title on slide 1 to: ViDA e-invoicing for your firm', {back: true})")
     page.wait_for_timeout(900)

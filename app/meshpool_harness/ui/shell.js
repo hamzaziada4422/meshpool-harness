@@ -428,21 +428,28 @@ function srchIcon(it) {
   const ic = {chat: ICON.chat, code: ICON.codebr, project: ICON.stack, artifact: ICON.cube, scheduled: ICON.clock, action: it.id === "new_session" ? ICON.codebr : it.id === "settings" ? ICON.gear : ICON.plus}[it.kind] || ICON.chat;
   return `<span class="sic">${ic}${it.unread || it.waiting ? `<i class="bdot ${it.waiting ? "wait" : ""}"></i>` : ""}</span>`;
 }
+// The match in a snippet, marked (the words of the query, in any order).
+function srchMark(text, q) {
+  const words = String(q || "").toLowerCase().split(/\s+/).filter(w => w.length > 1).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const t = esc(text);
+  return words.length ? t.replace(new RegExp("(" + words.map(esc).join("|") + ")", "gi"), "<mark>$1</mark>") : t;
+}
 function openSearch(tab = "all", q0 = "") {
   closePop(); closeCtx(); closeSearch(); $(".scrim:not(.dlg-scrim)")?.remove();
+  const dev = S.mode === "code" || (S.threads || []).some(isCodeThread);      // the Alt+Enter and Tab hints are for people who use Code
   const sc = document.createElement("div"); sc.className = "scrim srch-scrim"; sc.id = "srch";
   sc.innerHTML = `<div class="srch" role="dialog" aria-modal="true" aria-label="Search">
     <div class="srch-top"><input id="srchIn" placeholder="Search" aria-label="Search" autocomplete="off" spellcheck="false" value="${esc(q0)}"><span class="spin" id="srchSpin" hidden></span><button class="iconbtn" id="srchX" aria-label="Close search">${ICON.x}</button></div>
     <div class="srch-tabs" role="tablist">${SRCH_TABS.filter(([k]) => k !== "code" || (S.threads || []).some(isCodeThread) || tab === "code").map(([k, l]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${l}</button>`).join("")}</div>
     <div class="srch-list" id="srchList" role="listbox"></div>
-    <div class="srch-keys"><span>Close <kbd>Esc</kbd></span><span>Change type <kbd>←</kbd><kbd>→</kbd></span><span>Open <kbd>↵</kbd></span><span>Actions <kbd>${isMac ? "⌥" : "Alt+"}↵</kbd></span><span class="sp"></span><span>Compose <kbd>Tab</kbd></span></div></div>`;
+    <div class="srch-keys"><span>Close <kbd>Esc</kbd></span><span>Change type <kbd>←</kbd><kbd>→</kbd></span><span>Open <kbd>↵</kbd></span>${dev ? `<span>Actions <kbd>${isMac ? "⌥" : "Alt+"}↵</kbd></span><span class="sp"></span><span>Compose <kbd>Tab</kbd></span>` : ""}</div></div>`;
   document.body.appendChild(sc);
   const inp = $("#srchIn", sc), list = $("#srchList", sc);
   let items = [], act = 0, seq = 0, timer = null;
   const mark = n => { const rows = $$(".sres", list); if (!rows.length) return; act = (n + rows.length) % rows.length; rows.forEach((r, i) => r.classList.toggle("act", i === act)); rows[act].scrollIntoView({block: "nearest"}); };
   const draw = r => {
     items = [];
-    list.innerHTML = (r.groups || []).map(g => `<div class="sgrp">${esc(g.label)}</div>` + g.items.map(it => { const i = items.push(it) - 1; return `<div class="sres ${i === 0 ? "act" : ""}" role="option" data-i="${i}">${srchIcon(it)}<span class="stt">${esc(it.title)}</span><span class="ssub">${esc(it.sub || "")}</span><button class="iconbtn smore" aria-label="Actions" tabindex="-1">${ICON.more}</button><span class="sret">↵</span></div>`; }).join("")).join("")
+    list.innerHTML = (r.groups || []).map(g => `<div class="sgrp">${esc(g.label)}</div>` + g.items.map(it => { const i = items.push(it) - 1; return `<div class="sres ${i === 0 ? "act" : ""}" role="option" data-i="${i}">${srchIcon(it)}${it.snippet ? `<span class="sbody"><span class="stt">${esc(it.title)}</span><span class="ssn">${srchMark(it.snippet, inp.value)}</span></span>` : `<span class="stt">${esc(it.title)}</span><span class="ssub">${esc(it.sub || "")}</span>`}<button class="iconbtn smore" aria-label="Actions" tabindex="-1">${ICON.more}</button><span class="sret">↵</span></div>`; }).join("")).join("")
       || `<div class="sempty">${inp.value.trim() ? `Nothing matches “${esc(inp.value.trim())}”. Try fewer words, or another type.` : "Nothing here yet."}</div>`;
     act = 0;
   };
@@ -546,12 +553,12 @@ function renderTop() {
   const pj = pid && S.pj.find(p => p.id === pid);
   const folderChat = !onProject && !onPage && !!root && (v ? !v.scratch && !pj : !!S.draft.project);
   const title = onProject ? (pj?.name || "Project") : v ? (v.title || "New chat") : "";
-  const open = !!S.panel && !$("#panel")?.hidden;
+  const open = !!S.panel && !$("#panel")?.hidden && !(typeof PVX !== "undefined" && PVX.open);      // under an open preview the panel is not shown
   const a = $("#app"); a.classList.toggle("pageview", onPage); a.classList.toggle("homeview", !v && !onProject && !onPage);
   $("#topbar").classList.toggle("newt", !v);
   const topHTML = `
     ${hidden ? `<button class="tbtn showside" id="showSide" data-tip="Show sidebar" data-kbd="${MOD}B" data-tip-pos="below" aria-label="Show sidebar">${ICON.side}<i class="ndot" ${attention() ? "" : "hidden"}></i></button>` : ""}
-    ${hidden && (v || onProject || onPage) ? `<button class="tbtn topnew" id="topNew" data-tip="New chat" data-kbd="${MOD}N" data-tip-pos="below" aria-label="New chat">${ICON.plus}</button>` : ""}
+    ${hidden && (v || onProject || onPage) ? `<button class="tbtn topnew" id="topNew" data-tip="New chat" data-kbd="${MOD}N" data-tip-pos="below" aria-label="New chat">${ICON.plus}<span>New chat</span></button>` : ""}
     ${pj && !onProject && v ? `<button class="chip" id="pjChip" data-tip="Open project" data-tip-pos="below">${ICON.stack}<span class="cl">${esc(pj.name)}</span></button><span class="crumb" aria-hidden="true">/</span>` : ""}
     ${!v && !onProject && !onPage && S.mode === "code" ? `<span class="toplabel">New session</span>` : ""}
     ${v || onProject ? `<span class="title" id="ttl" data-id="${esc(v?.id || "")}" ${v ? `role="button" tabindex="0" aria-haspopup="menu" data-tip="Chat options" data-tip-pos="below"` : ""}>${esc(title)}</span>${v ? `<button class="tbtn ttlchev" id="ttlChev" aria-label="Chat options" aria-haspopup="menu">${ICON.chev}</button>` : ""}` : ""}

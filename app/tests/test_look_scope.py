@@ -281,7 +281,7 @@ def test_the_checked_line_shape_with_recorded_inputs():
     persona, probs = RECORDED[3]
     st = {"persona": persona, "evals": [_v(persona, probs)]}
     assert LR.summary_line("doc", st) == (
-        "Checked as a business owner: fixed nothing. Still open: the chart image appears blank (and 2 more)."), \
+        "Checked as a business owner: fixed nothing. Still open: axis labels I asked for cannot be found."), \
         LR.summary_line("doc", st)
 
 
@@ -293,8 +293,7 @@ def test_no_fragment_is_printed_when_a_part_would_be_malformed():
     assert line == "Checked: fixed 3 things. Nothing left open.", line
     st = {"persona": "", "evals": [_v("", probs)]}                  # no persona at all: the neutral one is used
     line = LR.summary_line("doc", st)
-    assert line.startswith("Checked as someone opening this file for the first time: fixed nothing."), line
-    assert "Still open: 3 things." in line, line                     # the open items cannot be said whole: a count, not a fragment
+    assert line == "Checked it as someone opening this file for the first time.", line      # nothing whole to say: no claims, no count
     assert_clean(line)
 
 

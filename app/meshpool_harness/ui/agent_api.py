@@ -162,6 +162,19 @@ def _messages_from_events(events: list) -> list:
     return out
 
 
+def _with_plain(e: dict) -> dict:
+    """A step event with its plain title for Chat mode (core.plain_step, built on the approval cards' own titles), so the
+    page shows "Created open-house.html" and keeps the command itself in the step's details."""
+    if e.get("type") != "tool_start" or "plain" in e:
+        return e
+    try:
+        from meshpool_harness.agent.core import plain_step
+        p = plain_step(e.get("name") or "", e.get("summary") or "", bool(e.get("mcp")))
+    except Exception:  # noqa: BLE001 - a title is a help, never a second failure
+        p = None
+    return dict(e, plain=p) if p else e
+
+
 def _redact(text: str) -> str:
     from meshpool_harness.errors import tool_card    # a reopened chat's cards read like the live ones
     from meshpool_harness.redact import redact
@@ -256,9 +269,9 @@ def undo_message(r: dict) -> tuple[str, str]:
     det = list(notes)                        # why each file was kept: changed later, never stored, a link...
     det += [f"{p}: {CHANGED_AFTER}" for p in kept if not why[p]]
     if outside:
-        det.append("Changed outside this chat's folder, not restored: " + ", ".join(once(outside)))
-    if r.get("backup"):
-        det.append(f"Copies of the files Undo replaced are in {r['backup']}")
+        det.append("Changed outside this chat's folder, not restored: " + ", ".join(Path(x).name or x for x in once(outside)))
+    if r.get("backup"):                      # the folder of saved copies is not shown: nothing technical in the details
+        det.append("meshpool kept a copy of what Undo replaced, in case you change your mind.")
     return msg, "\n".join(det)
 
 
@@ -1765,8 +1778,15 @@ class Session:
                 line = CK.final_line(run)
                 if line:
                     sm = CK.summary(run)
+                    extra = {}
+                    ll = getattr(self.agent, "last_look", None)      # the look line of this turn is in the reply: one line, not two
+                    if isinstance(ll, dict) and ll.get("turn") == getattr(self.agent, "_turn_no", 0) and ll.get("line"):
+                        look = str(ll["line"]).split("\n\n")[0]
+                        merged = CK.merge_line(look, line)
+                        if merged:
+                            line, extra = merged, {"look": look}
                     self.emit({"type": "checks_line", "text": line, "items": sm.get("items", []),
-                               "details": sm.get("details", [])})
+                               "details": sm.get("details", []), **extra})
             except Exception:  # noqa: BLE001
                 pass
             self._ck_run = ""
@@ -2658,6 +2678,7 @@ class Session:
             n = len(self.events)
             raw = self.events[since:]
         evs = [e for e in raw if not e.get("gone")]  # a folded reply's deltas: its assistant event shows the text
+        evs = [_with_plain(e) for e in evs]
         a = self.agent
         meta = read_meta(self.id)
         try:
@@ -3203,7 +3224,7 @@ def view(sid: str, since: int) -> dict:
     except ProjectMissing as e:
         tr = _transcript(sid) or {}
         evs = tr.get("events") or events_from_messages(saved_messages(sid))
-        evs = [dict(x, i=i) for i, x in enumerate(evs)]
+        evs = [_with_plain(dict(x, i=i)) for i, x in enumerate(evs)]
         evs.append({"type": "error", "i": len(evs), "text": f"This chat's project folder ({e}) was moved or deleted, "
                     "so it can't continue here. Its history is below; start a new chat to keep working."})
         meta = read_meta(sid)
@@ -3633,8 +3654,9 @@ def search(q: str) -> list:
         shown = "\n".join(texts).lower()
         if not all(w in shown for w in words):
             continue
-        hit = next((s for s in texts if q in s.lower()), None) or \
-            max(texts, key=lambda s: sum(w in s.lower() for w in words))
+        body = texts[1:] or texts                         # the words in the messages, not just in the title, make the snippet
+        hit = next((s for s in body if q in s.lower()), None) or \
+            max(body, key=lambda s: sum(w in s.lower() for w in words))
         lo = hit.lower()
         j = lo.find(q) if q in lo else min((lo.find(w) for w in words if w in lo), default=0)
         snippet = " ".join(hit[max(0, j - 60): j + 100].split())

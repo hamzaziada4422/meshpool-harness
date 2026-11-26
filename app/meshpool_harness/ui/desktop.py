@@ -762,7 +762,7 @@ def permissions() -> dict:
         note = ("Windows does not need extra permissions: agents run commands and control apps as you. "
                 "Windows may ask to allow network access the first time a tool listens on a port.")
     else:
-        note = "Linux does not need extra permissions."
+        note = ""
     return {"platform": sys.platform, "rows": rows, "note": note}
 
 

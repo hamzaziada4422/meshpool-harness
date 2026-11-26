@@ -35,6 +35,8 @@ function routeMenu(anchor) {
 // One cost format: "$0.42", and "<$0.01" for anything under a cent (never "$0.0005"). One duration format: "<1 s",
 // "42 s", "3 min 45 s", "1 h 5 min" (receipts.py writes the same).
 // "Summarized 12 earlier messages so the task can keep going." (agent/core.py) in the words of the chat.
+// A note's details hold nothing technical: a line that names a folder of saved copies (a checkpoint path) is left out.
+const plainDetail = t => String(t || "").split("\n").filter(l => !/[\/\\]checkpoints[\/\\]/.test(l)).join("\n").trim();
 const plainStatus = t => String(t || "").replace(/^Summarized \d+ earlier messages so the task can keep going( \(from the log only\))?\.$/, "Made room to keep going: the earlier steps are now a short summary.");
 function fmtCost(x) { x = Number(x) || 0; return x > 0 && x < 0.01 ? "<$0.01" : "$" + x.toFixed(2); }
 function fmtDur(s) {
@@ -130,6 +132,10 @@ const ICON = {
   gear: I('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'),
   send: I('<path d="M12 19V5M5 12l7-7 7 7"/>'), stop: I('<rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor"/>'),
   clip: I('<path d="m21 11-8.6 8.6a5 5 0 0 1-7-7l8.5-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.3-2.3l7.9-8"/>'),
+  fsheet: I('<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h8M12 11v8"/>'),
+  fdoc: I('<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/>'),
+  fdeck: I('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8"/>'),
+  fimg: I('<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="m21 16-5-5-8 9"/>'),
   diff: I('<path d="M12 3v14M5 10h14M5 21h14"/>'), files: I('<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>'),
   term: I('<path d="m4 17 6-5-6-5M12 19h8"/>'), globe: I('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'),
   branch: I('<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="7" r="2"/><path d="M6 7v10M18 9a6 6 0 0 1-6 6H6"/>'),
@@ -556,11 +562,15 @@ function browseFolder(start, opts = {}) {
         const sep = r.path.includes("\\") ? "\\" : "/";
         const parts = r.path.split(/[\\/]/).filter(Boolean);
         let acc = r.path.startsWith("/") ? "" : "";
-        $("#fbCrumbs", sc).innerHTML = (r.path.startsWith("/") ? `<button data-c="/">/</button>` : "") + parts.map((p, k) => {
+        const crumbs = parts.map((p, k) => {
           acc = (k === 0 && !r.path.startsWith("/")) ? p + sep : acc + (acc.endsWith(sep) || acc === "" ? "" : sep) + p;
           const full = r.path.startsWith("/") ? "/" + parts.slice(0, k + 1).join("/") : acc;
-          return `<button data-c="${esc(full)}" class="${k === parts.length - 1 ? "here" : ""}">${esc(full === home ? "Home" : p)}</button>`;
-        }).join(`<span class="sep">›</span>`);
+          return {full, label: full === home ? "Home" : p, here: k === parts.length - 1};
+        });
+        // a long path shows its last three parts, with an ellipsis that goes up to the part before them
+        const shownC = crumbs.length > 3 ? crumbs.slice(-3) : crumbs, up = crumbs.length > 3 ? crumbs[crumbs.length - 4] : null;
+        $("#fbCrumbs", sc).innerHTML = (up ? `<button data-c="${esc(up.full)}" class="more" title="${esc(up.full)}" aria-label="Up to ${esc(up.label)}">…</button><span class="sep">›</span>` : r.path.startsWith("/") ? `<button data-c="/">/</button>` : "")
+          + shownC.map(c => `<button data-c="${esc(c.full)}" class="${c.here ? "here" : ""}">${esc(c.label)}</button>`).join(`<span class="sep">›</span>`);
         $$("#fbCrumbs [data-c]", sc).forEach(b => b.onclick = () => go(b.dataset.c));
         $("#fbCrumbs", sc).scrollLeft = $("#fbCrumbs", sc).scrollWidth;       // one row: a long path scrolls, it does not wrap
         $("#fbIn", sc).value = "";
@@ -1669,8 +1679,20 @@ function markRetried(d) {
     if (st && key(o) === k) { st.className = "st"; st.textContent = "retried"; o.classList.add("retried"); }
   }
 }
+// A failed step is a problem only when the turn ended with it, or when the reply says so. A find that found nothing, or a
+// check that was run again, is a normal part of the work and is not counted (round 2: "3 steps, 1 had a problem").
+const PROBLEM_RX = /\b(could not|couldn't|can't|cannot|unable|didn't work|did not work|not able to|wasn't able|failed|went wrong|problem|error)\b/i;
+function groupFails(g) {
+  const bad = $$(".tool", g).map(t => !!$(".st.bad", t));
+  let tail = 0; for (let i = bad.length - 1; i >= 0 && bad[i]; i--) tail++;
+  if (tail || !g.dataset.done) return tail;       // the step the work ends on failed: it is counted at once
+  let reply = "", n = g.nextElementSibling;
+  while (n && !n.classList.contains("work") && !n.classList.contains("msg-user")) { if (n.classList.contains("msg-ai")) reply += " " + n.textContent; n = n.nextElementSibling; }
+  return PROBLEM_RX.test(reply) ? bad.filter(Boolean).length : 0;
+}
 function bumpGroup(g, done) {
-  const n = $$(".tool", g).length; const fails = $$(".tool .st.bad", g).length;
+  if (done) g.dataset.done = "1";
+  const n = $$(".tool", g).length; const fails = groupFails(g);
   $(".wl", g).textContent = `${n} step${n === 1 ? "" : "s"}${fails ? `, ${fails} had a problem` : ""}`;
   if (done) { g.dataset.done = "1"; g.open = !!S.steps || !!$(".appr:not(.done)", g); const el = $(".gel", g); if (el) el.textContent = ""; $(".gdots", g)?.remove(); }
 }
@@ -1748,13 +1770,15 @@ function applyEvRaw(ev) {
       const g = workGroup();
       const raw = ev.name || "";
       const name = ev.mcp ? raw.split("__").slice(2).join("__") : raw;
-      const label = TOOL_RUN[name] || TOOL_LABEL[name] || plainTool(name, ev.mcp, "run");
+      const pl = chatMode() && ev.plain ? ev.plain : null;      // Chat mode: the server's plain title; the raw command stays in the details
+      const label = pl ? pl.run : TOOL_RUN[name] || TOOL_LABEL[name] || plainTool(name, ev.mcp, "run");
       const d = document.createElement("details"); d.className = "tool"; d.id = "tool-" + ev.id; d.dataset.name = name; if (ev.mcp) d.dataset.mcp = "1";
-      const st0 = stepTitle(stepSummary(name, ev));     // a long script is a short title; the whole script is in the body
+      if (pl) { d.dataset.pdone = pl.done; d.dataset.pbase = pl.base; d.dataset.prun = pl.run; }
+      const st0 = pl ? {title: "", full: pl.done === "Used a connector" ? "" : stepSummary(name, ev).trim()} : stepTitle(stepSummary(name, ev));     // a long script is a short title; the whole script is in the body
       d.innerHTML = `<summary><span class="ic">${TOOL_ICON(name)}</span><span class="tn"${ev.mcp ? ` title="${esc(name.replace(/_/g, " "))}"` : ""}>${esc(label)}</span><span class="ts">${esc(st0.title)}</span><span class="st run"></span></summary>${st0.full ? `<pre class="script">${esc(st0.full)}</pre>` : ""}${ev.diff ? `<pre>${diffLines(ev.diff)}</pre>` : ""}`;
       $(".rows", g).appendChild(d); cur.tools[ev.id] = d; bumpGroup(g);
       if (/(^|__|[.:])browser_open$/.test(raw) && cur.ready && typeof browserAutoOpen === "function") browserAutoOpen(cur);
-      { const sm = stepSummary(name, ev); cur.activity = `${label}${sm ? " " + sm : ""}`; } break; }
+      { const sm = pl ? "" : stepSummary(name, ev); cur.activity = `${label}${sm ? " " + sm : ""}`; } break; }
     case "tool_output": {                               // a command's output while it runs (live only, not saved)
       const d = cur.tools[ev.id] || document.getElementById("tool-" + ev.id); if (!d || d.dataset.done) break;
       let pre = $("pre.live", d);
@@ -1776,7 +1800,8 @@ function applyEvRaw(ev) {
       const st = $(".st", d); st.className = "st " + (ev.ok || stopped || unfinished || planned || ev.denied ? "" : "bad");
       st.textContent = ev.denied ? "not run" : ev.ok ? "" : stopped ? "stopped" : unfinished ? "not finished" : planned ? "not allowed in Plan mode" : "failed";
       const nm = d.dataset.name || "";
-      $(".tn", d).textContent = ev.ok ? (TOOL_DONE[nm] || TOOL_LABEL[nm] || plainTool(nm, d.dataset.mcp, "done")) : (TOOL_BASE[nm] || TOOL_LABEL[nm] || plainTool(nm, d.dataset.mcp, "base"));
+      if (d.dataset.pdone) $(".tn", d).textContent = ev.ok ? d.dataset.pdone : d.dataset.pbase;
+      else $(".tn", d).textContent = ev.ok ? (TOOL_DONE[nm] || TOOL_LABEL[nm] || plainTool(nm, d.dataset.mcp, "done")) : (TOOL_BASE[nm] || TOOL_LABEL[nm] || plainTool(nm, d.dataset.mcp, "base"));
       const shown = cleanToolOut(ev.output);
       if (shown && !$("pre:not(.script)", d)) d.insertAdjacentHTML("beforeend", `<pre class="out">${esc(shown)}</pre>`);
       if (ev.ok) markRetried(d);
@@ -1784,7 +1809,7 @@ function applyEvRaw(ev) {
       break; }
     case "approval": {
       const gKeep = cur.group && cur.group === col.lastElementChild ? cur.group : null;
-      for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st) { st.textContent = "Needs your approval"; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_BASE[nm] || TOOL_LABEL[nm] || nm; } }
+      for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st) { st.textContent = "Needs your approval"; const nm = t.dataset.name || ""; $(".tn", t).textContent = t.dataset.pbase || TOOL_BASE[nm] || TOOL_LABEL[nm] || nm; } }
       closeGroup();
       const OPT = {allow_once: "Allow just this", allow_always: "Allow for this whole chat", reject_once: "Deny", reject_always: "Always deny"};
       // 0.0.19 wording, the same on every card: each answer says what it covers (the chat grant's reach is in its tip)
@@ -1808,7 +1833,7 @@ function applyEvRaw(ev) {
         catch (e) { $$("button", d).forEach(x => x.disabled = false); toast(e.message); }
       });
       scrollConv(true); break; }
-    case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /approval|waiting/i.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
+    case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /approval|waiting/i.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = t.dataset.prun || TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
       const d = cardEl("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); $(".apdet", d)?.remove(); $(".apsum", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.closed ? "Closed when meshpool restarted." : ev.decision === "stopped" ? "Stopped before running." : ev.decision === "timeout" ? "No answer in time." : ev.reason ? esc(ev.reason) : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "save" ? "Allowed, and saved for this folder." : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
         const g = d.previousElementSibling; if (g?.classList.contains("work") && d === col.lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
@@ -1849,6 +1874,7 @@ function applyEvRaw(ev) {
         // transcript, on the line's tooltip and in the Session panel's Agent section.
         const why = ev.auto && ev.auto.reason ? String(ev.auto.reason) : "";
         if (/^Using meshpool\b/i.test(ev.text || "") && !ev.back && !ev.handoff) { sessionSoon(); break; }   // meshpool's own agent: nothing to announce
+        if (chatMode()) { sessionSoon(); break; }        // Chat mode: no engine names in the thread ("Using Codex", "Use meshpool Code instead")
         const un = add(`<span${why ? ` title="${esc(why)}"` : ""}>${esc(lowBrand(ev.text))}</span>` + (ev.back ? ` <button class="linkbtn" data-back="1">Use ${esc(lowBrand(ev.back.name))} instead</button>` : ""), "note using");
         $("[data-back]", un)?.addEventListener("click", async () => {   // one click back to the mode's own agent, history kept
           try { const v = await post(`/api/agent/${cur.id}/harness`, {harness: ev.back.harness, since: 1e9}); cur.view.harness = v.harness || harness(ev.back.harness); $("[data-back]", un)?.remove(); renderBar();
@@ -1878,7 +1904,7 @@ function applyEvRaw(ev) {
         break; }
       if (ev.look) cur.activity = String(ev.text || "").replace(/\.+$/, "");   // the footer names the wait (agent/look.py)
       if (ev.look && ev.persona && cur.lookEl && cur.lookEl.isConnected) { cur.lookEl.textContent = ev.text; break; }   // the same note says who is checking it
-      { const nn = add(esc(plainStatus(ev.text)) + (ev.detail ? ` <details class="notedet"><summary>Details</summary><div>${esc(ev.detail).replace(/\n/g, "<br>")}</div></details>` : ""), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); if (ev.look) { endLook(cur, ""); cur.lookEl = nn; nn.dataset.look = "1"; } else if (/^Starting the office tools/.test(ev.text || "")) { cur.officeEl?.remove(); cur.officeEl = nn; } } break; }
+      { const nn = add(esc(plainStatus(ev.text)) + (plainDetail(ev.detail) ? ` <details class="notedet"><summary>Details</summary><div>${esc(plainDetail(ev.detail)).replace(/\n/g, "<br>")}</div></details>` : ""), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); if (ev.look) { endLook(cur, ""); cur.lookEl = nn; nn.dataset.look = "1"; } else if (/^Starting the office tools/.test(ev.text || "")) { cur.officeEl?.remove(); cur.officeEl = nn; } } break; }
     case "gate": {                                      // all model slots busy: say so while it waits, drop the line once it runs
       if (cur.gateEl && !cur.gateEl.isConnected) cur.gateEl = null;
       if (ev.state === "waiting") {
@@ -1904,11 +1930,19 @@ function applyEvRaw(ev) {
       if (t && cur.lastFoot && nf && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; safe(() => pvTurnCards(cur, cur.lastFoot, t.n)); cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${nf} file${nf === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }
       if (t && t.changed && typeof pvRefresh === "function") safe(() => pvRefresh(curRoot(), t.changed.map(c => c.path)));   // an open preview of a changed file
       break; }
+    case "steps_retried": {                              // the server found failed steps that a later step redid: not problems
+      for (const id of ev.ids || []) {
+        const d = cur.tools?.[id] || document.getElementById("tool-" + id); if (!d) continue;
+        const st = $(".st.bad", d); if (st) { st.className = "st"; st.textContent = "retried"; d.classList.add("retried"); }
+      }
+      $$(".work", col).forEach(g => bumpGroup(g));
+      break; }
     case "turn_end": {
       endLook(cur, "");
       cur.gateEl?.remove(); cur.gateEl = null; cur.jobStage = ""; cur.down = false; cur.downEl = null;
       settleSteps("");
       closeGroup();
+      $$(".work[data-done]", col).forEach(g => bumpGroup(g));      // the reply is in: count the problems it reports
       if (ev.synthetic) break;                  // a turn that never ran (or one cut short by a restart): no footer, no Build this plan
       const u = ev.turn || {};
       const foot = add("", "turnfoot"); if (u.calls) foot.title = `${u.calls} model call${u.calls === 1 ? "" : "s"} · ${fmt(u.in)} tokens in · ${fmt(u.out)} out`;
@@ -2021,6 +2055,7 @@ function settleSteps(label) {
     const st = $(".st.run", d); if (!st) continue;
     const nm = d.dataset.name || "";
     st.className = "st"; st.textContent = label === "stopped" ? "not run" : "";
+    if (d.dataset.pdone) { $(".tn", d).textContent = label === "stopped" ? d.dataset.pbase : d.dataset.pdone; continue; }
     $(".tn", d).textContent = label === "stopped" ? (TOOL_BASE[nm] || TOOL_LABEL[nm] || plainTool(nm, d.dataset.mcp, "base")) : (TOOL_DONE[nm] || TOOL_LABEL[nm] || plainTool(nm, d.dataset.mcp, "done"));
   }
 }
@@ -2033,10 +2068,11 @@ async function drawRules(box, r) {
   try { r = r || await api("/api/rules"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
   const NAMES = {allow: ["Always allowed", "Runs without asking."], ask: ["Always asks", "Asks first, even with full access or an allow rule."], deny: ["Never allowed", "Refused, whatever the mode."]};
   const row = (lst, rule, folder) => `<li><span class="tg"><code>${esc(rule)}</code></span><button class="iconbtn" data-rrm="${esc(lst)}" data-rule="${esc(rule)}" ${folder ? `data-folder="${esc(folder)}"` : ""} aria-label="Remove ${esc(rule)}">${ICON.x}</button></li>`;
-  box.innerHTML = `<h3 style="font-size:16px;margin:16px 0 4px">Saved rules</h3><p class="pnote plain-rules">These are the things you told meshpool to always allow, always ask about, or never do. Most people never need to change them.</p><p class="pnote adv-rules">For people who want the exact syntax: a rule is a tool name (<code>edit</code>), or <code>bash:</code> and a command with * for any text (<code>bash:git push*</code>). Saved in ${esc(r.path)}.</p>
+  box.innerHTML = `<h3 style="font-size:16px;margin:16px 0 4px">Saved rules</h3><p class="pnote plain-rules">These are the things you told meshpool to always allow, always ask about, or never do. Most people never need to change them.</p>
+    <details class="advrules"><summary>Advanced rules</summary><p class="pnote adv-rules">For people who want the exact syntax: a rule is a tool name (<code>edit</code>), or <code>bash:</code> and a command with * for any text (<code>bash:git push*</code>). Saved in ${esc(r.path)}.</p>
     ${Object.entries(NAMES).map(([k, [h, d]]) => `<h4 style="margin:12px 0 4px">${h}</h4><small class="pnote">${d}</small><ul class="rows2">${(r[k] || []).map(x => row(k, x)).join("") || `<li class="pnote">None.</li>`}</ul>`).join("")}
     ${r.folders.length ? `<h4 style="margin:12px 0 4px">Allowed in one folder</h4>${r.folders.map(f => `<small class="pnote">${esc(f.folder)}</small><ul class="rows2">${f.allow.map(x => row("allow", x, f.folder)).join("")}</ul>`).join("")}` : ""}
-    <div class="srow" style="margin-top:8px"><select id="ruleList" aria-label="Kind of rule"><option value="ask">Always ask</option><option value="deny">Never allow</option><option value="allow">Always allow</option></select><input id="ruleText" placeholder="bash:git push*" spellcheck="false"><button class="btn" id="ruleAdd">Add rule</button></div><div class="res" id="ruleRes"></div>`;
+    <div class="srow" style="margin-top:8px"><select id="ruleList" aria-label="Kind of rule"><option value="ask">Always ask</option><option value="deny">Never allow</option><option value="allow">Always allow</option></select><input id="ruleText" placeholder="bash:git push*" spellcheck="false"><button class="btn" id="ruleAdd">Add rule</button></div><div class="res" id="ruleRes"></div></details>`;
   const act = async body => { try { drawRules(box, await post("/api/rules", body)); } catch (e) { const x = $("#ruleRes", box); x.className = "res bad"; x.textContent = e.message; } };
   $$("[data-rrm]", box).forEach(x => x.onclick = () => act({action: "remove", list: x.dataset.rrm, rule: x.dataset.rule, folder: x.dataset.folder || ""}));
   $("#ruleAdd", box).onclick = () => act({action: "add", list: $("#ruleList", box).value, rule: $("#ruleText", box).value});
@@ -2214,6 +2250,10 @@ function flipLayout(change) {
   } finally { flipBusy = false; }
 }
 function togglePanel(name, force) {
+  // The preview and the side panel take the same place (app.css .app.pvopen>.panel hides the panel). Asking for the panel
+  // while a file is open closes the file's preview: the first click used to mark the button and show nothing, because the
+  // panel was open in the state but hidden under the preview. (A file with unsaved edits asks first, as it does on Close.)
+  if (typeof PVX !== "undefined" && PVX.open && !(S.panel === name && force === false)) { force = true; closePreview(true); }
   if (!panelSet().includes(name)) name = panelSet()[0];
   if (S.panel === name && !force && curMode() === "cowork") store("cw_panel_closed", true);
   if (force) store("cw_panel_closed", false);
@@ -2230,12 +2270,12 @@ function setupPanelResize() {
 // The room the chat would have with the sidebar kept and the side panel (or the preview) open: the sidebar folds only
 // when that drops under about 640px, not at a fixed window width (priya018). The panel widths are the CSS ones
 // (app.css .panel, .pvp), worked out for the sidebar being open so the answer does not flip when it folds.
-const CHAT_ROOM_MIN = 640;
+const CHAT_ROOM_MIN = 672;      // a 640px text column and its 16px gutters: the chat never gets a narrower column than that
 function chatRoomWithSide() {
   const vw = innerWidth, side = 288, pv = typeof PVX !== "undefined" && PVX.open;
   let w = 0;
   if (vw > 980) {
-    if (pv) w = Math.max(360, Math.min(Math.min(920, Math.max(480, vw * 0.46)), vw - side - 560));
+    if (pv) w = Math.min(Math.min(920, Math.max(480, vw * 0.46)), Math.max(vw - side - CHAT_ROOM_MIN, 460));     // the same room the chat keeps beside Progress
     else { const pw = Number(store("pw")) || 460; w = vw < 1440 ? Math.min(pw, Math.max(340, vw * 0.32)) : pw; }
   }
   return vw - side - w;
@@ -2263,11 +2303,13 @@ function renderPanel() {
   $$("#ptabs [data-t]").forEach(b => b.onclick = () => togglePanel(b.dataset.t, true));
   $("#pclose").onclick = () => togglePanel(S.panel);
   { const st = $("#ptabs .pstrip"), on = $('[aria-selected="true"]', st);   // one row that scrolls: the open tab is brought into view, the wheel scrolls it sideways
-    if (on && st.scrollWidth > st.clientWidth) st.scrollLeft += on.getBoundingClientRect().left - st.getBoundingClientRect().left - (st.clientWidth - on.offsetWidth) / 2;
+    const bring = () => { if (on && st.scrollWidth > st.clientWidth) st.scrollLeft += on.getBoundingClientRect().left - st.getBoundingClientRect().left - (st.clientWidth - on.offsetWidth) / 2; };
+    bring();
     const nl = $("#pnavl"), nr = $("#pnavr");      // an arrow at each end where tabs are out of sight, so none is hidden without a sign
     const fade = () => { const l = st.scrollLeft > 1, r = st.scrollLeft + st.clientWidth < st.scrollWidth - 1; st.classList.toggle("fl", l); st.classList.toggle("fr", r); nl.hidden = !l; nr.hidden = !r; };
     nl.onclick = () => st.scrollBy({left: -Math.max(80, st.clientWidth * 0.7), behavior: "smooth"}); nr.onclick = () => st.scrollBy({left: Math.max(80, st.clientWidth * 0.7), behavior: "smooth"});
-    fade(); st.addEventListener("scroll", fade, {passive: true});
+    fade(); bring(); fade();      // the arrows take room from the row: the open tab is brought into view once more with them in place
+    st.addEventListener("scroll", fade, {passive: true});
     st.addEventListener("wheel", e => { if (e.deltaY && !e.deltaX && st.scrollWidth > st.clientWidth) { st.scrollLeft += e.deltaY; e.preventDefault(); } }, {passive: false}); }
   const body = $("#pbody"); body.innerHTML = "";
   if (!S.cur && S.panel !== "session" && S.panel !== "browser") { body.innerHTML = `<div class="pnote">Start a chat and what it makes, changes or runs shows up here.</div>`; return; }
@@ -2288,12 +2330,14 @@ function progressSteps() {
   const tools = {};
   let turnIds = [];
   for (const e of turn) {
-    if (e.type === "tool_start") { const nm = e.mcp ? String(e.name || "").split("__").slice(2).join("__") : e.name; const sm = stepSummary(nm, e); tools[e.id] = {name: nm, sm, text: `${TOOL_RUN[nm] || e.label || plainTool(nm, e.mcp, "run")}${sm ? " " + sm : ""}`, status: "in_progress", mcp: !!e.mcp}; }
-    if (e.type === "tool_end" && tools[e.id] && e.ok) tools[e.id].text = `${TOOL_DONE[tools[e.id].name] || TOOL_LABEL[tools[e.id].name] || plainTool(tools[e.id].name, tools[e.id].mcp, "done")}${tools[e.id].sm ? " " + tools[e.id].sm : ""}`;
+    if (e.type === "tool_start") { const nm = e.mcp ? String(e.name || "").split("__").slice(2).join("__") : e.name; const pl = chatMode() && e.plain ? e.plain : null; const sm = pl ? "" : stepSummary(nm, e); tools[e.id] = {name: nm, sm, pl, text: pl ? pl.run : `${TOOL_RUN[nm] || e.label || plainTool(nm, e.mcp, "run")}${sm ? " " + sm : ""}`, status: "in_progress", mcp: !!e.mcp}; }
+    if (e.type === "tool_end" && tools[e.id] && tools[e.id].pl) tools[e.id].text = e.ok ? tools[e.id].pl.done : tools[e.id].pl.base;
+    else if (e.type === "tool_end" && tools[e.id] && e.ok) tools[e.id].text = `${TOOL_DONE[tools[e.id].name] || TOOL_LABEL[tools[e.id].name] || plainTool(tools[e.id].name, tools[e.id].mcp, "done")}${tools[e.id].sm ? " " + tools[e.id].sm : ""}`;
     if (e.type === "tool_end" && tools[e.id]) tools[e.id].status = tools[e.id].status === "stopped" ? "stopped" : e.ok ? "completed" : /^Not finished: the turn ended/.test(String(e.output || "")) ? "stopped" : "failed";
+    if (e.type === "steps_retried") for (const id of e.ids || []) if (tools[id] && tools[id].status === "failed") tools[id].status = "completed";
     if (e.type === "user" && !e.steer) turnIds = [];
     if (e.type === "tool_start") turnIds.push(e.id);
-    if (e.type === "interrupted") for (const id of turnIds) { const t = tools[id]; if (t && (t.status === "in_progress" || t.status === "failed")) { t.status = "stopped"; t.text = `${TOOL_LABEL[t.name] || t.name}${t.sm ? " " + t.sm : ""} (stopped)`; } }
+    if (e.type === "interrupted") for (const id of turnIds) { const t = tools[id]; if (t && (t.status === "in_progress" || t.status === "failed")) { t.status = "stopped"; t.text = t.pl ? `${t.pl.base} (stopped)` : `${TOOL_LABEL[t.name] || t.name}${t.sm ? " " + t.sm : ""} (stopped)`; } }
     if (e.type === "turn_end") for (const t of Object.values(tools)) if (t.status === "in_progress") t.status = "completed";
   }
   const items = Object.entries(tools).map(([id, t]) => Object.assign({key: "t" + id}, t));
@@ -3241,12 +3285,12 @@ function showOnboarding() {
 
 /* Bring your context: what ChatGPT, Claude or Gemini already knows about you, by prompt or by data export, and
    custom GPT / project instructions as skills. */
-async function contextPanel(box) {
+async function contextPanel(box, opts = {}) {
   if (!box) return;
   let prompt = "", local = {}, links = [];
   try { const ic = await api("/api/import-context"); prompt = ic.prompt; links = ic.links || []; } catch (e) { /* the server is older: hide the panel */ return; }
   try { local = await api("/api/import-chats"); } catch (e) { local = {}; }
-  const srcs = Object.entries(local).filter(([, v]) => v.found);
+  const srcs = opts.noLocal ? [] : Object.entries(local).filter(([, v]) => v.found);     // onboarding has the tick box for these chats: one control
   const n = x => Number(x || 0).toLocaleString();
   box.innerHTML = `<h3 class="onb-h">Bring your chats and memory</h3>
     <p class="muted">It all stays on this computer.</p>
@@ -3378,13 +3422,16 @@ async function importPanel(box, onDone) {
   box.innerHTML = `<div class="res">Looking…</div>`;
   let f;
   try { f = await api("/api/import-agents"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
-  const agents = f.agents.filter(a => a.items.length);
+  // Plain labels for what other apps hold ("Notes from Claude Code", "Saved skills"); a hook has no plain name, so it is not listed
+  const agents = f.agents.map(a => Object.assign({}, a, {items: a.items.filter(i => i.kind !== "hook")})).filter(a => a.items.length);
   if (!agents.length) { box.innerHTML = `<span></span>`; onDone?.(null); return; }
-  const KIND = {skill: "Skill", mcp: "Tool", memory: "Memory", instructions: "Instructions", hook: "Hook"};
-  const item = it => `<label class="imp ${it.exists ? "have" : ""}"><input type="checkbox" data-key="${esc(it.key)}" ${it.exists ? "disabled" : ""}><span class="tg"><b>${esc(it.name)}</b> <span class="badge modified">${KIND[it.kind]}</span>${it.exists ? ` <span class="badge">Already here</span>` : ""}${it.kind === "memory" ? "" : `<small>${esc((it.preview || "").slice(0, 140))}</small>`}${(it.stripped || []).length ? `<small>Left out: ${esc(it.stripped.join(", "))}</small>` : ""}${(it.risks || []).length ? `<small class="bad">Check first: ${esc(it.risks.slice(0, 3).join("; "))}</small>` : ""}</span></label>`;
-  const sum = a => ["skill", "mcp", "memory", "instructions", "hook"].filter(k => a.counts[k]).map(k => `${a.counts[k]} ${({skill: "skill", mcp: "tool", memory: "memor", instructions: "instruction file", hook: "hook"})[k]}${k === "memory" ? (a.counts[k] === 1 ? "y" : "ies") : a.counts[k] === 1 ? "" : "s"}`).join(", ");
+  const KIND = {skill: "Saved skill", mcp: "Connected tool", memory: "Saved memory", instructions: "Notes"};
+  let curAgent = "";
+  const itemName = it => it.kind === "instructions" ? `Notes from ${curAgent}` : it.name;
+  const item = it => `<label class="imp ${it.exists ? "have" : ""}"><input type="checkbox" data-key="${esc(it.key)}" ${it.exists ? "disabled" : ""}><span class="tg"><b>${esc(itemName(it))}</b> <span class="badge modified">${KIND[it.kind] || "Item"}</span>${it.exists ? ` <span class="badge">Already here</span>` : ""}${it.kind === "memory" ? "" : `<small>${esc((it.preview || "").slice(0, 140))}</small>`}${(it.stripped || []).length ? `<small>Left out: ${esc(it.stripped.join(", "))}</small>` : ""}${(it.risks || []).length ? `<small class="bad">Check first: ${esc(it.risks.slice(0, 3).join("; "))}</small>` : ""}</span></label>`;
+  const sum = a => ["skill", "mcp", "memory", "instructions"].map(k => [k, a.items.filter(i => i.kind === k).length]).filter(([, n]) => n).map(([k, n]) => `${n} ${({skill: "saved skill", mcp: "connected tool", memory: "saved memor", instructions: "set of notes"})[k]}${k === "memory" ? (n === 1 ? "y" : "ies") : n === 1 ? "" : k === "instructions" ? "" : "s"}`).join(", ");
   box.innerHTML = `<h3 class="onb-h">Agents on this computer</h3>
-    ${agents.map(a => `<details class="impag" open><summary><b>${esc(a.name)}</b> <small class="muted">${esc(sum(a))}</small></summary><div class="impl">${a.items.map(item).join("")}</div></details>`).join("")}${agents.some(a => a.credentials_not_read.length) ? `<small class="muted">Logins are never read.</small>` : ""}
+    ${agents.map(a => (curAgent = a.name, `<details class="impag" open><summary><b>${esc(a.name)}</b> <small class="muted">${esc(sum(a))}</small></summary><div class="impl">${a.items.map(item).join("")}</div></details>`)).join("")}${agents.some(a => a.credentials_not_read.length) ? `<small class="muted">Logins are never read.</small>` : ""}
     <div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn primary" id="impGo">Import selected</button><button class="linkbtn" id="impDry">Preview only</button></div><div class="res" id="impRes"></div>`;
   const keys = () => $$("[data-key]", box).filter(x => x.checked && !x.disabled).map(x => x.dataset.key);
   const say = (t, cls) => { const r = $("#impRes", box); r.className = "res " + (cls || ""); r.textContent = t; };
@@ -3435,17 +3482,18 @@ function permStep(host) {
     } catch (e) { /* the step still works without the list */ }
   };
   $$("[data-scope]", card).forEach(x => x.onclick = async () => {
-    $$("[data-scope]", card).forEach(y => y.setAttribute("aria-checked", y === x));
+    $$("[data-scope]", card).forEach(y => y.setAttribute("aria-checked", "false"));      // selected only once it has happened
     const res = $("#oScope", card);
     try {
       if (x.dataset.scope === "pick") {     // the folder becomes a project: in the sidebar, the picker, and new chats work in it
         const r = await pickProject({project: true, noHome: true}), p = r?.pid && S.pj.find(q => q.id === r.pid);
         if (p) { newThread(); }
         const mine = S.pj.filter(q => q.link?.type === "folder" && q.pinned);
+        x.setAttribute("aria-checked", String(mine.length > 0));
         res.className = mine.length ? "res ok" : "res"; res.textContent = mine.length ? `Added ${mine.map(q => q.name).join(", ")}. New chats work in ${p ? p.name : mine[0].name}. Add more any time with Add a folder in the sidebar.` : "No folder added yet.";
       }
-      else if (x.dataset.scope === "home") { const r = await post("/api/projects", {action: "home"}); S.projects = r.projects; renderSide(); newThread(r.picked); res.className = "res ok"; res.textContent = "meshpool can work anywhere in your home folder. It asks before deleting files, using the internet or installing anything."; }
-      else { res.className = "res"; res.textContent = "Add your own folders any time from the sidebar."; }
+      else if (x.dataset.scope === "home") { const r = await post("/api/projects", {action: "home"}); S.projects = r.projects; renderSide(); newThread(r.picked); x.setAttribute("aria-checked", "true"); res.className = "res ok"; res.textContent = "meshpool can work anywhere in your home folder. It asks before deleting files, using the internet or installing anything."; }
+      else { x.setAttribute("aria-checked", "true"); res.className = "res"; res.textContent = "Add your own folders any time from the sidebar."; }
       if (mac && x.dataset.scope !== "later") draw({id: "folders"});
     } catch (e) { res.className = "res bad"; res.textContent = e.message; }
   });
@@ -3454,7 +3502,7 @@ function permStep(host) {
   window._permVis = () => { if (!document.hidden && $("#onbPerm")) draw(); };
   document.addEventListener("visibilitychange", window._permVis);
   $("#oDone", card).onclick = () => setupStep(o, card);
-  if (!S.projects.length) { const pick = $("[data-scope=pick]", card); pick.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Click Folders I choose to pick a folder now. You can add more any time from the sidebar."; }   // "Folders I choose" is the one already picked: one click opens the folder list
+  if (!S.projects.length) { $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Click Folders I choose to pick a folder now. You can add more any time from the sidebar."; }   // nothing looks chosen until a folder is added
   draw();
 }
 
@@ -3468,7 +3516,7 @@ function setupStep(o, prev) {
     <label class="switchrow" id="oLocalRow" hidden><input type="checkbox" id="oLocal"> <span id="oLocalTxt"></span></label></div>
     <div class="onb-go"><button class="bigbtn" id="oFinish">Start using meshpool</button></div>`;
   importPanel($("#oImport", card)).then(() => { const b = $("#impGo", card); if (b) b.hidden = true; });
-  contextPanel($("#oContext", card));
+  contextPanel($("#oContext", card), {noLocal: true});
   let found = {};
   api("/api/import-chats").then(l => { found = l; const n = Object.values(l).filter(v => v.default).reduce((a, v) => a + v.found - v.imported, 0); if (n) { $("#oLocalTxt", card).textContent = `Copy my past chats from ${Object.values(l).filter(v => v.default).map(v => v.name).join(" and ")} into meshpool (${n.toLocaleString()} chat${n === 1 ? "" : "s"})`; $("#oLocalRow", card).hidden = false; } }).catch(() => {});
   store("onbStep", 3);

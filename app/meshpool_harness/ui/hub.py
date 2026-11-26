@@ -234,10 +234,16 @@ def search(q: str, tab: str = "all") -> dict:
                 in_title = all(w in r["title"].lower() for w in q.split())     # every word, in any order
                 if in_title or hit or r["id"] in boost:
                     seen.add(r["id"])
-                    sub = (hit or {}).get("snippet", "") if not in_title else ""
-                    if not sub and SU is not None:
+                    snip = (hit or {}).get("snippet", "")
+                    if snip.strip("… ").lower() == r["title"].strip().lower():
+                        snip = ""                          # the title again says nothing new
+                    sub = ""
+                    if not snip and SU is not None:
                         sub = SU.summary_for(r["id"])
-                    items.append(_thread_item(r, sub))
+                    it = _thread_item(r, sub)
+                    if snip:
+                        it["snippet"] = snip              # a short piece of the chat around the match
+                    items.append(it)
             add(key, label, items[:12])
     if want("projects"):
         from meshpool_harness import project_store as PS

@@ -103,6 +103,7 @@
 .devbtn{position:relative;padding:4px 8px}
 .gdot{width:7px;height:7px;border-radius:50%;background:var(--add);display:inline-block}
 .devbtn .gdot{position:absolute;top:3px;right:2px;box-shadow:0 0 0 2px var(--bg)}
+.topnew{padding:0 12px}.topbar .topnew span{display:inline}       /* "New chat" stays a labelled button while the sidebar is folded */
 .stepbtn{color:var(--ink-2);padding:0 12px}   /* looks pressed only while its panel is open */
 .stepbtn[aria-pressed="true"]{background:var(--sel)}
 #panelBtn svg{transform:none}
@@ -233,6 +234,10 @@
 .ssub{color:var(--ink-3);font-size:var(--fs-s);white-space:nowrap;max-width:40%;overflow:hidden;text-overflow:ellipsis}
 .sres .smore,.sres .sret{display:none;color:var(--ink-3)}
 .sres.act .smore,.sres.act .sret{display:inline-grid}.sres.act .ssub{display:none}
+.sres:has(.sbody){height:auto;min-height:52px;padding-top:8px;padding-bottom:8px}
+.sbody{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.ssn{color:var(--ink-3);font-size:var(--fs-s);overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+.ssn mark{background:none;color:var(--ink);font-weight:500}
 .sempty{padding:36px 16px;text-align:center;color:var(--ink-3)}
 .sres.sk{cursor:default}.sk-dot{width:16px;height:16px;border-radius:4px;background:var(--hover);display:block}
 .sk-bar{height:12px;border-radius:6px;background:var(--hover);animation:pulse 2s var(--ease) infinite}
@@ -338,6 +343,9 @@
 .mnav button svg{width:16px;height:16px;color:var(--ink-2);flex:none}
 .mnav button:hover{background:var(--hover);color:var(--ink)}
 .mnav button[aria-selected="true"]{background:var(--sel);color:var(--ink);box-shadow:inset 0 0 0 1px var(--sel-ring)}
+.madv>summary{display:flex;align-items:center;justify-content:space-between;height:32px;padding:0 12px;border-radius:var(--r-m);color:var(--ink-2);font-size:var(--fs-m);cursor:pointer;list-style:none}
+.madv>summary::-webkit-details-marker{display:none}.madv>summary:hover{background:var(--hover);color:var(--ink)}
+.madv .mch{display:inline-grid;transition:transform var(--t-hover) var(--ease)}.madv .mch svg{width:16px;height:16px}.madv[open] .mch{transform:rotate(180deg)}
 .mnav .mext{justify-content:space-between;color:var(--ink-2);border-top:1px solid var(--line-2);border-radius:0 0 var(--r-m) var(--r-m);margin-top:4px;padding-top:8px;height:40px}.mnav .mext span{display:inline-grid}
 .mmain{background:var(--bg);border-top-left-radius:0}
 .mbody{padding:20px 32px 32px}
@@ -402,7 +410,7 @@
 .ptabs .pstrip.fl{-webkit-mask-image:linear-gradient(270deg,#000 calc(100% - 24px),transparent);mask-image:linear-gradient(270deg,#000 calc(100% - 24px),transparent)}
 .ptabs .pstrip.fl.fr{-webkit-mask-image:linear-gradient(90deg,transparent,#000 24px,#000 calc(100% - 24px),transparent);mask-image:linear-gradient(90deg,transparent,#000 24px,#000 calc(100% - 24px),transparent)}
 .ptabs .pnav{flex:none;width:24px;height:28px;padding:0;display:grid;place-items:center;color:var(--ink-2)}.ptabs .pnav[hidden]{display:none}
-.ptabs .pnav svg{width:14px;height:14px}.ptabs #pnavl svg{transform:scaleX(-1)}
+.ptabs .pnav svg{width:16px;height:16px}.ptabs #pnavl svg{transform:scaleX(-1)}
 .pbar select{text-overflow:ellipsis}
 .pbody{background:var(--bg)}
 .col:has(>.gal){max-width:none;padding:0}
