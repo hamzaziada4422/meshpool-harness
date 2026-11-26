@@ -277,7 +277,8 @@ def test_the_look_line_is_not_added_to_the_reply():
     ("Checked as an office or facilities manager: found nothing to fix.", "", "Checked · all good"),
     ("Checked as a customer on her phone ordering a birthday cake: fixed 2 things: the order form error and low "
      "contrast.", "", "Checked · fixed 2 things"),
-    ("", "Checked the formulas. One thing to look at: some formulas show errors.", "Checked · 1 to look at"),
+    ("", "Checked the formulas. One thing to look at: some formulas show errors.",
+     "Checked · 1 to look at: some formulas show errors"),
     ("Checked as a florist shop owner: found nothing to fix.", "Checked the formulas, and that the file opens cleanly.",
      "Checked · all good"),
 ])

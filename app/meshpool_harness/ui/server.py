@@ -1608,7 +1608,7 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     if on_ready:
         on_ready(port)
     print("")
-    print("  Meshpool is running.")
+    print("  meshpool is running.")
     if desktop:                                     # the window opens itself; this output goes to app.log, which
         print(f"  Address: http://127.0.0.1:{port}/")   # any local process may read: no launch key in it
     else:
@@ -1617,7 +1617,7 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     print(f"  Task outputs:  {RUNS}")
     if office:
         print(f"  Office panel:  {office}")
-    print("  Use Quit in the app to stop Meshpool." if desktop else "  Close this window (or press Ctrl+C) to stop Meshpool.")
+    print("  Use Quit in the app to stop meshpool." if desktop else "  Close this window (or press Ctrl+C) to stop meshpool.")
     print("", flush=True)                           # a log file gets the address now, not when its buffer fills
     if open_browser:
         threading.Timer(0.8, lambda: webbrowser.open(open_url(port))).start()   # the app in a browser tab: a one-time key

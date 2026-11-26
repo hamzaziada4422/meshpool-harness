@@ -84,7 +84,12 @@ CHAT_MODE = ("This is a chat with someone who is not a developer. Tell them outc
              "rules, pixel sizes, file internals, tool or setting names, how your tools work) unless they ask for "
              "it. When something needs a change in a file, a setting or a service, offer to do it yourself and ask "
              "only for what you need (\"Tell me your email and I'll connect the form\"); never ask them to edit code "
-             "or files.")
+             "or files. A chart or graph they ask for is a picture: save it as a PNG in their folder, so it shows in "
+             "the chat, and never draw it in text with characters.")
+# Chat mode with the office tools (Maya, round 4: an .xlsx was read with "cat; cp; unzip", which asked for approval).
+CHAT_MODE_OFFICE = ("Read a Word, Excel, PowerPoint or PDF file with read_document. It needs no approval. Do not "
+                    "unzip it or open it with a script to read it. Change a Word, Excel or PowerPoint file they "
+                    "already have with edit_office_file when you have it, not with a script that rewrites the file.")
 
 
 def dashless(text: str) -> str:
@@ -487,6 +492,8 @@ def build_context(task: str = "", root: str = "", project_id: str = "", chat_id:
             parts.append(NO_SCRATCH_COPIES)
     if chat:                                   # Chat mode, not the Code tab: outcomes, not implementation
         parts.append(CHAT_MODE)
+        if office and tools == "all":          # the office reader is there: office files are read with it
+            parts.append(CHAT_MODE_OFFICE)
     sections.append({"title": "Meshpool's own rules", "text": "\n".join(parts), "ids": []})
     try:                                       # who the user is and the language to answer in (Settings, General)
         from meshpool_harness.ui import settings_v2 as SV
@@ -1107,6 +1114,7 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
 
     class Sub(K.Agent):
         _delegate_depth = 99                                 # these never start sub-agents of their own
+        reports_to_agent = True                              # it reports to the parent model, not to the user
 
         def _tool_names(self):
             return tools

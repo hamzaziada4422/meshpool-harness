@@ -482,10 +482,11 @@ def work_title(paths: list) -> str:
     return (" ".join(common) + ": " + tail)[:80]
 
 
-def retitle_from_work(sid: str, root: Path, made: list) -> str:
+def retitle_from_work(sid: str, root: Path, made: list, reset: bool = False) -> str:
     """Title a chat after the work: once a turn makes a file, the chat is named for the newest deliverable, not for the
     first sentence the user typed. Never over a name the user gave (rename), never from a message ("go ahead", a retry):
-    only a file's name is used. Returns the new title, or "" when nothing changed."""
+    only a file's name is used. Returns the new title, or "" when nothing changed. `reset` (after Undo): with no
+    deliverable left, a title named after work goes back to the chat's first message."""
     try:
         meta = read_meta(sid)
         if meta.get("renamed") or (meta.get("title") and not meta.get("auto_title")):
@@ -503,6 +504,10 @@ def retitle_from_work(sid: str, root: Path, made: list) -> str:
         if title and title != meta.get("title"):
             write_meta(sid, title=title, auto_title=True)
             return title
+        if not title and reset and meta.get("auto_title") and meta.get("title"):
+            # Maya, round 4: after Undo the chat was back on the invoice question but still read "Bouquet price list"
+            write_meta(sid, title="", auto_title=False)        # the view shows the first message's title again
+            return ""
     except Exception:  # noqa: BLE001 - a title is never worth breaking the turn
         pass
     return ""
@@ -2100,6 +2105,10 @@ class Session:
                 elif hasattr(self.agent, "pace_deadline"):
                     self.agent.pace_deadline = 0
                 commits: list = []                   # what this turn used up: spent only once it really starts (M20-03)
+                try:                                 # Chat mode, not the Code tab: the agent reads office files with
+                    self.agent.chat_mode = read_meta(self.id).get("code_mode") is not True   # read_document
+                except Exception:  # noqa: BLE001
+                    pass
                 if self.ctx_pending:
                     try:
                         from meshpool_harness import assistant as AS
@@ -2383,7 +2392,7 @@ class Session:
         except Exception:  # noqa: BLE001
             pass
 
-    def _retitle(self, turns: list | None = None, evs: list | None = None) -> str:
+    def _retitle(self, turns: list | None = None, evs: list | None = None, reset: bool = False) -> str:
         """Name the chat after what it made, from every turn's checkpoint (the files really added) and this turn's
         events. Daniel, 0.0.18: the chat kept "This is the Northfield bench...": the event scan missed "Saved as: X"
         and "Files: - X", so retitle_from_work saw no deliverable."""
@@ -2405,7 +2414,7 @@ class Session:
                 said = [str(e.get("text") or "") for e in self.events if e.get("type") == "user"]
             attached = {x.strip() for t in said for line in re.findall(r"Attached files \(in [^)]*\): ([^\n]+)", t)
                         for x in line.split(", ")}
-            return retitle_from_work(self.id, root, [o for k, o in made.items() if k not in attached])
+            return retitle_from_work(self.id, root, [o for k, o in made.items() if k not in attached], reset=reset)
         except Exception:  # noqa: BLE001
             return ""
 
@@ -2716,6 +2725,8 @@ class Session:
         with self.lock:                          # whether the conversation lost anything (undo_message says so)
             r["conversation"] = (len(getattr(self.agent, "messages", None) or []), len(self.events)) != had
         self._persist(running=False)
+        if built_in:                             # the title follows the work that is left (never a name the user gave)
+            self._retitle(reset=True)
         try:                                     # Undo counts against every logged turn it removed; never breaks Undo
             from meshpool_harness.hrouter import outcomes as OUT
             logged = {x.get("turn") for x in OUT.rows(self.id) if isinstance(x.get("turn"), int)}
