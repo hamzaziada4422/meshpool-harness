@@ -316,7 +316,7 @@ const S = {
   collapsed: new Set(store("collapsed") || []),
 };
 // What a chat may do without asking. The keys are what the server stores; the words are for people.
-const MODES = {ask: ["Ask", "Works in this folder on its own (Undo keeps every change); asks before deleting, using the internet, installing or going outside the folder"], edits: ["Accept edits", "Edits files on its own; asks before deleting, using the internet, installing or going outside the folder"], auto: ["Full access", "Edits files and runs commands without asking"]};
+const MODES = {ask: ["Ask", "Works in this folder on its own where the computer can sandbox commands (Undo keeps every change); without a sandbox it asks first. Always asks before deleting, using the internet, installing software or going outside the folder."], edits: ["Accept edits", "File edits in this folder and local git commits never ask, sandbox or not. Commands follow the same rules as Ask."], auto: ["Full access", "Edits files and runs commands without asking. Destructive commands (rm -r, git reset --hard, sudo) still ask."]};
 // Earlier spellings of the three levels still read as these three.
 const MODE_ALIAS = {manual: "ask", supervised: "ask", ask: "ask", edits: "edits", "accept edits": "edits", "accept-edits": "edits", "auto-accept edits": "edits", full: "auto", "full access": "auto", "full-access": "auto", auto: "auto"};
 function normMode(v) { return MODE_ALIAS[String(v || "").trim().toLowerCase()] || "ask"; }

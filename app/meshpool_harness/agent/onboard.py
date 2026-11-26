@@ -385,9 +385,8 @@ def _where_step(st, start: Path) -> Path | None:
     _p()
     _p(f"  {st.bold('What can it do without asking?')}")
     _p()
-    modes = [("ask", "Ask", "before it changes a file or runs a command (recommended)"),
-             ("edits", "Accept edits", "edit files freely, ask only before running commands"),
-             ("auto", "Full access", "never ask")]
+    modes = [(k, C.MODE_INFO[k][0], C.MODE_INFO[k][1] + (" (recommended)" if k == "ask" else "")) for k in
+             ("ask", "edits", "auto")]
     cur = C.permission_mode()
     d = next((i for i, m in enumerate(modes, 1) if m[0] == cur), 1)
     c = _choose(st, [(m[1], m[2]) for m in modes], d)

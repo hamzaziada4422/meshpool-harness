@@ -1848,7 +1848,7 @@ class Session(SharedCommands):
         from meshpool_harness import providers as PV
         t.refresh_facts(a)
         key = PV.key()
-        mode = {"ask": "ask before changes", "edits": "accept edits", "auto": "full access"}.get(t.mode, t.mode)
+        mode = C.MODE_INFO.get(t.mode, (t.mode, ""))[0]            # the same names and words as the web app
         window = R.context_window(t.model, t.windows)
         rows = [("Version", t.version), ("Model", f"{t.model} · {t.provider}"),
                 ("Endpoint", PV.host(PV.key_base()) or "-"),
@@ -1861,6 +1861,10 @@ class Session(SharedCommands):
         if self.mcp:
             ok = [s for s in self.mcp.status() if s["status"] == "connected"]
             rows.append(("MCP", f"{len(ok)} server{'s' if len(ok) != 1 else ''} connected"))
+        import textwrap
+        info = textwrap.wrap(C.MODE_INFO.get(t.mode, ("", ""))[1], max(30, t.width - 13))
+        at = next((i for i, r in enumerate(rows) if r[0] == "Access"), len(rows) - 1) + 1
+        rows[at:at] = [("", x) for x in info]
         t.scroll([""] + [f"  {st.dim(R.pad(k, 9))}{v}" for k, v in rows])
 
     def _model_options(self) -> tuple[list[str], str]:

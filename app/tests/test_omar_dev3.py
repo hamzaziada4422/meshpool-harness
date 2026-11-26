@@ -104,6 +104,47 @@ def test_4_a_stash_round_trip_after_a_passing_test_run_keeps_the_receipt_verifie
     assert "passed" in r or "ran" in r
 
 
+# ---------------------------------------------------------------------------------------- 7: one text per mode
+def test_7_the_web_and_the_terminal_describe_each_mode_in_the_same_words():
+    import re
+
+    from meshpool_harness import config as C
+    js = (Path(core.__file__).resolve().parents[1] / "ui" / "app.js").read_text(encoding="utf-8")
+    line = next(x for x in js.splitlines() if x.startswith("const MODES = "))
+    web = re.findall(r'(\w+): \["([^"]+)", "([^"]+)"\]', line)
+    assert [w[0] for w in web] == ["ask", "edits", "auto"]
+    for key, name, text in web:
+        assert (name, text) == C.MODE_INFO[key], key
+    helptext = next(f[3] for f in C.FIELDS if f[0] == "MH_AGENT_PERMISSIONS")
+    assert all(C.MODE_INFO[k][1] in helptext for k in C.MODE_INFO)
+
+
+def test_7_the_descriptions_say_what_each_mode_really_does():
+    from meshpool_harness import config as C
+    ask, edits = C.MODE_INFO["ask"][1], C.MODE_INFO["edits"][1]
+    assert "sandbox" in ask and "asks first" in ask             # in the sandbox it does not ask; without, it does
+    assert "never ask" in edits and "git" in edits and edits != ask       # no longer "almost the same" as Ask
+
+
+def test_7_the_terminal_shows_the_same_text_in_status_and_first_run(monkeypatch):
+    import io
+
+    from meshpool_harness import config as C
+    from meshpool_harness.agent import onboard as OB
+    from meshpool_harness.agent import tui as T
+    src = Path(OB.__file__).read_text(encoding="utf-8")
+    assert "C.MODE_INFO" in src                                 # the first-run choice reads the shared words
+    t = T.Terminal(out=io.StringIO(), interactive=False)
+    t.mode = "edits"
+    t.version, t.model, t.provider, t.cwd, t.windows = "x", "m", "p", "/w", {}
+    sess = T.Session.__new__(T.Session)
+    sess.term, sess.agent, sess.mcp = t, type("A", (), {"messages": [], "title": ""})(), None
+    monkeypatch.setattr(T.Terminal, "refresh_facts", lambda self, a: None)
+    sess.cmd_status("")
+    text = " ".join(t.out.getvalue().split())
+    assert "Accept edits" in text and C.MODE_INFO["edits"][1] in text
+
+
 # ---------------------------------------------------------------------------------------- 5: the shared slot cap
 def test_5_a_local_endpoint_takes_six_calls_and_the_setting_still_wins(monkeypatch):
     from meshpool_harness.core import gateway as GW
