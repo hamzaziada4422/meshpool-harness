@@ -175,24 +175,46 @@ def search(root_s: str, q: str, content: bool = False) -> dict:
     return {"results": hits, "truncated": truncated}
 
 
+_GITF: dict = {}                    # root -> (stamp, when, files): one answer for the picker's two requests
+_GITF_LOCKS: dict = {}
+_GITF_TTL = 2.0
+
+
 def _git_files(root: Path) -> list | None:
     """The files of root that git tracks or would track (not ignored), relative to root; None when root is not in a
-    git repository, git is missing, or MH_PICKER_IGNORED=1 asks for ignored files too."""
+    git repository, git is missing, or MH_PICKER_IGNORED=1 asks for ignored files too.
+
+    The @ picker asks twice per keystroke (file names and symbols, at the same time) and asks again 120 ms after each
+    key, each time a git process. Callers within two seconds share one answer while .git/index and HEAD are
+    unchanged, and a caller that comes while git runs waits for it. A new untracked file can take two seconds to
+    show."""
     if os.environ.get("MH_PICKER_IGNORED") == "1":
         return None
     import shutil
     import subprocess
+    import threading
+
+    from meshpool_harness import fsio
     g = shutil.which("git")
     if not g:
         return None
-    try:
-        r = subprocess.run([g, "-c", "core.fsmonitor=false", "-c", "core.quotePath=false", "ls-files", "-z", "-co",
-                            "--exclude-standard", "--", "."], cwd=str(root), capture_output=True, timeout=3)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if r.returncode:
-        return None
-    return sorted(x for x in r.stdout.decode("utf-8", "replace").split("\0") if x)[:200000]
+    key = str(root)
+    gate = _GITF_LOCKS.setdefault(key, threading.Lock())
+    with gate:
+        stamp = (g, fsio.file_stamp(root / ".git" / "index"), fsio.file_stamp(root / ".git" / "HEAD"))
+        hit = _GITF.get(key)
+        if hit and hit[0] == stamp and 0 <= time.monotonic() - hit[1] < _GITF_TTL:
+            return hit[2]
+        try:
+            r = subprocess.run([g, "-c", "core.fsmonitor=false", "-c", "core.quotePath=false", "ls-files", "-z", "-co",
+                                "--exclude-standard", "--", "."], cwd=str(root), capture_output=True, timeout=3)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        out = None if r.returncode else sorted(x for x in r.stdout.decode("utf-8", "replace").split("\0") if x)[:200000]
+        if len(_GITF) > 32:
+            _GITF.clear()
+        _GITF[key] = (stamp, time.monotonic(), out)
+        return out
 
 
 _SYMBOL_EXT = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".go", ".rs", ".java", ".kt", ".rb", ".php", ".cs",
@@ -203,6 +225,47 @@ _SYMBOL = re.compile(
     r"(?P<kind>def|class|function|func|fn|interface|struct|enum|trait|type|module|object)\s+"
     r"(?:\([^)]*\)\s*)?(?P<name>[A-Za-z_$][\w$]*)"
     r"|^\s*(?:export\s+)?(?:const|let|var)\s+(?P<arrow>[A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>")
+
+
+_SYMS: dict = {}                    # file -> (stamp, definitions): the picker asks on every keystroke
+
+
+def _file_symbols(f: Path) -> tuple | None:
+    """The definitions in one source file as (name, name in lower case, kind, line); None for a link, a file over
+    1 MB or one that cannot be read. Kept while the file's stamp is unchanged: typing in the @ picker read and scanned
+    every source file of the project on each keystroke. A file changed in the last two seconds is read each time."""
+    import stat as _stat
+
+    from meshpool_harness import fsio
+    try:
+        st = f.lstat()
+    except OSError:
+        return None
+    if _stat.S_ISLNK(st.st_mode) or not _stat.S_ISREG(st.st_mode) or st.st_size > 1_000_000:
+        return None
+    stamp = (st.st_mtime_ns, st.st_size, st.st_ino, st.st_ctime_ns)
+    hit = _SYMS.get(str(f))
+    if hit and hit[0] == stamp:
+        return hit[1]
+    t0 = time.time()
+    try:
+        text = f.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    out = []
+    for i, line in enumerate(text.splitlines(), 1):
+        m = _SYMBOL.match(line)
+        if m:
+            name = m.group("name") or m.group("arrow")
+            if name:
+                out.append((name, name.lower(), "function" if m.group("arrow") else m.group("kind"), i))
+    out = tuple(out)
+    old = (t0 - fsio.RACY_S) * 1e9
+    if stamp[0] < old and stamp[3] < old:
+        if len(_SYMS) > 50000:
+            _SYMS.clear()
+        _SYMS[str(f)] = (stamp, out)
+    return out
 
 
 def symbols(root_s: str, q: str) -> dict:
@@ -224,23 +287,9 @@ def symbols(root_s: str, q: str) -> dict:
     for rel in files:
         if Path(rel).suffix.lower() not in _SYMBOL_EXT or any(x in HIDE_DIRS for x in rel.split("/")):
             continue
-        f = root / rel
-        try:
-            if f.is_symlink() or f.stat().st_size > 1_000_000:
-                continue
-            text = f.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        if q not in text.lower():
-            continue
-        for i, line in enumerate(text.splitlines(), 1):
-            m = _SYMBOL.match(line)
-            if not m:
-                continue
-            name = m.group("name") or m.group("arrow")
-            if name and q in name.lower():
-                hits.append({"name": name, "kind": "function" if m.group("arrow") else m.group("kind"), "path": rel,
-                             "line": i})
+        for name, low, kind, i in _file_symbols(root / rel) or ():
+            if q in low:
+                hits.append({"name": name, "kind": kind, "path": rel, "line": i})
         if time.time() > deadline or len(hits) > 400:
             break
     hits.sort(key=lambda h: (not h["name"].lower().startswith(q), len(h["name"]), h["path"]))

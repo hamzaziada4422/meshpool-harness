@@ -261,3 +261,70 @@ def test_cpu07_open_editor_does_not_hash_the_file_every_four_seconds(home, tmp_p
     a = FA.stat(str(root), "big.py")["sha"]            # write in the same clock tick keeps the same stamp
     f.write_bytes(b"x = 4\n" * 300_000)
     assert FA.stat(str(root), "big.py")["sha"] != a
+
+
+# ---------------------------------------------------------------------------------------------------- CPU-08, CPU-09
+GIT = shutil.which("git")
+
+
+@pytest.fixture
+def picker_repo(home, tmp_path, monkeypatch):
+    import subprocess
+
+    from meshpool_harness.ui import files_api as FA
+    from meshpool_harness.ui import workbench as W
+    root = tmp_path / "repo"
+    (root / "pkg").mkdir(parents=True)
+    for i in range(40):
+        (root / "pkg" / f"mod{i}.py").write_text(f"def handle_{i}(x):\n    return x\n\nclass Widget{i}:\n    pass\n" * 2)
+    subprocess.run([GIT, "init", "-q"], cwd=root, check=True)
+    subprocess.run([GIT, "add", "-A"], cwd=root, check=True)
+    for p in root.rglob("*.py"):
+        _age(p)
+    monkeypatch.setattr(W, "known_roots", lambda: [root])
+    getattr(FA, "_SYMS", {}).clear()
+    getattr(FA, "_GITF", {}).clear()
+    runs = []
+    real = subprocess.run
+
+    def counting(cmd, *a, **k):
+        if "ls-files" in [str(c) for c in cmd]:
+            runs.append(cmd)
+        return real(cmd, *a, **k)
+    monkeypatch.setattr(subprocess, "run", counting)
+    return root, runs
+
+
+@pytest.mark.skipif(not GIT, reason="git is not installed")
+def test_cpu08_symbol_picker_does_not_reread_every_source_file_per_key(picker_repo, monkeypatch):
+    from meshpool_harness.ui import files_api as FA
+    root, _ = picker_repo
+    assert FA.symbols(str(root), "ha")["results"]
+    box = count_opens(monkeypatch, lambda p: p.endswith(".py"))
+    for q in ("han", "hand", "handl", "handle", "handle_", "handle_1", "wid", "widg", "widget"):   # typing after @
+        r = FA.symbols(str(root), q)["results"]
+        assert r and all(q in h["name"].lower() for h in r)
+    assert box["n"] == 0, f"{box['n']} source file reads for 9 keystrokes"
+    assert FA.symbols(str(root), "handle_12")["results"][0] == {"name": "handle_12", "kind": "def",
+                                                                "path": "pkg/mod12.py", "line": 1}
+    f = root / "pkg" / "mod3.py"
+    f.write_text("def renamed_entry(y):\n    return y\n")
+    os.utime(f, (OLD + 60, OLD + 60))
+    assert [h["name"] for h in FA.symbols(str(root), "renamed")["results"]] == ["renamed_entry"]
+    assert not [h for h in FA.symbols(str(root), "handle_3")["results"] if h["name"] == "handle_3"]
+
+
+@pytest.mark.skipif(not GIT, reason="git is not installed")
+def test_cpu09_picker_asks_git_once_for_a_burst_of_keys(picker_repo):
+    import subprocess
+
+    from meshpool_harness.ui import files_api as FA
+    root, runs = picker_repo
+    for q in ("m", "mo", "mod", "mod1", "mod12"):     # each key: the names and the symbols request, together
+        FA.search(str(root), q)
+        FA.symbols(str(root), q)
+    assert len(runs) == 1, f"{len(runs)} git ls-files runs for 5 keys"
+    (root / "pkg" / "fresh.py").write_text("x = 1\n")
+    subprocess.run([GIT, "add", "fresh.py"], cwd=root / "pkg", check=True)   # the index changed: asked again at once
+    assert any(h["path"] == "pkg/fresh.py" for h in FA.search(str(root), "fresh")["results"])
+    assert len(runs) == 2
