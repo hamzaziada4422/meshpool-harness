@@ -883,3 +883,16 @@ def test_code_steps_are_named_in_words(page):
     assert got[0] == "Ran a command" and got[1] == "Edit files", got
     assert got[2] == "2 steps, 1 did not work", got
     assert page.errors == [], page.errors
+
+
+def test_copy_on_your_message_gives_your_words_and_says_copied(page):
+    """Copy on a message of yours puts only your words on the clipboard (not the attached-files note) and says
+    "Copied". A merge put the .then(...) that shows the toast inside a line comment, so it never said so."""
+    _fake_chat(page)
+    got = page.evaluate("""async () => { let put = null; navigator.clipboard.writeText = async t => { put = t; };
+        applyEv({type: 'user', text: "Chart this\\n\\nAttached files (in this chat's folder): sales.csv", i: 0});
+        document.querySelector('#col .msg-user [data-ma=copy]').click();
+        await new Promise(r => setTimeout(r, 300));
+        return {put, toast: [...document.querySelectorAll('.toast')].map(t => t.textContent).join(' ')}; }""")
+    assert got["put"] == "Chart this" and "Copied" in got["toast"], got
+    assert page.errors == [], page.errors
