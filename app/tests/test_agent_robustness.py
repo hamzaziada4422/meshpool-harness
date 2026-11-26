@@ -51,7 +51,7 @@ def test_write_file_with_object_content_does_not_crash_the_turn(tmp_path):
     assert a.send("go") == "done"
     assert json.loads((tmp_path / "cfg.json").read_text()) == {"a": 1}
     outs = _tools(a)
-    assert outs[0].startswith("wrote cfg.json") and "must be string" in outs[1] and outs[2].startswith("ERROR")
+    assert outs[0].startswith("wrote cfg.json") and "must be text" in outs[1] and outs[2].startswith("ERROR")
 
 
 def test_incomplete_read_is_a_retryable_connection_error(tmp_path, monkeypatch):

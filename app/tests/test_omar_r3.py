@@ -93,6 +93,22 @@ def test_1_history_key_names_the_moves():
         assert not A._history_key([c]), c
 
 
+# ------------------------------------------------------------------------------------- 3: a bool where a command goes
+def test_3_a_bool_for_cmd_is_a_plain_tool_error_to_the_model(tmp_path):
+    a = _c171(tmp_path)
+    for bad in (True, False, None, 7):
+        out = _run(a, "exec_command", {"cmd": bad})
+        assert out.startswith("ERROR: exec_command: `cmd` must be text"), out
+        assert "argument 'cmd'" not in out and "got bool" not in out and "send the command line itself" in out.lower()
+    assert _run(a, "exec_command", {"cmd": "echo hi"}).count("hi") >= 1          # a real command still runs
+
+
+def test_3_the_tool_workspace_itself_does_not_say_empty_for_a_bool(tmp_path):
+    ws = T.Workspace(tmp_path, tmp_path / ".run")
+    with pytest.raises(T.ToolError, match="must be the command line as text"):
+        ws.exec_command(True)
+
+
 # ----------------------------------------------------------------------------------- 2: the verification line
 def _project(root):
     (root / "calc.py").write_text("def add(a, b):\n    return a - b\n")

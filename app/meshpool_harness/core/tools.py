@@ -951,7 +951,14 @@ def validate(name: str, raw_args, allowed: list[str]) -> dict:
               "number": isinstance(v, (int, float)) and not isinstance(v, bool),
               "boolean": isinstance(v, bool), "array": isinstance(v, list)}[t]
         if not ok:
-            raise ToolError(f"{name}: argument '{k}' must be {t}, got {type(v).__name__}")
+            got = {"bool": "true or false", "NoneType": "nothing (null)", "int": "a number", "float": "a number",
+                   "str": "text", "list": "a list", "dict": "an object"}.get(type(v).__name__, type(v).__name__)
+            what = {"string": "text", "integer": "a whole number", "number": "a number", "boolean": "true or false",
+                    "array": "a list"}[t]
+            hint = (f' For a command, send the command line itself as text, for example {{"{k}": "ls -la"}}.'
+                    if t == "string" and k in ("cmd", "command") else "")
+            raise ToolError(f"{name}: `{k}` must be {what}, but it was {got}. Send the call again with a valid "
+                            f"`{k}`.{hint}")
     return args
 
 
@@ -2335,7 +2342,9 @@ class Workspace:
         yield_time_ms, when given, is its time limit (default: the bash tool's). The result is Codex's format
         (exec_result): no Meshpool notes, no saved-output pointer, no error-context excerpts. An apply_patch given
         as a heredoc is applied as a patch, as Codex intercepts it."""
-        if not isinstance(cmd, str) or not cmd.strip():
+        if not isinstance(cmd, str):
+            raise ToolError("exec_command: `cmd` must be the command line as text. Send the call again with it.")
+        if not cmd.strip():
             raise ToolError("exec_command: `cmd` is empty")
         cwd = None
         if workdir:
