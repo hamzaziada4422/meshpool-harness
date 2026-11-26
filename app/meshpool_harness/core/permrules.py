@@ -507,6 +507,7 @@ def sandbox_auto_ok(cmd: str, root, cwd=None, made=None, touched=None) -> bool:
     (~/.ssh, ~/Documents outside the project) still asks, as do deletes of the user's files (`made`: the files this
     chat made, which it may delete) and git's risky verbs (GIT_ASK). Compound commands are fine: the sandbox confines
     them all."""
+    cmd = commit_message_inert(cmd)                    # a commit message is text, whatever paths or words it holds
     if not cmd or not cmd.strip() or NETWORK.search(cmd) or _HOME_REF.search(cmd) or GIT_ASK.search(cmd) or \
             url_argument(cmd):
         return False
@@ -684,6 +685,22 @@ def _git_local_seg(w: list, root, cwd, chat_made=None) -> bool:
     return False
 
 
+_MSG_SUBST = re.compile(r"""((?:-\w*m|--message)(?:\s+|=))"\$\(\s*cat\s*<<-?\s*(['"])(\w+)\2[ \t]*\n.*?\n[ \t]*\3[ \t]*\n?\s*\)\"""",
+                        re.S)
+_MSG_FILE = re.compile(r"""((?:-F|--file)(?:\s+|=)-)[ \t]*<<-?[ \t]*(['"])(\w+)\2[ \t]*\n.*?\n[ \t]*\3[ \t]*(?:\n|$)""",
+                       re.S)
+
+
+def commit_message_inert(cmd: str) -> str:
+    """The command with the heredoc message of a `git commit` taken out: `-m "$(cat <<'EOF' ... EOF)"` becomes
+    `-m "message"` and `-F - <<'EOF' ... EOF` becomes `-F -`. The delimiter is quoted, so the body is only text (nothing
+    in it expands or runs); it is the commit message and no more. Any other heredoc stays as it is."""
+    if "<<" not in (cmd or "") or not re.search(_GIT + r"commit\b", cmd):
+        return cmd
+    out = _MSG_SUBST.sub(lambda m: m.group(1) + '"message"', cmd)
+    return _MSG_FILE.sub(lambda m: m.group(1) + "\n", out)
+
+
 def git_local_ok(cmd: str, root, cwd=None, chat_made=None) -> bool:
     """A command made only of local git writes in the project's repository and plain reads: add, commit (--amend only
     while the commit is not pushed), stash, reset --soft, restore, checkout of a file, and a new branch (git branch x,
@@ -691,6 +708,7 @@ def git_local_ok(cmd: str, root, cwd=None, chat_made=None) -> bool:
     path leaves the project, and nothing expands ($, backticks) or redirects. Push, pull, fetch, clone, reset --hard,
     clean, rebase, filter-branch and git config still ask."""
     from meshpool_harness.core import tools as T
+    cmd = commit_message_inert(cmd)
     if not cmd or not cmd.strip() or re.search(r"[$`\r\x00-\x08\x0b-\x1f]", cmd) or writes(cmd) or \
             GIT_ASK.search(cmd) or NETWORK.search(cmd) or DESTRUCTIVE.search(cmd):
         return False

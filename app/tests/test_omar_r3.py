@@ -109,6 +109,57 @@ def test_3_the_tool_workspace_itself_does_not_say_empty_for_a_bool(tmp_path):
         ws.exec_command(True)
 
 
+# -------------------------------------------------------------------------- 4: a commit message written as a heredoc
+MSG = "Add --currency option\n\nPass it to render. See ~/notes and $HOME and `x`.\n\nCo-Authored-By: A <a@b.c>"
+COMMIT_F = "git add -A && git commit -F - <<'EOF'\n" + MSG + "\nEOF"
+COMMIT_M = "git add -A && git commit -m \"$(cat <<'EOF'\n" + MSG + "\nEOF\n)\" && git status --short"
+
+
+def _local_repo(tmp_path, monkeypatch):
+    from meshpool_harness.core import sandbox as SB
+    monkeypatch.setenv("MH_SANDBOX_AUTO", "1")
+    monkeypatch.delenv("MH_SANDBOX", raising=False)
+    monkeypatch.setattr(SB, "available", lambda *a, **k: True)          # as test_sandbox_auto does
+    home = tmp_path / "home"
+    proj = home / "work"
+    proj.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    _git(proj, "init", "-q")
+    (proj / "a.py").write_text("x = 1\n")
+    return proj
+
+
+@pytest.mark.parametrize("mode", ["ask", "edits"])
+@pytest.mark.parametrize("tool,key", [("bash", "command"), ("exec_command", "cmd")])
+@pytest.mark.parametrize("cmd", [COMMIT_F, COMMIT_M], ids=["dash_F", "dash_m_subst"])
+def test_4_a_local_commit_with_a_heredoc_message_runs_in_p_mode(tmp_path, monkeypatch, mode, tool, key, cmd):
+    proj = _local_repo(tmp_path, monkeypatch)
+    a = A.Agent(str(proj), mode=mode, approve=None)                    # -p: nobody can approve
+    ok, why = a._permit(tool, {key: cmd})
+    assert ok, why
+
+
+@pytest.mark.parametrize("cmd", [COMMIT_F, COMMIT_M], ids=["dash_F", "dash_m_subst"])
+def test_4_the_rule_for_local_git_writes_knows_the_heredoc_forms(tmp_path, monkeypatch, cmd):
+    from meshpool_harness.core import permrules as PR
+    proj = _local_repo(tmp_path, monkeypatch)
+    assert PR.git_local_ok(cmd, proj)
+
+
+@pytest.mark.parametrize("cmd", [
+    "git commit -F - <<EOF\nmsg\nEOF",                                        # an unquoted delimiter expands $(...)
+    "git commit -F - <<'EOF'\nmsg\nEOF\ngit push origin main",
+    "git commit -F - <<'EOF' && git push\nmsg\nEOF",
+    "git commit -m x <<'EOF'\nrm -rf x\nEOF",
+    "git commit -F /etc/passwd",
+    "cat > a.py <<'EOF'\nx\nEOF\ngit commit -m x",
+], ids=["unquoted", "push_after", "push_same_line", "heredoc_to_other_cmd", "file_outside", "other_heredoc"])
+def test_4_other_forms_still_ask(tmp_path, monkeypatch, cmd):
+    from meshpool_harness.core import permrules as PR
+    proj = _local_repo(tmp_path, monkeypatch)
+    assert not PR.git_local_ok(cmd, proj)
+
+
 # ----------------------------------------------------------------------------------- 2: the verification line
 def _project(root):
     (root / "calc.py").write_text("def add(a, b):\n    return a - b\n")
