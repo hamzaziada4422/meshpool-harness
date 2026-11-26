@@ -89,6 +89,8 @@ class TermFrontend:
         except Exception:  # noqa: BLE001
             pass
         self.term.refresh_facts(new.agent)
+        if hasattr(self.term, "follow_history"):
+            self.term.follow_history()                       # FL-L11: history follows the chat's folder
 
     @property
     def can_ask(self) -> bool:

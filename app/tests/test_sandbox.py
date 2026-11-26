@@ -78,3 +78,38 @@ def test_git_dirs_outside_the_project_are_writable(tmp_path):
     plain = tmp_path / "plain"
     plain.mkdir()
     assert not any(x.endswith(".git") for x in SB._writable(plain.resolve()))
+
+
+def test_git_dirs_are_kept_per_folder_until_its_git_changes(tmp_path, monkeypatch):
+    """Every sandboxed command ran git rev-parse to find these folders. The answer is kept while the nearest .git is
+    the same, and asked again when a repository appears, or a worktree's .git file points somewhere else."""
+    import shutil
+    import subprocess
+    import pytest
+    if not shutil.which("git"):
+        pytest.skip("git is not installed")
+    SB._GIT_DIRS.clear()
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    runs = []
+    real = subprocess.run
+
+    def counting(cmd, *a, **kw):
+        if "--git-common-dir" in cmd:
+            runs.append(cmd)
+        return real(cmd, *a, **kw)
+    monkeypatch.setattr(subprocess, "run", counting)
+    assert SB._git_dirs(proj) == [] and SB._git_dirs(proj) == []
+    assert len(runs) == 1                                          # not a repository: asked once
+    _git("init", "-q", cwd=proj)
+    first = SB._git_dirs(proj)
+    assert str((proj / ".git").resolve()) in first and len(runs) == 2   # a new .git: asked again
+    for _ in range(5):
+        assert SB._git_dirs(proj) == first
+    assert len(runs) == 2                                          # then kept
+    other = tmp_path / "other"
+    other.mkdir()
+    _git("init", "-q", cwd=other)
+    shutil.rmtree(proj / ".git")
+    (proj / ".git").write_text(f"gitdir: {other / '.git'}\n")
+    assert str((other / ".git").resolve()) in SB._git_dirs(proj) and len(runs) == 3   # the .git file changed

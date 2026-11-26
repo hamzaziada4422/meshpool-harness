@@ -194,3 +194,15 @@ def test_a_second_profile_is_a_different_sign_in(dirs, tmp_path, site):
         assert "Signed out" in call(other, "browser_open", url=site + "/dashboard")
     finally:
         other.close()
+
+
+def test_site_lists_hold_for_every_navigation_not_just_the_first(site, dirs):
+    port = site.rsplit(":", 1)[1]
+    s = H.server_for(*dirs, CHANNEL, extra_env={"MH_FETCH_ALLOW": "127.0.0.1"})
+    try:
+        text, failed = s.call("browser_open", {"url": f"http://localhost:{port}/dashboard"})
+        assert failed and "read only" in text                               # a site not on the list: refused
+        text, failed = s.call("browser_open", {"url": f"{site}/hop?to=http://localhost:{port}/dashboard"})
+        assert failed or "Dashboard" not in text                             # the redirect is stopped too
+    finally:
+        s.close()

@@ -73,6 +73,7 @@ sandbox, loop guards (a call refused or failing repeatedly with nothing changed 
 | Setting | Default | What it does | Measured effect |
 |---|---|---|---|
 | `MH_LEAN_WORK` | on | Work chats use the lean core (short prompt, files preloaded) instead of the full Work agent. | Work: 45/54 vs 44/54 at 0.51x; 3.8k vs 10.1k input per call, 3.3 vs 4.0 calls per task |
+| `MH_WORK_OFFICE_STYLE` | `c171` | An office edit or a file the user names sends Codex 0.171's request (prompt and exec_command only); the rows below then apply to the lean route (`=lean`), decks, reports, models and tracked changes. | Office-7 41/42 vs 41/42 at 0.89x; SpreadsheetBench 33/36 vs 33/36 at 0.89x in the same hour |
 | `MH_OFFICE_DIRECT` | on | Edits of existing files, and new files the user names ("make budget.xlsx"), are written with openpyxl, python-docx or python-pptx, the way Codex does. The deck, report and model engines are offered only for an open-ended deliverable ("a pitch deck for investors"). | pptx_chart: the slides engine took 33 and 84 calls in two runs; Codex built the deck by hand for $0.02 |
 | Tracked changes | on request | A request for Word tracked changes or comments brings `edit_office_file`, which writes real revisions; revision XML written by hand is refused. | docx_tracked: 8 calls instead of 71 |
 | Pre-answer checks (`MH_OFFICE_FINISH_CHECK`) | on | Before answering, the files written this turn are checked against the request's own terms: a stated slide count, a requested total row, a template's formatting, shapes inside the slide, an edit that changed nothing, TODAY() or NOW() in place of a year the request names, and (with LibreOffice) a formula the turn wrote that recalculates to an error. Each speaks once. | sb-374-31 went from 0 of 4 runs to 2 of 2 |
@@ -82,28 +83,30 @@ sandbox, loop guards (a call refused or failing repeatedly with nothing changed 
 
 ## Office results
 
-Six runs per task, same model and gateway as Codex (raw rows in `docs/results/release016/` on the audit branch).
+Since 0.0.17, an office edit or a file the user names in a Work chat sends Codex 0.171's own
+request, the same one code chats send: its prompt and its one command tool, with none of Meshpool's office notes,
+checks or office tools (`MH_WORK_OFFICE_STYLE=c171`, the default; `=lean` keeps the 0.0.16 route). A new deck, report
+or model and Word tracked changes keep the engines. Raw rows in `docs/results/office_c171/`.
 
 | Suite | Solved, Meshpool vs Codex | Cost per solved vs Codex (95% CI) | Median time vs Codex |
 |---|---|---|---|
-| Office-7 (decks, documents, workbooks) | 42/42 vs 41/42 | 0.94x (0.72-1.18) | 0.76x |
-| SpreadsheetBench (public sample) | 31/36 vs 35/36 | 0.90x (0.74-1.05) | 1.07x |
-| OfficeBench (public sample) | 21/24 vs 24/24 | 0.83x (0.60-1.06) | 0.87x |
+| Office-7 (decks, documents, workbooks), 7 x 6 | 41/42 vs 41/42 | 0.89x (0.81-0.95) | 0.53x |
+| SpreadsheetBench, same hour as Codex, 6 x 6 each | 33/36 vs 33/36 | 0.89x (0.78-1.03) | 1.22x |
+| OfficeBench, same hour as Codex, 4 x 6 each | 24/24 vs 22/24 | 1.02x (0.63-1.31) | 1.07x |
 
-Office costs less than Codex per solved task on all three (point estimates; each interval reaches past 1x), but
-solves fewer tasks on SpreadsheetBench (31 vs 35)
-and OfficeBench (21 vs 24). The SpreadsheetBench row is the shipped build (`docs/results/release016/sb_f70ea3ca/`),
-against Codex's runs from the hour before. It adds two pre-answer checks aimed at the failures of the first run: a
-workbook formula that calls TODAY() or NOW() when the request names its years (sb-39515: three runs wrote
-`YEAR(TODAY())-1` for "the previous year (2022)"), and a recalculation through LibreOffice of the formulas the turn
-changed, sent back once when one comes out as an Excel error or gives the result the user called wrong (sb-56921).
-Two earlier SpreadsheetBench runs without the formula check came out at 1.04x and 1.16x, so with six tasks the
-run-to-run spread is about as large as the gap to Codex.
+Office-7 now solves as many tasks as Codex at 0.89x its cost, SpreadsheetBench, run side by side with Codex in the
+same hour, as many tasks at 0.89x, and OfficeBench, side by side, 24 of 24 against Codex's 22 at about its cost
+(1.02x). OfficeBench's last loss, ob-1-15-2 ("add the reference from reference.txt to the end of the document", 8 of 12
+before), is fixed by one pre-answer check that also runs on Codex's request: the named file's text must be in the
+document's paragraphs as the file gives it, not inside a content control and not reworded (12 of 12 with it; on the 239
+saved office runs it fires on the 4 failures only). Side by side, SpreadsheetBench and OfficeBench took 1.22x and 1.07x
+Codex's median time; against Codex's earlier runs (same settings) the times were 0.48-0.76x, so time here moves with
+the hour more than with the route.
 
-Office savings come from the same place as code: a short prompt and only the tools the request needs. Before this
-release, office edits went through Meshpool's deck and spreadsheet engines, which took 33 and 84 calls in two runs of
-a deck task that Codex finished with one Python script. The settings in the Work chats table above make Meshpool write the file the way Codex
-does, and the pre-answer checks and caps stop the re-checking loops that made up most of the remaining extra calls.
+0.0.16, on the same suites: Office-7 42/42 at 0.94x, SpreadsheetBench 31/36 at 1.04x (0.90x on a later run), OfficeBench
+21/24 at 0.83x. Why the route helps: a request that is exactly Codex's gets Codex's results, and Meshpool's notes on an
+office request had told the model to check with tools it did not have (pdf_report: 42 calls searching the disk for
+`view_output`, against Codex's 10).
 
 ## What did not save money
 

@@ -33,7 +33,14 @@ from .density import condense
 from .template import default_template, layout
 
 ICONS = Path(__file__).resolve().parents[1] / "slides" / "icons"
-ICON_CACHE = Path(__import__("tempfile").gettempdir()) / f"forge_icons_{__import__('engines.icons', fromlist=['_user_tag'])._user_tag()}"
+ICON_CACHE = None          # None: a private per-user folder (engines.icons.forge_cache); tests may point it elsewhere
+
+
+def _icon_cache() -> Path:
+    from engines.icons import forge_cache, private_dir
+    return private_dir(ICON_CACHE, "meshpool_forge_") if ICON_CACHE else private_dir(forge_cache() / "icons",
+                                                                                      "meshpool_forge_")
+
 
 LEFT, RIGHT = 0.6, 12.733
 COLS, GUT = 24, 0.125            # 24-column grid (reference decks use a fine grid); span()/colx() take 12-column units
@@ -398,8 +405,7 @@ def _icon_png(name: str, hexcolor: str) -> str | None:
     (engines/slides/icons_png) and are coloured with Pillow: the Cairo library the SVGs need is not on Mac or
     Windows, and decks there came out with no icons at all."""
     nm = icon_name(name)
-    ICON_CACHE.mkdir(exist_ok=True)
-    out = ICON_CACHE / f"{nm}-{hexcolor}.png"
+    out = _icon_cache() / f"{nm}-{hexcolor}.png"
     if out.exists():
         return str(out)
     mask = ICONS.with_name("icons_png") / f"{nm}.png"
@@ -477,8 +483,7 @@ def _set_png(name: str, hexcolor: str, icon_set: str) -> str | None:
     svg = _icon_svg(name, hexcolor, icon_set)
     if not svg:
         return None
-    ICON_CACHE.mkdir(exist_ok=True)
-    out = ICON_CACHE / f"{icon_set}-{name}-{hexcolor}.png"
+    out = _icon_cache() / f"{icon_set}-{name}-{hexcolor}.png"
     if not out.exists():
         tmp = out.with_suffix(".tmp.png")
         tmp.write_bytes(png_bytes(svg.decode("utf-8"), hexcolor, 192))
@@ -4489,6 +4494,9 @@ def render(slides: list[dict], out_path: str, template: str | None = None, fix_l
     res = _render(slides, out_path, template, carry)
     if not fix_labels:
         return res
+    if not _has_bubble_labels(slides):                       # only bubble labels move: no LibreOffice run without them
+        set_density(DENSITY["deck"])                         # the state the label check leaves behind
+        return res
     from .common import find_soffice
     if not find_soffice():                                   # no LibreOffice: nothing to measure labels with
         return res
@@ -4573,6 +4581,17 @@ def _logo(sl, x_right: float, y: float, h: float, max_w: float, name: str, x_lef
 
 
 _CYCLE = ["right", "left", "above", "below"]
+
+
+def _has_bubble_labels(slides) -> bool:
+    """True when some slide has a bubble chart with a labelled point: the only labels _relabel moves. Without one,
+    its LibreOffice render (a fresh soffice per deck) could never change anything."""
+    for s in slides or []:
+        c = (s.get("chart") or {}) if isinstance(s, dict) else {}
+        if isinstance(c, dict) and c.get("kind") == "bubble" and any(
+                isinstance(p, dict) and p.get("label") for p in c.get("points") or []):
+            return True
+    return False
 
 
 def _relabel(slides, out_path) -> int:

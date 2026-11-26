@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>meshpool</title>
+<link rel="stylesheet" href="/office/taskpane.css">
+<meta name="mp-token" content="__MESHPOOL_TOKEN__">
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+</head>
+<body>
+<header>
+  <img src="/office/icon-32.png" alt="" width="18" height="18">
+  <span class="name">meshpool</span>
+  <span id="host" class="host"></span>
+  <button id="newChat" class="ghost" title="Start a new chat">New chat</button>
+</header>
+<section id="ctx" class="ctx">
+  <label><input type="checkbox" id="useSel" checked> <span id="ctxText">Include the selection</span></label>
+  <button id="refreshSel" class="ghost small" title="Read the selection again">Refresh</button>
+</section>
+<section id="quick" class="quick"></section>
+<main id="log" aria-live="polite">
+  <div id="empty" class="empty">Ask about what you selected, or ask for something new. The answer stays here until you insert it.</div>
+</main>
+<div id="status" class="status" hidden></div>
+<form id="composer">
+  <textarea id="inp" rows="3" placeholder="Ask meshpool" aria-label="Message"></textarea>
+  <div class="row">
+    <span id="note" class="note"></span>
+    <button type="button" id="stop" class="ghost" hidden>Stop</button>
+    <button type="submit" id="send">Send</button>
+  </div>
+</form>
+<script src="/office/compat.js"></script>
+<script src="/office/taskpane.js"></script>
+</body>
+</html>

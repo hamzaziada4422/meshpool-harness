@@ -91,6 +91,9 @@ def _home() -> Path:
     return Path(os.environ.get("MESHPOOL_HOME") or Path.home() / ".meshpool")
 
 
+RENDER_IDLE_S = float(os.environ.get("MH_RENDER_IDLE_S", "120") or 120)   # the shared renderer's idle close
+
+
 class ProfileLock:
     """An exclusive, OS-level lock on a file next to the profile folder: gone when its holder dies, so never stale."""
 
@@ -144,11 +147,36 @@ class Browser:
         self.notice = ""                    # said once, in the next page description (a last-resort browser was used)
         self.popup_note = ""                # said once: the page opened a new tab and the agent followed it
         self.lock = None                    # the profile folder's lock (one browser per profile)
+        self.render = None                  # the headless renderer that view_output, ui_audit and ui_smoke share
         threading.Thread(target=self._loop, daemon=True).start()
+
+    def render_browser(self, launch):
+        """The headless renderer, started on first use and kept for the next call: each view_output, ui_audit and
+        ui_smoke started and closed a Chromium of its own before (about a second of CPU and a dozen processes)."""
+        b = self.render
+        try:
+            if b is not None and b.is_connected():
+                return b
+        except Exception:  # noqa: BLE001
+            pass
+        self.render = launch()
+        return self.render
+
+    def _close_render(self):
+        b, self.render = self.render, None
+        if b is not None:
+            try:
+                b.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _loop(self):
         while True:
-            fn, box, done, skip = self.q.get()
+            try:                                    # an unused renderer is closed after RENDER_IDLE_S, on this thread
+                fn, box, done, skip = self.q.get(timeout=RENDER_IDLE_S if self.render is not None else None)
+            except queue.Empty:
+                self._close_render()
+                continue
             if skip.is_set():                       # the client gave up (Stop, timeout) before its turn: never run it
                 box["e"] = ToolFailed("cancelled before it ran")
                 done.set()
@@ -223,6 +251,7 @@ class Browser:
             if why:
                 raise ToolFailed(why)
         if self.ctx is not None and self._alive():
+            self._guard_sites()
             return
         own = mode == "meshpool" and bundled.packaged()     # the app's own Chromium (app/vendor/browsers)
         if own:
@@ -246,6 +275,45 @@ class Browser:
         self._watch_popups()
         if self.page is None or self.page.is_closed():
             self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
+        self._guard_sites()
+
+    def _guard_sites(self):
+        """The user's site lists (Settings) for every page the browser goes to: links, redirects, scripts, Back."""
+        if not (os.environ.get("MH_FETCH_ALLOW") or os.environ.get("MH_FETCH_DENY")) or getattr(self, "_guarded", None) is self.ctx:
+            return
+        from meshpool_harness import web as WEB
+
+        def check(route, request):
+            u = request.url
+            if request.is_navigation_request() and u.lower().startswith(("http:", "https:")):
+                try:
+                    WEB.check_domain(u)
+                except WEB.WebError:
+                    return route.abort("blockedbyclient")
+            return route.continue_()
+        try:
+            self.ctx.route("**/*", check)
+            self._guarded = self.ctx
+        except Exception:  # noqa: BLE001 - a browser that cannot route keeps the first-page check only
+            pass
+
+    def _check_where(self):
+        """Where the page ended up (a server redirect is not seen by the route check) must be on the user's site
+        lists too; if not, the page is closed before anything of it reaches the agent."""
+        if not (os.environ.get("MH_FETCH_ALLOW") or os.environ.get("MH_FETCH_DENY")) or self.page is None:
+            return
+        u = self.page.url or ""
+        if not u.lower().startswith(("http:", "https:")):
+            return
+        from meshpool_harness import web as WEB
+        try:
+            WEB.check_domain(u)
+        except WEB.WebError as e:
+            try:
+                self.page.goto("about:blank")
+            except Exception:  # noqa: BLE001
+                pass
+            raise ToolFailed(f"The page went to a site your lists do not allow, so it was closed: {e}")
 
     def _watch_popups(self):
         """A link with target=_blank, window.open, a form that posts to a new tab: carry on in the tab the current page
@@ -393,6 +461,7 @@ class Browser:
 
     def snapshot(self, note: str = "") -> str:
         self.settle()
+        self._check_where()
         if os.environ.get("MH_BROWSER_STATES") == "1":
             self.page.evaluate("() => { window.__mpStates = true; }")
         s = self.page.evaluate(SNAPSHOT_JS)
@@ -444,11 +513,15 @@ def _refuse_url(u: str) -> str:
 
 
 def browser_open(url: str) -> str:
+    u = url.strip()
+    if "://" not in u and not u.startswith(("about:", "file:", "//")):
+        u = "https://" + u
+    if u.lower().startswith(("http:", "https:")):          # the user's site lists (Settings) apply here too
+        from meshpool_harness import web as WEB
+        WEB.check_domain(u)
+
     def go():
         B.ensure()
-        u = url.strip()
-        if "://" not in u and not u.startswith(("about:", "file:")):
-            u = "https://" + u
         why = _refuse_url(u)
         if why:
             raise ToolFailed(f"Not opened: {why}.")
@@ -566,6 +639,7 @@ def browser_screenshot(full_page: bool = False) -> list:
     def go():
         B.ensure()
         B.settle()
+        B._check_where()                                  # never a picture of a site the lists do not allow
         png = B.page.screenshot(full_page=bool(full_page), type="png")
         out = Path(os.environ.get("MESHPOOL_PROJECT") or os.getcwd()) / "Meshpool outputs" / "screenshots"
         try:
@@ -624,10 +698,30 @@ def _outputs_dir(sub: str) -> Path:
     return out
 
 
+class _Kept:
+    """The shared renderer as view, ui_audit and ui_smoke see it: their close() closes the contexts they opened and
+    leaves the browser running for the next call (Browser.render_browser)."""
+
+    def __init__(self, browser):
+        self._b = browser
+
+    def __getattr__(self, name):
+        return getattr(self._b, name)
+
+    def close(self):
+        for c in list(self._b.contexts):
+            try:
+                c.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def _launcher():
-    """A separate headless Chromium for audits and renders (fresh viewports, never the user's window)."""
+    """A separate headless Chromium for audits and renders (fresh viewports, never the user's window), shared by
+    every call on the browser thread and closed after RENDER_IDLE_S unused."""
     from meshpool_harness import ui_audit as UA
-    return UA.launcher(B.pw)
+    launch = UA.launcher(B.pw)
+    return lambda: _Kept(B.render_browser(launch))
 
 
 def _images(shots, limit: int = 4) -> list:

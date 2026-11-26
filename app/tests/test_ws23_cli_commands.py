@@ -200,7 +200,7 @@ def test_every_matrix_row_has_a_command_and_help_lists_it(capsys):
     assert MATRIX_SLASH <= names, MATRIX_SLASH - names
     assert {"tokens", "cost"} <= set(T.ALIASES) and T.ALIASES["cost"] == "usage"
     for n in names:
-        assert hasattr(T.Session, "cmd_" + n), n
+        assert hasattr(T.Session, "cmd_" + n.replace("-", "_")), n          # /add-dir runs cmd_add_dir
     shown = []
     fake = type("F", (), {"term": type("Tm", (), {"st": type("St", (), {"cmd": staticmethod(str), "dim": staticmethod(str)}),
                                                   "scroll": lambda self, rows: shown.extend(rows)})()})()

@@ -578,7 +578,6 @@ def test_a_stream_of_only_keep_alives_ends(tmp_path, monkeypatch):
 
 
 def test_stop_while_connecting_sends_nothing(tmp_path, monkeypatch):
-    import threading
     import time
     a = Agent(str(tmp_path), mode="auto")
     log = []
@@ -586,10 +585,10 @@ def test_stop_while_connecting_sends_nothing(tmp_path, monkeypatch):
     real = core.http.client.HTTPConnection.connect
 
     def slow_connect(self):
-        time.sleep(0.6)                                            # Stop lands while this is connecting
-        real(self)
+        a._stop = True                                             # Stop lands while this is connecting: set here,
+        time.sleep(0.6)                                            # not by a timer that a slow runner can move
+        real(self)                                                 # before or after the connect (PA-skills-13)
     monkeypatch.setattr(core.http.client.HTTPConnection, "connect", slow_connect)
-    threading.Timer(0.2, lambda: setattr(a, "_stop", True)).start()
     with pytest.raises(core.Interrupted):
         a._wait(a._post, base, "k", {"model": "m", "messages": []}, True)
     time.sleep(1.2)
@@ -683,7 +682,43 @@ def test_a_reply_cut_short_after_some_text_resets_the_stream(tmp_path, monkeypat
     with pytest.raises(RuntimeError, match="only keep-alives"):
         a._post(f"http://127.0.0.1:{srv.server_address[1]}", "k", {"model": "m", "messages": []}, True)
     assert any(e["type"] == "text_delta" for e in events) and events[-1]["type"] == "stream_reset"
+    assert a._partial_text == "Hello "                     # what arrived is kept for the turn's end
     srv.shutdown()
+
+
+def test_a_cut_off_reply_is_kept_and_the_request_id_shown(tmp_path, monkeypatch):
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(503)
+            self.send_header("x-request-id", "req_abc123")
+            self.end_headers()
+            self.wfile.write(b"overloaded")
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    a = Agent(str(tmp_path), mode="auto")
+    with pytest.raises(RuntimeError, match=r"\[request id: req_abc123\]"):
+        a._post(f"http://127.0.0.1:{srv.server_address[1]}", "k", {"model": "m", "messages": []}, False)
+    assert a.last_request_id == "req_abc123"
+    srv.shutdown()
+    events = []
+    monkeypatch.setenv("MESHPOOL_API_KEY", "k")
+    b = Agent(str(tmp_path), mode="auto", emit=events.append)
+
+    def fail(self, *x, **k):
+        self._keep_partial(["Half of the answer"])           # the stream dropped after some text, every time
+        raise RuntimeError("HTTP 400: the endpoint could not take this request")
+    monkeypatch.setattr(Agent, "_post", fail)
+    b.send("go")
+    kept = [e for e in events if e["type"] == "assistant"]
+    assert kept and kept[-1]["text"].startswith("Half of the answer") and "cut off" in kept[-1]["text"]
+    assert b.messages[-1]["role"] == "assistant" and "Half of the answer" in b.messages[-1]["content"]
 
 
 def test_the_call_limit_holds_across_processes(tmp_path, monkeypatch):

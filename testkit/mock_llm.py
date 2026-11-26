@@ -47,6 +47,12 @@ def plan(messages, tools):
     done = [m for m in messages[last_user + 1:] if m["role"] == "tool"]
     step = len(done)
     u = utext.lower()
+    if "office table demo" in u:                          # the Office panel: a table to insert into a sheet
+        return ("text", "Here is the table:\n\n| Region | Sales | Share |\n|---|---:|---|\n| North | 120 | =B2/SUM(B$2:B$3) |\n| South | 80 | =B3/SUM(B$2:B$3) |\n\nInsert it where you like.")
+    if "office slide demo" in u:
+        return ("text", "Quarterly results\n- Sales grew **12%**\n- Costs held flat\n- Two new regions")
+    if "office question demo" in u and not done:
+        return ("tool", "ask_user", {"questions": [{"question": "Which quarter?", "options": [{"label": "Q1"}, {"label": "Q2"}]}]}) if "ask_user" in names else ("text", "no ask_user")
     if "the goal of this chat" in u and "goal test" in u:   # /goal: three turns, one file each, then done
         n = sum(1 for m in messages if m["role"] == "user" and "the goal of this chat" in str(m["content"]).lower())
         if step == 0:
@@ -91,11 +97,24 @@ def plan(messages, tools):
         if step == 0 and url and "fetch_url" in names:
             return ("tool", "fetch_url", {"url": url})
         return ("text", "Fetched the slow page.")
+    if "count slowly" in u:                               # a command that prints over a few seconds (live output)
+        cmd = "for i in 1 2 3 4 5 6; do echo tick $i; sleep 1; done"
+        if step == 0 and "bash" in names:
+            return ("tool", "bash", {"command": cmd})
+        if step == 0 and "exec_command" in names:          # a Code chat since 0.0.16
+            return ("tool", "exec_command", {"cmd": cmd})
+        if step == 0 and "shell" in names:                 # a Code chat: Codex's shell tool
+            return ("tool", "shell", {"command": ["bash", "-lc", cmd]})
+        return ("text", "Counted.")
     if "long task" in u and "stopped your previous request" not in u:
         if step == 0 and "bash" in names:
             return ("tool", "bash", {"command": "sleep 25; echo slept"})
         if step == 0 and "terminal" in names:
             return ("tool", "terminal", {"command": "sleep 25; echo slept"})
+        if step == 0 and "shell" in names:
+            return ("tool", "shell", {"command": ["bash", "-lc", "sleep 25; echo slept"]})
+        if step == 0 and "exec_command" in names:        # Codex 0.171 replica: every code chat since 0.0.16
+            return ("tool", "exec_command", {"cmd": "sleep 25; echo slept"})
         return ("text", "Long task finished.")
     if "say hello in french" in u:                      # a skill's instructions reached the model (Pi, ACP agents)
         return ("text", "Bonjour! (the claude-skill instructions were applied)")
@@ -126,14 +145,31 @@ def plan(messages, tools):
             return ("tool", sc, {})
         return ("text", "Computer use: " + (done[-1]["content"][:300] if done else "no computer tool"))
     if "read the pdf" in u:
+        if "exec_command" in names and not names & {"read", "read_file"}:
+            # Codex 0.171 replica (every code chat since 0.0.16): no document reader, so its one command tool reads it
+            if step == 0:
+                return ("tool", "exec_command", {"cmd": "python3 -c \"import re; d=open('report.pdf','rb').read(); "
+                                                        "print('Pages:', len(re.findall(rb'/Type\\s*/Page\\b', d)))\""})
+            return ("text", "Read: " + done[-1]["content"][-120:].replace("\n", " "))
         if step == 0:
             return ("tool", "read_file" if "read_file" in names else "read", {"path": "report.pdf"})
-        if step == 1:
-            rd = next((n for n in names if n.endswith("read_document")), None)
-            if rd:
-                return ("tool", rd, {"path": "model.pbix"})
+        rd = next((n for n in names if n.endswith("read_document")), None)
+        if rd and step <= 3 and not any("Page" in m["content"] or "page" in m["content"] for m in done[1:]):
+            return ("tool", rd, {"path": "model.pbix" if step == 1 else "report.pdf"})
+        if step <= 2 and "tool_search" in names and not rd:      # Pi since 0.0.16: office tools load on request
+            return ("tool", "tool_search", {"query": "read_document"})
         return ("text", "Read: " + " || ".join(m["content"][:120].replace("\n", " ") for m in done))
+    if "show python code" in u:                           # a fenced code block (copy button, colours in the app)
+        return ("text", "Here it is:\n\n```python\ndef add(a, b):\n    return a + b  # sum\n```\n\nThat is all.")
+    if "think out loud" in u:                             # streamed reasoning_content before the answer
+        return ("text", "THINK:I should answer briefly.|Done thinking.")
     if "hello" in u:
+        if "exec_command" in names and not names & {"apply_patch", "write_file", "write", "bash"}:
+            # Codex 0.171 replica (every code chat since 0.0.16): one command tool writes and runs the file
+            if step == 0:
+                return ("tool", "exec_command", {"cmd": "printf \"print('hello from meshpool')\\n\" > hello.py && "
+                                                        "(python3 hello.py || python hello.py)"})
+            return ("text", "I created **hello.py** and ran it. Output:\n```\n" + done[-1]["content"][-60:] + "\n```")
         codex = "apply_patch" in names and "write_file" not in names      # Codex-style lane: apply_patch + shell
         if step == 0:
             if codex:
@@ -148,6 +184,8 @@ def plan(messages, tools):
     if "finish" in u or "harness" in u:                 # one-shot harness engines: call finish
         if step == 0 and "bash" in names:
             return ("tool", "bash", {"command": "echo 42"})
+        if step == 0 and "exec_command" in names and "finish" not in names:
+            return ("tool", "exec_command", {"cmd": "echo 42"})
         if "finish" in names:
             return ("tool", "finish", {"answer": "The answer is 42.", "evidence": ["echo 42"]})
         return ("text", "The answer is 42.")
@@ -188,12 +226,17 @@ class H(BaseHTTPRequestHandler):
         sent = int(len(json.dumps([body.get("messages"), body.get("tools") or []])) / 3.5) + 1
         usage = {"prompt_tokens": max(1000, sent), "completion_tokens": 50, "prompt_tokens_details": {"cached_tokens": 800}}
         if not body.get("stream"):
+            if str(msg.get("content") or "").startswith("THINK:"):
+                msg["content"] = msg["content"].split("|", 1)[1]
             out = json.dumps({"id": "x", "choices": [{"index": 0, "message": msg, "finish_reason": "stop"}], "usage": usage}).encode()
             self.send_response(200); self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(out))); self.end_headers(); self.wfile.write(out); return
         self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
         def ev(d):
             self.wfile.write(b"data: " + json.dumps(d).encode() + b"\n\n"); self.wfile.flush()
+        if str(msg.get("content") or "").startswith("THINK:"):
+            thought, msg["content"] = msg["content"][6:].split("|", 1)
+            ev({"id": "x", "choices": [{"index": 0, "delta": {"reasoning_content": thought}}]})
         if msg.get("content"):
             words = msg["content"].split(" ")
             for i, w in enumerate(words):

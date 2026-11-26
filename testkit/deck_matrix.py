@@ -102,8 +102,10 @@ class App:
         self.base = f"http://127.0.0.1:{self.port}"
         end, page = time.time() + 120, ""
         while time.time() < end:
+            k = ""
             try:
-                with urllib.request.urlopen(self.base + "/", timeout=3) as r:
+                k = re.search(r"\?k=([\w-]+)", (root / "app.log").read_text(errors="replace")).group(1)
+                with urllib.request.urlopen(f"{self.base}/?k={k}", timeout=3) as r:   # the launch key it printed
                     page = r.read().decode("utf-8", "replace")
                     break
             except Exception:  # noqa: BLE001

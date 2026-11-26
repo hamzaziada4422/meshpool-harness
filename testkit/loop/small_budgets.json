@@ -10,20 +10,20 @@
    "growth_per_call_limit": 400
   },
   "work": {
-   "measured_fixed_tokens": 2159,
-   "fixed_tokens_limit": 2374,
-   "measured_growth_per_call": 259.2,
-   "growth_per_call_limit": 286
+   "measured_fixed_tokens": 4990,
+   "fixed_tokens_limit": 5489,
+   "measured_growth_per_call": 362.6,
+   "growth_per_call_limit": 399
   },
   "chat": {
-   "measured_fixed_tokens": 2159,
-   "fixed_tokens_limit": 2374,
-   "measured_growth_per_call": 259.2,
+   "measured_fixed_tokens": 2191,
+   "fixed_tokens_limit": 2410,
+   "measured_growth_per_call": 259.4,
    "growth_per_call_limit": 286
   },
   "data": {
-   "measured_fixed_tokens": 2159,
-   "fixed_tokens_limit": 2374,
+   "measured_fixed_tokens": 2191,
+   "fixed_tokens_limit": 2410,
    "measured_growth_per_call": 259.2,
    "growth_per_call_limit": 286
   }

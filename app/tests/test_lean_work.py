@@ -25,6 +25,7 @@ def _env(tmp_path, monkeypatch):
     for var in ("MH_LEAN_WORK", "MH_ENGINE_STYLE", "MH_HARNESS_PROFILE", "MH_CORE_PROMPT_FILE", "MH_APPEND_PROMPT"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("MH_OFFICE_DIRECT", "0")      # the engine path; direct-office tests turn it on themselves
+    monkeypatch.setenv("MH_WORK_OFFICE_STYLE", "lean")   # these tests cover the lean Work route (default: c171)
 
 
 def _work(tmp_path, profile="core", spec="data", **kw):

@@ -1,6 +1,7 @@
 """The in-app file browser and editor (ui/files_api.py, /api/fs/*): list, read, save, conflicts, path safety, and that
 no click path asks the operating system to open anything."""
 import json
+from pathlib import Path
 import os
 import threading
 import urllib.error
@@ -65,6 +66,14 @@ def test_search_finds_files_by_name(proj, http):
     (proj / "node_modules" / "a.py").write_text("x")
     st, r = http("GET", "/api/fs/search", root=str(proj), q="a.py")
     assert [x["path"] for x in r["results"]] == ["src/a.py"]
+
+
+def test_search_inside_files_returns_matching_lines(proj, http):
+    (proj / "node_modules" / "x.js").write_text("print('hidden')")
+    (proj / "blob.bin").write_bytes(b"print\0\1")
+    st, r = http("GET", "/api/fs/search", root=str(proj), q="PRINT", content="1")
+    assert st == 200 and r["lines"] == [{"name": "a.py", "path": "src/a.py", "line": 1, "text": "print('hi')"}]
+    assert "lines" not in http("GET", "/api/fs/search", root=str(proj), q="print")[1]
 
 
 def test_read_text_and_kinds(proj, http):
@@ -214,3 +223,35 @@ def test_no_page_script_posts_to_a_removed_open_route():
         text = js.read_text(encoding="utf-8")
         for route in ("/api/open-path", "/api/open-file", "/api/open-data", "/api/open-editor", "/api/company/open"):
             assert route not in text, (js.name, route)
+
+
+def test_search_leaves_out_what_git_ignores(tmp_path, monkeypatch):
+    import subprocess
+    from meshpool_harness.ui import files_api as FA2
+    monkeypatch.setattr(FA2, "safe", lambda r, p: (Path(r), Path(r) / p))
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text("build/\n*.log\n")
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "app_out.py").write_text("x")
+    (tmp_path / "app.py").write_text("x")
+    (tmp_path / "app.log").write_text("x")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app_util.py").write_text("x")              # untracked but not ignored: shown
+    got = sorted(h["path"] for h in FA2.search(str(tmp_path), "app")["results"])
+    assert got == ["app.py", "src/app_util.py"]
+    monkeypatch.setenv("MH_PICKER_IGNORED", "1")
+    assert "build/app_out.py" in [h["path"] for h in FA2.search(str(tmp_path), "app")["results"]]
+
+
+def test_symbols_for_the_at_picker(tmp_path, monkeypatch):
+    from meshpool_harness.ui import files_api as FA2
+    monkeypatch.setattr(FA2, "safe", lambda r, p: (Path(r), Path(r) / p))
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "auth.py").write_text("class AuthClient:\n    def refresh_token(self):\n        pass\n\ndef login(u):\n    pass\n")
+    (tmp_path / "src" / "ui.ts").write_text("export async function loadUser(id) {}\nexport const tokenStore = (x) => x;\ninterface TokenInfo {}\n")
+    (tmp_path / "notes.md").write_text("def refresh_token in a doc does not count\n")
+    got = {(h["name"], h["kind"], h["path"], h["line"]) for h in FA2.symbols(str(tmp_path), "token")["results"]}
+    assert got == {("refresh_token", "def", "src/auth.py", 2), ("tokenStore", "function", "src/ui.ts", 2),
+                   ("TokenInfo", "interface", "src/ui.ts", 3)}
+    assert [h["name"] for h in FA2.symbols(str(tmp_path), "auth")["results"]] == ["AuthClient"]
+    assert FA2.symbols(str(tmp_path), "a")["results"] == []                   # two letters at least

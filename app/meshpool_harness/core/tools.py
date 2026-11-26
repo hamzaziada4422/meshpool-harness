@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 OUTPUT_HEAD, OUTPUT_TAIL, OUTPUT_KILL_CHARS = 200_000, 200_000, 64_000_000
-SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".venv", "venv", "build", "dist", "target"})   # H-11
+SKIP_DIRS = frozenset({".git", ".jj", ".sl", ".hg", "node_modules", "__pycache__", ".venv", "venv", "build", "dist", "target"})   # H-11
 MAX_GREP_FILE = 5_000_000                       # H-11: bytes read per file by grep
 _WIN_RESERVED = frozenset({"con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
                            "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"})
@@ -225,6 +225,255 @@ def read_only(cmd: str) -> bool:
                           or rest[:3] in (["-m", "pip", "show"], ["-m", "pip", "list"]))):
             return False
     return True
+
+
+# Allowlist, not blocklist (review H1, H2, M1, M8): a token is plain characters only, so no shell (bash, sh or
+# PowerShell) can expand it; every flag is one this subcommand is known to read with; paths stay in the project.
+_GIT_TOKEN = re.compile(r"^[A-Za-z0-9_.,/:=^~+%-]+$")
+_GIT_FLAGS = {
+    "status": {"-s", "--short", "-b", "--branch", "--porcelain", "--porcelain=v1", "--porcelain=v2", "-v", "--long",
+               "-uno", "-unormal", "-uall", "--untracked-files=no", "--untracked-files=normal",
+               "--untracked-files=all", "--ignored"},
+    "log": {"--oneline", "--graph", "--decorate", "--stat", "--shortstat", "--name-only", "--name-status", "-p",
+            "--patch", "--all", "--no-merges", "--merges", "--reverse", "--first-parent", "--abbrev-commit",
+            "--date=short", "--date=iso", "--date=relative", "--no-color", "--follow"},
+    "show": {"--stat", "--shortstat", "--name-only", "--name-status", "--oneline", "-s", "--no-patch", "-p",
+             "--patch", "--no-color", "--abbrev-commit"},
+    "diff": {"--stat", "--shortstat", "--numstat", "--name-only", "--name-status", "--cached", "--staged", "-w",
+             "--ignore-all-space", "--no-color", "--word-diff", "--summary", "--check"},
+    "blame": {"-w", "-s", "--porcelain", "-e"},
+    "rev-parse": {"--abbrev-ref", "--show-toplevel", "--short", "--verify", "--is-inside-work-tree", "--git-dir",
+                  "--show-prefix", "--symbolic-full-name"},
+    "ls-files": {"-m", "--modified", "-o", "--others", "--exclude-standard", "-d", "--deleted", "-s", "--stage",
+                 "-c", "--cached"},
+    "describe": {"--tags", "--always", "--long", "--abbrev=0", "--dirty"},
+    "shortlog": {"-s", "-n", "-sn", "-ns", "-e", "--summary", "--numbered", "--all"},
+    "rev-list": {"--count", "--all", "--max-count=1"},
+    "merge-base": {"--is-ancestor"},
+    "ls-tree": {"-r", "--name-only", "-l"},
+    "cat-file": {"-t", "-s", "-p"},
+    "branch": {"-a", "-r", "-v", "-vv", "--all", "--remotes", "--list", "-l", "--show-current", "--merged",
+               "--no-merged"},
+    "tag": {"-l", "--list"},
+    "remote": {"-v", "--verbose"},
+    "stash": set(),
+}
+_GIT_VALUE_FLAGS = ("-n", "--max-count=", "--since=", "--until=", "--author=", "-L", "-U", "--unified=",
+                    "--format=", "--pretty=")      # flags that carry a value, checked as plain tokens too
+_GIT_NO_POSITIONAL = {"branch", "tag", "remote", "status"}       # their positional words create or change things
+
+
+def _git_path_ok(tok: str) -> bool:
+    """A ref, range or path argument: never absolute, never from home, never climbing out with .."""
+    t = tok.split(":", 1)[-1] if ":" in tok and not tok.startswith(":") else tok
+    if tok.startswith(("/", "~", ":")) or t.startswith(("/", "~")) or re.match(r"^[A-Za-z]:", tok):
+        return False
+    return ".." not in t.replace("...", "").split("/") if "/" in t else t != ".."
+
+
+def git_read_only(cmd: str) -> bool:
+    """True only for one git command that reads this repository: no shell expansion is possible (plain characters
+    only), every flag comes from a list of flags known to read, and no path leaves the project. Everything else
+    asks. The caller also checks the repo's own config (git_config_safe), since git status and diff can run
+    programs named there."""
+    if re.search(r"[^\x20-\x7e]", cmd or ""):              # a CR, tab or Unicode break separates statements somewhere
+        return False
+    w = (cmd or "").split()
+    if len(w) < 2 or w[0] != "git" or not all(_GIT_TOKEN.match(t) for t in w):
+        return False
+    if any("%" in t and not t.startswith(("--format=", "--pretty=")) for t in w):
+        return False                                      # % only in a log format, never elsewhere
+    rest = w[1:]
+    if rest[0] == "--no-pager":
+        rest = rest[1:]
+    if not rest or rest[0] not in _GIT_FLAGS:
+        return False
+    sub, args = rest[0], rest[1:]
+    if sub == "stash":                                    # only "git stash list"
+        return args == ["list"]
+    if sub == "tag" and not args:
+        return True
+    if sub == "remote":                                   # "git remote" and "git remote -v": no network
+        return all(a in _GIT_FLAGS["remote"] for a in args)
+    after_dashdash = False
+    for a in args:
+        if a == "--":
+            after_dashdash = True
+            continue
+        if after_dashdash and a.startswith("-"):           # a shell that drops "--" would make it an option
+            return False
+        if a.startswith("-") and not after_dashdash:
+            if a in _GIT_FLAGS[sub] or (re.fullmatch(r"-\d{1,4}", a) and sub in ("log", "shortlog", "show")):
+                continue
+            if any(a.startswith(v) and len(a) > len(v) for v in _GIT_VALUE_FLAGS) and sub in ("log", "show", "diff",
+                                                                                                 "blame", "shortlog"):
+                continue
+            return False
+        if sub in _GIT_NO_POSITIONAL or not _git_path_ok(a):
+            return False
+    return True
+
+
+_GIT_RISKY_CONFIG = re.compile(r"(fsmonitor|pager|external|textconv|command|program|askpass|editor|proxy|hookspath|"
+                               r"worktree|^include|^includeif|^filter\.|^alias\.|^gpg\.|sshcommand)", re.I)
+
+
+_GIT_SAFE_KEY = re.compile(
+    r"^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks|autocrlf|"
+    r"eol|safecrlf|quotepath|longpaths|checkstat|trustctime)|user\.[a-z]+|remote\.[^.]+\.(url|fetch|pushurl)|"
+    r"branch\..+\.(remote|merge|rebase|description)|pull\.(rebase|ff)|init\.defaultbranch|gc\.auto|color\.[a-z.]+|"
+    r"commit\.gpgsign|merge\.ff|push\.(default|autosetupremote)|fetch\.prune|lfs\.repositoryformatversion|"
+    r"maintenance\.(auto|strategy)|index\.(version|skiphash)|extensions\.objectformat|status\.showuntrackedfiles)$",
+    re.I)                                                  # anything else in a repo's own config: the shortcut is off
+
+
+# What meshpool passes to every git call that only looks at a repository (status, log, diff): the repository's own
+# config must not run programs then (fsmonitor, an external diff, a pager, hooks). ui/workbench.py does the same.
+SAFE_GIT_OPTS = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "diff.external=", "-c",
+                 f"core.hooksPath={os.devnull}", "--no-pager"]
+
+
+def safe_git(*args: str) -> list:
+    """argv for a read-only git call that never runs the repository's own programs."""
+    return ["git", *SAFE_GIT_OPTS, *args]
+
+
+def git_config_runs_programs(root) -> bool:
+    """True when the repository's own config names a program that a checkout, a diff or a merge would run (a filter,
+    an external diff or textconv, an include, an ssh command). Narrower than git_config_safe: submodules and unknown
+    keys are fine here, and fsmonitor and hooks are not counted because worktrees.py turns them off on every call."""
+    try:
+        r = subprocess.run(["git", "-C", str(root), "config", "--name-only", "--list", "--show-scope"],
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return True
+    if r.returncode not in (0, 1):
+        return True
+    for line in r.stdout.splitlines():
+        scope, _, key = line.partition("\t")
+        if scope in ("local", "worktree") and _GIT_RISKY_CONFIG.search(key) and \
+                not re.search(r"fsmonitor|hookspath", key, re.I):
+            return True
+    return False
+
+
+def git_config_safe(root) -> bool:
+    """False when the repository's own config (.git/config, which a downloaded project can ship) names a program
+    git would run on a read: core.fsmonitor, a pager, an external diff, a textconv, an include, an alias.
+
+    It ran two git processes on every git command the agent wanted to run without asking. A "safe" answer is now kept
+    for the folder while nothing it read has changed: the folders from here up to the .git it found, the .git entry,
+    the git dir and its config files, the hooks folder and the user's own git config files (each by modification time,
+    size and inode), and the GIT_* environment. Only a "safe" answer is kept, never for files changed in the last few
+    seconds (a change in the same clock tick would not show), and for two minutes at most. Anything else asks git."""
+    key = os.path.abspath(str(root))
+    envk = _git_env_key()
+    with _GCS_LOCK:
+        hit = _GCS.get(key)
+    if hit is not None:
+        paths, stamp, env0, at = hit
+        if env0 == envk and 0 <= time.time() - at < _GCS_MAX_AGE and _git_stamp(paths) == stamp:
+            return True
+    t0 = time.time()
+    ok, hooks = _git_config_check(root)
+    with _GCS_LOCK:
+        _GCS.pop(key, None)
+    if ok and hooks is not None:
+        paths = _git_safe_paths(key, hooks)
+        stamp = _git_stamp(paths) if paths else None
+        if stamp and all(s[1] is None or s[1] < (t0 - _GCS_RACY_S) * 1e9 for s in stamp):
+            with _GCS_LOCK:
+                _GCS[key] = (paths, stamp, envk, t0)
+    return ok
+
+
+_GCS: dict = {}                      # folder -> (paths read, their stamps, GIT_* environment, when): "safe" answers
+_GCS_LOCK = threading.Lock()
+_GCS_MAX_AGE = 120.0
+_GCS_RACY_S = 3.0                    # FAT keeps times in 2 s steps: a newer file may change again unseen
+
+
+def _git_env_key() -> tuple:
+    return tuple(sorted((k, v) for k, v in os.environ.items()
+                        if k.startswith("GIT_") or k in ("HOME", "XDG_CONFIG_HOME", "PREFIX", "PATH")))
+
+
+def _git_safe_paths(root: str, hooks: Path) -> list | None:
+    """What a git_config_safe answer for root depends on, as files and folders to stat; None when the .git cannot be
+    found the way git finds it (the answer is then not kept)."""
+    here = Path(root)
+    dirs, dotgit = [], None
+    for d in (here, *here.parents):                  # git looks up from the folder: a new .git on the way is a new
+        dirs.append(d)                               # repo, and it changes that folder's modification time
+        if os.path.lexists(d / ".git"):
+            dotgit = d / ".git"
+            break
+    if dotgit is None:
+        return None
+    gitdir = dotgit
+    try:
+        if dotgit.is_file():                         # a worktree or submodule: "gitdir: <path>"
+            txt = dotgit.read_text(encoding="utf-8", errors="replace").strip()
+            if not txt.startswith("gitdir:"):
+                return None
+            g = Path(txt[7:].strip())
+            gitdir = g if g.is_absolute() else dotgit.parent / g
+        common = gitdir
+        cf = gitdir / "commondir"
+        if cf.is_file():
+            c = Path(cf.read_text(encoding="utf-8", errors="replace").strip())
+            common = c if c.is_absolute() else gitdir / c
+    except OSError:
+        return None
+    home = Path(os.path.expanduser("~"))
+    xdg = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
+    files = [gitdir / "config", gitdir / "config.worktree", gitdir / "commondir", common / "config",
+             common / "config.worktree", here / ".gitmodules", home / ".gitconfig", xdg / "git" / "config",
+             Path("/etc/gitconfig")]
+    files += [Path(os.environ[k]) for k in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM") if os.environ.get(k)]
+    # the git dir itself only by identity: git status rewrites the index in it, which changes its time every call
+    out = [(d, False) for d in dirs] + [(dotgit, True), (gitdir, True), (common, True)] + [(f, False) for f in files]
+    out.append((Path(hooks), False))                 # adding or renaming a hook changes the folder's time
+    return out
+
+
+def _git_stamp(paths) -> tuple:
+    out = []
+    for p, ident in paths:
+        try:
+            st = os.stat(p)
+            out.append((str(p), None if ident else st.st_mtime_ns, None if ident else st.st_size, st.st_ino,
+                        st.st_mode))
+        except OSError:
+            out.append((str(p), None))
+    return tuple(out)
+
+
+def _git_config_check(root) -> tuple[bool, Path | None]:
+    """(safe, the hooks folder git uses): git_config_safe without the kept answer."""
+    try:
+        r = subprocess.run(["git", "-C", str(root), "config", "--name-only", "--list", "--show-scope"],
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False, None
+    if r.returncode not in (0, 1):
+        return False, None
+    for line in r.stdout.splitlines():   # global, system and command (-c, GIT_CONFIG_PARAMETERS) scopes are the user's
+        scope, _, key = line.partition("\t")
+        if scope in ("local", "worktree") and (_GIT_RISKY_CONFIG.search(key) or not _GIT_SAFE_KEY.match(key)):
+            return False, None
+    if (Path(root) / ".gitmodules").exists():           # submodules have configs and hooks of their own
+        return False, None
+    try:                                                  # hooks in the repo's own .git/hooks run on some reads
+        r = subprocess.run(["git", "-C", str(root), "rev-parse", "--git-path", "hooks"], capture_output=True, text=True,
+                           timeout=10)
+        h = r.stdout.strip()
+        hooks = (Path(h) if os.path.isabs(h) else Path(root) / h) if r.returncode == 0 and h else None
+        if hooks is not None and hooks.is_dir() and any(f.is_file() and not f.name.endswith(".sample") for f in hooks.iterdir()):
+            return False, None
+    except (OSError, subprocess.SubprocessError):
+        return False, None
+    return True, hooks
 
 
 _PATCH_CMDS = ("apply_patch", "applypatch")
@@ -719,6 +968,9 @@ def _parses_with_newer_python(path: Path, text: str) -> bool:
             continue
     return False
 
+_LIVE = threading.local()          # the tool call whose command is running in this thread
+
+
 
 def _squeeze(text: str, keep: int = 2) -> str:
     """Runs of identical lines (progress bars, repeated warnings, polling output) shown once with a count: tool
@@ -786,9 +1038,12 @@ class Workspace:
         scratch = self.__dict__.get("_scratch_dir")
         if write and scratch and Path(scratch).resolve() in q.parents:
             return q                          # the task's own private scratch folder ($TMPDIR): edits there are fine
-        if write and self.root not in q.parents and q != self.root:
-            raise ToolError(f"writes must stay inside the workdir {self.root}; got {q}")
-        if write and any(_git_dir_name(x) for x in q.relative_to(self.root).parts):
+        base = next((r for r in [self.root, *getattr(self, "extra_roots", [])] if q == r or r in q.parents), None)
+        if write and base is None:
+            raise ToolError(f"writes must stay inside the workdir {self.root}"
+                            + (f" or the added folders ({', '.join(map(str, self.extra_roots))})"
+                               if getattr(self, "extra_roots", None) else "") + f"; got {q}")
+        if write and any(_git_dir_name(x) for x in q.relative_to(base).parts):
             # git runs settings and hooks from here (core.fsmonitor, hooks/): a write there can run any command
             raise ToolError("agents cannot change files inside .git; use git commands instead")
         try:
@@ -883,8 +1138,10 @@ class Workspace:
             pages = f"{start or 1}-{end or ''}" if (start or end) else None
             return self._cap(docread.extract(p, pages=pages), "read")
         with p.open("rb") as _f:
-            if b"\0" in _f.read(8192):
-                raise ToolError(f"{path} is a binary file ({p.stat().st_size} bytes); read_file shows text only")
+            head = _f.read(8192)
+        if b"\0" in head and not head.startswith((b"\xff\xfe", b"\xfe\xff")):   # binary (UTF-16 text has a BOM)
+            raise ToolError(f"{path} is a binary file ({p.stat().st_size:,} bytes); read_file shows text only. Use a "
+                            "tool made for its format, or `file`, `xxd | head` or `strings | head` in the shell.")
         text = read_src(p)[0]
         self.seen[str(p)] = self._hash(text)
         self.original.setdefault(str(p), self.seen[str(p)])
@@ -904,6 +1161,25 @@ class Workspace:
         except (OSError, ValueError):
             return False
 
+    def _ignored(self, files: list, base: Path | None = None) -> set:
+        """The files git ignores (.gitignore, .git/info/exclude, the global excludes), so search skips build output,
+        caches and dependencies the way other agents do. Empty when this is not a git repo, git is missing, or the
+        folder being searched is itself ignored (the user pointed at it on purpose)."""
+        if not files or os.environ.get("MH_SEARCH_IGNORED") == "1" or not shutil.which("git"):
+            return set()
+        try:                     # no "is this a repo" call first: outside one, check-ignore itself fails (128)
+            if base is not None and base != self.root and subprocess.run(
+                    ["git", "-C", str(self.root), "check-ignore", "-q", str(base)], capture_output=True,
+                    timeout=10).returncode != 1:
+                return set()     # 0: the folder searched is itself ignored; 128: not a repo
+            r = subprocess.run(["git", "-C", str(self.root), "check-ignore", "--stdin", "-z"],
+                               input="\0".join(str(f) for f in files) + "\0", capture_output=True, text=True, timeout=30)
+            if r.returncode not in (0, 1):
+                return set()
+            return {Path(x) for x in r.stdout.split("\0") if x}
+        except (OSError, subprocess.SubprocessError):
+            return set()
+
     def grep(self, pattern, path=".", glob=None, inside_only=False, context=0, before=0, after=0,
              output_mode="content", head_limit=400, ignore_case=False, multiline=False):
         """inside_only: skip files that resolve outside the project (a symlink), before anything is read or saved;
@@ -922,7 +1198,7 @@ class Workspace:
             ctx = f"-B{before} -A{after}" if (before or after) and output_mode == "content" else ""
             mode = {"files_with_matches": "-l", "count": "-c"}.get(output_mode, "")
             case = "-i" if ignore_case else ""
-            out, _ = self._run(f"grep -rnE {case} {mode} {ctx} {inc} --exclude-dir=.git --exclude-dir=node_modules -e "
+            out, _ = self._run(f"grep -rnE {case} {mode} {ctx} {inc} --exclude-dir=.git --exclude-dir=.jj --exclude-dir=.sl --exclude-dir=node_modules -e "
                                f"{json.dumps(pattern)} {json.dumps(path)} | head -{head}", 60, "grep", record=False)
             return out
         try:
@@ -932,7 +1208,10 @@ class Workspace:
         base = self._path(path)
         if not base.exists():
             raise ToolError(f"path not found: {path}")
-        files = [base] if base.is_file() else self._walk(base)
+        files = [base] if base.is_file() else list(self._walk(base))
+        if not base.is_file():                                   # files git ignores are left out, like ripgrep
+            skip = self._ignored(files, base)
+            files = [f for f in files if f not in skip]
         out, matched, truncated = [], 0, False
         for f in files:
             rel = f.relative_to(self.root) if self.root in f.parents else f
@@ -945,9 +1224,12 @@ class Workspace:
             try:
                 if f.stat().st_size > MAX_GREP_FILE:
                     continue                                       # H-11: a huge file is not source
-                text = f.read_text(errors="ignore")
-            except (OSError, UnicodeDecodeError):
+                raw = f.read_bytes()
+            except OSError:
                 continue
+            if b"\0" in raw[:8192]:                               # a binary file: never matched as text
+                continue
+            text = raw.decode("utf-8", errors="ignore")
             lines = text.splitlines()
             hits: list[int] = []                                   # 1-based line numbers that start a match
             need = head - len(out) + 1                             # enough to know the list is full; no more
@@ -1010,6 +1292,9 @@ class Workspace:
                     raise ToolError("stopped by the user")
                 if SKIP_DIRS.isdisjoint(p.relative_to(self.root).parts) and (not inside_only or self._inside(p)):
                     res.append(str(p.relative_to(self.root)))
+            if not any(ch in pattern for ch in ("node_modules", "dist/", "build/")):   # unless asked for by name
+                skip = {str(x.relative_to(self.root)) for x in self._ignored([self.root / r for r in res])}
+                res = [r for r in res if r not in skip]
             res.sort()
         except (NotImplementedError, ValueError) as e:
             raise ToolError(f"invalid glob pattern: {e}")
@@ -1396,6 +1681,7 @@ class Workspace:
             f"\nIt does not parse yet; fix it next:\n{bad}" if bad else "")
 
     should_stop = None          # set by the agent: a callable that says the user pressed Stop
+    on_output = None            # set by the agent: on_output(call id, text) while a command runs (live output)
     get_mode = None             # set by the agent: a callable that gives the chat's access mode (Full access skips the sandbox)
 
     def _proc(self, args, env, timeout_s, shell=False, encoding=None, cwd=None):
@@ -1407,6 +1693,8 @@ class Workspace:
         _BG_ALL.add(p)                                   # killed at exit too if this process ends mid-command
         box: dict = {}
         bufs = {"out": _Capped(), "err": _Capped()}
+        cid, live = getattr(_LIVE, "cid", ""), self.on_output
+        live_q = [] if (live and cid) else None           # what came since the last look, for the step's card
         over = threading.Event()
 
         def drain(stream, buf):
@@ -1423,6 +1711,8 @@ class Workspace:
                     if not chunk:
                         continue
                     buf.add(chunk)
+                    if live_q is not None:
+                        live_q.append(chunk)
                     if bufs["out"].total + bufs["err"].total > OUTPUT_KILL_CHARS:
                         over.set()                       # an endless producer: end it, keep head and tail
                         break
@@ -1456,8 +1746,16 @@ class Workspace:
         th.start()
         end = time.time() + timeout_s
         why = None
+        t_live = time.time() + 0.6                      # a quick command shows its output once, at the end
         while th.is_alive():
             th.join(0.2)
+            if live_q and time.time() >= t_live:        # what arrived since the last look, for the step's card
+                got, live_q[:] = "".join(live_q), []
+                try:
+                    live(cid, got[-4000:])
+                except Exception:  # noqa: BLE001 - showing progress must never break the command
+                    pass
+                t_live = time.time() + 0.4
             if th.is_alive() and self.should_stop and self.should_stop():
                 why = "stopped"
             elif th.is_alive() and time.time() > end:

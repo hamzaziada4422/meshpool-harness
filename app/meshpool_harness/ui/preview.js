@@ -225,19 +225,60 @@ function pvSheets(m) {
   const s = sheets[Math.min(PVX.sheet, sheets.length - 1)];
   st.innerHTML = "";
   if (!s.rows.length) return pvNote("This sheet is empty.");
+  const key = PVX.path + "#" + PVX.sheet;
+  if (!PVX.view || PVX.view.key !== key) PVX.view = {key, col: -1, dir: 0, q: ""};
+  const V = PVX.view;
+  const isNum = v => v !== "" && /^-?[\d,]*\.?\d+%?$/.test(String(v).trim());
+  const num = v => parseFloat(String(v).replace(/[,%]/g, ""));
+  // a first row of labels stays on top when sorting or filtering
+  const headRow = s.rows.length > 1 && s.rows[0].some(v => v !== "") && s.rows[0].every(v => v === "" || !isNum(v));
+  const bar = document.createElement("div"); bar.className = "pv-tools";
+  const q = document.createElement("input"); q.type = "search"; q.className = "pv-filter"; q.placeholder = "Filter rows";
+  q.setAttribute("aria-label", "Filter rows"); q.value = V.q;
+  const count = document.createElement("span"); count.className = "pv-count";
+  bar.append(q, count);
   const wrap = document.createElement("div"); wrap.className = "pv-sheet"; wrap.tabIndex = 0;
   const t = document.createElement("table"), tb = document.createElement("tbody");
   const colName = i => { let n = "", k = i + 1; while (k > 0) { n = String.fromCharCode(65 + (k - 1) % 26) + n; k = Math.floor((k - 1) / 26); } return n; };
   const head = document.createElement("thead"), hr = document.createElement("tr");
   hr.appendChild(document.createElement("th")).className = "rn";
-  for (let c = 0; c < s.cols; c++) { const th = document.createElement("th"); th.textContent = colName(c); hr.appendChild(th); }
+  const ths = [];
+  for (let c = 0; c < s.cols; c++) {
+    const th = document.createElement("th"); th.className = "sortable"; th.tabIndex = 0;
+    th.title = "Sort by this column"; ths.push(th); hr.appendChild(th);
+    const go = () => { if (V.col !== c) { V.col = c; V.dir = 1; } else { V.dir = V.dir === 1 ? -1 : V.dir === -1 ? 0 : 1; } draw(); };
+    th.onclick = go; th.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } };
+  }
   head.appendChild(hr); t.appendChild(head);
-  s.rows.forEach((r, ri) => {
-    const tr = document.createElement("tr"); const rn = document.createElement("th"); rn.className = "rn"; rn.textContent = ri + 1; tr.appendChild(rn);
-    r.forEach(v => { const td = document.createElement("td"); td.textContent = v; if (v !== "" && /^-?[\d,]*\.?\d+%?$/.test(v)) td.className = "num"; tr.appendChild(td); });
-    tb.appendChild(tr);
-  });
-  t.appendChild(tb); wrap.appendChild(t); st.appendChild(wrap);
+  const draw = () => {
+    ths.forEach((th, c) => { const on = V.col === c && V.dir; th.textContent = colName(c) + (on ? (V.dir === 1 ? " \u25b2" : " \u25bc") : "");
+      th.setAttribute("aria-sort", on ? (V.dir === 1 ? "ascending" : "descending") : "none"); });
+    let idx = s.rows.map((_, i) => i).filter(i => !(headRow && i === 0));
+    const needle = V.q.trim().toLowerCase();
+    if (needle) idx = idx.filter(i => s.rows[i].some(v => String(v).toLowerCase().includes(needle)));
+    if (V.col >= 0 && V.dir) {
+      const c = V.col;
+      idx.sort((a, b) => { const x = s.rows[a][c] ?? "", y = s.rows[b][c] ?? "";
+        if (x === "" || y === "") return x === y ? a - b : x === "" ? 1 : -1;                       // blanks last
+        const r = isNum(x) && isNum(y) ? num(x) - num(y) : String(x).localeCompare(String(y), undefined, {numeric: true, sensitivity: "base"});
+        return (r * V.dir) || a - b; });
+    }
+    if (headRow) idx.unshift(0);
+    tb.innerHTML = "";
+    idx.forEach(ri => {
+      const r = s.rows[ri];
+      const tr = document.createElement("tr"); if (headRow && ri === 0) tr.className = "hd";
+      const rn = document.createElement("th"); rn.className = "rn"; rn.textContent = ri + 1; tr.appendChild(rn);
+      r.forEach(v => { const td = document.createElement("td"); td.textContent = v; if (isNum(v)) td.className = "num"; tr.appendChild(td); });
+      tb.appendChild(tr);
+    });
+    const shown = idx.length - (headRow ? 1 : 0), all = s.rows.length - (headRow ? 1 : 0);
+    count.textContent = needle ? `${shown} of ${all} rows` : "";
+  };
+  let qt = 0;
+  q.oninput = () => { clearTimeout(qt); qt = setTimeout(() => { V.q = q.value; draw(); }, 120); };
+  draw();
+  t.appendChild(tb); wrap.appendChild(t); st.appendChild(bar); st.appendChild(wrap);
   const notes = [s.more ? `Showing the first ${s.rows.length} rows.` : "", s.wide ? "Showing the first 50 columns." : ""].filter(Boolean).join(" ");
   if (notes) st.insertAdjacentHTML("beforeend", `<div class="pv-more">${esc(notes)} Use Open to see the rest.</div>`);
 }

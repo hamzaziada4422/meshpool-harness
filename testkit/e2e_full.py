@@ -12,9 +12,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from ui_token import token as _ui_token  # noqa: E402  (the launch key, testkit/ui_token.py)
 
 BASE = os.environ.get("MP_BASE", "http://127.0.0.1:8799")
-TOK = re.search(r'token: "([^"]+)"', urllib.request.urlopen(BASE + "/").read().decode()).group(1)
+TOK = _ui_token(BASE)
 P, FX = sys.argv[1], sys.argv[2]
 RESULTS = []
 
@@ -187,7 +188,8 @@ for hid in ("meshpool-code", "pi"):
     call(f"/api/agent/{v['id']}/send", {"text": "read the pdf"})
     v = wait_idle(v["id"])
     outs = [str(e.get("output")) for e in v.get("events", []) if e["type"] == "tool_end"]
-    check(f"[{hid}] reads a PDF through the document reader", any("Page" in o or "page" in o for o in outs), outs[-2:])
+    how = "with its command tool" if hid == "meshpool-code" else "through the document reader"   # code: Codex 0.171
+    check(f"[{hid}] reads a PDF {how}", any("Page" in o or "page" in o for o in outs), outs[-2:])
 
 # Meshpool Auto creates the routed thread
 v = call("/api/agent", {"workdir": P, "harness": "meshpool-auto", "kind": "cowork", "task": "Build a revenue forecast in Excel"})

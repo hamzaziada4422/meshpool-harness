@@ -14,10 +14,11 @@ import sys
 import threading
 import time
 import urllib.request
+from ui_token import token as _ui_token  # noqa: E402  (the launch key, testkit/ui_token.py)
 
 P = sys.argv[1]
 BASE = sys.argv[2] if len(sys.argv) > 2 else "http://127.0.0.1:8799"
-TOK = re.search(r'token: "([^"]+)"', urllib.request.urlopen(BASE + "/").read().decode()).group(1)
+TOK = _ui_token(BASE)
 RESULTS = []
 
 

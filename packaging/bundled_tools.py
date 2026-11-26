@@ -199,9 +199,17 @@ def download_verified(urls: list[str], dest: Path, sha256: str, size: int = 0,
     return dest
 
 
+# The current release on the main download site, under its version name: a fallback when the archive host is down
+# (Nov 25 2026: downloadarchive.documentfoundation.org unreachable from GitHub's Linux and Windows runners). It holds the
+# same bytes (sha256 and sizes checked against LO_PINNED) until "stable" moves past this version; download_verified checks
+# every file against the pinned sha256 and size either way.
+_STABLE = "https://download.documentfoundation.org/libreoffice/stable/{v}/{d}/{n}"
+
+
 def lo_urls(key: str) -> list[str]:
     d, name, _sha, _size = LO_PINNED[key]
-    return [_ARCHIVE.format(b=LO_BUILD, d=d, n=name)]
+    return [_ARCHIVE.format(b=LO_BUILD, d=d, n=name),
+            _STABLE.format(v=LO_VERSION, d=d, n=name.replace(LO_BUILD, LO_VERSION))]
 
 
 # ---------------------------------------------------------------------------------------------------------------

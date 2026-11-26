@@ -305,7 +305,8 @@ class Guards:
         if self.ws.container and not self.ws.mounted:
             return subprocess.run(["docker", "exec", "-w", self.ws.cdir, self.ws.container, "git", *args],
                                   capture_output=True, text=True, timeout=30)
-        return subprocess.run(["git", *args], cwd=self.ws.root, capture_output=True, text=True, timeout=30)
+        from meshpool_harness.core.tools import safe_git
+        return subprocess.run(safe_git(*args), cwd=self.ws.root, capture_output=True, text=True, timeout=30)
 
     def _git_test_changes(self) -> list[str] | None:
         try:

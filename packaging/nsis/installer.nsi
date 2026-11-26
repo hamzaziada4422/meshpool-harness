@@ -65,10 +65,10 @@ Section "Meshpool" SecMain
   ; close a running copy (the app and everything it started from this folder) so its files can be replaced
   nsExec::Exec 'taskkill /F /IM Meshpool.exe'
   Pop $0
-  ; also the app's own Python and Node processes (they hold files in runtime and node open): only programs that
-  ; live in the install folder, never this installer or the update helper (taskkill /T could reach those)
-  nsExec::Exec `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-Process | Where-Object { $$_.Path -and $$_.Path.StartsWith('$INSTDIR\', [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -ErrorAction SilentlyContinue"`
-  Pop $0
+  ; WinSetup's Stop step closes the app's own Python, Node and Git (they hold files in runtime and node open): only
+  ; programs in the install folder, never this installer or the update helper (taskkill /T could reach those). It
+  ; gets the folder in an environment variable, so a folder name with an apostrophe is safe (PA-packaging-20: an
+  ; inline PowerShell command with '$INSTDIR\' in quotes broke on one).
   !insertmacro WinSetup "$INSTDIR" "" ""
   ; Stage the new program files beside the install folder first, then swap folder by folder (the old one is kept as
   ; <name>.old until every swap worked, and put back if one fails). A failure halfway (power loss, a locked file, a full
@@ -165,10 +165,10 @@ Section "Uninstall"
   ; close the app and everything running from this folder (its Python, Node, Git), or their files stay locked
   nsExec::Exec 'taskkill /F /IM Meshpool.exe'
   Pop $0
-  ; also the app's own Python and Node processes (they hold files in runtime and node open): only programs that
-  ; live in the install folder, never this installer or the update helper (taskkill /T could reach those)
-  nsExec::Exec `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-Process | Where-Object { $$_.Path -and $$_.Path.StartsWith('$INSTDIR\', [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -ErrorAction SilentlyContinue"`
-  Pop $0
+  ; WinSetup's Stop step closes the app's own Python, Node and Git (they hold files in runtime and node open): only
+  ; programs in the install folder, never this installer or the update helper (taskkill /T could reach those). It
+  ; gets the folder in an environment variable, so a folder name with an apostrophe is safe (PA-packaging-20: an
+  ; inline PowerShell command with '$INSTDIR\' in quotes broke on one).
   !insertmacro WinSetup "$INSTDIR" "" ""
   Delete "$SMPROGRAMS\Meshpool.lnk"
   Delete "$DESKTOP\Meshpool.lnk"

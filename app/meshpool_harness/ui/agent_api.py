@@ -50,10 +50,24 @@ def _claim_working(sess) -> None:
             raise ValueError(_GATE_MSG)
         sess.state = "working"
 LOCK = threading.Lock()
-_SKIP = {"text_delta", "stream_reset", "model_start", "model_end", "usage", "context", "queued"}
+_SKIP = {"text_delta", "stream_reset", "model_start", "model_end", "usage", "context", "queued", "tool_output"}
 # A text_delta of a finished reply (Session._fold_deltas): one shared, never-mutated marker in place of each, so event
 # positions stay put. It has no "i"; outward views (Session.view, the event stream) leave it out.
 _DELTA_GONE = {"type": "text_delta", "text": "", "gone": True}
+# FL-R6a: the same for a streamed piece of the model's reasoning once the call's saved copy (thought, final) arrived.
+_THOUGHT_GONE = {"type": "thought", "text": "", "delta": True, "gone": True}
+_RUN_MCP_SPEC: list = []    # meshpool --mcp-config for this terminal run, read once (run_mcp_spec)
+
+
+def run_mcp_spec() -> str:
+    """meshpool --mcp-config: the servers for this terminal run only. FL-V17: read once and taken out of the
+    environment, so commands the agent runs, MCP servers and other child runs (a nested meshpool -p) do not start
+    them too. Chats opened later in the same terminal (/clear, /resume) still get them."""
+    if os.environ.get("MESHPOOL_FRONTEND") != "terminal":
+        return ""
+    if "MH_MCP_CONFIG" in os.environ:
+        _RUN_MCP_SPEC[:] = [os.environ.pop("MH_MCP_CONFIG")]
+    return _RUN_MCP_SPEC[0] if _RUN_MCP_SPEC else ""
 # /goal: the agent keeps taking turns until it says the goal is met. The note is hidden in the chat (after \u200b).
 GOAL_NOTE = ("\n\n\u200b[Meshpool] The goal of this chat: {goal}\nKeep working until it is fully done and checked. End your "
              "reply with one last line: \"GOAL: DONE\" once the goal is met and verified, or \"GOAL: CONTINUE\" and "
@@ -127,6 +141,11 @@ def _messages_from_events(events: list) -> list:
     return out
 
 
+def _redact(text: str) -> str:
+    from meshpool_harness.redact import redact
+    return redact(text)
+
+
 def events_from_messages(messages: list) -> list:
     """Rebuild a transcript from saved messages (for sessions reopened after the app restarted)."""
     evs, outputs = [], {m.get("tool_call_id"): m.get("content", "") for m in messages if m.get("role") == "tool"}
@@ -155,7 +174,7 @@ def events_from_messages(messages: list) -> list:
                             "mcp": f.get("name", "").startswith("mcp__"), "diff": ""})
                 evs.append({"type": "tool_end", "id": c.get("id"), "name": f.get("name", ""),
                             "ok": not out.startswith(("ERROR", "The user denied")),
-                            "denied": out.startswith("The user denied"), "output": out[:6000]})
+                            "denied": out.startswith("The user denied"), "output": _redact(out[:6000])})
     for i, e in enumerate(evs):
         e["i"] = i
     return evs
@@ -357,6 +376,7 @@ class Session:
     _retry_open = False        # a retry notice is showing: the next good model event resolves it
     _undo_token = None         # the turn an Undo / Rewind holds: a message sent meanwhile waits in the queue
     _open_deltas = ()          # positions in self.events of the text_delta events of the reply still streaming
+    _open_thoughts = ()        # positions in self.events of the streamed reasoning pieces not folded yet (FL-R6a)
 
     def __init__(self, workdir: str | None = None, resume_id: str | None = None, mode: str | None = None,
                  harness: str | None = None, kind: str = "code", model: str | None = None, plan: bool = False,
@@ -463,8 +483,8 @@ class Session:
                 if tr.get("running"):
                     last = next((e.get("text") for e in reversed(tr["events"]) if e.get("type") == "user"), "")
                     self.emit({"type": "interrupted", "restarted": True, "resend": last,
-                               "text": "Meshpool closed while this was running, so it stopped. Your message is kept: "
-                                       "send it again to continue."})
+                               "text": "Meshpool closed while this was running, so it stopped. Everything done so far "
+                                       "is kept: press Continue to pick it up, or send your message again."})
                     self._persist(running=False)
             try:                                     # an approval, question or step left open when the app closed
                 self._close_open_items(turns=bool(tr and tr.get("events")))
@@ -572,6 +592,13 @@ class Session:
             # office file (Agent.office_on), so coding chats do not pay for them.
             from meshpool_harness.harnesses.acp import office_extra
             extra = office_extra(self.workdir)
+            spec = run_mcp_spec()
+            if spec:                                  # meshpool --mcp-config: servers for this terminal run only
+                from meshpool_harness.agent.tui import _mcp_for_run
+                try:
+                    extra = {**(extra or {}), **_mcp_for_run(spec)}
+                except ValueError as e:
+                    self.emit({"type": "status", "text": f"--mcp-config: {e}"})
             self.mcp = M.Manager(roots=[self.workdir], extra=extra, chat=self.id).start(
                 timeout=float(os.environ.get("MH_MCP_START_S", "45")))
             if getattr(self, "_closed", False):       # the chat was closed while its servers were starting
@@ -661,6 +688,14 @@ class Session:
                 self._open_deltas.append(ev["i"])
             elif self._open_deltas and t in ("assistant", "stream_reset", "turn_end"):
                 self._fold_deltas(final=t != "turn_end")
+            if t == "thought" and not ev.get("final"):
+                if not isinstance(self._open_thoughts, list):
+                    self._open_thoughts = []
+                self._open_thoughts.append(ev["i"])
+            elif self._open_thoughts and t == "thought":
+                self._fold_thoughts()                # the call's saved copy is here: the streamed pieces can go
+            elif self._open_thoughts and t == "turn_end":
+                self._open_thoughts = []             # no saved copy came (a stop, or a harness that sends none): kept
             self.changed.notify_all()
         lease = getattr(self, "_lease", None)
         if lease and time.time() - getattr(self, "_lease_beat", 0) > 60:      # a working run keeps its task claimed
@@ -711,6 +746,19 @@ class Session:
                     evs[p] = _DELTA_GONE
             k = j + 1
 
+    def _fold_thoughts(self):
+        """Under self.lock. FL-R6a: reasoning streams as many thought events (one per token or so), like a reply's
+        text. Once the call's saved copy (one thought event, final, with the whole text) has arrived, each streamed
+        piece becomes _THOUGHT_GONE, a shared marker the page is never sent and that is never saved. Positions never
+        move, so since= cursors and event indexes stay right. The page adds any part it had not seen yet from the
+        saved copy (app.js, case "thought")."""
+        idx, self._open_thoughts = self._open_thoughts, []
+        evs = self.events
+        for p in idx:
+            if 0 <= p < len(evs) and evs[p].get("type") == "thought" and not evs[p].get("gone") \
+                    and not evs[p].get("final"):
+                evs[p] = _THOUGHT_GONE
+
     def _persist_soon(self):
         """Steps arrive many per second: write the transcript at most once every two seconds instead of on every step."""
         with self.lock:
@@ -746,6 +794,7 @@ class Session:
                     replace = n is None or epoch != getattr(self, "_tlog_epoch", None) or total < n
                     src = self.events if replace else self.events[n:]
                     evs = [{k: v for k, v in e.items() if k != "i"} for e in src if e.get("type") not in _SKIP
+                           and not e.get("gone")
                            and not (e.get("type") == "subagent" and e.get("kind") == "tool")]   # live only
                 if replace:
                     log.rewrite(evs[-3000:], run)
@@ -828,7 +877,8 @@ class Session:
             self.pendings[aid] = p
         if running:
             self._set_state("waiting", token=tok, expect=_BUSY)
-        self.emit({"type": "approval", "id": aid, "kind": kind, "title": title, "detail": detail,
+        from meshpool_harness.redact import redact
+        self.emit({"type": "approval", "id": aid, "kind": kind, "title": title, "detail": redact(detail),
                    "options": options, "scope": scope})
         if time.time() - getattr(self, "t_turn", time.time()) > 60:
             _notify(f"{self.agent.title or 'A task'} needs your approval", title)
@@ -868,7 +918,7 @@ class Session:
         p = self.pendings.get(str(aid))
         if not p or p.get("closed"):
             raise ValueError("That approval is no longer waiting.")
-        allowed = {"yes", "always", "no"} | {o["id"] for o in (p.get("options") or [])}
+        allowed = {"yes", "always", "save", "no"} | {o["id"] for o in (p.get("options") or [])}
         p["decision"] = decision if decision in allowed else "no"
         p["note"] = note
         p["answered"] = True
@@ -893,6 +943,14 @@ class Session:
         if not hasattr(self.agent, "reply"):
             raise ValueError("This agent does not ask questions.")
         self.agent.reply(str(question_id or ""), answers)
+
+    def _codex_office(self, text: str) -> bool:
+        """This message's office job runs on Codex 0.171's request (core.Agent.office_c171_for)."""
+        try:
+            f = getattr(self.agent, "office_c171_for", None)
+            return bool(f and self.harness.get("type") not in ("acp", "pi") and f(text))
+        except Exception:  # noqa: BLE001
+            return False
 
     def _office_direct(self, text: str = "") -> bool:
         """The agent writes office files itself (core.Agent._office_direct: a lean Work chat, MH_OFFICE_DIRECT on), so
@@ -1023,6 +1081,17 @@ class Session:
         self._start_turn(text, images, token)
         return {"queued": False}
 
+    def take_back(self) -> dict:
+        """The last message sent while the agent worked, back to the user: from the queue, or from the running
+        turn when the agent has not read it yet. {"text": None} when there is nothing left to take back."""
+        with self.lock:
+            if self.queue:
+                text, _ = self.queue.pop()
+                self.emit({"type": "queued", "text": self.queue[-1][0] if self.queue else "", "n": len(self.queue)})
+                return {"text": text}
+        if hasattr(self.agent, "take_back"):
+            return {"text": self.agent.take_back()}
+        return {"text": None}
     def _save_files(self, text: str, files: list) -> str:
         """Attached files go into this chat's own folder; the message then names them."""
         import base64
@@ -1203,6 +1272,10 @@ class Session:
     # fail a turn: the slow parts run on a thread, every call is guarded.
     def _turn_begin(self):
         self._ck_run, self._ck_n = f"{self.id}:{int(self.t_turn)}", 0
+        if not getattr(self, "_awake", False):         # no idle sleep while this turn runs (awake.py)
+            from meshpool_harness import awake as AW
+            AW.hold()
+            self._awake = True
         try:
             from meshpool_harness import checks as CK
             CK.begin(self._ck_run)
@@ -1232,6 +1305,10 @@ class Session:
             pass
 
     def _turn_finish(self):
+        if getattr(self, "_awake", False):
+            from meshpool_harness import awake as AW
+            AW.release()
+            self._awake = False
         lease = getattr(self, "_lease", None)
         if lease:                                    # the run is over: its task may run again
             self._lease = None
@@ -1400,7 +1477,8 @@ class Session:
                     except Exception as e:  # noqa: BLE001
                         self.emit({"type": "status", "text": f"Could not record a checkpoint: {e}"})
                 body = self._body(text, images)
-                if caps:                                # a file the agent can make: say so, with the tools for it
+                codex_office = self._codex_office(text)   # Codex's own request: no Meshpool office notes on it
+                if caps and not codex_office:           # a file the agent can make: say so, with the tools for it
                     from meshpool_harness import capabilities as CAP
                     body += CAP.note(caps, self.harness, direct=self._office_direct(text))
                 from meshpool_harness import pace as PACE
@@ -1444,12 +1522,16 @@ class Session:
                         if outside:
                             tools = "deferred" if self.harness.get("type") == "pi" else (
                                 "all" if not self.harness.get("lean") else "none")
+                        elif codex_office:             # Codex's request has one command tool: name no Meshpool tool
+                            tools = "none"             # (pdf_report: told to check with view_output, it searched the
+                                                       # disk for it and re-rendered the PDF, 42 calls vs Codex's 10)
                         body += "\n\n\u200b" + AS.context_block(
                             text, self.workdir, pid, chat_id=self.id, incognito=self.incognito, exclude=ex,
                             lookup=not m0.get("project_unbound"), rules=outside, tools=tools,
+                            data_rule=outside or bool(getattr(self.agent, "_style", lambda: False)()),
                             # Pi: the office rules ride on the message that asks for a file (capabilities.note),
                             # not on every chat's first message
-                            office=("direct" if self._office_direct(text) else True) if (
+                            office=False if codex_office else ("direct" if self._office_direct(text) else True) if (
                                 tools != "none" and tools != "deferred") or (
                                 bool(getattr(self.agent, "office_on", False)) and not caps) else False)
 
@@ -1933,6 +2015,7 @@ class Session:
             self.agent.save()
             with self.lock:
                 self._open_deltas = []
+                self._open_thoughts = []
                 if cut is not None:                  # keep the transcript up to there: earlier turns keep their Undo
                     self.events = [dict(e, i=i) for i, e in enumerate(self.events[:cut])]
                 else:
@@ -1946,6 +2029,7 @@ class Session:
                     users = [i for i, e in enumerate(self.events) if e.get("type") == "user" and not e.get("steer")]
                     cut = users[int(turn) - 1] if 0 < int(turn) <= len(users) else len(self.events)
                 self._open_deltas = []
+                self._open_thoughts = []
                 self.events = [dict(e, i=i) for i, e in enumerate(self.events[:cut])]
                 if hasattr(self.agent, "events"):
                     self.agent.events = [{k: v for k, v in e.items() if k not in ("i", "t")} for e in self.events]
@@ -2053,11 +2137,11 @@ class Session:
                 "harness_models": getattr(a, "available_models", None), "plan": self.plan, "goal": self.goal,
                 "effort": self.effort,
                 "style": self.style_id() or _default_style(), "incognito": bool(self.incognito),
-                "worktree": meta.get("worktree") or None,
+                "worktree": meta.get("worktree") or None, "versions": meta.get("versions") or {},
                 "epoch": self.epoch, "turns": self.cp.turns() if self.cp else [],
                 "checkpoints_note": self.cp.disabled if self.cp else "",
                 "events": evs, "total": since + len(raw) if since <= n else n,
-                "mcp": self.mcp.status() if self.mcp else None}
+                "mcp": self.mcp.status() if self.mcp else None, "trust": _trust_note(self.workdir)}
 
     def close(self):
         self._closed = True                           # an MCP start still running closes its servers when it finishes
@@ -2077,6 +2161,18 @@ def _default_style() -> str:
         return ST.default_id()
     except Exception:  # noqa: BLE001
         return "normal"
+
+
+def _trust_note(workdir: str) -> dict | None:
+    """When the folder has hooks or allow rules that are being ignored until the user trusts it."""
+    if not workdir:
+        return None
+    try:
+        from meshpool_harness import trust as TR
+        files = TR.needs_prompt(workdir)
+    except Exception:  # noqa: BLE001 - a status line must never break the chat view
+        return None
+    return {"files": files, "text": TR.message(workdir)} if files else None
 
 
 def create(body: dict) -> dict:
@@ -2217,6 +2313,11 @@ def _create(body: dict, made: list) -> dict:
         write_meta(s.id, style=picked if picked and ST.get(picked) else ST.default_id())   # fixed for this chat
     except Exception:  # noqa: BLE001
         pass
+    if body.get("effort") and hasattr(s.agent, "effort"):
+        try:
+            s.set_effort(str(body["effort"]))
+        except ValueError:
+            pass
     if pid:
         PS.touch(pid)
     with LOCK:
@@ -2427,6 +2528,8 @@ def session_action(sid: str, act: str, b: dict) -> dict:
         r = s.send(b.get("text", ""), images=b.get("images") or None, interrupt=bool(b.get("interrupt")),
                    files=b.get("files") or None)
         return dict(s.view(since), sent=r)
+    if act == "take_back":                          # a message sent while the agent worked, back to the box
+        return dict(s.view(since), taken=s.take_back())
     if act == "stop":
         s.stop()
     elif act == "grade":
@@ -2436,7 +2539,7 @@ def session_action(sid: str, act: str, b: dict) -> dict:
     elif act == "compact":
         if s.state in ("working", "waiting"):
             raise ValueError("Wait for the task to finish or stop it, then compact.")
-        r = s.agent.compact_now() if hasattr(s.agent, "compact_now") else None
+        r = s.agent.compact_now(str(b.get("focus") or "")) if hasattr(s.agent, "compact_now") else None
         return dict(s.view(since), compacted=r)
     elif act == "mode":
         s.set_mode(b.get("mode", "ask"))
@@ -2455,7 +2558,17 @@ def session_action(sid: str, act: str, b: dict) -> dict:
     elif act == "effort":
         s.set_effort(b.get("effort", ""))
     elif act == "revert":
-        s.revert(int(b.get("turn", 0)))
+        turn = int(b.get("turn", 0))
+        if str(b.get("what") or "both") == "chat":   # the conversation only: the files stay as they are
+            pos = s._turn_cut(turn)
+            if pos is None:
+                raise ValueError("That reply cannot be taken back without its files.")
+            s.rewind(pos, files=False)
+        else:
+            s.revert(turn)
+        if not b.get("keep_versions"):               # Undo or Edit: the earlier answers belonged to that message
+            vs = {k: v for k, v in (read_meta(s.id).get("versions") or {}).items() if k.isdigit() and int(k) < turn}
+            write_meta(s.id, versions=vs)
     else:
         raise ValueError("Unknown chat action.")
     return s.view(since)
@@ -2670,6 +2783,10 @@ def _purge(sid: str, force: bool = False) -> None:
             DELETED.add(sid)
             list_dirty()
             s = LIVE.pop(sid, None)
+        import sys as _sys                                # the Office panel's token no longer reaches it
+        _sv = _sys.modules.get("meshpool_harness.ui.server")
+        if _sv is not None and hasattr(_sv, "OFFICE_CHATS"):
+            _sv.OFFICE_CHATS.discard(sid)
     if s:
         s.deleted = True
         s.agent.deleted = True                        # its last save after stopping must not recreate the thread
@@ -2724,6 +2841,13 @@ def thread_action(sid: str, body: dict) -> dict:
         write_meta(sid, pinned=act == "pin")
     elif act in ("archive", "unarchive"):
         write_meta(sid, archived=act == "archive")
+    elif act == "keep_version":                      # Try again: the answer being replaced stays viewable
+        turn, text = int(body.get("turn") or 0), str(body.get("text") or "")[:20000]
+        if turn < 1 or not text.strip():
+            raise ValueError("Give the reply's turn and text.")
+        vs = {k: v for k, v in (read_meta(sid).get("versions") or {}).items() if k.isdigit() and int(k) < turn}
+        vs[str(turn)] = ((read_meta(sid).get("versions") or {}).get(str(turn)) or [])[-3:] + [text]
+        write_meta(sid, versions=vs)
     elif act in ("seen", "unseen"):                   # the blue dot: a finished chat nobody has opened yet
         write_meta(sid, unread=act == "unseen")
     elif act == "move":                               # into a project, or out of it (project_id empty)
@@ -2742,6 +2866,10 @@ def thread_action(sid: str, body: dict) -> dict:
         except Exception:  # noqa: BLE001
             pass
     elif act == "delete":                             # soft: the server purges it after the grace, page or no page
+        import sys as _sys                            # the Office panel's token stops reaching it at once
+        _sv = _sys.modules.get("meshpool_harness.ui.server")
+        if _sv is not None and hasattr(_sv, "OFFICE_CHATS"):
+            _sv.OFFICE_CHATS.discard(sid)
         with _DEL_LOCK:
             if sid in DELETED:
                 raise KeyError("That chat no longer exists. Refresh the list.")
@@ -3029,9 +3157,51 @@ def probe_mcp():
         pass
 
 
+def prune_old_chats(days: float | None = None, now: float | None = None) -> list[str]:
+    """Settings, Keep chats for: deletes chats not touched for that many days (the same way Delete does), except
+    pinned ones and chats that are running. Returns the ids deleted. 0 or unset: nothing is deleted."""
+    if days is None:
+        try:
+            days = float(os.environ.get("MH_KEEP_DAYS") or C.read().get("MH_KEEP_DAYS") or 0)
+        except ValueError:
+            days = 0
+    days = int(days or 0)
+    if days < 1 or not SESSIONS.is_dir():
+        return []
+    cutoff = (now or time.time()) - days * 86400
+    gone = []
+    for d in list(SESSIONS.iterdir()):
+        if not d.is_dir() or d.name.startswith((".", "_")):
+            continue
+        sid = d.name
+        if sid.startswith("sub-") or sid in LIVE:      # a sub-agent's own record, or a chat that is open now
+            continue
+        meta = read_meta(sid)
+        if meta.get("pinned"):
+            continue
+        try:
+            last = max(f.stat().st_mtime for f in d.iterdir()) if any(d.iterdir()) else d.stat().st_mtime
+        except OSError:
+            continue
+        if last < cutoff:
+            try:
+                _purge(sid, force=True)                  # no undo window: the user asked for chats this old to go
+                gone.append(sid)
+            except Exception:  # noqa: BLE001
+                continue
+    return gone
+
+
 def scheduler_loop():
     from meshpool_harness import assistant as AS
+    last_prune = 0.0
     while True:
+        if time.time() - last_prune > 86400:          # Keep chats for N days: at start, then once a day
+            last_prune = time.time()
+            try:
+                prune_old_chats()
+            except Exception:  # noqa: BLE001
+                pass
         try:
             for t in ([] if QUIESCING[0] else AS.due()):      # due tasks stay due and run after the restart
                 try:

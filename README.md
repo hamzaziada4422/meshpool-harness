@@ -16,7 +16,7 @@
 Meshpool runs on your own computer. It does research, writing, analysis, spreadsheets, decks and code with any model on the Meshpool endpoint, your own OpenAI-compatible key, or the ChatGPT plan you already pay for.
 
 > [!NOTE]
-> **Meshpool is a beta (currently 0.0.10).** Some things will break. When one does, Meshpool shows what went wrong in the chat, and **Report this** (or the **Beta** badge) opens a GitHub issue with your version and system filled in. Your chats and files are never included.
+> **Meshpool is a beta (currently 0.0.17).** Some things will break. When one does, Meshpool shows what went wrong in the chat, and **Report this** (or the **Beta** badge) opens a GitHub issue with your version and system filled in. Your chats and files are never included.
 
 ## Why Meshpool
 
@@ -44,8 +44,8 @@ Each agent ran on the same model (DeepSeek V4.1 Flash), on the same tasks with t
 
 | Agent | Best at | Result |
 |---|---|---|
-| **Meshpool Code** | Coding in your project | SWE-bench Verified: 18 of 20 solved at $0.0079 per solved task. Codex CLI solved 17 at $0.0101. |
-| **Meshpool Work** | Word, Excel, PowerPoint and PDF work | Seven office tasks, same model as Codex and Pi: 6 of 7 passed, but it cost more and took longer than both (Pi: $0.006 and 35 s per task, Codex: $0.011 and 45 s). Not cheaper than Codex or Pi on office work yet; see [BENCHMARKS.md](docs/BENCHMARKS.md). |
+| **Meshpool Code** | Coding in your project | Against Codex CLI 0.171 on the same model, gateway and hour (0.0.16): SWE-bench Verified (SymPy) 22 vs 22 solved at 0.76x Codex's cost per solved task; 144 vs 145 on 156 coding runs at 0.71x; 39 vs 38 on v2_dev at 0.79x. |
+| **Meshpool Work** | Word, Excel, PowerPoint and PDF work, data tasks | Data tasks: 45 vs 44 solved at 0.51x Codex's cost per solved task. Office (0.0.16): Office-7 42 vs 41 at 0.94x; SpreadsheetBench 31 vs 35 at 0.90x; OfficeBench 21 vs 24 at 0.83x. Cheaper than Codex on every suite, but it still solves fewer SpreadsheetBench and OfficeBench tasks; see [BENCHMARKS.md](docs/BENCHMARKS.md). |
 | **Meshpool's agent loop, browser use** | Web forms and web apps | MiniWoB++: 97 of 102 at $0.0027 and 17 s per solved task. In a same-time round, $0.0009 per solved task against $0.0025 for Codex CLI. |
 
 ## Install
@@ -110,7 +110,10 @@ irm https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/insta
 - **Quiet suggestions.** At most one short nudge at a time, only when a chat ends or you open the app, and always with what Meshpool saw. Switch it off in Settings.
 - **Receipts.** Time, cost where known, the agent chosen and the checks that ran, under each reply.
 - **Scheduled tasks and parallel sub-agents.**
+- **Isolated copies:** a Code chat, a terminal session (`meshpool -w`), sub-agents that edit at the same time and each scheduled run on a git folder can work in a copy of their own (a git worktree, or a plain copy without git), so they never edit your working copy. You review the diff, then merge or discard ([worktrees](docs/setup/worktrees.md)).
+- **meshpool in Excel, PowerPoint and Word** (new, not yet checked in real Office): a panel on the Home tab that answers about your selection and inserts the answer ([setup](docs/setup/office-add-in.md)).
 - **You stay in control:** Enter adds to the task, Interrupt redirects it, Esc stops, and Undo reverses any reply.
+- **For scripts and your own setup:** one-shot runs with JSON output ([terminal](docs/setup/terminal.md)), [hooks](docs/setup/hooks.md), [skills](docs/setup/skills.md) and [sub-agents](docs/setup/sub-agents.md).
 
 ## For developers
 

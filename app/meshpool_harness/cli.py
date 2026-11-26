@@ -17,6 +17,7 @@ Settings come from meshpool.config (next to the launcher); shell variables win o
 from __future__ import annotations
 
 import argparse
+import re
 import json
 import os
 import shutil
@@ -139,8 +140,10 @@ def _run_request(request: str, files: list[str], out: str, engine: str | None = 
             "out_dir": str(outdir), "wall_s": round(time.time() - t0, 1), "key_spend_since_start": spent}
 
 
-COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect", "worktree", "permissions", "chats", "projects", "memory", "skills", "plugins",
-            "schedule", "agents", "models", "usage", "settings", "help"}
+COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app",
+            "acp", "login", "setup", "import", "connect", "disconnect", "worktree", "permissions", "chats",
+            "projects", "memory", "skills", "plugins", "schedule", "agents", "models", "usage", "settings", "help",
+            "trust", "office", "completion", "doctor"}
 
 
 def _agent_parser():
@@ -153,6 +156,8 @@ def _agent_parser():
                "  import           bring your old chats and sessions (ChatGPT, Claude, Claude Code, Codex) and context\n"
                "  login            save your Meshpool API key\n"
                "  check            show settings and installed tools (--live sends one tiny model call)\n"
+               "  doctor           find problems in settings, hooks, rules, MCP servers, skills and sub-agents\n"
+               "  completion       print a shell completion script (bash, zsh or fish)\n"
                "  connect          connect apps: Notion, Gmail, Slack, HubSpot... or any MCP server by URL\n"
                "  mcp              list, test and switch MCP servers\n"
                "  acp              serve the agent over the Agent Client Protocol (Zed, JetBrains, other apps)\n"
@@ -171,12 +176,20 @@ def _agent_parser():
     ap.add_argument("--sandbox", action="store_true", help="run the agent's commands in the sandbox (on by default except in Full access): they can write only in the project and temporary folders")
     ap.add_argument("--no-network", dest="no_network", action="store_true", help="also cut the network for sandboxed commands")
     ap.add_argument("--append-system-prompt", help="extra instructions added to the agent's system prompt for this run")
+    ap.add_argument("--append-system-prompt-file", metavar="FILE", help="like --append-system-prompt, read from a file")
+    ap.add_argument("--system-prompt", help="replace meshpool's own instructions for this run (the rule that tool "
+                                             "output is data, not instructions, is always kept)")
+    ap.add_argument("--system-prompt-file", metavar="FILE", help="like --system-prompt, read from a file")
     ap.add_argument("--max-turns", "--max-steps", dest="max_turns", type=int, metavar="N",
                     help="stop after this many tool steps in one reply (default 200; 0 = no limit)")
     ap.add_argument("--allowed-tools", help="comma-separated tools or bash:pattern rules that never ask, e.g. edit,bash:npm test*")
     ap.add_argument("--disallowed-tools", help="comma-separated tools or bash:pattern rules that are always refused")
     ap.add_argument("-c", "--continue", dest="resume", action="store_true", help="resume the last session here")
     ap.add_argument("--resume", dest="session", help="resume a session by id")
+    ap.add_argument("--fork-session", action="store_true", help="with -c or --resume: continue in a new session, "
+                                                                 "leaving the old one as it was")
+    ap.add_argument("--session-id", help="the id for a new session (letters, digits, - and _)")
+    ap.add_argument("--no-session-persistence", action="store_true", help="with -p: do not save this session")
     ap.add_argument("--model", help="model id for this session")
     ap.add_argument("--effort", choices=["off", "low", "medium", "high", "xhigh"],
                     help="how hard the model thinks (setting MH_REASONING_EFFORT; /effort in a session)")
@@ -188,8 +201,72 @@ def _agent_parser():
     ap.add_argument("--incognito", action="store_true", help="no memory is read or written and nothing is learned from this chat")
     ap.add_argument("--attach", action="append", default=[], metavar="PATH", help="a file or picture to send with the request (repeatable)")
     ap.add_argument("--output-last-message", metavar="FILE", help="with -p: also write the final reply to FILE")
-    ap.add_argument("--worktree", action="store_true", help="work in an isolated copy of the folder (a git worktree on its own branch; a plain copy without git), so other sessions and chats are not disturbed; merge it back with `meshpool worktree merge <id>`")
+    ap.add_argument("-w", "--worktree", action="store_true", help="work in an isolated copy of the folder (a git worktree on its own branch; a plain copy without git), so other sessions and chats are not disturbed; merge it back with `meshpool worktree merge <id>`")
+    ap.add_argument("-n", "--name", help="a name for this session (shown in /resume and the app)")
+    ap.add_argument("--mcp-config", help="MCP servers for this run only: a JSON file, or JSON text, with mcpServers")
+    ap.add_argument("--strict-mcp-config", action="store_true", help="use only the servers from --mcp-config, not "
+                                                                      "your saved ones or the project's")
+    ap.add_argument("--settings", metavar="FILE", help="meshpool settings for this run: a JSON object or KEY=VALUE "
+                                                      "lines (MH_ and MESHPOOL_ keys)")
+    ap.add_argument("--disable-slash-commands", action="store_true", help="no custom commands, server prompts or "
+                                                                           "skills for this run")
+    from meshpool_harness import __version__
+    ap.add_argument("--subagent", metavar="NAME", help="work as one of your saved sub-agents (its instructions, tools and model)")
     return ap
+
+
+def _settings_file(path) -> dict:
+    """{KEY: value} from a JSON object or KEY=VALUE lines; only meshpool's own MH_ and MESHPOOL_ keys."""
+    import json
+    text = Path(path).expanduser().read_text(encoding="utf-8", errors="replace")
+    if text.lstrip().startswith("{"):
+        d = json.loads(text)
+        if not isinstance(d, dict):
+            raise ValueError("the JSON must be an object")
+        pairs = d.items()
+    else:
+        pairs = [ln.split("=", 1) for ln in text.splitlines() if "=" in ln and not ln.lstrip().startswith("#")]
+    out = {}
+    for k, v in pairs:
+        k = str(k).strip()
+        if not re.fullmatch(r"(MH|MESHPOOL)_[A-Z0-9_]+", k):
+            raise ValueError(f"{k} is not a meshpool setting (they start with MH_ or MESHPOOL_)")
+        out[k] = ("1" if v else "0") if isinstance(v, bool) else str(v).strip()
+    return out
+
+
+def _read_arg_file(path) -> str:
+    if not path:
+        return ""
+    return Path(path).expanduser().read_text(encoding="utf-8", errors="replace").strip()
+
+
+def completion(shell: str) -> str:
+    """A shell completion script for meshpool: commands and the main options."""
+    import argparse
+    opts = sorted({o for act in _agent_parser()._actions for o in act.option_strings if o.startswith("--")})
+    cmds = sorted(COMMANDS | {"completion"})
+    if shell == "bash":
+        return ("_meshpool() {\n"
+                "  local cur=${COMP_WORDS[COMP_CWORD]}\n"
+                f"  local cmds=\"{' '.join(cmds)}\"\n"
+                f"  local opts=\"{' '.join(opts)}\"\n"
+                "  if [[ $COMP_CWORD -eq 1 && $cur != -* ]]; then COMPREPLY=($(compgen -W \"$cmds\" -- \"$cur\"));\n"
+                "  elif [[ $cur == -* ]]; then COMPREPLY=($(compgen -W \"$opts\" -- \"$cur\"));\n"
+                "  else COMPREPLY=($(compgen -f -- \"$cur\")); fi\n"
+                "}\ncomplete -F _meshpool meshpool\n")
+    if shell == "zsh":
+        return ("#compdef meshpool\n_meshpool() {\n"
+                f"  local -a cmds; cmds=({' '.join(cmds)})\n"
+                f"  local -a opts; opts=({' '.join(opts)})\n"
+                "  if (( CURRENT == 2 )) && [[ $words[CURRENT] != -* ]]; then compadd -a cmds\n"
+                "  elif [[ $words[CURRENT] == -* ]]; then compadd -a opts\n"
+                "  else _files; fi\n}\ncompdef _meshpool meshpool\n")
+    if shell == "fish":
+        lines = [f"complete -c meshpool -n '__fish_use_subcommand' -a '{c}'" for c in cmds]
+        lines += [f"complete -c meshpool -l {o[2:]}" for o in opts]
+        return "\n".join(lines) + "\n"
+    raise argparse.ArgumentTypeError("bash, zsh or fish")
 
 
 def _worktree_session(a, prompt) -> dict | None:
@@ -248,6 +325,62 @@ def _no_console() -> bool:
         return not ctypes.windll.kernel32.GetConsoleWindow()
     except Exception:  # noqa: BLE001
         return False
+
+
+def _mcp_add_json(args: list) -> int:
+    import json
+    from meshpool_harness.agent import mcp as M
+    if len(args) != 2 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,62}", args[0]):
+        print("usage: meshpool mcp add-json NAME JSON   (JSON: {\"command\": ..., \"args\": [...]} or {\"url\": ...};"
+              " - reads it from standard input)", file=sys.stderr)
+        return 2
+    raw = sys.stdin.read() if args[1] == "-" else args[1]
+    try:
+        spec = json.loads(raw)
+    except ValueError as e:
+        print(f"meshpool: not valid JSON: {e}", file=sys.stderr)
+        return 2
+    if isinstance(spec, dict) and isinstance(spec.get("mcpServers"), dict) and len(spec["mcpServers"]) == 1:
+        spec = next(iter(spec["mcpServers"].values()))       # a whole snippet as a server's docs give it
+    if not isinstance(spec, dict) or not (isinstance(spec.get("command"), str) or isinstance(spec.get("url"), str)):
+        print("meshpool: the server needs a command or a url", file=sys.stderr)
+        return 2
+    if spec.get("args") is not None and not isinstance(spec["args"], list):
+        print("meshpool: args must be a list", file=sys.stderr)
+        return 2
+    try:
+        existed = M.edit_config(lambda s: (args[0] in s, s.__setitem__(args[0], spec))[0])
+    except (OSError, ValueError) as e:
+        print(f"meshpool: {e}", file=sys.stderr)
+        return 1
+    print(f"{'Replaced' if existed else 'Added'} the MCP server {args[0]} in {M.config_file()}.")
+    return 0
+
+
+def _trust_cli(args: list) -> int:
+    from meshpool_harness import trust as TR
+    ap = argparse.ArgumentParser(prog="meshpool trust", description="Let a folder's own hooks and allow rules "
+                                 "(.meshpool/hooks.json, .meshpool/permissions.json) run. Folders are not trusted "
+                                 "until you say so.")
+    ap.add_argument("path", nargs="?", default=".", help="the folder (default: this one)")
+    ap.add_argument("--revoke", action="store_true", help="stop trusting the folder")
+    ap.add_argument("--list", action="store_true", help="list trusted folders")
+    a = ap.parse_args(args)
+    if a.list:
+        for f in TR.folders():
+            print(f)
+        return 0
+    root = Path(a.path).expanduser().resolve()
+    if not root.is_dir():
+        print(f"Folder not found: {root}")
+        return 1
+    if a.revoke:
+        print(f"No longer trusted: {root}" if TR.revoke(root) else f"{root} was not trusted.")
+        return 0
+    TR.trust(root)
+    risky = TR.risky_files(root)
+    print(f"Trusted: {root}" + (f" (its {' and '.join(risky)} now apply)" if risky else ""))
+    return 0
 
 
 from meshpool_harness.cli_app import HELP as _HELP, NEW as _APP_COMMANDS  # noqa: E402  (one table for help)
@@ -359,7 +492,7 @@ def _main(argv=None):
         _bundled_tools()             # the shell, Git and browser engine that ship inside the app
     except Exception:
         pass
-    if argv and argv[0] in ("--version", "-V"):
+    if argv and argv[0] in ("--version", "-V", "-v"):
         from meshpool_harness import __version__
         print(f"meshpool {__version__}")
         return 0
@@ -367,8 +500,21 @@ def _main(argv=None):
         if argv and argv[0] == "agent":
             argv = argv[1:]
         a = _agent_parser().parse_args(argv)
+        if a.settings:                       # first, so the flags below still win
+            try:
+                for k, v in _settings_file(a.settings).items():
+                    os.environ[k] = v
+            except (OSError, ValueError) as e:
+                print(f"meshpool: --settings: {e}", file=sys.stderr)
+                return 2
         if a.model:
             os.environ["MH_MODEL"] = a.model
+        if a.strict_mcp_config:
+            os.environ["MH_STRICT_MCP"] = "1"
+        if a.subagent:
+            os.environ["MH_START_AGENT"] = a.subagent
+        if a.disable_slash_commands:
+            os.environ["MH_NO_COMMANDS"] = "1"
         if os.environ.get("MH_EFFORT") and not os.environ.get("MH_REASONING_EFFORT"):
             os.environ["MH_REASONING_EFFORT"] = os.environ["MH_EFFORT"]      # the old name, kept as an alias
         if getattr(a, "effort", None):
@@ -386,8 +532,43 @@ def _main(argv=None):
             os.environ["MH_AGENT_PROFILE"] = mode
         if a.max_turns is not None:
             os.environ["MH_MAX_STEPS"] = str(a.max_turns)
-        if a.append_system_prompt:
-            os.environ["MH_APPEND_PROMPT"] = a.append_system_prompt
+        if a.name:
+            os.environ["MH_SESSION_NAME"] = a.name.strip()[:80]
+        if a.mcp_config:
+            os.environ["MH_MCP_CONFIG"] = a.mcp_config
+        try:
+            extra = "\n\n".join(x for x in (a.append_system_prompt, _read_arg_file(a.append_system_prompt_file)) if x)
+            own = a.system_prompt or _read_arg_file(a.system_prompt_file)
+        except OSError as e:
+            print(f"meshpool: {e}", file=sys.stderr)
+            return 2
+        if extra:
+            os.environ["MH_APPEND_PROMPT"] = extra
+        if own:
+            os.environ["MH_SYSTEM_PROMPT"] = own
+        if a.session_id:
+            from meshpool_harness.agent import core as K
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", a.session_id) or a.session_id.startswith("sub-"):
+                print("meshpool: --session-id takes letters, digits, - and _ (up to 80)", file=sys.stderr)
+                return 2
+            if (K.SESSIONS / a.session_id / "session.json").exists():
+                print(f"meshpool: a session with the id {a.session_id} already exists; use --resume", file=sys.stderr)
+                return 2
+            if (a.resume or a.session) and not a.fork_session:
+                print("meshpool: --session-id names a new session; add --fork-session to resume into it",
+                      file=sys.stderr)
+                return 2
+            os.environ["MH_SESSION_ID"] = a.session_id
+        if a.fork_session:
+            if not (a.resume or a.session):
+                print("meshpool: --fork-session goes with -c or --resume", file=sys.stderr)
+                return 2
+            os.environ["MH_FORK_SESSION"] = "1"
+        if a.no_session_persistence:
+            if prompt is None:
+                print("meshpool: --no-session-persistence goes with -p", file=sys.stderr)
+                return 2
+            os.environ["MH_NO_PERSIST"] = "1"
         if getattr(a, "sandbox", False):
             os.environ["MH_SANDBOX"] = "1"
         if getattr(a, "no_network", False):
@@ -411,6 +592,8 @@ def _main(argv=None):
                               **({"worktree_id": wt["id"]} if wt else {}))
         finally:
             _worktree_done(wt)
+    if argv[:2] == ["mcp", "add-json"]:          # meshpool mcp add-json NAME '{"command": ...}'  (or - for stdin)
+        return _mcp_add_json(argv[2:])
     if argv[0] in _APP_COMMANDS and not (argv[0] == "mcp" and len(argv) == 1):   # the app's features as commands
         from meshpool_harness import cli_app
         return cli_app.main(argv)
@@ -444,6 +627,25 @@ def _main(argv=None):
             print("Usage: meshpool disconnect <name>")
             return 1
         return connect_cli.disconnect(argv[1])
+    if argv[0] == "doctor":                    # meshpool doctor [folder]: problems in meshpool's own files
+        from meshpool_harness import doctor as DR
+        text, code = DR.report(argv[1] if len(argv) > 1 else ".")
+        print(text)
+        return code
+    if argv[0] == "completion":                # meshpool completion bash|zsh|fish
+        sh = (argv[1:2] or [""])[0]
+        if sh not in ("bash", "zsh", "fish"):
+            print("usage: meshpool completion bash|zsh|fish\n  bash: eval \"$(meshpool completion bash)\" in "
+                  "~/.bashrc\n  zsh: meshpool completion zsh > \"${fpath[1]}/_meshpool\"\n  fish: meshpool "
+                  "completion fish > ~/.config/fish/completions/meshpool.fish", file=sys.stderr)
+            return 2
+        sys.stdout.write(completion(sh))
+        return 0
+    if argv[0] == "trust":                     # meshpool trust [path] [--revoke] [--list]
+        return _trust_cli(argv[1:])
+    if argv[0] == "office":                    # meshpool office install | status | uninstall | manifest
+        from meshpool_harness import office as OF
+        return OF.cli(argv[1:])
     if argv[0] == "run-due":
         from meshpool_harness import scheduler_os as SO
         print(f"ran {SO.run_due()} scheduled task(s)", flush=True)

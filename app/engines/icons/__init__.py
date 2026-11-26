@@ -51,6 +51,38 @@ def _user_tag() -> str:
 
 # per-user default: a shared /tmp/meshpool_icons would let another local user pre-plant SVGs
 CACHE = Path(os.environ.get("MESHPOOL_ICON_CACHE") or Path(tempfile.gettempdir()) / f"meshpool_icons_{_user_tag()}")
+_PRIVATE: dict = {}                     # the private folder used when CACHE is not this user's own (made once)
+
+
+def private_dir(d: Path, prefix: str = "meshpool_icons_") -> Path:
+    """d when it is this user's own folder, with no group or other access (fixed if the user owns it). A per-user
+    name in a shared temp folder is still predictable: another local user can make it first and plant files in it.
+    Such a folder (another owner, or a link) is never used; a fresh private temp folder is used instead."""
+    d = Path(d)
+    if os.name == "nt":                             # per-user %TEMP%: no other local user can write there
+        return d
+    try:
+        d.mkdir(mode=0o700, parents=True, exist_ok=True)
+        st = os.lstat(d)
+        if not os.path.islink(d) and os.path.isdir(d) and st.st_uid == os.getuid():
+            if st.st_mode & 0o077:
+                os.chmod(d, 0o700)
+            return d
+    except OSError:
+        pass
+    key = (str(d), prefix)
+    if key not in _PRIVATE:
+        _PRIVATE[key] = Path(tempfile.mkdtemp(prefix=prefix))      # mkdtemp: 0700, a random name
+    return _PRIVATE[key]
+
+
+def _cache_root() -> Path:
+    return private_dir(CACHE)
+
+
+def forge_cache() -> Path:
+    """The forge's own cache folder (rendered icons, built templates and brand masters), private to this user."""
+    return private_dir(Path(tempfile.gettempdir()) / f"meshpool_forge_{_user_tag()}", "meshpool_forge_")
 
 _LUCIDE = {"family": "lucide", "license": "ISC", "license_file": ENGINES / "slides" / "icons" / "LICENSE-lucide.txt",
            "version": "0.460.0", "source": "https://lucide.dev (npm lucide-static)"}
@@ -377,8 +409,8 @@ def _shared_tags() -> dict:
     return out
 
 
-def _cache_path(set: str, name: str) -> Path:
-    return CACHE / f"{set}-{SETS[set]['version']}" / f"{name}.svg"
+def _cache_path(set: str, name: str, root: Path | None = None) -> Path:
+    return (root or _cache_root()) / f"{set}-{SETS[set]['version']}" / f"{name}.svg"
 
 
 @lru_cache(maxsize=None)
@@ -394,7 +426,8 @@ def index(set: str | None = None) -> tuple[dict, ...]:
     if "dir" in info:
         items = [(p.stem, str(p)) for p in sorted(info["dir"].glob("*.svg"))]
     else:
-        items = [(n, str(_cache_path(set, n))) for n in sorted(_icons(set))]
+        root = _cache_root()
+        items = [(n, str(_cache_path(set, n, root))) for n in sorted(_icons(set))]
     rows = []
     for name, p in items:
         t = tags.get(name) or lend.get(name) or []

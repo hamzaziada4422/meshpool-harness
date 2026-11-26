@@ -64,12 +64,50 @@ def _check_ip(url: str, host: str, ip) -> None:
         _refuse(url, host, ip)
 
 
+def _domains(key: str) -> list[str]:
+    return [d.strip().lower().lstrip(".").removeprefix("*.").rstrip(".") for d in os.environ.get(key, "").split(",")
+            if d.strip()]
+
+
+def _covers(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
+
+
+def _host_of(url: str) -> str:
+    """The host a browser or HTTP client would reach, normalised (IDNA, case, trailing dots); "" when unclear."""
+    u = str(url or "").strip()
+    if "\\" in u or u.startswith("//") or "://" not in u or re.search(r"[\x00-\x20]", u.split("#")[0]):
+        return ""
+    host = (urllib.parse.urlsplit(u).hostname or "").strip()
+    try:
+        host = host.encode("idna").decode("ascii") if host and not host.isascii() else host
+    except UnicodeError:
+        return ""
+    return host.rstrip(".").lower()
+
+
+def check_domain(url: str) -> None:
+    """The user's site lists: never the blocked sites; only the allowed ones when there are any."""
+    deny, allow = _domains("MH_FETCH_DENY"), _domains("MH_FETCH_ALLOW")
+    if not deny and not allow:
+        return
+    host = _host_of(url)
+    if not host:
+        raise WebError(f"refused {url[:120]}: its address is unclear, and your site lists need a clear host.")
+    if any(_covers(host, d) for d in deny):
+        raise WebError(f"refused {url}: {host} is on your list of sites agents never read (Settings, MH_FETCH_DENY).")
+    if allow and not any(_covers(host, d) for d in allow):
+        raise WebError(f"refused {url}: agents read only {', '.join(allow)} (Settings, MH_FETCH_ALLOW). Ask the user "
+                       "to add the site if it is needed.")
+
+
 def check_public(url: str) -> None:
     """Refuse URLs that point at this computer or a private network (loopback, RFC 1918, link-local such as the
     169.254.169.254 cloud metadata address, reserved ranges). Agents call fetch() without asking, so a page or a prompt
     must not be able to make them read local services. Behind a system proxy (common on company Macs and PCs) the
     proxy resolves the name, so only literal addresses and local names are checked. MH_ALLOW_PRIVATE_FETCH=1 turns the
-    check off."""
+    check off. The site lists in Settings (MH_FETCH_ALLOW, MH_FETCH_DENY) apply always."""
+    check_domain(url)
     if _private_allowed():
         return
     u = urllib.parse.urlparse(url)
@@ -680,6 +718,7 @@ def fetch(url: str, refresh: bool = False) -> dict:
         url = "https://" + url if re.match(r"[\w.-]+\.[a-z]{2,}(/|$)", url, re.I) else url
     if not re.match(r"https?://", url, re.I):
         raise WebError("url must start with http:// or https://")
+    check_domain(url)                                 # before the cache: a site blocked since is never served
     with _LOCK:
         hit = _CACHE.get(url)
     if hit and not refresh and time.time() - hit[0] < 900:

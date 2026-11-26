@@ -27,8 +27,20 @@ per agent, so a single pass or fail can move; costs are estimates from one price
 | Meshpool CLI (affected, see below) | 4/7 | $0.056 | 4/7 | $0.055 | 337 | 182 |
 | Meshpool Work (affected, see below) | 5/7 | $0.056 | 6/7 | $0.154 | 874 | 396 |
 
-**Meshpool is not cheaper or faster than Codex or Pi on office work yet.** Pi is the cheapest and Codex the most
+**At the time of this run (before 0.0.16), Meshpool was not cheaper or faster than Codex or Pi on office work.** Pi is the cheapest and Codex the most
 reliable. The best Meshpool option, Meshpool on Codex, costs about 2.2x Codex and 4x Pi per task.
+
+**Since 0.0.16** (Meshpool Work's direct office route, against Codex CLI 0.171, same model, gateway and hour, six runs
+per task; cost per solved task as a multiple of Codex's, 95% interval; time as the median of per-task ratios):
+
+| Suite | Solved, Meshpool vs Codex | Cost per solved vs Codex | Time vs Codex |
+|---|---|---|---|
+| Office-7 (the seven tasks above) | 42 vs 41 of 42 | 0.94x (0.72-1.18) | 0.76x |
+| SpreadsheetBench (public sample) | 31 vs 35 of 36 | 0.90x (0.74-1.05) | 1.07x |
+| OfficeBench (public sample) | 21 vs 24 of 24 | 0.83x (0.60-1.06) | 0.87x |
+
+Meshpool Work is now cheaper than Codex per solved office task, and faster on Office-7, but it still solves fewer
+SpreadsheetBench and OfficeBench tasks. Pi was not re-measured on these suites.
 
 What changed since 0.0.12, and what it did:
 - The Meshpool layer on top of Pi and Codex is much smaller per request (measured on a fake endpoint, first request

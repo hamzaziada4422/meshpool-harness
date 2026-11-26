@@ -77,9 +77,29 @@ def load_config(path: Path | None = None) -> dict:
     if not isinstance(data, dict):
         return {}
     a, b = data.get("mcpServers"), data.get("servers")
-    if isinstance(a, dict) and isinstance(b, dict):
+    a, b = (a if isinstance(a, dict) else None), (b if isinstance(b, dict) else None)
+    if a is not None and b is not None:
         return {**b, **a}                      # a file that ended up with both keys: show every server
     return a or b or {}
+
+
+PROJECT_FILES = (".mcp.json", ".meshpool/mcp.json")
+
+
+def project_servers(root) -> dict:
+    """MCP servers a project lists in .mcp.json (the shared format) or .meshpool/mcp.json. They start programs, so
+    they are used only when the user trusts the folder (trust.py). The user's own servers win on a name clash."""
+    from meshpool_harness import trust as TR
+    if not root or not TR.is_trusted(root):
+        return {}
+    out: dict = {}
+    for rel in PROJECT_FILES:
+        try:
+            got = load_config(Path(root) / rel)
+        except (ValueError, OSError):
+            continue
+        out.update({k: v for k, v in got.items() if isinstance(v, dict)})
+    return out
 
 
 _CFG_LOCK = threading.Lock()
@@ -320,6 +340,7 @@ def raise_file_limit(want: int = 4096) -> None:
 
 
 _LOGIN_ENV: list = []
+_LOGIN_ENV_LOCK = threading.Lock()       # servers start in parallel threads: the login shell runs once, not per server
 
 
 def login_shell_env() -> dict:
@@ -329,6 +350,13 @@ def login_shell_env() -> dict:
     cannot be read (then the app's own environment is used). Off with MH_LOGIN_ENV=0."""
     if _LOGIN_ENV:
         return _LOGIN_ENV[0]
+    with _LOGIN_ENV_LOCK:
+        if not _LOGIN_ENV:
+            _LOGIN_ENV.append(_read_login_env())
+    return _LOGIN_ENV[0]
+
+
+def _read_login_env() -> dict:
     got: dict = {}
     if os.name != "nt" and os.environ.get("MH_LOGIN_ENV", "1") != "0" and not os.environ.get("MESHPOOL_RESOLVING_ENV"):
         sh = os.environ.get("MH_LOGIN_SHELL") or os.environ.get("SHELL") or "/bin/sh"
@@ -343,7 +371,6 @@ def login_shell_env() -> dict:
                 got = dict(kv.split("=", 1) for kv in body.split("\0") if "=" in kv)
         except (OSError, subprocess.SubprocessError, ValueError):
             got = {}
-    _LOGIN_ENV.append(got)
     return got
 
 
@@ -364,6 +391,9 @@ def child_env() -> dict:
         env = merged
         for k in ("MESHPOOL_RESOLVING_ENV", "PWD", "OLDPWD", "SHLVL", "_"):
             env.pop(k, None)
+    # PA-toplevel-23: a server outlives the turn it was started in; with the turn's MH_CHECK_RUN it would record every
+    # later turn's checks into that first one. Without it, it follows checks.current() (the pointer file).
+    env.pop("MH_CHECK_RUN", None)
     return env
 
 
@@ -841,7 +871,11 @@ def _sse_spec(spec: dict) -> bool:
 # start its own: five chats, five processes, each importing its libraries at once. Now chats on the same folder share
 # one process; it starts on the first tool call (the tool list comes from a cache on disk), a chat that closes lets
 # go of it, and one nobody has used for MH_MCP_IDLE_S seconds (60) is stopped and starts again on the next call.
-# Browser and computer servers keep per-chat state (pages, the screen), so they stay one process per chat.
+# Browser and computer servers keep per-chat state (pages, the screen), so they stay one process per chat. An app
+# chat's browser (MH_CHAT_ID in its env, so its key is its own) is pooled too, only to start on its first call instead
+# of when the chat opens; it is never stopped for being idle (it would lose the pages and sign-ins), only when the chat
+# closes. The app's office and assistant servers serve every chat from one process: the chat's folder and id go with
+# each call (_project, _chat), not in the process's environment, which would make one process per chat again.
 
 _STATEFUL = ("browser", "computer")
 _POOL: dict[str, "_Entry"] = {}
@@ -860,6 +894,7 @@ class _Entry:
         self.refs: set = set()           # the Server objects (chats) using it
         self.inflight = 0
         self.last = time.time()
+        self.keep = False                # a stateful server (a chat's browser): never stopped for being idle
         self._n = 0
 
     def next_id(self) -> int:
@@ -894,7 +929,7 @@ def _reap_loop():
             entries = list(_POOL.values())
         for e in entries:
             with e.lock:
-                if limit > 0 and e.t is not None and not e.inflight and time.time() - e.last > limit:
+                if limit > 0 and e.t is not None and not e.inflight and not e.keep and time.time() - e.last > limit:
                     e.stop()                          # idle: no process, no CPU; the next call starts it again
 
 
@@ -950,6 +985,11 @@ def _cache_file() -> Path:
 
 
 def _cache_key(name: str, spec: dict) -> str:
+    # MH_CHAT_ID only tells a built-in server which chat it serves (live view, task mode, build counts); its tool list
+    # is the same for every chat, so a new chat (every `meshpool -p`) finds the saved list instead of starting servers
+    env = spec.get("env")
+    if isinstance(env, dict) and "MH_CHAT_ID" in env:
+        spec = {**spec, "env": {k: v for k, v in env.items() if k != "MH_CHAT_ID"} or None}
     stamp = ""
     try:
         stamp = str(int(max(f.stat().st_mtime for f in Path(__file__).parent.glob("*_mcp_server.py"))))
@@ -995,11 +1035,51 @@ def save_tools(name: str, spec: dict, tools: list, info: dict) -> None:
 
 # ---------- one server ---------------------------------------------------------------------------------------------
 
+RES_LIST, RES_READ = "mcp__meshpool_resources__list_resources", "mcp__meshpool_resources__read_resource"
+_READ_WORDS = {"get", "list", "search", "read", "fetch", "find", "query", "describe", "view", "show", "lookup",
+               "count", "retrieve", "browse", "check", "inspect", "status", "info", "stats", "preview", "explain",
+               "summarize", "summary", "download", "export", "resolve", "estimate", "validate", "analyze", "lookup"}
+_WRITE_VERBS = {"create", "update", "delete", "remove", "send", "post", "write", "add", "set", "put", "patch", "edit",
+                "move", "merge", "archive", "close", "reopen", "assign", "invite", "upload", "publish", "cancel",
+                "approve", "reply", "comment", "insert", "modify", "rename", "transfer", "trigger", "run", "execute",
+                "exec", "start", "stop", "pause", "resume", "mark", "label", "draft", "schedule", "share", "duplicate",
+                "enable", "disable", "batch", "bulk", "forward", "trash", "untrash", "apply", "deploy", "push", "fork",
+                "buy", "submit", "kill", "revoke", "rotate", "restore", "reset", "upsert", "import", "commit",
+                "complete", "replace", "connect", "disconnect", "purchase", "pay", "charge", "refund", "migrate",
+                "drop", "truncate", "grant", "unlock", "lock", "login", "logout", "register", "subscribe",
+                "unsubscribe", "save", "store", "toggle", "rerun", "retry", "invoke", "call", "generate", "make",
+                "build", "install", "uninstall", "configure", "provision", "terminate", "rollback", "promote",
+                "release", "sync", "clone", "copy", "attach", "detach", "link", "unlink", "react", "vote", "follow",
+                "unfollow", "block", "unblock", "mute", "unmute", "pin", "unpin", "star", "unstar", "accept",
+                "decline", "reject", "dismiss", "resolve_thread", "rate", "tag", "untag", "notify", "email", "message",
+                "book", "order", "sign", "request", "convert", "clear", "flush", "purge", "wipe", "erase"}
+
+
+def _words(name: str) -> list[str]:
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(name or ""))     # createIssue -> create_Issue
+    return [w for w in re.split(r"[^A-Za-z0-9]+", s.lower()) if w]
+
+
+def read_only_tools(tools: list[dict]) -> list[dict]:
+    """The tools of a connector in read-only mode. The server's own readOnlyHint decides when it gives one; else a
+    tool stays only when its name has a read word (get, list, search...) and no word that changes something
+    (create, push, deploy, apply...): an allow list, so an unknown verb is left out, not let through."""
+    def ok(t):
+        ann = t.get("annotations") or {}
+        if ann.get("readOnlyHint") is True and ann.get("destructiveHint") is not True:
+            return True
+        if ann.get("readOnlyHint") is False or ann.get("destructiveHint") is True:
+            return False
+        w = _words(t.get("name"))
+        return bool(set(w) & _READ_WORDS) and not (set(w) & _WRITE_VERBS)
+    return [t for t in tools if ok(t)]
+
+
 class Server:
     def __init__(self, name: str, spec: dict, log_dir: Path, roots: list[str]):
         # this chat's own folder, not whatever the process-wide variable holds when several chats start together
         self.name, self.spec = name, _expand(spec, {"MESHPOOL_PROJECT": str(Path(roots[0]).resolve())} if roots else None)
-        self.status, self.error, self.tools, self.info = "starting", "", [], {}
+        self.status, self.error, self.tools, self.info, self.caps = "starting", "", [], {}, {}
         self._id = 0
         self._lock = threading.Lock()
         self._conn = threading.RLock()         # one reconnect or token refresh at a time
@@ -1014,9 +1094,15 @@ class Server:
         self._inflight: dict[int, object] = {}   # request id -> transport, for Stop (notifications/cancelled)
         self.timed_out = False                 # the start only ran out of time: not a verdict on the server
 
+    def _stateful(self) -> bool:
+        return any(w in self.name.lower() for w in _STATEFUL)
+
     def _poolable(self) -> bool:
-        return (bool(self.spec.get("command")) and not self.spec.get("url") and self.spec.get("shared", True) is not False
-                and not any(w in self.name.lower() for w in _STATEFUL) and os.environ.get("MH_MCP_POOL", "1") != "0")
+        if not (bool(self.spec.get("command")) and not self.spec.get("url") and self.spec.get("shared", True) is not False
+                and os.environ.get("MH_MCP_POOL", "1") != "0"):
+            return False
+        env = self.spec.get("env")                 # a stateful server only with a chat of its own (its own pool key)
+        return not self._stateful() or (isinstance(env, dict) and bool(env.get("MH_CHAT_ID")))
 
     def _join_pool(self):
         key = _pool_key(self.spec, self.roots)
@@ -1024,6 +1110,7 @@ class Server:
             e = _POOL.setdefault(key, _Entry())
         with e.lock:
             e.refs.add(id(self))
+            e.keep = e.keep or self._stateful()
         self._entry, self._key = e, key
         _ensure_reaper()
 
@@ -1053,12 +1140,14 @@ class Server:
                                 e.stop()
                         raise MCPError(f"{er.get('message', 'error')} (code {er.get('code')})")
                     e.info = (msg.get("result") or {}).get("serverInfo") or {}
+                    e.caps = (msg.get("result") or {}).get("capabilities") or {}   # resources, prompts
                     t.notify("notifications/initialized")
                     e.ready = True
         with e.lock:
             if self.closed or e.t is not t or not e.ready:
                 raise MCPError("closed" if self.closed else t._exit_reason())
             self.t, self.info = e.t, e.info
+            self.caps = getattr(e, "caps", None) or {}
             e.last = time.time()
 
     def _rpc(self, method, params, timeout):
@@ -1154,6 +1243,7 @@ class Server:
     def _handshake(self, timeout):
         res = self._rpc("initialize", self._init_params(), timeout)
         self.info = res.get("serverInfo") or {}
+        self.caps = res.get("capabilities") or {}
         if isinstance(self.t, _Http):
             self.t.version = res.get("protocolVersion") or PROTOCOL
         self.t.notify("notifications/initialized")
@@ -1232,8 +1322,10 @@ class Server:
                 if self.cancelled:                 # the caller gave up waiting: stay an error, do not appear late
                     raise MCPError(self.error or "cancelled")
                 self.tools = [t for t in tools if isinstance(t, dict) and isinstance(t.get("name"), str)]
+                if self.spec.get("read_only"):     # Settings, Connectors: read only
+                    self.tools = read_only_tools(self.tools)
                 self.status = "connected"
-            if self._entry is not None and self.tools:
+            if self.spec.get("command") and self.tools:   # a private one too: a chat's browser then starts lazily
                 save_tools(self.name, self.spec, self.tools, self.info)
         except Exception as e:
             with self._lock:
@@ -1285,6 +1377,8 @@ class Server:
                 model = ""
             if model:
                 args["_model"] = str(model)                  # the chat's model, for engines that call one
+            if self.spec.get("chat_id"):
+                args["_chat"] = str(self.spec["chat_id"])    # the chat it serves (one process serves every chat)
         r = self._rpc("tools/call", {"name": tool, "arguments": args}, float(self.spec.get("timeout", 120)))
         images: list[dict] = []
         parts = []
@@ -1361,7 +1455,9 @@ class Manager:
         except (ValueError, OSError) as e:
             self.config_error = f"{self.path.name} is not valid JSON: {e}"
             cfg = {}
-        cfg = {**cfg, **self.extra}
+        cfg = {**project_servers(self.roots[0]), **cfg, **self.extra}
+        if os.environ.get("MH_STRICT_MCP") == "1":      # --strict-mcp-config: this run's servers and meshpool's own
+            cfg = dict(self.extra)
         log_dir = C.runs_dir() / "mcp-logs"
         raise_file_limit()
         os.environ["MESHPOOL_PROJECT"] = str(Path(self.roots[0]).resolve())   # usable as ${MESHPOOL_PROJECT}
@@ -1405,10 +1501,16 @@ class Manager:
 
     def _with_chat(self, spec: dict) -> dict:
         """The browser server learns which chat it serves, so the app can find its live view; the assistant server
-        learns it to schedule tasks in the chat's own mode; the office server, so its builds are counted per chat."""
-        if self.chat and any(x in str(a) for a in spec.get("args") or []
-                             for x in ("browser_mcp_server", "assistant_mcp_server", "office_mcp_server")):
+        learns it to schedule tasks in the chat's own mode; the office server, so its builds are counted per chat.
+        The office and assistant servers get it with each call (_chat, as they get the folder): an id in their
+        environment made one process per chat, each started when the chat opened."""
+        args = [str(a) for a in spec.get("args") or []]
+        if not self.chat:
+            return spec
+        if any("browser_mcp_server" in a for a in args):
             return {**spec, "env": {**(spec.get("env") or {}), "MH_CHAT_ID": self.chat}}
+        if any(x in a for a in args for x in ("assistant_mcp_server", "office_mcp_server")):
+            return {**spec, "per_call_project": True, "chat_id": self.chat}
         return spec
 
     def _rebuild(self):
@@ -1460,10 +1562,134 @@ class Manager:
                 desc = (t.get("description") or t.get("title") or t["name"]).strip()
                 out.append({"type": "function", "function": {
                     "name": fname, "description": f"[MCP server '{s.name}'] {desc}"[:1024], "parameters": params}})
-        return out
+        return out + self._resource_schemas()
 
     def has(self, name: str) -> bool:
-        return name in self.map
+        return name in self.map or (name in (RES_LIST, RES_READ) and bool(self._resource_servers()))
+
+    # ---- prompts (ready-made requests a server offers, used as /mcp__server__prompt) ------------------------------
+    def prompts(self) -> list[dict]:
+        """[{"command", "server", "name", "description", "arguments"}] for every connected server that offers prompts."""
+        out = []
+        for s in list(self.servers.values()):
+            if s.status != "connected" or "prompts" not in (getattr(s, "caps", None) or {}):
+                continue
+            try:
+                r = s._rpc("prompts/list", {}, 30)
+            except MCPError:
+                continue
+            for p in (r.get("prompts") or [])[:100]:
+                if isinstance(p, dict) and isinstance(p.get("name"), str):
+                    out.append({"command": "/" + tool_name(s.name, p["name"]), "server": s.name, "name": p["name"],
+                                "description": str(p.get("description") or "")[:300],
+                                "arguments": [a for a in (p.get("arguments") or []) if isinstance(a, dict)]})
+        return out
+
+    def expand_prompt(self, text: str) -> str | None:
+        """The message for "/mcp__server__prompt words...": the server's prompt filled in, None when text is not one.
+        The words fill the prompt's arguments in order; the last one takes the rest. Raises ValueError for a prompt
+        that needs more arguments than were given."""
+        m = re.match(r"^/(mcp__[A-Za-z0-9_-]+)(?:\s+(.*))?$", text.strip(), re.S)
+        if not m:
+            return None
+        hit = next((p for p in self.prompts() if p["command"] == "/" + m.group(1)), None)
+        if not hit:
+            return None
+        import shlex
+        rest = (m.group(2) or "").strip()
+        try:
+            words = shlex.split(rest)
+        except ValueError:
+            words = rest.split()
+        args, specs = {}, hit["arguments"]
+        for i, a in enumerate(specs):
+            if i < len(words):
+                args[a["name"]] = " ".join(words[i:]) if i == len(specs) - 1 else words[i]
+        missing = [a["name"] for a in specs if a.get("required") and a["name"] not in args]
+        if missing:
+            raise ValueError(f"{hit['command']} needs: {', '.join(missing)}")
+        try:
+            r = self.servers[hit["server"]]._rpc("prompts/get", {"name": hit["name"], "arguments": args}, 60)
+        except MCPError as e:
+            raise ValueError(f"Could not get the prompt {hit['name']} from {hit['server']}: {redact(e)}")
+        parts = []
+        for msg in r.get("messages") or []:
+            c = (msg or {}).get("content")
+            for item in (c if isinstance(c, list) else [c]):
+                if isinstance(item, dict) and item.get("type") == "text":
+                    parts.append(str(item.get("text") or ""))
+                elif isinstance(item, dict) and item.get("type") == "resource":
+                    res = item.get("resource") or {}
+                    if res.get("text"):
+                        parts.append(f"[{res.get('uri', '')}]\n{res['text']}")
+        return "\n\n".join(p for p in parts if p.strip()) or None
+
+    def annotations(self, name: str) -> dict:
+        """The server's own hints for one tool (readOnlyHint, destructiveHint, ...), {} when it gives none."""
+        pair = self.map.get(name)
+        s = self.servers.get(pair[0]) if pair else None
+        if not s:
+            return {}
+        t = next((t for t in s.tools if t.get("name") == pair[1]), None)
+        ann = (t or {}).get("annotations")
+        return ann if isinstance(ann, dict) else {}
+
+    # ---- resources (files, records, docs a server offers to read) ------------------------------------------------
+    def _resource_servers(self) -> list:
+        return [s for s in list(self.servers.values()) if s.status == "connected" and "resources" in (getattr(s, "caps", None) or {})]
+
+    def _resource_schemas(self) -> list[dict]:
+        if not self._resource_servers():
+            return []
+        names = ", ".join(s.name for s in self._resource_servers())
+        return [{"type": "function", "function": {"name": RES_LIST, "description": (
+                    f"List the resources (files, records, documents) the connected MCP servers offer to read: {names}. "
+                    "Then read one with " + RES_READ + "."), "parameters": {"type": "object", "properties": {
+                        "server": {"type": "string", "description": "Only this server (optional)"}}}}},
+                {"type": "function", "function": {"name": RES_READ, "description": "Read one MCP resource by its "
+                    "server and URI (from " + RES_LIST + ").", "parameters": {"type": "object", "properties": {
+                        "server": {"type": "string"}, "uri": {"type": "string"}}, "required": ["server", "uri"]}}}]
+
+    def _resources(self, args: dict) -> tuple[str, bool]:
+        want = str(args.get("server") or "")
+        lines = []
+        for s in self._resource_servers():
+            if want and s.name != want:
+                continue
+            cursor, n = None, 0
+            try:
+                for _ in range(5):
+                    r = s._rpc("resources/list", {"cursor": cursor} if cursor else {}, 60)
+                    for x in r.get("resources") or []:
+                        n += 1
+                        if n <= 200:
+                            lines.append(f"{s.name}: {x.get('uri', '')}  {x.get('name') or ''}"
+                                         + (f" ({x.get('mimeType')})" if x.get("mimeType") else "")
+                                         + (f" - {str(x.get('description'))[:120]}" if x.get("description") else ""))
+                    cursor = r.get("nextCursor")
+                    if not cursor:
+                        break
+            except MCPError as e:
+                lines.append(f"{s.name}: could not list resources ({redact(e)})")
+            if n > 200:
+                lines.append(f"{s.name}: and {n - 200} more")
+        return ("\n".join(lines) or "No resources." if lines or not want else f"No server named {want} offers resources."), False
+
+    def _read_resource(self, args: dict) -> tuple[str, bool]:
+        s = self.servers.get(str(args.get("server") or ""))
+        if s is None or s not in self._resource_servers():
+            return f"No connected server named {args.get('server')!r} offers resources.", True
+        try:
+            r = s._rpc("resources/read", {"uri": str(args.get("uri") or "")}, float(s.spec.get("timeout", 120)))
+        except MCPError as e:
+            return f"MCP error from '{s.name}': {redact(e)}", True
+        parts = []
+        for c in r.get("contents") or []:
+            if c.get("text") is not None:
+                parts.append(str(c["text"]))
+            elif c.get("blob"):
+                parts.append(f"[{c.get('mimeType') or 'binary'} content, {len(c['blob']) * 3 // 4} bytes, not shown]")
+        return ("\n\n".join(parts) or "(empty)")[:200000], False
 
     def call(self, name: str, args: dict) -> tuple[str, bool]:
         """Run a tool. Images it returned are left in self.last_images for the agent to show the model."""
@@ -1473,6 +1699,10 @@ class Manager:
     def call_with_images(self, name: str, args: dict, project: str | None = None):
         """call() without the shared last_images: ((text, failed), images), safe from several threads. ``project``:
         see Server.call_with_images."""
+        if name == RES_LIST and name not in self.map:
+            return self._resources(args), []
+        if name == RES_READ and name not in self.map:
+            return self._read_resource(args), []
         sname, tool = self.map[name]
         s = self.servers[sname]
         if s.status != "connected":

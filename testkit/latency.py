@@ -1,8 +1,9 @@
 """Turn latency on the mock model: send a message, wait until the chat is idle. Run against two apps (0.0.9 and
 0.0.10) and compare. Usage: latency.py PORT [N]"""
 import json, re, statistics, sys, time, urllib.request
+from ui_token import token as _ui_token  # noqa: E402  (the launch key, testkit/ui_token.py)
 B = "http://127.0.0.1:" + sys.argv[1]; N = int(sys.argv[2]) if len(sys.argv) > 2 else 12
-TOK = re.search(r'token: "([^"]+)"', urllib.request.urlopen(B + "/").read().decode()).group(1)
+TOK = _ui_token(B)
 def call(p, body=None):
     r = urllib.request.Request(B + p, data=None if body is None else json.dumps(body).encode(), headers={"X-Meshpool-Token": TOK, "Content-Type": "application/json"})
     return json.loads(urllib.request.urlopen(r, timeout=120).read() or b"{}")

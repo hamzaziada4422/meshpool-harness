@@ -156,9 +156,9 @@ def test_ask_mode_permission_prompt():
     assert choice == ("always", "")
     text = shots[0]
     assert "Run this command?" in text and "git push origin main" in text
-    assert "1. Yes" in text and "2. Yes, and don't ask again for commands in this session" in text and "3. No" in text
+    assert "1. Yes" in text and "2. Yes, and don't ask again for commands in this session" in text and "3. Yes, and always allow this in this folder" in text and "4. No" in text
     assert "❯ 2." in text
-    for keys, want in (("y", "yes"), ("1", "yes"), ("n", "no"), ("\x1b", "no"), ("3", "no")):
+    for keys, want in (("y", "yes"), ("1", "yes"), ("n", "no"), ("\x1b", "no"), ("3", "save"), ("4", "no"), ("f", "save")):
         t.keys_factory = lambda keys=keys: FakeKeys(keys)
         assert t.approve("edit", "Edit?", "+x\n-y")[0] == want
     opts = [{"id": "ok-all", "kind": "allow_always"}]
@@ -292,6 +292,9 @@ def test_slash_commands(monkeypatch, tmp_path):
     assert a.mode == "edits"
     sess.command("/access ask")                     # the old /mode name is now /access (and /permissions)
     assert a.mode == "ask"
+    sess.command("/permissions edits")              # with a mode it sets it; bare, it lists the saved rules
+    assert a.mode == "edits"
+    sess.command("/permissions ask")
     sess.command("/auto edits")
     sess.command("/model gpt-x")
     assert a.model == "gpt-x"
@@ -318,6 +321,51 @@ def test_slash_commands(monkeypatch, tmp_path):
     assert "Connected to" in S.screen(out).text()
 
 
+def test_ctrl_r_finds_an_earlier_prompt():
+    t, out, clk = S.make_terminal()
+    t.history = ["deploy the app", "run the tests", "fix the login bug"]
+    t.keys_factory = lambda: FakeKeys("\x12", "test", "\r", "\r")
+    assert t.read_input() == "run the tests"
+    t.keys_factory = lambda: FakeKeys("\x12", "the", "\x12", "\r", "\r")     # Ctrl+R again: an older match
+    assert t.read_input() == "fix the login bug"                            # newest is the one just sent
+    t.keys_factory = lambda: FakeKeys("keep", "\x12", "zzz", "\x1b", "\r")    # Esc: what was typed comes back
+    assert t.read_input() == "keep"
+
+
+def test_ctrl_s_stashes_the_prompt_and_it_comes_back_after_the_next_send():
+    t, out, clk = S.make_terminal()
+    t.keys_factory = lambda: FakeKeys("long draft", "\x13", "quick one", "\r")
+    assert t.read_input() == "quick one"
+    t.keys_factory = lambda: FakeKeys(" more", "\r")
+    assert t.read_input() == "long draft more"                              # back, ready to go on
+
+
+def test_word_movement_keys():
+    t, out, clk = S.make_terminal()
+    t.keys_factory = lambda: FakeKeys("one two three", "\x1bb", "\x1bb", "X", "\r")
+    assert t.read_input() == "one Xtwo three"
+    t.keys_factory = lambda: FakeKeys("one two three", "\x1b[1;5D", "\x1b\x7f", "\r")
+    assert t.read_input() == "one three"
+    t.keys_factory = lambda: FakeKeys("a b", "\x01", "\x1bf", "!", "\r")
+    assert t.read_input() == "a! b"
+
+
+
+def test_a_status_line_command_shows_in_the_footer(tmp_path, monkeypatch):
+    import time as _t
+    script = tmp_path / "sl.sh"
+    script.write_text("#!/bin/sh\npython3 -c \"import json,sys; d=json.load(sys.stdin); print('branch main | mode', d['mode'])\"\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("MH_STATUSLINE", str(script))
+    t, out, clk = S.make_terminal()
+    t.cwd = str(tmp_path)
+    t._sl_ok = True                                                         # the folder check has its own test
+    t.footer_line()
+    for _ in range(40):
+        if getattr(t, "_sl_text", ""):
+            break
+        _t.sleep(0.05)
+    assert "branch main | mode" in t.footer_line()
 def test_ctrl_c_while_the_prompt_redraws_is_not_a_crash(tmp_path):
     """Ctrl+C is SIGINT: it reached the prompt loop when it landed during a redraw (a slow or paused terminal) and
     the program ended with a KeyboardInterrupt traceback. It clears the line instead; the session goes on."""

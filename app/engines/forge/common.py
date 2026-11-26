@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -168,21 +169,93 @@ def _run_tree(cmd: list, timeout: int):
     return subprocess.CompletedProcess(cmd, pr.returncode, out, err)
 
 
+# ------------------------------------------------------------------ conversion cache
+# One deck build renders the same .pptx to PDF for the validator and again for the reviewers' page images; a workbook
+# is recalculated by QA, by the workbook rules and again for the review digest. Each run is a fresh LibreOffice with a
+# new profile (one to two CPU seconds). A conversion is kept for CONVERT_TTL_S, keyed by the source's bytes (sha256),
+# its name, the target format, the kind of run and the soffice executable (path, mtime, size): the same input gives
+# the same file back without starting LibreOffice. Callers always get their own copy. MH_CONVERT_CACHE=0 turns it off.
+CONVERT_TTL_S = 600
+CONVERT_KEEP = 24
+
+
+def _convert_dir() -> Path:
+    from meshpool_harness import config as C
+    return C.home() / "cache" / "soffice"
+
+
+def convert_key(src: str, to: str, exe: str, kind: str) -> str | None:
+    if os.environ.get("MH_CONVERT_CACHE", "1") == "0":
+        return None
+    try:
+        h = hashlib.sha256()
+        with open(src, "rb") as fh:
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                h.update(block)
+        st = os.stat(exe)
+        sig = repr((h.hexdigest(), Path(src).name, to, kind, os.path.realpath(exe), st.st_mtime_ns, st.st_size))
+    except OSError:
+        return None
+    return hashlib.sha256(sig.encode("utf-8")).hexdigest()[:40]
+
+
+def convert_cached(key: str | None, dest: Path) -> bool:
+    """Copy a kept conversion to dest. False when there is none (or it is older than CONVERT_TTL_S)."""
+    if not key:
+        return False
+    f = _convert_dir() / key
+    try:
+        if time.time() - f.stat().st_mtime > CONVERT_TTL_S:
+            return False
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(dest.name + f".{os.getpid()}.part")
+        shutil.copyfile(f, tmp)
+        os.replace(tmp, dest)
+    except OSError:
+        return False
+    return True
+
+
+def convert_keep(key: str | None, made: Path) -> None:
+    """Keep a finished conversion (written whole, then moved in) and drop the oldest past CONVERT_KEEP."""
+    if not key:
+        return
+    try:
+        d = _convert_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        tmp = d / f"{key}.{os.getpid()}.part"
+        shutil.copyfile(made, tmp)
+        os.replace(tmp, d / key)
+        kept = sorted((f for f in d.iterdir() if not f.name.endswith(".part")), key=lambda f: f.stat().st_mtime)
+        old = time.time() - CONVERT_TTL_S
+        for f in kept[:-CONVERT_KEEP] + [f for f in kept[-CONVERT_KEEP:] if f.stat().st_mtime < old]:
+            f.unlink(missing_ok=True)                    # past the limit, or expired: nothing stays longer than needed
+    except OSError:
+        pass
+
+
 def soffice_convert(src: str, to: str, out_dir: str, timeout: int = 240) -> Path:
-    """Headless convert with a throwaway profile, so parallel runs never share a lock."""
+    """Headless convert with a throwaway profile, so parallel runs never share a lock. The same input converted again
+    within CONVERT_TTL_S comes from the conversion cache (see above) without starting LibreOffice."""
     from meshpool_harness import office_runtime
     exe = find_soffice()
     if not exe:
         raise office_runtime.Unavailable()
     Path(out_dir).mkdir(parents=True, exist_ok=True)
+    ext = to.split(":")[0]
+    out = Path(out_dir) / (Path(src).stem + "." + ext)
+    key = convert_key(src, to, exe, "forge-fonts")           # read before the run: out may be src itself
+    if convert_cached(key, out):
+        return out
+    t0 = time.time()
     with tempfile.TemporaryDirectory() as profile:
         _profile_fonts(Path(profile))
         r = _run_tree([exe, f"-env:UserInstallation={Path(profile).as_uri()}", "--headless", "--convert-to", to,
                        "--outdir", str(out_dir), str(src)], timeout)
-    ext = to.split(":")[0]
-    out = Path(out_dir) / (Path(src).stem + "." + ext)
     if not out.exists():
         raise RuntimeError(f"LibreOffice could not convert {Path(src).name}: {(r.stderr or r.stdout)[-400:]}")
+    if r.returncode == 0 and out.stat().st_mtime >= t0 - 2:   # this run wrote it (not a file left from before)
+        convert_keep(key, out)
     return out
 
 

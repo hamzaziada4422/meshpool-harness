@@ -18,6 +18,7 @@ psutil>=5.9
 duckdb>=1.1
 ddgs>=9.0                 # free web search (metasearch); without it web search fell back to rate-limited engines
 ruff>=0.8
+cryptography>=41          # meshpool office install: the localhost certificate Office loads the panel over (Windows has no openssl)
 tomli>=2.0; python_version < "3.11"
 # Built into the app so no skill has to install anything (docs/plan/0.0.11-bundled.md). Pinned on purpose: these are the
 # versions whose macOS builds were read file by file and need macOS 11 at most (packaging/mac/wheel_minos.py,

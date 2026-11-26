@@ -13,7 +13,7 @@ _CSI = {"A": "up", "B": "down", "C": "right", "D": "left", "H": "home", "F": "en
 _TILDE = {"1": "home", "7": "home", "4": "end", "8": "end", "3": "delete", "5": "pageup", "6": "pagedown"}
 _CTRL = {"\x01": "ctrl_a", "\x02": "ctrl_b", "\x03": "ctrl_c", "\x04": "ctrl_d", "\x05": "ctrl_e", "\x06": "ctrl_f",
          "\x0b": "ctrl_k", "\x0c": "ctrl_l", "\x0e": "ctrl_n", "\x0f": "ctrl_o", "\x10": "ctrl_p", "\x15": "ctrl_u",
-         "\x17": "ctrl_w", "\x1a": "ctrl_z", "\t": "tab", "\x7f": "backspace", "\x08": "backspace", "\r": "enter",
+         "\x17": "ctrl_w", "\x1a": "ctrl_z", "\x12": "ctrl_r", "\x07": "ctrl_g", "\x13": "ctrl_s", "\t": "tab", "\x7f": "backspace", "\x08": "backspace", "\r": "enter",
          "\n": "enter"}
 
 
@@ -38,6 +38,8 @@ def parse_keys(data: str) -> list:
                     i = end + 6 if end >= 0 else n
                 elif final == "~":
                     out.append(_TILDE.get(body.split(";")[0], "unknown"))
+                elif final in "CD" and body.endswith((";3", ";5", ";9")):   # Alt or Ctrl with an arrow: a word
+                    out.append("word_right" if final == "C" else "word_left")
                 else:
                     out.append(_CSI.get(final, "unknown"))
             elif data[i + 1] == "O" and i + 2 < n:
@@ -49,8 +51,8 @@ def parse_keys(data: str) -> list:
             elif data[i + 1] in "\x7f\x08":                 # Alt+Backspace (macOS Terminal, iTerm): delete a word
                 out.append("ctrl_w")
                 i += 2
-            elif data[i + 1] in "bf":                        # Alt+b / Alt+f: a word left / right
-                out.append("word_left" if data[i + 1] == "b" else "word_right")
+            elif data[i + 1] in "bfd":                       # Alt+b / Alt+f: a word left / right; Alt+d: delete the next one
+                out.append({"b": "word_left", "f": "word_right", "d": "word_delete"}[data[i + 1]])
                 i += 2
             elif data[i + 1] != "\x1b" and data[i + 1] >= " ":   # any other Alt+key: not "esc" plus a letter
                 out.append("unknown")
@@ -105,6 +107,7 @@ class RawKeys:
         self.saved = termios.tcgetattr(self.fd)
         new = termios.tcgetattr(self.fd)
         new[3] &= ~(termios.ICANON | termios.ECHO | termios.IEXTEN)
+        new[0] &= ~termios.IXON                        # Ctrl+S and Ctrl+Q are keys here, not flow control
         new[6][termios.VMIN], new[6][termios.VTIME] = 1, 0
         termios.tcsetattr(self.fd, termios.TCSADRAIN, new)
         sys.stdout.write("\x1b[?2004h")             # bracketed paste: a pasted block arrives as one piece

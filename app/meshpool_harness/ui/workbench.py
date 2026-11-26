@@ -478,17 +478,24 @@ def _git_status(root: str) -> dict:
     except ValueError:
         return {"repo": False, "git": True}
     branch = _git(r, "branch", "--show-current", check=False).strip() or "(detached)"
-    porcelain = _git(r, "status", "--porcelain", "-z", check=False)
-    files, parts = [], porcelain.split("\0")
-    i = 0
-    while i < len(parts):
-        ent = parts[i]
+    raw = _git(r, "status", "--porcelain", "-z", "--untracked-files=all", "--", ".", check=False).split("\0")
+    files, i = [], 0
+    while i < len(raw):                               # "XY path", and for a rename or copy the old path next
+        line = raw[i]
         i += 1
-        if len(ent) < 4:
+        if len(line) < 4:
             continue
-        if ent[0] in "RC" or ent[1] in "RC":          # a rename or copy: the old path follows as its own entry
+        xy, path = line[:2], line[3:]
+        if xy[0] in "RC" or xy[1] in "RC":           # " R new\0old\0": a rename in the worktree only, too
             i += 1
-        files.append({"status": ent[:2].strip(), "path": ent[3:]})
+        rel = os.path.relpath(Path(top) / path, r).replace(os.sep, "/")   # git gives repository paths
+        files.append({"status": xy.strip(), "path": rel, "xy": xy, "staged": xy[0] not in (" ", "?"),
+                      "unstaged": xy[1] != " " or xy[0] == "?"})
+    log = []
+    for line in _git(r, "log", "-15", "--pretty=format:%h%x1f%an%x1f%ar%x1f%s", check=False).splitlines():
+        p = line.split("\x1f")
+        if len(p) == 4:
+            log.append({"hash": p[0], "author": p[1], "when": p[2], "subject": p[3]})
     ahead = behind = 0
     try:
         ab = _git(r, "rev-list", "--left-right", "--count", "@{upstream}...HEAD").split()
@@ -499,6 +506,7 @@ def _git_status(root: str) -> dict:
     remote = _git(r, "remote", "get-url", "origin", check=False).strip()
     branches = [b.strip().lstrip("* ").strip() for b in _git(r, "branch", "--format=%(refname:short)", check=False).splitlines() if b.strip()]
     return {"repo": True, "git": True, "top": top, "branch": branch, "files": files[:500], "dirty": len(files),
+            "staged": sum(1 for f in files if f["staged"]), "log": log,
             "ahead": ahead, "behind": behind, "upstream": upstream, "remote": remote, "branches": branches[:200],
             "github": _github_slug(remote)}
 
@@ -531,6 +539,20 @@ def git_action(root: str, body: dict) -> dict:
             _git(r, "switch", "-c", name)
         else:
             _git(r, "switch", name)
+    elif act in ("stage", "unstage"):
+        paths = [str(p) for p in (body.get("paths") or []) if isinstance(p, str) and p.strip()]
+        if not paths:
+            raise ValueError("Choose a file.")
+        for p in paths:                                   # files of this repository only, never an option
+            q = (r / p).resolve()
+            if p.startswith(("-", ":")) or not (q == r.resolve() or r.resolve() in q.parents):
+                raise ValueError(f"{p} is not a file in this project.")
+        if act == "stage":
+            _git(r, "add", "-A", "--", *paths)
+        elif _git(r, "rev-parse", "--verify", "-q", "HEAD", check=False).strip():
+            _git(r, "reset", "-q", "HEAD", "--", *paths)
+        else:                                             # no commit yet: take them out of the index
+            _git(r, "rm", "-r", "-q", "--cached", "--", *paths)
     elif act == "commit":
         msg = (body.get("message") or "").strip()
         if not msg:
@@ -539,7 +561,11 @@ def git_action(root: str, body: dict) -> dict:
         if _git(r, "diff", "--name-only", "--diff-filter=U", check=False).strip() or (top / ".git" / "MERGE_HEAD").exists():
             raise ValueError("This repository is in the middle of a merge with conflicts. Resolve the conflicts "
                              "(look for <<<<<<< in the files), then commit.")
-        _git(r, "add", "-A", "--", ".")          # this project's folder only, not the rest of a larger repository
+        if body.get("staged_only"):               # what was staged, nothing else
+            if not _git(r, "diff", "--cached", "--name-only", check=False).strip():
+                raise ValueError("Nothing is staged. Stage some files first, or use Commit all.")
+        else:
+            _git(r, "add", "-A", "--", ".")      # this project's folder only, not the rest of a larger repository
         _git(r, "-c", "user.name=" + (_git(r, "config", "user.name", check=False).strip() or "Meshpool"),
              "-c", "user.email=" + (_git(r, "config", "user.email", check=False).strip() or "meshpool@localhost"),
              "commit", "-m", msg)
