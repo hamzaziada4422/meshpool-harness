@@ -154,7 +154,10 @@ def test_sse_survives_silence_and_reconnects(home, mock):
     s.start(1)                               # the connect timeout is 1 s
     try:
         assert s.status == "connected", s.error
-        time.sleep(1.6)                      # longer than that timeout with nothing on the stream
+        # once the stream named its endpoint, its socket has no read timeout, so a silent stream cannot end after
+        # the 1 s connect timeout (no fixed wait needed to see that)
+        sock = s.t._sock()
+        assert sock is not None and sock.gettimeout() is None
         assert s.t.alive
         assert s.call("echo", {"text": "a"}) == ("echo: a", False)
         old = s.t
