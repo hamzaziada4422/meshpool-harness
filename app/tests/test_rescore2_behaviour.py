@@ -627,8 +627,8 @@ def test_an_in_place_edit_points_to_undo_not_to_a_backup(office):
 
 def test_removing_an_office_lock_file_is_titled_as_that():
     from meshpool_harness.agent.core import _plain_command_title as title
-    sara = ("rm -f '~$Budget_2026.xlsx' && mkdir -p /tmp/claude-0/-tmp/32e3/scratchpad/bx && cd "
-            "/tmp/claude-0/-tmp/32e3/scratchpad/bx && unzip -o -q \"$OLDPWD/Budget_2026.xlsx\" && find . -type f && "
+    sara = ("rm -f '~$Budget_2026.xlsx' && mkdir -p /tmp/mh-scratch/bx && cd "
+            "/tmp/mh-scratch/bx && unzip -o -q \"$OLDPWD/Budget_2026.xlsx\" && find . -type f && "
             "cat xl/worksheets/sheet1.xml && echo && cat xl/charts/chart1.xml")
     assert title(sara) == "Remove the Office lock file for Budget_2026.xlsx?"
     assert title("rm -f '.~lock.Budget_2026.xlsx#'") == "Remove the Office lock file for Budget_2026.xlsx?"

@@ -282,7 +282,7 @@ def test_a_reply_never_links_a_backup_outside_the_project(tmp_path, monkeypatch)
     C.ensure_home()
     proj = tmp_path / "Board"
     proj.mkdir()
-    scratch = Path("/tmp/claude-0/-tmp/6ad9dbff-dce6-4a8f-b6d9-2ed354b5681f/scratchpad/Budget_2026.backup.xlsx")
+    scratch = tmp_path / "scratchpad" / "Budget_2026.backup.xlsx"          # a temporary copy outside the project
     text = (f"Q4 is added.\n\nA copy of the file as it was before this change is at `{scratch}`.\n"
             f"The workbook is {proj / 'Budget_2026.xlsx'}.")
     from meshpool_harness.ui import agent_api as A
@@ -290,7 +290,7 @@ def test_a_reply_never_links_a_backup_outside_the_project(tmp_path, monkeypatch)
     class S:
         workdir = str(proj)
     ev = A.Session._no_dead_links(S(), {"type": "assistant", "text": text})
-    assert str(scratch) not in ev["text"] and "/tmp/claude-0" not in ev["text"]
+    assert str(scratch) not in ev["text"] and str(scratch.parent) not in ev["text"]
     assert "Budget_2026.backup.xlsx (a temporary copy outside this project" in ev["text"]
     assert str(proj / "Budget_2026.xlsx") in ev["text"]       # a file in the project stays a link
     # the page's TEMP_PATH_RX would have made a button of it: nothing in the new text matches it

@@ -36,7 +36,7 @@ CASES = [
     ("exec_command", "sed -i 's/a/b/' open-house.html", False, "Changed open-house.html"),
     ("mcp__meshpool_office__check_document", "Use the office tool check document on client-update.docx", True, "Checked client-update.docx"),
     ("mcp__meshpool_office__make_document", "Make a Word document, client-update.docx", True, "Made client-update.docx"),
-    ("mcp__meshpool_office__read_document", '{"path": "/tmp/claude-0/x/client-update.docx"}', True, "Read client-update.docx"),
+    ("mcp__meshpool_office__read_document", '{"path": "/tmp/mh-scratch/x/client-update.docx"}', True, "Read client-update.docx"),
 ]
 
 
@@ -80,7 +80,7 @@ def test_chat_mode_rows_are_plain_and_code_mode_is_unchanged(app, page):
     assert steps == want, steps
     # a failed connector step is not "Connector step ."
     page.evaluate("""() => { const pl = {base: 'Connector step', run: 'Using a connector', done: 'Used a connector'};
-        applyEv({type: 'tool_start', id: 'y', name: 'mcp__foo__bar', summary: '/tmp/claude-0/x', mcp: true, plain: pl});
+        applyEv({type: 'tool_start', id: 'y', name: 'mcp__foo__bar', summary: '/tmp/mh-scratch/x', mcp: true, plain: pl});
         applyEv({type: 'tool_end', id: 'y', name: 'mcp__foo__bar', ok: false, output: 'ERROR nope'}); }""")
     last = page.evaluate("() => { const t = [...document.querySelectorAll('#col .tool')].pop(); return [t.querySelector('.tn').textContent, t.querySelector('.ts').textContent]; }")
     assert last == ["Connector step", ""], last
