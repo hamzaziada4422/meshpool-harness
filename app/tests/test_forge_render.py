@@ -116,7 +116,8 @@ def test_gap_marker_in_bold_leaves_no_empty_markup():
         "Closing the gap implies roughly **[GAP: implied upside %]** upside to the price.",
         "Margin is **28.9%**, net debt [GAP: net debt]."]})
     assert [b["text"] for b in s["bullets"]] == ["Margin is **28.9%**."]   # a sentence with a hole goes whole
-    assert "implied upside %" in s["notes"] and "net debt" in s["notes"]
+    qa = " ".join(s.get("_qa") or [])                    # for the checks, not the speaker notes (0.0.19)
+    assert "implied upside %" in qa and "net debt" in qa
 
 
 def test_benchmark_names_never_wrap_into_the_next_row(tmp_path):

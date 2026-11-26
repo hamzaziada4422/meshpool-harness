@@ -450,6 +450,14 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
     for sec in doc.sections:
         sec.page_width, sec.page_height = (Mm(210), Mm(297)) if size == "A4" else (Mm(215.9), Mm(279.4))
         sec.left_margin = sec.right_margin = Mm(25.4)
+    try:                                                   # real Heading and List styles, table padding and core
+        if str(APP) not in sys.path:                       # properties (Daniel, 0.0.19: engines/forge/docstyle.py)
+            sys.path.insert(0, str(APP))
+        from engines.forge import docstyle as DS
+    except Exception:  # noqa: BLE001 - engines not shipped: plain python-docx defaults
+        DS = None
+    if DS:
+        DS.style(doc)
     if title:
         doc.add_heading(title, level=0)
     clarity_note = ""
@@ -514,10 +522,15 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
                     if ri == 0:
                         for r in cell.paragraphs[0].runs:
                             r.bold = True
+            if DS:
+                DS.table(t)
         elif m := re.match(r"^(#{1,6})\s+(.*)", s):
             doc.add_heading(m.group(2).strip(), level=min(len(m.group(1)), 4))
-        elif m := re.match(r"^[-*+]\s+(.*)", s):
-            _runs(doc.add_paragraph(style="List Bullet"), m.group(1))
+        elif DS and (h := DS.bold_heading(s)):          # a line that is only a bold label: a Heading 2, not Normal
+            doc.add_heading(h, level=2)
+        elif m := re.match(r"^(?:[-*+]|[\u2022\u00b7\u25aa\u25e6\u2023])\s+(.*)", s):   # typed bullets too ("• ")
+            nested = len(ln) - len(ln.lstrip()) >= 2 and "List Bullet 2" in [st.name for st in doc.styles]
+            _runs(doc.add_paragraph(style="List Bullet 2" if nested else "List Bullet"), m.group(1))
         elif m := re.match(r"^\d+[.)]\s+(.*)", s):
             if num_id is None:
                 num_id = _new_number_list(doc)
@@ -531,6 +544,8 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
         elif s:
             _runs(doc.add_paragraph(), s)
         i += 1
+    if DS:
+        DS.finish(doc, title=title or DS.first_heading(markdown))
     path = _dest(filename, "document.docx", ".docx", _named)
     doc.save(path)
     return f"Saved the Word document: {path}.{clarity_note}", False
@@ -791,7 +806,7 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                     if not 0 <= i < len(prs.slides):
                         errors.append(f"no slide {i + 1}: the deck has {len(prs.slides)}")
                         continue
-                    prs.slides[i].notes_slide.notes_text_frame.text = o.get("text", "")
+                    prs.slides[i].notes_slide.notes_text_frame.text = _notes_text(o.get("text", ""))
                     done.append(f"notes set on slide {i + 1}")
                 else:
                     errors.append(f"unknown op {op!r} (replace_text, set_notes)")
@@ -950,6 +965,17 @@ def _tracked(paragraphs, op: str, find: str, new: str, author: str, mine: set | 
                     after_el.addnext(ins)
             return True
     return False
+
+
+def _notes_text(text) -> str:
+    """Speaker notes as presenter prose only (engines/forge/notes.py): no check markers, ids or JSON."""
+    try:
+        if str(APP) not in sys.path:
+            sys.path.insert(0, str(APP))
+        from engines.forge.notes import clean
+        return clean(text, punctuate=False)
+    except Exception:  # noqa: BLE001 - engines not shipped: the text as given
+        return str(text or "")
 
 
 def _docx_paragraphs(doc):

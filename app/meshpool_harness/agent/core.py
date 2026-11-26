@@ -129,6 +129,49 @@ def _engine_tool(name: str) -> bool:
     return n == "office_task" or (n.startswith("mcp__meshpool_office__") and n.rsplit("__", 1)[-1] in ENGINE_MCP)
 
 
+_MADE_EXT = (".pptx", ".docx", ".xlsx", ".pdf")
+
+
+def _job_file(out: str, root) -> str:
+    """The deliverable an office engine call reports it wrote ("Saved as: X", "saved it as X", "Saved the Word document:
+    X", or the first deliverable under "Files:"), as a path that exists, else ""."""
+    text = str(out or "")
+    cands = re.findall(r"Saved as: (.+?\.(?:pptx|docx|xlsx|pdf))\b", text) + \
+        re.findall(r"saved it as (.+?\.(?:pptx|docx|xlsx|pdf))\b", text) + \
+        re.findall(r"Saved the (?:Word document|PDF): (.+?\.(?:docx|pdf))\b", text) + \
+        re.findall(r"^- (.+?\.(?:pptx|docx|xlsx|pdf))\s*$", text, re.M)
+    for c in cands:
+        p = Path(c.strip())
+        p = p if p.is_absolute() else Path(root or ".") / p
+        if p.is_file():
+            return str(p)
+        hit = next(iter(Path(root or ".").glob(f"**/{Path(c).name}")), None) if root else None
+        if hit is not None and hit.is_file():
+            return str(hit)
+    return ""
+
+
+def _made_summary(path: str) -> str:
+    """A plain line for a job that finished when the model's last reply came back empty: "Made X.pptx, 7 slides." """
+    p = Path(path or "")
+    if not path or not p.is_file():
+        return ""
+    extra = ""
+    try:
+        if p.suffix.lower() == ".pptx":
+            from pptx import Presentation
+            n = len(Presentation(str(p)).slides)
+            extra = f", {n} slide{'s' if n != 1 else ''}"
+        elif p.suffix.lower() == ".xlsx":
+            import zipfile
+            with zipfile.ZipFile(p) as z:
+                n = len([x for x in z.namelist() if re.match(r"xl/worksheets/sheet\d+\.xml$", x)])
+            extra = f", {n} sheet{'s' if n != 1 else ''}"
+    except Exception:  # noqa: BLE001 - the name alone still says what was made
+        extra = ""
+    return f"Made {p.name}{extra}."
+
+
 def _codex_prompt(lean: bool = False, work: bool = False) -> str:
     """Codex's base instructions (app/defaults/engines/codex/prompt.md, Apache-2.0, see its NOTICE comment, which is
     for readers of the file and is not sent to the model). lean: the short codex-tuned prompt (prompt-core.md).
@@ -672,12 +715,98 @@ _PROGRAMS = {"python": "Python", "python3": "Python", "node": "JavaScript", "Rsc
              "perl": "Perl", "soffice": "LibreOffice", "libreoffice": "LibreOffice", "pandoc": "Pandoc"}
 
 
+_GIT_PRE = r"git(?:\s+(?:-[Cc]\s*\S+|--?[\w-]+(?:=\S*)?))*\s+"
+
+
+def _git_discard_title(steps) -> str:
+    """A title for a step that throws away work the user may not have saved elsewhere: git checkout or restore of files,
+    reset --hard, clean, and stash (Omar, 0.0.19: the card read "Run a Python step on cli.py, report.py ..."). "" if no
+    step is one of these."""
+    for x in steps:
+        x = x.strip()
+        m = re.match(_GIT_PRE + r"(checkout|restore)\b(.*)$", x, re.S)
+        if m:
+            args = m.group(2).split()
+            if m.group(1) == "restore" and any(a in ("--staged", "-S") for a in args) and \
+                    not any(a in ("--worktree", "-W") for a in args):
+                continue                                          # only unstages: nothing is lost
+            if m.group(1) == "checkout" and not ("--" in args or args[:1] == ["."]):
+                continue                                          # a branch switch or a new branch
+            paths = [a.strip("'\"") for a in (args[args.index("--") + 1:] if "--" in args else args)
+                     if not a.startswith("-")]
+            if not paths:
+                continue
+            if paths == ["."]:
+                return "Discard all your changes in this folder?"
+            if len(paths) == 1:
+                return "Discard your changes to " + os.path.basename(paths[0].rstrip("/")) + "?"
+            return f"Discard your changes to {len(paths)} files?"
+        if re.match(_GIT_PRE + r"reset\b.*--hard\b", x):
+            return "Discard all your uncommitted changes (git reset --hard)?"
+        m = re.match(_GIT_PRE + r"clean\b(.*)$", x)
+        if m and not re.search(r"(?:^|\s)(?:-[a-z]*n[a-z]*|--dry-run)(?=\s|$)", m.group(1)):
+            return "Delete the files git does not track (git clean)?"
+        if re.match(_GIT_PRE + r"stash(?:\s+(?:push|save)\b.*|(?:\s+-[-\w]+.*)?)?$", x):
+            return "Shelve your uncommitted changes (git stash)?"
+    return ""
+
+
+_HEREDOC_OPEN = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n")
+
+
+def _strip_heredocs(s: str):
+    """(script without the heredoc bodies, [bodies])."""
+    out, bodies, pos = [], [], 0
+    while True:
+        m = _HEREDOC_OPEN.search(s, pos)
+        if not m:
+            out.append(s[pos:])
+            break
+        out.append(s[pos:m.end()])
+        end = re.search(r"^[ \t]*" + re.escape(m.group(2)) + r"[ \t]*$", s[m.end():], re.M)
+        if not end:
+            bodies.append(s[m.end():])
+            break
+        bodies.append(s[m.end():m.end() + end.start()])
+        pos = m.end() + end.end()
+    return "".join(out), bodies
+
+
+def _heredoc_title(s: str) -> str:
+    """Title for a script with a heredoc (`cat > chart.py <<'EOF' ... EOF` then `python chart.py`, or `python - <<'EOF'`):
+    from what it does, not from the lines of the program text (Lina, 0.0.19: "Run 27 steps: cat, import, ...")."""
+    if "<<" not in s:
+        return ""
+    head, bodies = _strip_heredocs(s)
+    if not bodies:
+        return ""
+    w = re.search(r"(?:\bcat|\btee(?:\s+-a)?)\s*(?:>>?\s*)?(?P<f>[^\s<>|;&]+)\s*<<|\bcat\s*>>?\s*(?P<g>[^\s<>|;&]+)\s*<<",
+                  head)
+    written = os.path.basename((w.group("f") or w.group("g") or "").strip("'\"")) if w else ""
+    if not written and not re.search(r"(?:^|[;&|\s])(?:python[\d.]*|node|Rscript|ruby|perl)\b[^\n<]*<<", head):
+        return ""
+    hfiles = [f for f in dict.fromkeys(m.group(0).rsplit("/", 1)[-1] for b in bodies + [head] for m in _FILE_WORD.finditer(b))
+              if f != written][:3]
+    on = (" on " + ", ".join(hfiles)) if hfiles else ""
+    lang = next((v for k, v in _PROGRAMS.items() if re.search(r"\b" + k + r"\b", head)), "")
+    if not lang and re.search(r"\bimport\b|\bdef\b|\bprint\(", " ".join(bodies)):
+        lang = "Python"
+    step = f"a {lang} step{on}" if lang else f"a step{on}"
+    if written:
+        ran = bool(re.search(r"(?:python[\d.]*|node|Rscript|ruby|perl|bash|sh)\s+\S*" + re.escape(written), head))
+        return f"Write {written} and run it ({step})?" if ran else f"Write {written}?"
+    return f"Run {step}?"
+
+
 def _plain_command_title(script: str) -> str:
     """What a command does, in words a person can judge, for the approval card (persona runs, 0.0.18: every card was
     a raw `D=/tmp/...; python3 -I -c "..."` line nobody could judge). The command itself stays below the title.
     Never milder than the command (review, 0.0.18): "Read" only when every step only reads, a write, delete or the
     network is named as such, and a chain says how many steps it has."""
     s = str(script or "")
+    hd = _heredoc_title(s)                            # a heredoc's lines are text for a program, never steps
+    if hd:
+        return hd
     files = list(dict.fromkeys(m.group(0).rsplit("/", 1)[-1] for m in _FILE_WORD.finditer(s)))[:3]
     on = (" on " + ", ".join(files)) if files else ""
     words = re.findall(r"(?:^|[;&|]\s*|\bdo\s+|\bthen\s+)([A-Za-z][\w.+-]*)", s)
@@ -698,6 +827,9 @@ def _plain_command_title(script: str) -> str:
         return "Send your commits to the remote repository?"
     if re.search(r"\bgit\s+(?:clone|fetch|pull)\b", s):
         return "Download from a git repository?"
+    why = _git_discard_title(steps)
+    if why:
+        return why
     if re.search(r"(?:^|[\s;&|(])(?:curl|wget)(?=\s|$)", s):   # a URL that is only text (an XML namespace in a
         host = re.search(r"https?://([^/\s'\"]+)", s)         # script, a link in a commit message) is not the network
         return "Use the internet" + (f" ({host.group(1)})" if host else "") + "?"
@@ -1418,6 +1550,28 @@ def _piped_check_hides_status(cmd: str) -> bool:
     if len(stages) < 2 or _PIPEFAIL.search(cmd):
         return False
     return any(_TEST_RUN.search(s) for s in stages[:-1])
+
+
+_GIT_LOOK = re.compile(_GIT_PRE + r"(?:status|diff|log|show|branch|rev-parse|ls-files|blame|describe|remote|tag)\b")
+_STASH_PUSH = re.compile(_GIT_PRE + r"stash(?:\s+(?:push|save)\b.*|(?:\s+-[-\w]+(?:\s+-[-\w]+)*)?\s*)$")
+_STASH_BACK = re.compile(_GIT_PRE + r"stash\s+(?:pop|apply)\b")
+
+
+def _leaves_tree_as_it_was(cmd: str) -> bool:
+    """A command whose only effect on the files is a round trip, or none: git status, diff and log, a test run, and
+    a `git stash` that its own `git stash pop` puts back. It is not an edit, so a passing test run before it is still
+    the check of the files as they are (Omar: a stash round trip after the tests made the receipt say "nothing was run
+    after the last change, so it is not verified"). A stash with no pop in the same command is a change."""
+    pushes = backs = 0
+    for seg in PR._segments(str(cmd or "")):
+        seg = re.sub(r"^cd\s+(\"[^\"]*\"|'[^']*'|\S+)\s*&&\s*", "", seg).strip()
+        if _STASH_BACK.match(seg):
+            backs += 1
+        elif _STASH_PUSH.match(seg):
+            pushes += 1
+        elif not (_GIT_LOOK.match(seg) or _TEST_RUN.search(seg) or T.read_only(seg)):
+            return False
+    return pushes == backs
 
 
 def _check_line(cmd: str, shown: str, code: int) -> str:
@@ -3738,6 +3892,14 @@ class Agent:
                         "[Meshpool] Your reply ran out of output space while you were thinking, before any answer. "
                         "Give your answer now, briefly, without more deliberation.")})
                     continue
+                if not calls and not content.strip() and not said and g.get("made"):
+                    # Daniel, 0.0.19: the deck job finished and wrote its file, then the last model turn came back
+                    # empty and a red "empty reply" error ended the turn. The job's own result says what was made.
+                    done = _made_summary(g["made"])
+                    if done:
+                        self.messages.append({"role": "assistant", "content": done})
+                        self.emit({"type": "assistant", "text": done, "streamed": False, "has_tools": False})
+                        return done
                 if not calls and not content.strip() and not said:
                     # nothing said and nothing asked for: not a reply to keep in the history
                     self.emit({"type": "assistant", "text": "", "streamed": streamed, "has_tools": False})
@@ -3941,6 +4103,10 @@ class Agent:
                     step_out += outs
                     for c, out in zip(batch, outs):
                         self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": clean(out)})
+                        if _engine_tool((c.get("function") or {}).get("name") or ""):   # the file an office job made
+                            made = _job_file(str(out), self.root)
+                            if made:
+                                g["made"] = made
                         if (c.get("function") or {}).get("name") in ("apply_patch", "edit", "write_file", "edit_file") \
                                 and str(out).lstrip().startswith(("ERROR", "Error", "error:")):
                             edit_failed = True
@@ -4503,6 +4669,20 @@ class Agent:
                         "tests, or answer with what you have." if len(prev) >= 4 else "")
                 return ("[Meshpool] Not run: you already ran this; the result is unchanged and no file changed since. "
                         "It was: " + str(prev[-1][4])[:200].replace("\n", " ") + more)
+        if nm in ("shell", "exec_command", "bash", "bash_many") and os.environ.get("MH_REPEAT_SHELL", "1") != "0" \
+                and not self._POLL.search(str(f.get("arguments", ""))):
+            # the same command three times in a row with no file changed between them, whatever it printed, or a
+            # pair of commands taking turns (git stash, git stash pop, five times: Omar's run): the fourth is refused
+            tail = [r for r in runs if r[2] == edits]
+            ks = [r[0] for r in tail]
+            bg = self.ws.__dict__.get("_bg") or {}
+            if not any(e["p"].poll() is None for e in list(bg.values())) and (
+                    (len(ks) >= 3 and ks[-1] == ks[-2] == ks[-3] == key) or
+                    (len(ks) >= 5 and ks[-1] != key and ks[-2] == ks[-4] == key and ks[-1] == ks[-3] == ks[-5])):
+                g["refused"] = g.get("refused", 0) + 1
+                return ("[Meshpool] Not run: you are repeating yourself. This command (or this pair of commands) "
+                        "has just run again and again, and no file changed in between. Running it once more changes "
+                        "nothing. Do something different, or answer with what you have.")
         if os.environ.get("MH_REPEAT_WINDOW") == "1":
             stuck = (sum(1 for r in runs if r[0] == key and r[2] == edits and r[3]) >= 3
                      and len({r[1] for r in runs if r[0] == key and r[2] == edits}) == 1)
@@ -6247,7 +6427,20 @@ class Agent:
                 return False
         cmds = PR.commands_of(name, args)
         return bool(cmds) and not _destructive(args, self.root) and \
-            all(PR.git_local_ok(c, self.root, wd) for c in cmds)
+            all(PR.git_local_ok(c, self.root, wd, self._chat_touched()) for c in cmds)
+
+    def _chat_touched(self) -> set:
+        """Full paths of every file this chat changed (added, edited or removed), for the stash rule: shelving
+        changes the chat did not make is the user's work and asks."""
+        out = set(self._chat_made())
+        out.update(str(x) for x in getattr(self.ws, "turn_files", ()) or ())
+        cp = getattr(self, "checkpoint", None)
+        try:
+            for t in (cp.turns() if cp is not None else []):
+                out.update(str(self.root / c["path"]) for c in t.get("changed") or [] if c.get("path"))
+        except Exception:  # noqa: BLE001
+            pass
+        return out
 
     def _edit_unasked(self, name: str, args: dict) -> bool:
         """The rule for a file change that needs no question, for every way of making one (edit, write_file,
@@ -6511,7 +6704,7 @@ class Agent:
             # Still asked: destructive commands, the network and installs, paths elsewhere in the user's home,
             # meshpool's own rule files (the guard above), and anything outside the folder.
             if name in ("bash", "shell", "exec_command") and cmds and wd_ok and not _destructive(args, self.root) \
-                    and all(PR.sandbox_auto_ok(c, self.root, wd, self._chat_made()) and not PR.open_office_write(c, self.root, wd)
+                    and all(PR.sandbox_auto_ok(c, self.root, wd, self._chat_made(), self._chat_touched()) and not PR.open_office_write(c, self.root, wd)
                             for c in cmds):
                 if self._sandboxed():
                     script = (T.shell_script(args.get("command")) if name == "shell"
@@ -6598,7 +6791,7 @@ class Agent:
                   and not _destructive(args, self.root) and not destr
                   and self.mode in ("ask", "edits") and _sandbox_auto_on()
                   and not self._sandboxed() and (group == "edit" or office_w or
-                                                 (cmds and all(PR.sandbox_auto_ok(c, self.root, wd, self._chat_made()) for c in cmds))))
+                                                 (cmds and all(PR.sandbox_auto_ok(c, self.root, wd, self._chat_made(), self._chat_touched()) for c in cmds))))
         folder = folder and not outside_edit
         scope = ("once" if risky == "destructive" or _destructive(args, self.root) or orisk or outside_edit else   # a destructive command: this once only
                  # no sandbox: one yes for the chat. Said plainly (review, 0.0.18): nothing isolates these commands
@@ -6927,7 +7120,7 @@ class Agent:
                 ok = T.exec_exit_code(out) == 0
                 after = self._tree_sig() if before is not None else None
                 self._sig_post = (id(c), after)
-                if before is not None and after != before:
+                if before is not None and after != before and not _leaves_tree_as_it_was(args.get("cmd")):
                     self.ws.edits += 1                 # a heredoc write is an edit: the loop guards see the progress
             else:
                 out = getattr(self.ws, name)(**args)

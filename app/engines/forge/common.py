@@ -288,6 +288,7 @@ def font_file(family: str, bold: bool = False, italic: bool = False, metric_map:
             path = Path(__file__).with_name("fonts") / own[1 if bold else 0]
             if path.exists():
                 return str(path), name == family
+    subst = None
     for name, exact in ((family, True), (mapping.get(family), False)):
         if not name:
             continue
@@ -301,8 +302,12 @@ def font_file(family: str, bold: bool = False, italic: bool = False, metric_map:
                     if bold and "bold" not in path.lower() and _is_variable(path):
                         path += "|Bold"
                     return path, exact
+                if path and name == family and Path(path).is_file() and not _is_variable(path):
+                    subst = path              # the face this computer (and LibreOffice on it) sets in its place
             except Exception:
                 pass
+    if subst:                                 # Georgia without Georgia or Gelasio: measured as the substitute that is
+        return subst, False                   # drawn (DejaVu Serif), not as narrow Carlito: titles overran (P1)
     fallback = "/usr/share/fonts/truetype/crosextra/Carlito-" + ({"": "Regular"}.get(style, style)) + ".ttf"
     if Path(fallback).exists():
         return fallback, False

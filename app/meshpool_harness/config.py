@@ -13,6 +13,18 @@ from pathlib import Path
 
 APP = Path(__file__).resolve().parents[1]
 
+# What each access mode does, in one place: the web app (ui/app.js MODES), the terminal (first-run choice, /status)
+# and the settings help read these words, so the two surfaces never say different things. A test keeps app.js equal.
+MODE_INFO = {
+    "ask": ("Ask", "Works in this folder on its own where the computer can sandbox commands (Undo keeps every change); "
+                   "without a sandbox it asks first. Always asks before deleting, using the internet, installing "
+                   "software or going outside the folder."),
+    "edits": ("Accept edits", "File edits in this folder and local git commits never ask, sandbox or not. Commands "
+                              "follow the same rules as Ask."),
+    "auto": ("Full access", "Edits files and runs commands without asking. Destructive commands (rm -r, git reset "
+                            "--hard, sudo) still ask."),
+}
+
 # Keys the web app shows and edits, in display order. (key, label, default, help)
 FIELDS = [
     ("MESHPOOL_API_KEY", "API key", "", "Your meshpool key (or any OpenAI-compatible key)."),
@@ -34,9 +46,7 @@ FIELDS = [
     ("MH_OTEL_CONTENT", "OpenTelemetry: include text", "0", "1 adds prompt, reply and tool-argument text (cut to 2 KB) "
      "to the exported spans. Off by default."),
     ("MH_AGENT_PERMISSIONS", "What agents may do without asking", "ask",
-     "Ask works in the chat's folder without asking (commands run sandboxed where the computer can, without the "
-     "internet; on Windows one yes covers the chat) and asks before deleting, using the internet, installing or "
-     "going outside the folder. Accept edits is the same. Full access never asks."),
+     " ".join(f"{MODE_INFO[k][0]}: {MODE_INFO[k][1]}" for k in ("ask", "edits", "auto"))),
     ("MH_SANDBOX_AUTO", "Ordinary work in the folder runs without asking", "1",
      "0 asks before every command and file change, as before 0.0.18."),
     ("MH_COMMIT_TRAILER", "Line at the end of the agent's commits", "", "For example Co-Authored-By: meshpool "
@@ -94,7 +104,7 @@ FIELDS = [
     ("MH_SUBAGENT_DEPTH", "Sub-agent levels", "1", "1: sub-agents do their part themselves. 2 or 3: they may hand "
      "parts on to sub-agents of their own."),
     ("MH_MAX_INFLIGHT", "Model calls at the same time", "", "Per endpoint and key, across all chats and sub-agents. "
-     "Blank: automatic. meshpool sizes it to the provider (16 on the meshpool gateway, 32 on the major cloud APIs, 2 "
+     "Blank: automatic. meshpool sizes it to the provider (16 on the meshpool gateway, 32 on the major cloud APIs, 6 "
      "on a local server, 8 on others) and lowers it when the provider answers too many requests. A number sets a "
      "fixed cap. While the endpoint is recovering from an outage, calls go one at a time."),
     ("MH_BROWSER_USE", "Browser use: which browser", "meshpool",

@@ -316,7 +316,7 @@ const S = {
   collapsed: new Set(store("collapsed") || []),
 };
 // What a chat may do without asking. The keys are what the server stores; the words are for people.
-const MODES = {ask: ["Ask", "Works in this folder on its own (Undo keeps every change); asks before deleting, using the internet, installing or going outside the folder"], edits: ["Accept edits", "Edits files on its own; asks before deleting, using the internet, installing or going outside the folder"], auto: ["Full access", "Edits files and runs commands without asking"]};
+const MODES = {ask: ["Ask", "Works in this folder on its own where the computer can sandbox commands (Undo keeps every change); without a sandbox it asks first. Always asks before deleting, using the internet, installing software or going outside the folder."], edits: ["Accept edits", "File edits in this folder and local git commits never ask, sandbox or not. Commands follow the same rules as Ask."], auto: ["Full access", "Edits files and runs commands without asking. Destructive commands (rm -r, git reset --hard, sudo) still ask."]};
 // Earlier spellings of the three levels still read as these three.
 const MODE_ALIAS = {manual: "ask", supervised: "ask", ask: "ask", edits: "edits", "accept edits": "edits", "accept-edits": "edits", "auto-accept edits": "edits", full: "auto", "full access": "auto", "full-access": "auto", auto: "auto"};
 function normMode(v) { return MODE_ALIAS[String(v || "").trim().toLowerCase()] || "ask"; }
@@ -1900,6 +1900,7 @@ function applyEvRaw(ev) {
       // the count is of the user's files: an engine's build and check files (qa.json, slides.json...) are not counted
       const nf = t && t.changed ? (t.changed.filter(c => !pvBuildFile(c.path)).length || t.changed.length) : 0;
       if (t && cur.lastFoot && nf && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; safe(() => pvTurnCards(cur, cur.lastFoot, t.n)); cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${nf} file${nf === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }
+      if (t && t.changed && typeof pvRefresh === "function") safe(() => pvRefresh(curRoot(), t.changed.map(c => c.path)));   // an open preview of a changed file
       break; }
     case "turn_end": {
       endLook(cur, "");
@@ -2256,12 +2257,14 @@ function renderPanel() {
   flipLayout(() => { fitPanel(); p.hidden = !S.panel; });
   if (S.panel !== "browser") brwStop();
   if (!S.panel) return;
-  $("#ptabs").innerHTML = `<div class="pstrip" role="tablist" aria-label="Side panel tabs">` + panelSet().map(k => [k, PTABS_ALL[k]]).map(([k, lb]) => `<button role="tab" aria-selected="${S.panel === k}" data-t="${k}">${lb}</button>`).join("") + `</div><span class="sp"></span><button class="iconbtn" id="pclose" aria-label="Close panel">${ICON.x}</button>`;
+  $("#ptabs").innerHTML = `<button class="pnav" id="pnavl" aria-label="Show tabs to the left" hidden>${ICON.chevR}</button><div class="pstrip" role="tablist" aria-label="Side panel tabs">` + panelSet().map(k => [k, PTABS_ALL[k]]).map(([k, lb]) => `<button role="tab" aria-selected="${S.panel === k}" data-t="${k}">${lb}</button>`).join("") + `</div><button class="pnav" id="pnavr" aria-label="Show more tabs" hidden>${ICON.chevR}</button><span class="sp"></span><button class="iconbtn" id="pclose" aria-label="Close panel">${ICON.x}</button>`;
   $$("#ptabs [data-t]").forEach(b => b.onclick = () => togglePanel(b.dataset.t, true));
   $("#pclose").onclick = () => togglePanel(S.panel);
   { const st = $("#ptabs .pstrip"), on = $('[aria-selected="true"]', st);   // one row that scrolls: the open tab is brought into view, the wheel scrolls it sideways
     if (on && st.scrollWidth > st.clientWidth) st.scrollLeft += on.getBoundingClientRect().left - st.getBoundingClientRect().left - (st.clientWidth - on.offsetWidth) / 2;
-    const fade = () => { st.classList.toggle("fl", st.scrollLeft > 1); st.classList.toggle("fr", st.scrollLeft + st.clientWidth < st.scrollWidth - 1); };
+    const nl = $("#pnavl"), nr = $("#pnavr");      // an arrow at each end where tabs are out of sight, so none is hidden without a sign
+    const fade = () => { const l = st.scrollLeft > 1, r = st.scrollLeft + st.clientWidth < st.scrollWidth - 1; st.classList.toggle("fl", l); st.classList.toggle("fr", r); nl.hidden = !l; nr.hidden = !r; };
+    nl.onclick = () => st.scrollBy({left: -Math.max(80, st.clientWidth * 0.7), behavior: "smooth"}); nr.onclick = () => st.scrollBy({left: Math.max(80, st.clientWidth * 0.7), behavior: "smooth"});
     fade(); st.addEventListener("scroll", fade, {passive: true});
     st.addEventListener("wheel", e => { if (e.deltaY && !e.deltaX && st.scrollWidth > st.clientWidth) { st.scrollLeft += e.deltaY; e.preventDefault(); } }, {passive: false}); }
   const body = $("#pbody"); body.innerHTML = "";

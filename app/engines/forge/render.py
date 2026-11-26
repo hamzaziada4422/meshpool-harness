@@ -30,6 +30,7 @@ from pptx.util import Inches, Pt
 
 from .common import numbers as number_tokens, positive_axis_ids
 from .density import condense
+from . import notes as NT
 from .template import default_template, layout
 
 ICONS = Path(__file__).resolve().parents[1] / "slides" / "icons"
@@ -53,7 +54,7 @@ T = {"title": 25, "sub": 18, "note": 9, "src": 9, "tag": 9, "label": 12, "body":
 DENSE = {"cell": 10, "lead": 10, "head": 14, "num": 20, "label": 10}            # challenge matrix (page 8)
 ARGUMENT = {"intro": 14, "bullet": 12, "callout": 12, "exhibit": 16, "unit": 12}  # exhibit + argument (page 3)
 FIRM = ""                   # a user's deck never carries the product name: the footer is empty unless a brand sets one
-BRAND = {"firm": None, "footer": None, "logo": None, "footer_right": None}   # the company look for this render (engines/forge/brand.py)
+BRAND = {"firm": None, "footer": None, "logo": None, "footer_right": None, "footer_every": None}   # the company look for this render (engines/forge/brand.py)
 _BASE = {"T": dict(T), "DENSE": dict(DENSE), "ARGUMENT": dict(ARGUMENT)}
 DENSITY = {"mode": "balanced", "bump": 1}       # deck density (engines/forge/density.py); set by render()
 
@@ -752,7 +753,7 @@ def _header(ctx, s, sl, n, title_w=None):
                 if head:
                     break
             if head and len(head.split()) >= 2:
-                s["notes"] = (s.get("notes", "") + "\n[QA] subtitle shortened to one line; in full: " + sub_t).strip()
+                NT.qa(s, "subtitle shortened to one line; in full: " + sub_t)
                 sub_t = head
                 ssz = next((z for z in (T["sub"], 16, 15, 14) if one(sub_t, z)), 14)
         _write(_box(sl, LEFT, 1.24 if band else SUB_Y, w, 0.3 if band else 0.33, "role_subtitle_Subtitle",
@@ -773,7 +774,39 @@ def _header(ctx, s, sl, n, title_w=None):
         x -= 0.3
 
 
-_NOTE_MARK = re.compile(r"^\s*(?:\^?\d{1,2}[.):]?|[¹²³⁴⁵⁶⁷⁸⁹]+)\s+(?=\S)")
+def _clauses(t: str) -> list[str]:
+    """A source line split at "; " and at commas outside parentheses: the places it may be cut whole."""
+    out, depth, start = [], 0, 0
+    for i, ch in enumerate(t):
+        depth += (ch in "([") - (ch in ")]")
+        if depth == 0 and ch in ";," and (i + 1 >= len(t) or t[i + 1] == " "):
+            out.append(t[start:i + 1])
+            start = i + 1
+    out.append(t[start:])
+    return [c for c in out if c.strip()]
+
+
+def source_blocks(t: str, sw: float) -> list[dict]:
+    """The source line as it is drawn: one line (BCG); else one line a point smaller; else two lines; else as many
+    whole clauses as fit in two lines, never cut inside a name or a parenthesis and never ending "and others" (a
+    truncated "(412 plant managers and others" line: Daniel, 0.0.19)."""
+    fits = lambda b, lim: _need(b, sw) <= lim          # noqa: E731
+    for size, lim in ((T["src"], 0.2), (T["src"] - 1, 0.19), (T["src"] - 1, 0.33)):
+        b = [{"text": t, "size": size, "numbers": False}]
+        if fits(b, lim):
+            return b
+    keep = ""
+    for c_ in _clauses(t):
+        cand = keep + c_
+        if keep and not fits([{"text": cand.rstrip(" ;,"), "size": T["src"] - 1, "numbers": False}], 0.33):
+            break
+        keep = cand
+    return [{"text": keep.rstrip(" ;,"), "size": T["src"] - 1, "numbers": False}]
+
+
+# a marker the writer typed: "1. ", "1) ", "^1 ", "¹ ", or a lone digit before a capital ("1 Five plants"); never the
+# number a note starts with ("19 months is the survey median" lost its "19": Daniel, 0.0.19)
+_NOTE_MARK = re.compile(r"^\s*(?:\^\d{1,2}[.):]?|\d{1,2}[.):]|[¹²³⁴⁵⁶⁷⁸⁹]+|\d(?=\s+[A-Z]))\s+(?=\S)")
 _NOTE_TAIL = re.compile(r"\s*(?:\^\d{1,2}|[¹²³⁴⁵⁶⁷⁸⁹]+)\s*$")
 
 
@@ -815,8 +848,8 @@ def _footer(ctx, s, sl, n):
     notes = [footnote_text(t) for t in s.get("footnotes") or [] if footnote_text(t)]
     meta = [x for x in notes if _META_NOTE.search(x)]     # notes about what the sources lack are for the presenter
     notes = [x for x in notes if x not in meta][:NOTE_MAX]   # at most three short notes on the page
-    if meta:
-        s["notes"] = (s.get("notes", "") + "\n[QA] Note moved off the slide: " + " | ".join(meta)).strip()
+    if meta:                                          # remarks about the sources: for the checks, not the presenter
+        NT.qa(s, "Note about the sources left off the slide: " + " | ".join(meta))
     lc = getattr(ctx, "label_col_notes", None)
     ctx.label_col_notes = None
     if notes and lc:                                  # dense matrix: footnotes in the bottom of the label column
@@ -835,7 +868,7 @@ def _footer(ctx, s, sl, n):
             if _need(joined, RIGHT - LEFT) <= avail + 0.02:                    # when they fit so; else the last
                 paras = joined                                                 # note goes to the speaker notes
                 break
-            s["notes"] = (s.get("notes", "") + "\n[QA] Footnote moved off the slide: " + paras[-1]["text"]).strip()
+            NT.moved(s, re.sub(r"^\d+  ", "", paras[-1]["text"]))
             paras = paras[:-1]
         _write(_box(sl, LEFT, top, RIGHT - LEFT, avail, "Footnotes", MSO_ANCHOR.BOTTOM), paras)
     src = s.get("source") or {}
@@ -845,18 +878,13 @@ def _footer(ctx, s, sl, n):
         t = (src["text"] if re.match(r"(?i)^(source|note|المصدر|ملاحظة)", src["text"].strip()) else
              ("المصدر: " if _rtl(src["text"]) else "Source: ") + src["text"])
         sx, sw = span(0, 9)
-        sb = [{"text": t, "size": T["src"], "numbers": False}]
-        if _need(sb, sw) > 0.2:                       # a source is one line (BCG): what will not fit
-            parts_ = re.split(r"(?<=[;,])\s+", t)    # (a writer pasting the fact list) goes to the notes, clause by
-            keep = parts_[0]                          # clause, never cut mid-word
-            for c_ in parts_[1:]:
-                if _need([dict(sb[0], text=keep + " " + c_ + " and others")], sw) > 0.2:
-                    break
-                keep += " " + c_
-            rest = t[len(keep):].strip()
-            if rest:
-                s["notes"] = (s.get("notes", "") + "\n[QA] Source line shortened; the rest: " + rest).strip()
-                sb = [dict(sb[0], text=keep.rstrip(" ;,") + " and others")]
+        if BRAND.get("footer_every") and BRAND.get("footer"):   # a long footer the request spells out: the source
+            lx_ = _label_x(BRAND["footer"] + "      00", RIGHT)    # ends a column before it, on the grid
+            sw = min(sw, max([colx24(i) + CW for i in range(COLS) if colx24(i) + CW <= lx_ - GUT + 1e-6]
+                             or [sx + 2.0]) - sx)
+        sb = source_blocks(t, sw)
+        if sb[0]["text"] != t:                        # whole clauses kept; what was left out is for the checks
+            NT.qa(s, "Source line shortened; the rest: " + t[len(sb[0]["text"]):].strip(" ;,"))
         _write(_box(sl, sx, SRC_Y, sw, 0.34, "Source"), sb)
     edges = [colx24(i) + CW for i in range(COLS)]
     snap = lambda x: max([e for e in edges if e <= x + 1e-6] or [colx(10)])  # noqa: E731 - box edges on the grid
@@ -880,9 +908,27 @@ def _footer(ctx, s, sl, n):
         x -= 0.3 if not FRAME_TOP else 0.12
     if FRAME_TOP and not FRAME["band"]:                 # the deck's frame: a hairline across the top of every content
         _rule(sl, LEFT, 0.12, snap(x - LEFT) if x < RIGHT else RIGHT - LEFT, TC.TEXT_1, 0.75, "FrameTop")
-    if right - colx(10) >= 0.3:
-        _write(_box(sl, colx(10), SRC_Y, right - colx(10), 0.25, "Firm"),
+    lx = _label_x(label, right) if BRAND.get("footer_every") else colx(10)   # the whole footer on one line
+    if right - lx >= 0.3:
+        _write(_box(sl, lx, SRC_Y, right - lx, 0.25, "Firm"),
                [{"text": label, "size": T["src"] + 1, "numbers": False, "align": PP_ALIGN.RIGHT}])
+
+
+def _one_line_size(text: str, size: float, width: float, floor: float = 16) -> float:
+    """The largest size up to `size` at which a big figure ("19 months", "EUR 3.1m") stays on one line in the heading
+    face: a wide face (Georgia) broke "19 months" over its label (Daniel, 0.0.19)."""
+    from .common import text_width_in
+    f = _font("head", True)
+    plain = re.sub(r"\*\*|\^\w+", "", text)
+    while size > floor and text_width_in(plain, size, f) > width * 0.95:
+        size -= 2
+    return size
+
+
+def _label_x(label: str, right: float) -> float:
+    """Left edge of the footer label box: wide enough for the label on one line, on a column edge (P7)."""
+    want = right - _need_w(label, T["src"] + 1) - 0.15
+    return min(colx(10), max([colx24(i) for i in range(COLS) if colx24(i) <= want] or [LEFT]))
 
 
 # ------------------------------------------------------------------ charts
@@ -1569,14 +1615,11 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
             if not multi and hl:                          # one accent bar, the context in light grey
                 s.format.fill.fore_color.theme_color = TC.ACCENT_5
             if not multi:
-                vals_k = series[k]["values"]
                 for j, cat in enumerate(cats):
-                    neg = j < len(vals_k) and isinstance(vals_k[j], (int, float)) and vals_k[j] < 0
-                    if cat in hl or neg:
-                        # the focus point in the accent; a fall in the pale highlight
-                        f = s.points[j].format
-                        f.fill.solid()
-                        f.fill.fore_color.theme_color = TC.ACCENT_2 if neg and cat not in hl else TC.ACCENT_1
+                    if cat in hl:                         # the focus point in the accent; every other bar keeps the
+                        f = s.points[j].format            # series colour, a fall included (a pale amber bar beside
+                        f.fill.solid()                    # navy and grey ones read as random: Daniel, 0.0.19)
+                        f.fill.fore_color.theme_color = TC.ACCENT_1
         s.data_labels.show_value = True
         s.data_labels.number_format = fmt
         s.data_labels.number_format_is_linked = False
@@ -1824,11 +1867,15 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         lab = "Target " + fmt_value(target, unit, t_dec)   # the target as stated ("2%", not "2.0%": the text says
         # 2% and the figure check flagged the two precisions until the line was dropped)
         lw_ = _need_w(lab, T["label"], True) + 0.1
+        bw_half = band / (1 + (c.get("_gap") if c.get("_gap") is not None else 1.5)) / 2
+
         def clash(xa, xb):                                # a bar's value label under the target label's span,
             return any(abs(yt - (yv(v) - 0.2)) < 0.4 and xa - band / 2 < cx(j) < xb + band / 2   # or a difference
                        for j, v in enumerate(vals)) or (delta is not None and any(   # arrow's end there
                            abs(yt - 0.15 - (yv(vals[j_]) - 0.34)) < 0.45 and xa - 0.1 < cx(j_) < xb + 0.1
-                           for j_ in delta[:2]))
+                           for j_ in delta[:2])) or any(    # or the bar itself: "Target 47%" was drawn on the
+                           yv(v) < yt - 0.04 and xa < cx(j) + bw_half and cx(j) - bw_half < xb   # Germany bar
+                           for j, v in enumerate(vals))     # (Daniel, 0.0.19)
         if any(abs(v - target) <= 1e-9 + 0.002 * abs(target) for v in vals):
             return                                        # a bar (a peer, a plan) stands at the line: its value label
                                                           # and the footnote name it; a "Target" label overprinted
@@ -1840,8 +1887,10 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
                 free = [(a_, b_) for a_, b_ in runs if b_ - a_ >= lw_ and not clash(a_, a_ + lw_)]
                 if free:
                     lx_ = max(free, key=lambda r_: r_[1] - r_[0])[0]
-                else:
-                    lx_, yt = px, yt - 0.32
+                else:                                     # above every bar: the line's label rides over the plot
+                    lx_ = px + pw - lw_
+                    yt = min(yt, min(yv(v) for v in vals) - 0.36)
+                    yt = max(yt, py + 0.3)
         _write(_box(sl, lx_, yt - 0.3, lw_, 0.26, "ov_TargetLabel", MSO_ANCHOR.BOTTOM),
                [{"text": lab, "size": T["label"], "bold": True, "numbers": False, "color": TC.ACCENT_1}], ctx, n)
         ctx.track(n, lab, prov)
@@ -2299,7 +2348,7 @@ def _table_gaps(t: dict, s: dict) -> dict:
              for c in r] for r in rows]
     na = lambda c: _is_na(c)                               # noqa: E731
     keyval = len(cols) <= 4 and any(_VALUE_HEAD.match(c) for c in cols[1:2])
-    note = lambda m: s.__setitem__("notes", (s.get("notes", "") + "\n[QA] " + m).strip())  # noqa: E731
+    note = lambda m: NT.qa(s, m)  # noqa: E731
     hl = set(t.get("highlight_rows") or [])
     keep, gone = [], []
     for i, r in enumerate(rows):
@@ -2417,8 +2466,7 @@ def normalize(s: dict) -> dict:
         s["footnotes"] = [tidy_prose(gap_re.sub(" not available in the sources", f)) if isinstance(f, str) else f
                           for f in s["footnotes"]]
     if gaps:
-        s["notes"] = (s.get("notes", "") + "\n[QA] Not available in the sources, left out of the text: "
-                      + "; ".join(g for g in gaps if g)).strip()
+        NT.qa(s, "Not available in the sources, left out of the text: " + "; ".join(g for g in gaps if g))
     for k in ("title", "title_right"):                       # no "…" continuation: reviewers read it as cut off
         if isinstance(s.get(k), str):
             s[k] = re.sub(r"^\s*(?:\.\.\.|…)\s*", "", re.sub(r"\s*(?:\.\.\.|…)\s*$", "", s[k]))
@@ -2731,8 +2779,7 @@ def football_fallback(s: dict) -> dict:
     text = {"type": "text", "lead": tk.get("text", ""), "prov": tk.get("prov"),
             "bullets": [b if isinstance(b, dict) else {"text": str(b)} for b in s.get("bullets") or []]}
     out = {k: v for k, v in s.items() if k not in ("chart", "takeaway", "bullets")}
-    out["notes"] = (s.get("notes", "") + "\n[QA] football field shown as figures: "
-                    + "; ".join(chart_problems(c))).strip()
+    NT.qa(out, "football field shown as figures: " + "; ".join(chart_problems(c)))
     if not items:
         return dict(out, archetype="argument_only", blocks=[{"text": text["lead"], "bullets": text["bullets"]}])
     parts = [{"type": "stats", "heading": c.get("title") or s.get("subtitle") or "Valuation reference points",
@@ -2920,9 +2967,11 @@ def a_cover(ctx, s, sl, n):
                                                          "color": soft}])
     if not dark:                                           # a logo drawn for white paper stays off the dark field
         _logo(sl, RIGHT, 0.5, 0.55, 2.6, "ov_Logo", x_left=LEFT)
+    cover_label = (BRAND.get("footer") if BRAND.get("footer_every") else None) or s.get("firm") or \
+        BRAND.get("firm") or FIRM                          # "Footer on every slide": the cover too
     _write(_box(sl, colx(9), 6.65, RIGHT - colx(9), 0.3, "Firm"),
-           [{"text": s.get("firm") or BRAND.get("firm") or FIRM, "size": 11, "bold": True, "numbers": False,
-             "align": PP_ALIGN.RIGHT, "color": ink}])
+           [{"text": cover_label, "size": 11, "bold": True, "numbers": False, "align": PP_ALIGN.RIGHT,
+             "color": ink}])
 
 
 def _as_columns(ctx, s, sl, n, items, mode):
@@ -2956,13 +3005,16 @@ def a_closing(ctx, s, sl, n):
         _as_columns(ctx, s, sl, n, items, "process")
         return
     has_when = any(st.get("owner") or st.get("timing") for st in steps)
+    # a column is drawn only when some step fills it: an empty "What it involves" column under its heading read as
+    # unfinished (Daniel, 0.0.19: the density pass had moved every detail to the notes)
+    has_what = any(str(st.get("detail") or "").strip() or st.get("milestones") for st in steps)
     nx = LEFT
-    ax, aw = span24(1, 7)
+    ax, aw = span24(1, 7) if has_what else (span24(1, 18) if has_when else span24(1, 23))
     dx, dw = (span24(8, 18) if has_when else span24(8, 23))
     wx, ww = span24(19, 23)
     y0 = TITLE_RULE_Y + 0.06
-    heads = [(ax, aw, s.get("columns", ["Action"])[0] if s.get("columns") else "Next step"),
-             (dx, dw, "What it involves")] + ([(wx, ww, "Owner and timing")] if has_when else [])
+    heads = [(ax, aw, s.get("columns", ["Action"])[0] if s.get("columns") else "Next step")] + \
+        ([(dx, dw, "What it involves")] if has_what else []) + ([(wx, ww, "Owner and timing")] if has_when else [])
     for x, w, t in heads:
         _write(_box(sl, x, y0, w, 0.3, f"role_subtitle_Head{len(t)}", MSO_ANCHOR.BOTTOM),
                [{"text": t, "size": T["head"], "bold": True, "numbers": False}])
@@ -3008,7 +3060,7 @@ def a_closing(ctx, s, sl, n):
     if keep_ms < 3:
         cut = [f"{st.get('action')}: " + "; ".join((st.get("milestones") or [])[keep_ms:]) for st in steps
                if (st.get("milestones") or [])[keep_ms:]]
-        s["notes"] = (s.get("notes", "") + "\nMilestones not shown: " + " | ".join(cut)).strip()
+        NT.moved(s, cut)
     if sum(need) > bottom - top:
         ctx.miss(n, "the next steps", int((sum(need) - (bottom - top)) * 30))
     gap = max(0.0, (bottom - top - sum(need)) / max(1, len(steps)))   # the rows share the body: no block of white
@@ -3325,7 +3377,8 @@ def _point_marker(ctx, sl, n, j, icon, x, y, d, meaning):
         _icon(sl, icon, x, y, d, meaning)
         return
     _write(_box(sl, x - 0.04, y - 0.02, d + 0.16, d + 0.04, f"ov_PointBadge{j + 1}", MSO_ANCHOR.MIDDLE),   # "01" in
-           [{"text": f"{j + 1:02d}", "size": T["num"] - 2, "bold": True, "heading": True, "numbers": False,   # the
+           [{"text": f"{j + 1:02d}", "size": _one_line_size("00", T["num"] - 2, d + 0.12, 12), "bold": True,   # the
+             "heading": True, "numbers": False,
              "color": TC.ACCENT_1, "align": PP_ALIGN.LEFT}], ctx, n)   # accent, as the summary and the BCG deck
     # number their points: a filled blue disc on every card read as a generated template (blind review)
 
@@ -3515,7 +3568,7 @@ def _trim_to_fit(blocks, w, h, floor):
 
 def _cut_note(s, dropped):
     if dropped:
-        s["notes"] = (s.get("notes", "") + "\n[QA] Did not fit and was left out: " + " | ".join(dropped)).strip()
+        NT.moved(s, list(dropped))
 
 
 def _grow(blocks, w, h, max_bump=2):
@@ -3958,8 +4011,8 @@ def _summary_panel(ctx, s, sl, n) -> bool:
         my = max(y, BODY_B - mh * len(mets))
         for i, m in enumerate(mets):
             _write(_box(sl, LEFT, my, tw, 0.55, f"role_numeral_Metric{i + 1}"),
-                   [{"text": str(m["value"]), "size": T["num"] + 6, "bold": True, "heading": True, "numbers": False,
-                     "color": TC.ACCENT_1}])
+                   [{"text": str(m["value"]), "size": _one_line_size(str(m["value"]), T["num"] + 6, tw - 0.2),
+                     "bold": True, "heading": True, "numbers": False, "color": TC.ACCENT_1}])
             ctx.track(n, str(m["value"]), m.get("prov") or s.get("title_prov"))
             _write(_box(sl, LEFT, my + 0.55, tw, 0.36, f"MetricLabel{i + 1}"),
                    [{"text": str(m.get("label") or ""), "size": T["body"], "numbers": False}])
@@ -3969,8 +4022,8 @@ def _summary_panel(ctx, s, sl, n) -> bool:
     for i, (a, d, h) in enumerate(laid):
         rh = h + gap
         _write(_box(sl, nx, yy + 0.08, cw, 0.5, f"role_numeral_{i + 1}"),
-               [{"text": f"{i + 1:02d}", "size": T["num"], "bold": True, "heading": True, "numbers": False,
-                 "color": TC.ACCENT_1}])
+               [{"text": f"{i + 1:02d}", "size": _one_line_size("00", T["num"], cw, 12), "bold": True,
+                 "heading": True, "numbers": False, "color": TC.ACCENT_1}])
         _write(_box(sl, lx, yy + 0.1, lw, rh - 0.14, f"Claim{i + 1}"), a, ctx, n)
         if d:
             _write(_box(sl, dx, yy + 0.1, dw, rh - 0.14, f"Evidence{i + 1}"), d, ctx, n)
@@ -3990,7 +4043,7 @@ def a_executive_summary(ctx, s, sl, n):
     ask = s.get("decision") or (s.get("callout") or {}).get("text") or ""
     if ask and repeats(re.sub(r"(?i)^\s*decision today:\s*", "", ask), s.get("title", ""), 0.55):   # the title
         # already is the answer: a band saying it again
-        s["notes"] = (s.get("notes", "") + "\n[QA] decision band left out: it repeats the title: " + ask).strip()
+        NT.qa(s, "decision band left out: it repeats the title: " + ask)
         ask = ""
     top, bottom = BODY_Y + 0.1, BODY_B
     if ask:
@@ -4024,8 +4077,8 @@ def a_executive_summary(ctx, s, sl, n):
             my = top + i * (bottom - top) / len(mets) if even else tops[i]     # tops: the row bounds (rules)
             mh = ((bottom - top) / len(mets) if even else
                   (tops[i + 1] if i + 1 < len(tops) else bottom) - my)
-            vb = [{"text": str(m["value"]), "size": T["num"] + 6, "bold": True, "heading": True, "numbers": False,
-                   "color": TC.ACCENT_1}]
+            vb = [{"text": str(m["value"]), "size": _one_line_size(str(m["value"]), T["num"] + 6, mw - 0.2),
+                   "bold": True, "heading": True, "numbers": False, "color": TC.ACCENT_1}]
             ctx.track(n, str(m["value"]), m.get("prov") or s.get("title_prov"))
             lb_ = [{"text": str(m.get("label") or ""), "size": T["body"], "numbers": False}]
             lh_ = _need(lb_, mw - 0.1) + 0.06
@@ -4079,8 +4132,9 @@ def a_executive_summary(ctx, s, sl, n):
             _icon(sl, icons[i], LEFT, y + 0.08, 0.42, re.sub(r"\*\*", "", pts[i].get("lead", ""))[:60])
         else:                                             # "01": the same mark as the section number on the slide
             _write(_box(sl, LEFT, y + 0.06, 0.5, 0.5, f"role_numeral_{i + 1}"),    # that proves this point
-                   [{"text": f"{i + 1:02d}" if tracker else str(i + 1), "size": T["num"], "bold": True,
-                     "heading": True, "numbers": False, "color": TC.ACCENT_1}])
+                   [{"text": f"{i + 1:02d}" if tracker else str(i + 1),
+                     "size": _one_line_size("00", T["num"], 0.5, 12), "bold": True,   # a wide face never breaks
+                     "heading": True, "numbers": False, "color": TC.ACCENT_1}])       # "01" into "0" over "1"
         _write(_box(sl, lx, y + 0.08, lw, rh - 0.12, f"Claim{i + 1}"), a, ctx, n)
         claims.append(y + 0.08)
         if d:
@@ -4485,7 +4539,7 @@ def render(slides: list[dict], out_path: str, template: str | None = None, fix_l
     except Exception:                                      # noqa: BLE001 - unreadable rules: the strict default
         PICTURES["allow"] = False
     _set_icons(icon_set or (theme.get("icon_set") if isinstance(theme, dict) else None))
-    BRAND.update({"firm": None, "footer": None, "logo": None, "footer_right": None,
+    BRAND.update({"firm": None, "footer": None, "logo": None, "footer_right": None, "footer_every": None,
                   **{k: v for k, v in (brand or {}).items() if k in BRAND}})
     DENSITY["deck"] = set_density(density)
     spec = theme_spec(theme)
@@ -4548,8 +4602,8 @@ def logo_shape(sl, path, x, y, h, max_aspect, name, alt, exact_w=None) -> float:
 def _firm_label(s) -> str:
     """The footer label: the company's footer line when it fits the label column, else its name, else the default."""
     foot = BRAND.get("footer") or ""
-    if foot and len(foot) <= 30:
-        return foot
+    if foot and (len(foot) <= 30 or BRAND.get("footer_every")):   # a footer the request spells out is used as
+        return foot                                                # written, whatever its length (Daniel, 0.0.19)
     return s.get("firm") or BRAND.get("firm") or FIRM
 
 
@@ -4774,6 +4828,7 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
     ctx = Ctx({})
     ctx.design = {}                                       # slide number -> which path drew it (design.py)
     errors = []
+    remarks: list[str] = []                               # what was cut, moved or not used, slide by slide
     try:
         queue = plan_forms(list(slides))
     except Exception:                                      # noqa: BLE001 - one bad slide must not lose the deck
@@ -4867,21 +4922,28 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
                 errors.append(f"slide {n}: fallback layout failed too: {type(e2).__name__}: {e2}")
         finally:
             BODY_B = body_b0
-        if s.get("notes"):
-            sl.notes_slide.notes_text_frame.text = s["notes"]
+        if ctx.carry and not carry:                         # fixed slide count: never an extra slide; the rows
+            left = ctx.carry.get("rows") or (ctx.carry.get("table") or {}).get("rows") or []   # go to the notes
+            NT.moved(s, ["; ".join(_txt(r.get("label")) if isinstance(r, dict) else ", ".join(map(str, r))
+                               for r in left)])
+        if s.get("notes"):                                  # the one writer of a slide's notes: presenter prose only
+            NT.write(sl, s["notes"])
+        remarks += [f"slide {n}: {m}" for m in NT.qa_of(s)]   # the renderer's remarks: for the record, not the notes
         if ctx.carry and carry:
             queue.insert(0, ctx.carry)
             errors.append(f"slide {n}: rows carried to a continuation slide (content longer than one slide)")
-        elif ctx.carry:                                     # fixed slide count: never an extra slide
-            left = ctx.carry.get("rows") or (ctx.carry.get("table") or {}).get("rows") or []
-            txt = "; ".join(_txt(r.get("label")) if isinstance(r, dict) else " | ".join(map(str, r)) for r in left)
-            prev = sl.notes_slide.notes_text_frame.text if sl.has_notes_slide else ""
-            sl.notes_slide.notes_text_frame.text = (prev + f"\n[QA] Did not fit on the slide and left out: {txt}").strip()
+        elif ctx.carry:
             errors.append(f"slide {n}: rows carried to a continuation slide (content longer than one slide); "
                           f"{len(left)} rows left out because the slide count is fixed")
     errors += ctx.overflow
     apply_rtl(prs)
     _reading_order(prs)
+    try:                                                    # File > Info: the deck's title and the user, never
+        from .docmeta import set_core                       # "generated using python-pptx" / "Steve Canny" (0.0.19)
+        first = next((s0 for s0 in slides if isinstance(s0, dict) and s0.get("title")), {})
+        set_core(prs.core_properties, title=str(first.get("title") or ""))
+    except Exception as e:  # noqa: BLE001 - properties never fail a render
+        errors.append(f"document properties skipped: {type(e).__name__}")
     prs.save(out_path)
     try:                                                    # P4: at most the density's sizes per text role
         from .typescale import harmonize
@@ -4890,7 +4952,7 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
         errors.append(f"type-scale pass skipped: {type(e).__name__}: {e}")
     prov_path = str(Path(out_path).with_suffix("")) + ".provenance.json"
     Path(prov_path).write_text(json.dumps({"slides": ctx.prov}, indent=1))
-    return {"slides": n, "errors": errors, "provenance": prov_path, "design": ctx.design}
+    return {"slides": n, "errors": errors, "provenance": prov_path, "design": ctx.design, "remarks": remarks}
 
 
 def _reading_order(prs) -> None:

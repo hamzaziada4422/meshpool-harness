@@ -4,8 +4,8 @@
 
 The model writes only JSON: a storyline (ghost deck), then slide content in schemas/slide.schema.json. The renderer
 owns layout. validate_pptx decides; its content-scope failures go back to the model slide by slide. Anything still
-failing after the last round is written into the slide notes as [QA] lines and into qa.json. Nothing passes
-silently.
+failing after the last round is written into qa.json and the engine's answer (never into the speaker notes, which
+hold presenter prose only: engines/forge/notes.py). Nothing passes silently.
 """
 from __future__ import annotations
 
@@ -147,7 +147,10 @@ ARCH_HELP = arch_help("read")                     # the dense send-ahead guide (
 
 SLIDE_SHAPE = """Slide JSON: {"id","node" (from the storyline),"archetype","title","title_prov":[fact ids],
  ...archetype fields..., "source": {"text": original sources, "prov": [ids]}, "footnotes": [...], "tags": optional
- ["Preliminary", "Non-exhaustive"], "notes": detail that did not fit}.
+ ["Non-exhaustive"] (a stamp such as "Preliminary" or "Draft" only when the brief asks for one), "notes": 3 to 5 plain
+ sentences the presenter reads aloud}.
+Notes are for the presenter only: no fact, calc or option ids, no "prov", no JSON, no remarks about the brief, the
+storyline, the facts or corrections, no instructions to yourself.
 Every text element that holds numbers carries "prov": [fact ids] (bullets as {"text","prov"}; cells as
 {"lead","bullets":[{"text","prov"}],"prov"}). Use ONLY fact values; if a number is missing write [GAP: what].
 Titles: one sentence stating the takeaway, with a verb, <= 15 words, no full stop. Every data slide has a source.
@@ -2254,6 +2257,20 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             res["rules"]["P22"] = "fail" if bad else "pass"
         return res
 
+    from engines.forge import requested as RQ
+    asked = (brand or {}).get("asked") or None              # brand items the request spells out (requested.py)
+    stamps_ok = sorted(RQ.allowed_stamps(brief.split("\n--- ", 1)[0]))   # the request, not the attached files
+
+    def tidy():
+        """What the brief did not ask for never reaches the page: a "Preliminary" or "Draft" stamp the brief does not
+        use, and section numbers on slides added to a deck that has its own (Daniel, 0.0.19)."""
+        for s_ in slides:
+            if isinstance(s_.get("tags"), list):
+                s_["tags"] = [t for t in s_["tags"] if not isinstance(t, str) or RQ.stamp_ok(t, set(stamps_ok))]
+            if insert:
+                for k in ("section", "section_no", "tracker"):
+                    s_.pop(k, None)
+
     def draw():
         _stage("drawing and checking the slides")
         try:                                  # one value per figure across the deck, fixed in code where mechanical
@@ -2261,13 +2278,22 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
                                          f"{task_id}-consistency"))
         except Exception:  # noqa: BLE001 - a checker that cannot run changes nothing
             pass
+        tidy()
+        qbrief = {"slide_count": len(slides) if fixed else slides_wanted, **ends, "stamps": stamps_ok,
+                  **({"brand": asked} if asked else {})}
         for _ in range(3):                    # a designed page that fails its checks is redrawn by its archetype
             specs, view_ = designed()
             r = render(view_, str(pptx), carry=False, theme=theme, density=density, template=template,
                        brand=brand)          # the brief's slide count is a hard limit
             prov = json.loads(Path(r["provenance"]).read_text())
-            res = validate(str(pptx), rules, brief={"slide_count": len(slides) if fixed else slides_wanted, **ends},
-                           provenance=prov, storyline={"nodes": nodes}, render=True, density=density)
+            res = validate(str(pptx), rules, brief=qbrief, provenance=prov, storyline={"nodes": nodes}, render=True,
+                           density=density)
+            if asked and res["rules"].get("P28") == "fail":   # the request's brand did not hold: fixed in this job,
+                done = RQ.enforce(str(pptx), asked)            # then checked again
+                if done:
+                    r.setdefault("remarks", []).extend(f"brand fixed after rendering: {d}" for d in done)
+                    res = validate(str(pptx), rules, brief=qbrief, provenance=prov, storyline={"nodes": nodes},
+                                   render=True, density=density)
             content_check(res, pptx)
             if not specs or not designer.check(str(pptx), r, res, slides, specs):
                 break
@@ -2583,21 +2609,15 @@ choice or the number of items; never layout. Keep node and keep the point of the
         for n, msgs in RV.as_failures(rv, severities=("high",)).items():   # what is still high goes to the notes
             fails.setdefault(n, []).extend(m for m in msgs if m not in fails.get(n, []))
         (out / "review.json").write_text(json.dumps(reviews, indent=1, default=str))
-    # freeze what is left into the notes: nothing passes silently
+    # what is left goes to qa.json, slides.json and the engine's answer: nothing passes silently, and nothing of it
+    # goes into the speaker notes, which are for the presenter only (engines/forge/notes.py)
     left = fails
     open_review = critics.review_notes(panel_final, len(slides)) if panel_final else {}
-    if (left or open_review) and rules["repair"]["flag_in_file"]:
-        for n, msgs in left.items():
-            if n - 1 < len(slides):
-                slides[n - 1]["notes"] = (slides[n - 1].get("notes", "") + "\n" + "\n".join("[QA] " + m for m in msgs)).strip()
-        for n, msgs in open_review.items():                  # the reviewers' blocking and major issues still open
-            slides[n - 1]["notes"] = (slides[n - 1].get("notes", "") + "\n" + "\n".join(msgs)).strip()
-        r = render(designed()[1], str(pptx), carry=False, theme=theme, density=density, template=template,
-                   brand=brand)          # the brief's slide count is a hard limit
-        prov = json.loads(Path(r["provenance"]).read_text())
-        res = validate(str(pptx), rules, brief={"slide_count": slides_wanted, **ends}, provenance=prov,
-                       storyline={"nodes": nodes}, render=True, density=density)
-        content_check(res, pptx)
+    if left or open_review:
+        from engines.forge.notes import QA_KEY
+        for n, msgs in list(left.items()) + list(open_review.items()):
+            if 0 < n <= len(slides):
+                slides[n - 1][QA_KEY] = list(dict.fromkeys(list(slides[n - 1].get(QA_KEY) or []) + list(msgs)))
     (out / "slides.json").write_text(json.dumps(slides, indent=1))
     (out / "facts.json").write_text(json.dumps(facts + [f for v in verify_calcs(slides, facts, rules)[0].values()
                                                          for f in v], indent=1))

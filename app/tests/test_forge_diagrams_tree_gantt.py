@@ -162,7 +162,7 @@ def test_long_content_is_cut_into_the_notes_not_overflowed(tmp_path):
         title, content = CASES[arch]
         slide = _slide(arch, title, **content[k])
         r, sl = _render(tmp_path, slide)
-        assert "Did not fit and was left out" in _notes(sl), arch
+        assert _notes(sl).strip() and "[QA]" not in _notes(sl)   # moved text: plain presenter notes, arch
         assert any("does not fit at the minimum size" in e for e in r["errors"]), arch
 
 
@@ -224,7 +224,7 @@ def test_gantt_rows_that_cannot_fit_the_height_are_left_out_and_noted(tmp_path):
     finally:
         PT.compose = real
     assert len([sh for sh in sl.shapes if sh.name.startswith("ov_GBar")]) < 14
-    assert "Did not fit and was left out" in _notes(sl)
+    assert _notes(sl).strip() and "[QA]" not in _notes(sl)   # moved text: plain presenter notes
 
 
 # ------------------------------------------------------------------ check functions

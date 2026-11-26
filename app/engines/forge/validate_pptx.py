@@ -33,6 +33,20 @@ from .ooxml_check import check as ooxml_check
 from .measure_pptx import measure, public
 
 RULES = [f"P{i}" for i in range(0, 21)]
+# What each rule checks, in plain words: the names the check details show the person ("Chart labels clear of the
+# bars: slide 3 ..."), never a rule code alone.
+RULE_NAMES = {
+    "P0": "The file opens and follows Office's format", "P1": "Nothing overlaps or runs off the page",
+    "P2": "Charts are real, editable charts", "P3": "Tables are real, editable tables",
+    "P4": "Fonts are the deck's own", "P5": "Text fits its box at a readable size",
+    "P6": "Colours come from the theme", "P7": "Shapes sit on the layout grid",
+    "P8": "Spacing is even and nothing collides", "P9": "Icons and decoration are restrained",
+    "P10": "Slides are not too dense", "P11": "Titles state the takeaway", "P12": "The titles tell the story",
+    "P13": "Every number has a source", "P14": "Text agrees with the charts", "P15": "Slides vary in form",
+    "P16": "The slide count matches the brief", "P17": "Everything is editable",
+    "P18": "Alt text and reading order", "P19": "Slides are consistent with each other",
+    "P20": "Blocks line up and fill the page", "P21": "Plain language", "P22": "Charts hold the data asked for",
+}
 
 # a small verb lexicon + inflection rules: enough to tell "Revenue grew 12% on pricing" from "Revenue overview"
 _VERBS = set("""
@@ -960,6 +974,9 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
             failures.append(F("P19", "title_face", f"Titles use {len(tfaces)} typefaces ({', '.join(sorted(tfaces))}).",
                               fix_scope="renderer", measured=len(tfaces), limit=K["title_faces_max"]))
         bfaces = {f for s in body_slides for f in s["consistency"]["body_faces"]}
+        if m["theme"].get("major") and m["theme"].get("major") != m["theme"].get("minor"):
+            bfaces -= {m["theme"]["major"]}       # the theme's heading face on numerals and leads is the pairing the
+            # deck asked for (Georgia headings, Segoe UI body), not a second body face (Daniel, 0.0.19)
         if len(bfaces) > K["body_faces_max"]:
             failures.append(F("P19", "body_face", f"Body text uses {len(bfaces)} typefaces ({', '.join(sorted(bfaces))}).",
                               fix_scope="renderer", measured=len(bfaces), limit=K["body_faces_max"]))
@@ -981,15 +998,46 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
         failures.append(F("P19", "consistency", f"Only {len(body_slides)} content slides; cross-slide consistency not "
                           "checked.", status="not_run", severity="info"))
 
-    rules_status = summarize(failures, RULES)
+    # ---------------- P23-P27 what a reader sees at a glance (visual_check.py); P28 the brand the request asks for
+    from .visual_check import RULES as _VRULES, check as _visual
+    try:
+        failures += _visual(str(path), brief)
+    except Exception as e:  # noqa: BLE001 - a visual check that cannot run is reported, never a pass
+        failures += [F(r, "visual", f"Could not run: {type(e).__name__}.", status="not_run", severity="info",
+                       fix_scope="renderer") for r in ("P23", "P24", "P25", "P26")]
+    if (brief or {}).get("brand"):
+        from .requested import check as _brand_check
+        failures += _brand_check(str(path), brief["brand"])
+    else:
+        failures.append(F("P28", "brand", "The request named no brand items; none were checked.", status="not_run",
+                          severity="info", fix_scope="renderer"))
+
+    rules_status = summarize(failures, RULES + _VRULES)
     try:                                    # the visible-checks recorder: the rules that ran (no-op when idle)
         from meshpool_harness import checks
-        checks.rules_ran("deck_rules", "design rules", rules_status, subject=os.path.basename(str(path)),
-                         names={f["rule"]: f.get("message", "") for f in failures if f.get("status") == "fail"})
+        checks.rules_ran("deck_rules", "design rules", rules_status, subject=os.path.basename(str(path)))
+        lines = failing_names(failures, rules_status)
+        if lines and hasattr(checks, "_detail"):          # what did not pass, by name, in plain words
+            checks._detail("deck_rules", os.path.basename(str(path)), lines)
     except Exception:  # noqa: BLE001 - the recorder never changes a validation
         pass
     return {"file": str(path), "sha256": m["sha256"], "rules": rules_status, "failures": failures, "stats": stats,
             "evidence": m["evidence"], "measurement": public(m)}
+
+
+def failing_names(failures: list[dict], statuses: dict, limit: int = 8) -> list[str]:
+    """One plain line per failing check: its name, then what is wrong where ("Chart labels clear of the bars: Slide 3:
+    a label sits on a bar of the chart: 'Target 47%' on the Germany bar.")."""
+    from .visual_check import NAMES as _VNAMES
+    names = {**RULE_NAMES, **_VNAMES}
+    out = []
+    for rule, st in statuses.items():
+        if st != "fail":
+            continue
+        msg = next((f.get("message", "") for f in failures if f["rule"] == rule and f.get("status") == "fail"
+                    and f.get("severity") == "error"), "")
+        out.append(f"{names.get(rule, rule)}: {msg}"[:220].rstrip())
+    return out[:limit]
 
 
 def _look(s: dict) -> str | None:

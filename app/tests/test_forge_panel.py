@@ -221,7 +221,7 @@ def test_a_worse_round_is_reverted_to_the_best_slides(live, tmp_path):
     slides = json.loads((tmp_path / "slides.json").read_text())
     assert slides[1]["title"] == "North revenue reached $120m in 2025"    # the best version, not the last
     assert "[REVIEW] Senior partner and MD (major, content): so-what missing Fix: add the implication" in \
-        slides[1]["notes"]
+        slides[1]["_qa"] and "[REVIEW]" not in slides[1].get("notes", "")   # qa.json, never the notes (0.0.19)
     qa = json.loads((tmp_path / "qa.json").read_text())
     assert qa["panel"]["status"] == "revise" and [r["score"] for r in qa["panel"]["deck"]["rounds"]] == [7.5, 6.0, 6.0]
 

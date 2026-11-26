@@ -230,8 +230,10 @@ def fallback(s: dict) -> dict:
         if s.get(key) is not None:
             fb[key] = s[key]
     fb = R.normalize(fb)
-    fb["notes"] = (s.get("notes", "") + "\n[QA] The layout was not used: the slide did not meet its requirements."
-                   ).strip()
+    if s.get("notes"):
+        fb["notes"] = s["notes"]
+    from .notes import qa
+    qa(fb, "The layout was not used: the slide did not meet its requirements.")
     return fb
 
 

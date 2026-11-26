@@ -165,10 +165,10 @@ def test_fewer_parts_never_leave_a_region_empty(tmp_path):
     out = tmp_path / "few.pptx"
     s = {"archetype": "grid", "layout": "quarters", "title": "Margin rose four points in two years", "source": SRC,
          "parts": [dict(TEXT), dict(CALLOUT), {"type": "stats", "items": STATS3}]}
-    render([s], str(out), fix_labels=False)
+    r = render([s], str(out), fix_labels=False)
     names = [sh.name for sh in Presentation(str(out)).slides[0].shapes]
     assert "Text1" in names and "Callout2" in names and any(n.startswith("ov_role_numeral_Stat3_") for n in names)
-    assert "main_stack" in Presentation(str(out)).slides[0].notes_slide.notes_text_frame.text
+    assert any("main_stack" in m for m in r["remarks"])                 # a remark, not a speaker note (0.0.19)
 
 
 @pytest.mark.skipif(not HAS_LO, reason="LibreOffice not installed")
