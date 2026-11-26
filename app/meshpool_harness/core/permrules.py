@@ -359,12 +359,12 @@ def check_rule(rule) -> str:
 def list_rules(path) -> dict:
     d = fsio.read_json(path, default={}) if Path(path).exists() else {}
     d = d if isinstance(d, dict) else {}
-    return {k: [x for x in (d.get(k) or []) if isinstance(x, str)] for k in ("allow", "deny")}
+    return {k: [x for x in (d.get(k) or []) if isinstance(x, str)] for k in ("allow", "ask", "deny")}
 
 
 def _edit(path, kind: str, rule: str, add: bool) -> dict:
-    if kind not in ("allow", "deny"):
-        raise ValueError("kind is allow or deny")
+    if kind not in ("allow", "ask", "deny"):
+        raise ValueError("kind is allow, ask or deny")
     rule = rule.strip()
     if add and check_rule(rule):
         raise ValueError(check_rule(rule))

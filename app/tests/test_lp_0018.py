@@ -124,3 +124,24 @@ def test_lp02_run_due_exits_nonzero_when_a_task_could_not_start(monkeypatch, cap
     monkeypatch.setattr(SO, "_data_home", lambda: tmp_path)
     SO.install(run=run, platform="linux")
     assert ">/dev/null 2>&1" in seen["tab"]
+
+
+def test_lp03_permissions_list_shows_ask_rules(tmp_path, monkeypatch, capsys):
+    """LP-03: `meshpool permissions list` shows the ask rules the agent reads, and remove takes them out."""
+    import json
+
+    from meshpool_harness import cli
+    from meshpool_harness.agent import core
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("MESHPOOL_HOME", str(home))
+    for k in ("MH_ALLOW", "MH_DENY", "MH_ASK"):
+        monkeypatch.delenv(k, raising=False)
+    (home / "permissions.json").write_text(json.dumps({"allow": ["read_file"], "ask": ["bash:git push*"]}))
+    proj = tmp_path / "p"
+    assert core._rules(proj)["ask"] == ["bash:git push*"]          # what the agent goes by
+    assert cli.main(["permissions", "list", "--dir", str(proj)]) == 0
+    out = capsys.readouterr().out
+    assert "ask   bash:git push*" in out and "allow read_file" in out
+    assert cli.main(["permissions", "remove", "bash:git push*"]) == 0
+    assert core._rules(proj)["ask"] == []

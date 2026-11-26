@@ -49,8 +49,8 @@ HELP = {
     "disconnect": "Usage: meshpool disconnect <name>\nRemove a connection.",
     "worktree": "Usage: meshpool worktree list [--all] | diff <id> [--stat] | merge <id> | discard <id>\n"
                 "Isolated copies made by `meshpool --worktree`, chats, sub-agents and scheduled runs.",
-    "permissions": "Usage: meshpool permissions [list | allow RULE | deny RULE | remove RULE] [--project] [--dir DIR]\n"
-                   "The saved allow and deny rules (a tool name, mcp__server__*, or bash:PATTERN).",
+    "permissions": "Usage: meshpool permissions [list | allow RULE | ask RULE | deny RULE | remove RULE] [--project] "
+                   "[--dir DIR]\nThe saved allow, ask and deny rules (a tool name, mcp__server__*, or bash:PATTERN).",
     "agent": "Usage: meshpool [agent] [options] [-p PROMPT]   (meshpool -h for every option)\n"
              "Options include --effort LEVEL, --mode code|work|auto, --agent ID, --resume ID, --worktree, --incognito.",
     "run": "Usage: meshpool run REQUEST [--files F...] [--engine E] [--out DIR] [--model M]\nRun one request on an engine.",

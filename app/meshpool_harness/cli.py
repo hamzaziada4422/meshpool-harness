@@ -389,9 +389,10 @@ from meshpool_harness.cli_app import HELP as _HELP, NEW as _APP_COMMANDS  # noqa
 
 
 def _permissions_cmd(argv) -> int:
-    ap = argparse.ArgumentParser(prog="meshpool permissions", description="List or edit the saved allow/deny rules. "
-                                 "A rule is a tool name (edit, mcp__github__*) or bash: and a command pattern (bash:npm test*).")
-    ap.add_argument("action", nargs="?", choices=["list", "allow", "deny", "remove"], default="list")
+    ap = argparse.ArgumentParser(prog="meshpool permissions", description="List or edit the saved allow, ask and deny "
+                                 "rules. A rule is a tool name (edit, mcp__github__*) or bash: and a command pattern "
+                                 "(bash:npm test*). An ask rule always asks first, in any mode.")
+    ap.add_argument("action", nargs="?", choices=["list", "allow", "ask", "deny", "remove"], default="list")
     ap.add_argument("rule", nargs="?", help="the rule to add or remove")
     ap.add_argument("--project", action="store_true", help="use <dir>/.meshpool/permissions.json instead of the user file")
     ap.add_argument("--dir", default=".", help="the project folder (with --project, and for listing)")
@@ -405,10 +406,10 @@ def _permissions_cmd(argv) -> int:
         for label, p in (("user", PR.user_path()), ("project", PR.project_path(a.dir))):
             r = PR.list_rules(p)
             print(f"{label} rules ({p}):")
-            for k in ("allow", "deny"):
+            for k in ("allow", "ask", "deny"):        # the agent reads all three (agent/core.py _rules)
                 for x in r[k]:
                     print(f"  {k:5} {x}")
-            if not (r["allow"] or r["deny"]):
+            if not (r["allow"] or r["ask"] or r["deny"]):
                 print("  (none)")
         return 0
     if not a.rule:
@@ -416,8 +417,8 @@ def _permissions_cmd(argv) -> int:
         return 2
     try:
         if a.action == "remove":
-            PR.remove_rule(path, "allow", a.rule)
-            PR.remove_rule(path, "deny", a.rule)
+            for k in ("allow", "ask", "deny"):
+                PR.remove_rule(path, k, a.rule)
         else:
             PR.add_rule(path, a.action, a.rule)
     except ValueError as e:
