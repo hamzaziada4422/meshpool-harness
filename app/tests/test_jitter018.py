@@ -151,3 +151,21 @@ def test_the_review_fold_is_a_quiet_note_and_its_text_reads_at_the_reply_size(ap
     assert got["inner"] == got["reply"] and got["reply"] == "14px", got
 
 
+# ---------------------------------------------------------------------------------------------------- J-05
+def test_the_dark_settings_modal_stands_off_its_scrim_without_its_border(app, page):
+    """J-05: in dark the settings modal (#0f0f10) was about 1.03 times as light as the page behind the scrim, so its edge
+    read only through the 8% border. It is a step up the ramp now: at least 1.1 times as light as the dimmed page."""
+    page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; openSettings('appearance'); }")
+    page.wait_for_selector(".modal")
+    page.wait_for_timeout(500)
+    got = page.evaluate("""() => { const m = getComputedStyle(document.querySelector('.modal')).backgroundColor, s = getComputedStyle(document.querySelector('.scrim')).backgroundColor;
+        return {modal: m, scrim: s, pages: ['#main', '.side'].map(q => getComputedStyle(document.querySelector(q)).backgroundColor)}; }""")
+    a = float(got["scrim"].split(",")[3].strip(" )")) if got["scrim"].startswith("rgba") else 1.0
+    lm = _lum(got["modal"])
+    ratios = []
+    for p in got["pages"]:
+        under = [float(x) * (1 - a) for x in p[p.index("(") + 1:p.index(")")].split(",")[:3]]
+        ratios.append((lm + 0.05) / (_lum("rgb(%f,%f,%f)" % tuple(under)) + 0.05))
+    assert min(ratios) >= 1.1, (got, ratios)
+
+

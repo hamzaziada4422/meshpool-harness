@@ -447,3 +447,8 @@
 .notedet.fold[open]>summary::before{transform:rotate(45deg)}
 .notedet.fold>summary:hover{color:var(--ink-2)}
 .notedet.fold[open]>.msg-ai{margin-top:4px;font-size:var(--fs-m)}
+
+/* Design-pass check 2 (0.0.18): in dark the settings modal sat on --side (#0f0f10), a hair from the dimmed page behind it
+   (about #0a0a0a), so its edge read only through the 8% border. It takes the next step up the ramp, --surface, in dark. */
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .modal{background:var(--surface)}:root:not([data-theme="light"]) .mnav{background:var(--bg)}}
+:root[data-theme="dark"] .modal{background:var(--surface)}:root[data-theme="dark"] .mnav{background:var(--bg)}
