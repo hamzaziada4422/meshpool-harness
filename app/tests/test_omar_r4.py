@@ -81,3 +81,56 @@ def test_a_piped_or_ignored_test_run_without_a_clean_summary_is_not_verified(cmd
     line = core._check_line(cmd, cmd, 0, "")
     assert line.startswith("Not verified:") and "Verified:" not in line.replace("Not verified:", "")
     assert core._check_line(cmd, cmd, 0, PYTEST_OK).startswith("Verified: pytest, 14 passed")
+
+
+# ---------------------------------------------------------------------------------------------- item 2
+import json  # noqa: E402
+
+
+def _scripted_agent(root, replies, mode="edits"):
+    a = core.Agent(str(root), mode=mode, approve=None, emit=lambda e: None)
+    seq = list(replies)
+
+    def fake(base, key, body, stream):
+        msg = seq.pop(0)
+        return {"choices": [{"message": msg, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5}}, bool(msg.get("content"))
+    a._post = fake
+    return a
+
+
+def _tool_call(name, args, cid="c1"):
+    return {"role": "assistant", "content": "", "tool_calls": [
+        {"id": cid, "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}]}
+
+
+@pytest.fixture
+def _quiet(tmp_path, monkeypatch):
+    monkeypatch.setattr(core, "SESSIONS", tmp_path / "_sessions")
+    monkeypatch.setenv("MESHPOOL_API_KEY", "k")
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("MH_SANDBOX", "off")
+
+
+def test_a_denied_write_command_in_p_tells_the_model_to_use_apply_patch(tmp_path, _quiet):
+    root = tmp_path / "proj"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "x.py").write_text("a = 1\n")
+    a = _scripted_agent(root, [
+        _tool_call("bash", {"command": "cat >> tests/x.py <<'EOF'\nb = 2\nEOF\npython -m pytest -q"}),
+        _tool_call("edit", {"path": "tests/x.py", "old": "a = 1\n", "new": "a = 1\nb = 2\n"}, "c2"),
+        {"role": "assistant", "content": "done"}])
+    a.send("add a test")
+    outs = [m["content"] for m in a.messages if m["role"] == "tool"]
+    assert "The user denied this action" in outs[0]
+    assert "Make the same change with edit" in outs[0]
+    assert (root / "tests" / "x.py").read_text() == "a = 1\nb = 2\n"        # the model finished with the patch
+
+
+def test_a_denied_command_that_writes_nothing_gets_no_edit_tool_hint(tmp_path, _quiet):
+    root = tmp_path / "proj"
+    root.mkdir()
+    a = _scripted_agent(root, [_tool_call("bash", {"command": "make install"}), {"role": "assistant", "content": "ok"}])
+    a.send("go")
+    outs = [m["content"] for m in a.messages if m["role"] == "tool"]
+    assert "The user denied this action" in outs[0] and "same change" not in outs[0]

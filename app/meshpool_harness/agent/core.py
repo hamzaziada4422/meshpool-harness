@@ -1877,6 +1877,17 @@ def _fails_of(c: dict) -> list:
     return list(c.get("fails") or T.failed_test_ids(c.get("tail", "")))
 
 
+_FILE_WRITE_CMD = re.compile(r"\bsed\s+(?:-\w+\s+)*-\w*i|\btee\b|\bdd\b[^|;]*\bof=|\binstall\s+-m|\bcp\s|\bmv\s")
+
+
+def _writes_a_file(name: str, args: dict) -> bool:
+    """A shell call whose command redirects into a file, or is tee, sed -i, cp or mv: a file change that
+    apply_patch or the edit tool can make in its place."""
+    if name not in ("bash", "shell", "exec_command", "bash_start", "bash_many", "probe", "trace"):
+        return False
+    return any(PR.writes(c) or _FILE_WRITE_CMD.search(c) for c in PR.commands_of(name, args))
+
+
 def _is_test_cmd(cmd: str) -> bool:
     """A real test or check run: it matches the runner words and is not a read-only command that only mentions them
     (`cat tests/x.py`, `git diff --stat tests`)."""
@@ -7608,6 +7619,11 @@ class Agent:
                 denied, ok = True, False
                 out = "The user denied this action." + (f" Their note: {note}" if note else "") + \
                     " Do not retry it. Take another approach or ask the user."
+                if not self.approve and _writes_a_file(name, args):      # -p: nobody can say yes, so say what works
+                    have = [n for n in ("apply_patch", "edit") if n in self._tool_names()] or ["edit"]
+                    out += (f" This command writes a file. Make the same change with {' or '.join(have)}"
+                            f"{' (or the edit tool)' if have == ['apply_patch'] else ''}, "
+                            "which file edits in the project go through, and then run the tests.")
                 try:
                     from meshpool_harness.agent import extras as EXD
                     _, hn = EXD.run_hooks(self.root, "PermissionDenied", {"reason": str(note or "")[:2000]},
