@@ -1791,6 +1791,11 @@ function applyEvRaw(ev) {
       cur.liveText += ev.text; cur.liveDirty = true; cur.activity = "Writing"; break;
     case "stream_reset": if (cur.live) { cur.live.remove(); cur.live = null; cur.liveDirty = false; } break;
     case "retry_ok": clearRetry(); break;
+    case "offer": {                                   // a reply that offers a folder: the action is under it
+      closeGroup();
+      const n = add(`<button class="btn" data-addfolder="1">${esc(ev.label || "Add a folder")}</button>`, "note");
+      $("[data-addfolder]", n)?.addEventListener("click", () => { if (typeof addFolderProject === "function") addFolderProject(); });
+      break; }
     case "assistant":
       if (ev.look) endLook(cur, "");                  // the line under the reply says what the look saw: the wait is over
       if (ev.append && ev.merged && cur.lastAi && cur.lastAi.isConnected && cur.lastText) {
@@ -2151,8 +2156,8 @@ function userBody(text) {
   const a = splitAtt(text);
   return esc(a.text) + (a.files.length ? `<span class="att">${a.files.map(f => `<button class="flink" data-open="${esc(f)}" title="${esc(f)}">${ICON.file}${esc(f.split("/").pop())}</button>`).join(" ")}</span>` : "");
 }
-// opts.back: Undo or Rewind put the message back. It is a draft: the box is not focused (one Enter must not send the
-// undone request again), and a note says so.
+// opts.back: Undo or Rewind put the message back. The box is focused with the caret at the end, so Enter sends it again
+// (Daniel, round 3: Enter did nothing because the box was not focused), and a note says so.
 function fillInput(text, opts = {}) {
   const inp = $("#input"); if (!inp || !text) return;
   const sp = splitAtt(text);
@@ -2170,9 +2175,10 @@ function fillInput(text, opts = {}) {
   S.filled = inp.value;
   S.suggSkip = inp.value.trim();        // put back by Undo or Rewind, not typed: no "Use $skill" chips for it
   inp.dispatchEvent(new Event("input"));
-  if (!opts.back) { inp.focus(); return; }
-  if (document.activeElement === inp) inp.blur();
-  toast("Your message is back in the box as a draft. Edit it, then send it again if you want to.", 6000, null, "undo");
+  inp.focus();
+  if (!opts.back) return;
+  try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch (e) { /* a box that takes no caret */ }
+  toast("Your message is back in the box. Press Enter to send it again, or edit it first.", 6000, null, "undo");
   if (lost.length) toast(lost.length === 1 ? `${lost[0]} was removed with the undo. Attach it again if you need it.` : `${lost.join(", ")} were removed with the undo. Attach them again if you need them.`, 8000, null, "undo");
 }
 async function undoTurn(n) {

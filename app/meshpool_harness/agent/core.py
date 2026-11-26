@@ -3913,6 +3913,13 @@ class Agent:
         fig_note, fig_pages = self._figure_pages(asked)   # a question about "the barriers chart": the pages with
         if fig_note:                                       # figures go with it (Daniel, 0.0.18)
             body += "\n\n" + fig_note
+        try:                                               # a file asked for in a chat with no folder of its own
+            from meshpool_harness import nofolder as NF
+            nf_note = NF.note(self.root, asked)
+        except Exception:  # noqa: BLE001
+            nf_note = ""
+        if nf_note:
+            body += "\n\n" + nf_note
         if images or fig_pages:
             parts = [{"type": "text", "text": body}] + [_image_part(im) for im in (images or [])[:6]]
             for im in fig_pages:
@@ -5507,6 +5514,11 @@ class Agent:
             return "", []
         try:
             from meshpool_harness import docfigures as DF
+            if DF.chat_folder_files(asked):            # a chat with no folder of its own: the file's text and its
+                note, pages = DF.for_attachments(self.root, asked, self._sees_images())   # figure pages go with it
+                if note or pages:
+                    self._fig_sent = {(str(Path(im["label"].rsplit(",", 1)[0])), im["page"]) for im in pages}
+                    return note, pages
             if not DF.asks_about_figures(asked):
                 return "", []
             see = self._sees_images()

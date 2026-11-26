@@ -347,10 +347,56 @@ def docs_in_chat(root, messages: list, question: str = "") -> list[Path]:
     return seen[:2]
 
 
-def for_question(root, messages: list, question: str, see: bool, cap: int = CAP) -> tuple[str, list]:
+TEXT_CAP = 30_000               # characters of an attached file's text that go with the message
+
+
+def chat_folder_files(question: str) -> list[str]:
+    """The names on the "Attached files (in this chat's folder): ..." line of a message: files attached to a chat that
+    has no folder of its own choosing."""
+    own = str(question or "").split("\n\n​")[0]
+    out: list[str] = []
+    for line in re.findall(r"Attached files \(in this chat's folder\): ([^\n]+)", own):
+        out += [x.strip() for x in line.split(", ") if x.strip()]
+    return out
+
+
+def for_attachments(root, question: str, see: bool, cap: int = CAP) -> tuple[str, list]:
+    """A chat with no folder of its own: its PDF, Word and PowerPoint attachments reach the model as text, with the
+    pages that hold figures as images (Daniel, round 3: the model saw three chart pages, no text, and asked him to
+    paste the report). ("", []) when the message has no such file."""
+    docs = []
+    for name in chat_folder_files(question):
+        q = Path(name)
+        q = q if q.is_absolute() else Path(root or ".") / q
+        try:
+            if q.suffix.lower() in EXTS and q.is_file():
+                docs.append(q)
+        except OSError:
+            pass
+    if not docs:
+        return "", []
+    from meshpool_harness import docread
+    parts = []
+    for d in docs[:2]:
+        try:
+            text = docread.extract(d, max_chars=TEXT_CAP)
+        except Exception:  # noqa: BLE001 - a file that cannot be read is left to read_document
+            continue
+        text = str(text or "").strip()
+        if not text:
+            continue
+        more = ("\n[Meshpool] The text above is cut here. Read the rest with read_document." if len(text) >= TEXT_CAP
+                else "")
+        parts.append(f"[Meshpool] The text of the attached file {d.name}:\n{text}{more}")
+    note_, images = for_question(root, [], question, see, cap, force=True)
+    return "\n\n".join(parts + ([note_] if note_ else [])), images
+
+
+def for_question(root, messages: list, question: str, see: bool, cap: int = CAP, force: bool = False) -> tuple[str, list]:
     """For a message that names a chart or figure: (a note on where the figures are in this chat's documents, the
-    page pictures when the model takes images). ("", []) for any other message, or when no document has figures."""
-    if not asks_about_figures(question):
+    page pictures when the model takes images). ("", []) for any other message, or when no document has figures.
+    force: for a message that names no figure but comes with an attached file (for_attachments)."""
+    if not force and not asks_about_figures(question):
         return "", []
     want = _words(question)
     notes, images = [], []
@@ -372,4 +418,5 @@ def for_question(root, messages: list, question: str, see: bool, cap: int = CAP)
         notes.append(n)
     if not notes:
         return "", []
-    return "[Meshpool] The user asks about a chart or figure.\n" + "\n\n".join(notes), images[:cap]
+    head = "The attached file has figures." if force else "The user asks about a chart or figure."
+    return f"[Meshpool] {head}\n" + "\n\n".join(notes), images[:cap]

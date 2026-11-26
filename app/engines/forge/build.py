@@ -189,7 +189,10 @@ CONSULTING = """House style (always, whatever the brief says about look):
   return = EPS / share price; idle cash earns the Treasury yield), and any score in a grid follows from numbers shown
   on the page, never asserted. One recommendation, the same amount on every slide.
 - Fact, calc and option ids (F7, S2O1) go in prov only, never in the words the reader sees.
-- Never invent a number. Missing evidence is [GAP: what], shown as N/A.
+- Never invent a number. Missing evidence is marked [GAP: what] for the checks and is not worded as N/A on the slide.
+- Write no caveats about anything the request did not ask about (how many plants a board member oversees, what the
+  report does not cover). Never write "N/A", "not available" or "not stated" on a slide. Missing data is left
+  out of the slide, or said once in plain words ("The report gives no 2019 figure.") where the decision rests on it.
 - Titles: 15 words or fewer, two lines at most, no full stop; the number in the title when the point is a number;
   an active verb that carries the point (falls, drives, pays back, doubles); not the same title pattern twice.
 - The most important number is a big number with a short label, never buried in a sentence.
@@ -204,7 +207,7 @@ CONSULTING = """House style (always, whatever the brief says about look):
   the brief or the facts give it; never invent one.
 - Source lines name the report's title or the file's name, never "fact base", "dossier" or fact ids.
 - Never write about the evidence on the page ("not stated", "the sources do not say", "not a stated fact"): a gap in
-  a table is N/A; what a number rests on goes in one short footnote or in the notes.
+  a table is left out (no row or column of N/A); what a number rests on goes in one short footnote or in the notes.
 - At most four big numbers on a slide; the most important one comes first and the rest support it. Two figures
   compared with each other (renewal +22% against new quotes +9%, before and after, ours against a peer) are a chart
   with the gap drawn on it ("delta"), never two big numbers side by side.
@@ -2138,7 +2141,7 @@ supports it. Choose varied archetypes that prove each title.
         try:
             from meshpool_harness.assistant import HONESTY
             return _call(client, MODEL, f"""You write ONE consulting slide as JSON for a renderer that owns all
-design. {HONESTY} A number that is not in the facts is written [GAP: what is missing] (it shows as N/A).
+design. {HONESTY} A number that is not in the facts is written [GAP: what is missing] (a marker for the checks; do not word it as N/A on the slide).
 {CONSULTING}
 {WRITE[density]}
 {SLIDE_SHAPE}
@@ -2283,6 +2286,10 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
         try:
             from engines.forge.render import plain_sources
             plain_sources(slides, brief)
+        except Exception:  # noqa: BLE001
+            pass
+        try:                                  # notes by default (40 to 120 words a slide); "no notes" turns them off
+            _NT.ensure(slides, brief.split("\n--- ", 1)[0], notes_words)
         except Exception:  # noqa: BLE001
             pass
         for s_ in slides:

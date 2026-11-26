@@ -812,9 +812,44 @@ def main_source(slides, brief: str = "") -> str:
     return ", ".join(dict.fromkeys(files)) if files else ""
 
 
+_FILE_EXT = r"(?:pdf|docx?|pptx?|xlsx?|xlsm|csv|tsv|txt|md|json)"
+_FILE_TOKEN = re.compile(r"[\w][\w.\-]*\." + _FILE_EXT + r"\b", re.I)
+_PAREN_FILE = re.compile(r"\s*\([^()]*" + _FILE_TOKEN.pattern + r"[^()]*\)", re.I)
+
+
+def _unfile(m) -> str:
+    """A bracket that holds a file name: the name goes; any other words in the bracket stay ("(survey of 412 plants;
+    report.pdf)" keeps the survey), and an empty bracket goes."""
+    rest = _FILE_TOKEN.sub("", m.group(0)[m.group(0).index("(") + 1:-1])
+    rest = re.sub(r"^[\s,;:]+|[\s,;:]+$", "", re.sub(r"\s*[,;:]\s*(?=[,;:]|$)", "", rest))
+    return f" ({rest})" if re.search(r"[A-Za-z0-9]", rest) else ""
+_BARE_FILE = re.compile(r"^\s*[\w][\w.\- ]*\." + _FILE_EXT + r"\s*$", re.I)
+
+
+def _names_a_report(t: str) -> bool:
+    """A source clause that names a report: two or more capitalised words, apart from any file name."""
+    return len(re.findall(r"\b[A-Z][a-z]+\b", _PAREN_FILE.sub("", t))) >= 2
+
+
+def drop_filenames(t: str, main: str = "") -> str:
+    """The report's title is known: "Northfield Research, Industry Benchmark Report 2025 (Northfield_PdM_Benchmark_2025.pdf)"
+    reads "Northfield Research, Industry Benchmark Report 2025" (Daniel, round 3). A clause that is only a file name
+    becomes the deck's main source when there is one. A file name is kept when it is all the source there is."""
+    out, hit = [], False
+    for c in re.split(r";(?![^()]*\))", str(t or "")):          # at ";" outside brackets
+        if _PAREN_FILE.search(c) and _names_a_report(c):
+            c, hit = _PAREN_FILE.sub(_unfile, c), True
+        elif _BARE_FILE.match(c.strip(" .")) and main and not _BARE_FILE.match(main.strip(" .")):
+            c, hit = main, True
+        if c.strip():
+            out.append(c.strip())
+    return "; ".join(out) if hit else str(t or "")
+
+
 def plain_sources(slides, brief: str = "") -> int:
     """Source lines name the real source, never the working files: "success rates from the project fact base"
-    (Daniel, round 2) reads "success rates from <the report>". Fact and calc ids go too. Returns lines changed."""
+    (Daniel, round 2) reads "success rates from <the report>". Fact and calc ids go too. A file name in brackets after
+    the report's title goes (round 3). Returns lines changed."""
     main = main_source(slides, brief)
     changed = 0
     for s in slides or []:
@@ -822,6 +857,10 @@ def plain_sources(slides, brief: str = "") -> int:
         if not isinstance(src, dict) or not isinstance(src.get("text"), str):
             continue
         t = src["text"]
+        t2 = drop_filenames(t, main)
+        if t2 != t:
+            src["text"] = t = t2
+            changed += 1
         if not (_WORK_WORDS.search(t) or _WORK_IDS.search(t)):
             continue
         out = []
@@ -1254,6 +1293,30 @@ def _chart_box(kind, ncat, nser, x, y, w, h):
     return x, y, w, h
 
 
+def _cats_fit(cats, w: float) -> bool:
+    """Do the category names of a column chart fit under their columns, wrapped in at most three lines, each word whole?
+    When they do not, the axis tilts them to 45 degrees (Daniel, round 3: slides 6 and 8)."""
+    n = max(1, len(cats))
+    per_line = max(3.0, (w / n - 0.08) / (T["label"] * 0.52 / 72))      # characters across one slot
+    for cat in cats:
+        t = str(cat)
+        if max((len(wd) for wd in t.split()), default=0) > per_line or len(t) > 3 * per_line:
+            return False
+    return True
+
+
+def _flat_labels(axis) -> None:
+    """The category labels are set horizontal: PowerPoint and LibreOffice wrap them instead of tilting them."""
+    try:
+        tx = axis._element.find(qn("c:txPr"))
+        bp = tx.find(qn("a:bodyPr")) if tx is not None else None
+        if bp is not None:
+            bp.set("rot", "0")
+            bp.set("vert", "horz")
+    except Exception:  # noqa: BLE001 - styling only
+        pass
+
+
 def _stands_up(kind, cats) -> bool:
     """A few bars read better as columns standing up, full height (labels wrap under them)."""
     return kind == "bar" and (len(cats) <= 5 and max((len(str(v)) for v in cats), default=0) <= 22
@@ -1567,6 +1630,10 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
     series = c["series"]
     if _stands_up(kind, cats):
         kind = "column"                                   # a few short bars read better standing up, full height
+    if kind == "column" and len(series) == 1 and not _cats_fit(cats, w) \
+            and not any(c.get(k) for k in ("delta", "target", "cagr")):
+        kind = "bar"                                      # names too long to sit under their columns lie flat as bars:
+                                                          # never tilted to 45 degrees
     x, y, w, h = _chart_box(kind, len(cats), len(series), x, y, w, h)
     cd = CategoryChartData()
     cd.categories = cats
@@ -1628,6 +1695,8 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
         va.visible = False
         ca = ch.category_axis
         ca.tick_labels.font.size = Pt(T["label"])
+        if kind in ("column", "stacked_column", "line") and not _cats_fit(cats, w):
+            _flat_labels(ca)                                    # long names on an annotated chart wrap, never tilt
         ca.format.line.color.theme_color = TC.TEXT_1
         if kind in ("bar", "stacked_bar"):
             ca.reverse_order = True

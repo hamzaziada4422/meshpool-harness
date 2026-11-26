@@ -241,3 +241,59 @@ def json_free(obj) -> str:
         return prose(obj)
     except Exception:  # noqa: BLE001
         return re.sub(r"[{}\[\]\"]", "", json.dumps(obj, ensure_ascii=False, default=str))
+
+
+# ------------------------------------------------------------------ notes by default (Daniel, round 3)
+MIN_WORDS = 40       # a board or client deck gets short notes on every slide unless the request says "no notes"
+
+_OFF = re.compile(r"(?i)\b(?:no|without|skip|omit|drop|leave out|exclude)\s+(?:any\s+|the\s+)?(?:speaker\s+|presenter\s+)?"
+                  r"notes\b|\bdon'?t\s+(?:add|include|want|need|write|put)\s+(?:any\s+)?(?:speaker\s+|presenter\s+)?notes\b|"
+                  r"\bnotes\s+(?:are\s+)?not\s+(?:needed|wanted|required)\b")
+
+
+def wanted(request: str) -> bool:
+    """Notes are on unless the request turns them off ("no notes", "without speaker notes")."""
+    return not _OFF.search(str(request or ""))
+
+
+_BODY_SKIP = _SKIP_KEYS | {"title", "notes", "footnotes", "source", "tags", "section", "section_no",
+                           "section_icon", "tracker", "sections", "_qa", "kicker"}
+
+
+def compose(s: dict, words: int = WORDS) -> str:
+    """Presenter prose for a slide that came back with no notes: its title as the point, then what is on the page, in
+    plain sentences. Nothing is added that the slide does not already say."""
+    title = prose(s.get("title"))
+    out = [f"The point of this slide: {title[0].lower() + title[1:]}." if title else ""]
+    for k, v in s.items():
+        if k in _BODY_SKIP:
+            continue
+        for part in re.split(r";\s+", prose(v)):
+            sent = _sentence(part)
+            if sent and len(sent.split()) >= 3:
+                out.append(sent)
+    text = clean("\n".join(x for x in out if x), True)
+    return trim(text, words)
+
+
+def ensure(slides: list, request: str, words: int | None = None) -> int:
+    """Notes by default: strips them on "no notes"; otherwise every slide ends with at least MIN_WORDS words of
+    presenter prose (a slide the writer sent without notes gets them composed from its own content). Returns how many
+    slides were changed."""
+    words = words or limit_for(request)
+    n = 0
+    for s in slides:
+        if not isinstance(s, dict):
+            continue
+        if not wanted(request):
+            if s.pop("notes", None):
+                n += 1
+            continue
+        have = clean(s.get("notes"))
+        if len(have.split()) >= MIN_WORDS:
+            continue
+        extra = compose({k: v for k, v in s.items() if k != "notes"}, words)
+        if extra and len(extra.split()) > len(have.split()):
+            s["notes"] = (have + "\n" + extra).strip() if have and len(have.split()) >= 15 else extra
+            n += 1
+    return n

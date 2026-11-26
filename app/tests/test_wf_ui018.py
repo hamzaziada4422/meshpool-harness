@@ -273,11 +273,10 @@ def test_undo_shows_the_backup_path_only_in_details_and_puts_back_no_skill_chips
     page.evaluate("() => fillInput('Change the title on slide 1 to: ViDA e-invoicing for your firm', {back: true})")
     page.wait_for_timeout(900)
     assert page.is_hidden("#sugg") and not asked, asked
-    # WF-J: the message put back is a draft: the box is not focused (one Enter must not redo the undone request)
-    assert page.evaluate("document.activeElement && document.activeElement.id") != "input"
-    assert "back in the box as a draft" in page.inner_text("body")
-    page.keyboard.press("Enter")
-    assert page.input_value("#input").startswith("Change the title on slide 1") and page.evaluate("S.cur.id") == "t-wf018"
+    # WF-J, changed in round 3 (Daniel): the message put back is focused with the caret at the end, so Enter sends it
+    # (the box not being focused made Enter do nothing). The Enter itself is tested in test_daniel019_round3.py.
+    assert page.evaluate("document.activeElement && document.activeElement.id") == "input"
+    assert "back in the box" in page.inner_text("body")
     page.focus("#input")
     page.type("#input", " now")                                      # typed by the person: suggestions as before
     page.wait_for_function("() => !$('#sugg').hidden", timeout=5000)

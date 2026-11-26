@@ -111,7 +111,7 @@ RESUME_NEXT = "Continue where you left off."
 RESUME_WAIT_S = 30
 RESUME_TRIES = 5
 
-_KEEP = {"user", "assistant", "tool_end", "interrupted", "error", "turn_end", "approval", "approval_done",
+_KEEP = {"user", "assistant", "offer", "tool_end", "interrupted", "error", "turn_end", "approval", "approval_done",
          "checkpoint", "status", "plan", "check", "checks_line", "task_receipt", "insight", "review", "retry_ok",
          "review_round"}
 # A step's files, for "a later step redid it" (Session._mark_retried_steps): names with an extension in its summary.
@@ -954,6 +954,12 @@ class Session:
             plain, raw = ET.outside(str(ev.get("text") or ""))
             if raw:
                 ev = dict(ev, text=plain, detail=raw)
+        offer = False
+        if t == "assistant" and ev.get("text") and self._no_folder_chat():
+            from meshpool_harness import nofolder as NF          # "run this in a session that has a shell": a plain
+            offer = NF.wants_folder(ev["text"])                  # offer and an "Add a folder" button instead
+            if offer:
+                ev = dict(ev, text=NF.plain(ev["text"]))
         if t == "turn_end":
             self._mark_retried_steps()               # failed steps a later step redid: not problems in the count
         if t == "status" and _RETRY_RE.search(str(ev.get("text") or "")):
@@ -1005,6 +1011,16 @@ class Session:
             after = self.__dict__.pop("_after_user", None)
             if after:                                # the fallback line goes under the message it is about
                 self.emit(after)
+        if offer:                                    # the reply offered a folder: the app shows the button under it
+            self.emit({"type": "offer", "action": "add_folder", "label": "Add a folder"})
+
+    def _no_folder_chat(self) -> bool:
+        """True for a chat that works in its own private folder, not in one the user chose."""
+        try:
+            from meshpool_harness import project_store as PS
+            return bool(getattr(self, "workdir", "")) and PS.is_scratch(self.workdir)
+        except Exception:  # noqa: BLE001
+            return False
 
     def _mark_retried_steps(self):
         """Before a turn_end: the failed steps of this turn that a later step redid (the same file worked on and the
