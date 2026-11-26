@@ -608,6 +608,7 @@ def make_agent(parent, emit, stop_check=None):
 
     class GraderAgent(K.Agent):
         _is_grader = True
+        reports_to_agent = True      # its verdict is JSON for the parent, not a reply to the user
 
         def system_prompt(self):
             return SYSTEM

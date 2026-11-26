@@ -1107,6 +1107,7 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
 
     class Sub(K.Agent):
         _delegate_depth = 99                                 # these never start sub-agents of their own
+        reports_to_agent = True                              # it reports to the parent model, not to the user
 
         def _tool_names(self):
             return tools
