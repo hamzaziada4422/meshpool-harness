@@ -227,7 +227,7 @@ def test_connection(values: dict | None = None, fresh: bool = False) -> dict:
         why = (PS._net_error(err, base) if err else _not_reply(PV.host(base), PS._not_reply_msg(data)) if st == 200
                else PS.explain(st, data, base=base, model=model, version=ver))
         return {"ok": False, "detail": why[:400], "model": model, "seconds": secs, "endpoint": base,
-                "status": 0 if err else st}
+                "status": 0 if err else st, "missing_model": bool(not err and EP.missing_model(st, data, model))}
     txt = ""
     if isinstance(data, dict):
         try:
@@ -261,8 +261,8 @@ def onboard(body: dict) -> dict:
         if model:
             vals["MH_MODEL"] = model
         r, used = test_connection(vals, fresh=True), cand
-        if r.get("ok") or r.get("status") != 404:
-            break
+        if r.get("ok") or r.get("status") != 404 or r.get("missing_model"):
+            break                         # a 404 that names a missing model came from the right address
     if not r.get("ok"):
         return {"ok": False, "detail": r.get("detail") or "The check failed.", "endpoint": used}
     vals = {"MESHPOOL_API_KEY": key, "MESHPOOL_BASE_URL": used if which == "custom" else "",   # default: no saved address
