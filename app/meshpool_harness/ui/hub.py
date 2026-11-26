@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import mimetypes
 import platform
+import re
 import time
 from pathlib import Path
 
@@ -154,8 +155,8 @@ def account() -> dict:
     rows = A.listing()
     code = [r for r in rows if is_code_session(r) and not r.get("archived")]
     return {"name": name, "first_name": first, "initial": (first or "M")[:1].upper(), "full_name": p["name"],
-            "plan": "Meshpool key" if key else "No key yet", "key_set": key,
-            "email": "Signed in with a Meshpool key" if key else "Not signed in",
+            "plan": "meshpool key" if key else "No key yet", "key_set": key,
+            "email": "Signed in with a meshpool key" if key else "Not signed in",
             "device": {"name": platform.node() or "This computer", "connected": True, "os": platform.system()},
             "billing_url": SV.BILLING_URL, "keys_url": SV.BILLING_URL,
             "code_waiting": len([r for r in code if r.get("state") == "waiting"]),
@@ -173,6 +174,16 @@ def _thread_item(r: dict, sub: str = "") -> dict:
     pr = r.get("pr") or {}
     return _item("code" if code else "chat", r["id"], r["title"], sub or (f"PR #{pr['number']}" if pr.get("number") else ""), unread=bool(r.get("unread")),
                  waiting=r.get("state") == "waiting", updated=r.get("updated", 0), project_id=r.get("project_id") or "")
+
+
+def _fold(s: str) -> str:
+    """Lowercase with spaces, hyphens, underscores and dots alike, so "open house" finds open-house.html."""
+    return " ".join(re.sub(r"[\s_\-.]+", " ", str(s or "").lower()).split())
+
+
+def _name_has(name: str, q: str) -> bool:
+    n = _fold(name)
+    return all(w in n for w in _fold(q).split())
 
 
 def search(q: str, tab: str = "all") -> dict:
@@ -252,7 +263,7 @@ def search(q: str, tab: str = "all") -> dict:
     if want("artifacts"):
         add("artifacts", "Artifacts", [_item("artifact", a["id"], a["name"], a["type"] + " · " + a["session_title"], session_id=a["session_id"],
                                              root=a["root"], path=a["path"])
-                                       for a in artifacts(listing=every)["artifacts"] if q in a["name"].lower()][:8])
+                                       for a in artifacts(listing=every)["artifacts"] if _name_has(a["name"], q)][:8])
     if want("scheduled"):
         add("scheduled", "Scheduled", [_item("scheduled", t["id"], t["name"], t["schedule"], unread=t["unread"])
                                        for t in scheduled(every)["tasks"] if q in t["name"].lower() or q in t["prompt"].lower()][:8])

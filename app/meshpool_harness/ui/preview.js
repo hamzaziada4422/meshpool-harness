@@ -106,6 +106,7 @@ function closePreview(quiet) {
   if (typeof edStop === "function") edStop();
   PVX.open = false; PVX.id++; pvFree();
   const hide = () => {
+    if (PVX.open) return;             // a preview opened again before this close was drawn: it stays
     const el = $("#pvp"); if (el) { el.hidden = true; $("#pvStage").innerHTML = ""; $("#pvThumbs").innerHTML = ""; }
     $("#app")?.classList.remove("pvopen");
     if (typeof fitPanel === "function") fitPanel();
@@ -384,8 +385,21 @@ const PV_THUMB_RX = /\.(pptx?|pptm|ppsx|odp|docx?|odt|rtf|pdf|xlsx|xlsm|xls|ods)
 // A file an engine keeps for its build and checks (qa.json, slides.json, deck.provenance.json...), not the user's
 // deliverable: left out of the cards and the "files changed" count (server side: workbench.is_build_file).
 const pvBuildFile = p => { p = String(p || "").replace(/\\/g, "/"); return /\.provenance\.json$/i.test(p) || /(^|\/)Meshpool outputs\/(.+\/)?[^/]+\.(json|jsonl|log|run|py)$/i.test(p); };
+// A line that arrives under the reply (the receipt, the checks, next-step chips: .after010) goes below the file cards, never
+// between the footer and them: it pushed the card away from under the pointer. Moved in the same task it is added, so no
+// frame is drawn with it above the cards.
+function pvKeepCardsFirst(col) {
+  if (col._pvKeep || typeof MutationObserver !== "function") return;
+  col._pvKeep = true;
+  new MutationObserver(list => { for (const m of list) for (const n of m.addedNodes) {
+    if (n.nodeType !== 1 || !n.classList.contains("after010")) continue;
+    let last = null; for (let x = n.nextElementSibling; x && /\b(pvcards|pvbigs)\b/.test(x.className); x = x.nextElementSibling) last = x;
+    if (last && n.previousElementSibling?.classList.contains("turnfoot")) last.after(n);
+  } }).observe(col, {childList: true, subtree: true});
+}
 function pvTurnCards(cur, foot, turn) {
   if (!foot || !cur) return;
+  { const col = foot.closest("#col"); if (col) pvKeepCardsFirst(col); }
   const root = typeof curRoot === "function" ? curRoot() : "";
   const seen = new Set(), base = String(root).replace(/\\/g, "/").replace(/\/+$/, "") + "/";
   const add = p => { p = String(p || "").replace(/\\/g, "/");
@@ -401,18 +415,20 @@ function pvTurnCards(cur, foot, turn) {
   let row = null;
   for (let n = foot.nextElementSibling; n && !n.classList.contains("turnfoot"); n = n.nextElementSibling) if (n.classList.contains("pvcards")) { row = n; break; }
   if (!paths.length || !root) { if (row?.nextElementSibling?.classList.contains("pvbigs")) row.nextElementSibling.remove(); row?.remove(); return; }
-  const shown = paths.slice(0, 6);
-  if (row && row.dataset.k === shown.join("|")) return;
   if (!row) { row = document.createElement("div"); row.className = "pvcards"; foot.after(row); }
-  row.dataset.k = shown.join("|"); row.dataset.root = root;
-  pvBigImages(row, root, paths);
+  // A picture shown large in the reply is not also a card in the row under it (the chart was there twice).
+  const bigs = pvBigImages(row, root, paths);
+  const shown = paths.filter(p => !bigs.has(p)).slice(0, 6), key = shown.join("|") + "#" + [...bigs].join("|");
+  row.hidden = !shown.length;
+  if (row.dataset.k === key) return;
+  row.dataset.k = key; row.dataset.root = root;
   // In a chat with its own folder, every file is in that folder, and a file you attached is a copy of yours there:
   // the card says so, so "I fixed Budget.xlsx" is not read as a change to your own file. Download gets it back.
   const own = !!cur.view?.scratch, att = pvAttached(cur);
   row.innerHTML = shown.map(p => { const ty = pvType(p), thumb = PV_THUMB_RX.test(p), img = /\.(png|jpe?g|gif|webp|svg)$/i.test(p), nm = p.split("/").pop();
     const where = own ? (att.has(p) || att.has(nm) ? "Copy of your file, in this chat" : "In this chat") : "";
     return `<span class="pvwrap"><button class="pvcard" data-pv="${esc(p)}" title="${esc(p)}"><span class="pvth${thumb ? " wait" : ""}">${img ? `<img alt="" loading="lazy" src="/raw?t=${encodeURIComponent(MP.token)}&${pvQuery(root, p)}">` : `<span class="pvi ${ty.ext && /^html?$/.test(ty.ext) ? "html" : ""}">${pvIcon(ty.ext)}</span>`}</span><span class="pvcm"><b title="${esc(nm)}">${esc(pvShortName(nm))}</b><small>${esc(ty.label)}${ty.ext ? " · ." + esc(ty.ext) : ""}</small>${where ? `<small class="pvwhere">${esc(where)}</small>` : ""}</span></button><button class="iconbtn pvdl" data-pvdl="${esc(p)}" aria-label="Download ${esc(nm)}" data-tip="Download" data-tip-pos="above">${ICON.dl}</button></span>`; }).join("")
-    + (paths.length > shown.length ? `<span class="pvmore">+${paths.length - shown.length} more under Artifacts</span>` : "");
+    + (paths.length - bigs.size > shown.length ? `<span class="pvmore">+${paths.length - bigs.size - shown.length} more under Artifacts</span>` : "");
   $$(".pvcard", row).forEach(b => {
     // opening is delegated (the click listener below), so a card whose handlers were lost in a rebuild still opens
     if (PV_THUMB_RX.test(b.dataset.pv)) pvThumb(root, b.dataset.pv, $(".pvth", b));
@@ -432,11 +448,16 @@ function pvBigImages(row, root, paths) {
   const main = imgs.length > 0 && imgs.length === paths.length;
   const named = new Set($$(".rimg", row.parentElement || document).map(i => i.getAttribute("alt")));
   const list = imgs.filter(p => !named.has(p)).slice(0, 3);
-  if (!(asked || main) || !list.length) { if (old) old.remove(); return; }
-  const box = old || document.createElement("div"); box.className = "pvbigs"; box.dataset.root = root;
+  const big = new Set(imgs.filter(p => named.has(p)));                    // drawn large by the reply's own text
+  if (!(asked || main) || !list.length) { if (old) old.remove(); return big; }
+  list.forEach(p => big.add(p));
+  const k = list.join("|");
+  if (old && old.dataset.k === k) return big;                             // already drawn: leave the loaded pictures alone
+  const box = old || document.createElement("div"); box.className = "pvbigs"; box.dataset.root = root; box.dataset.k = k;
   box.innerHTML = list.map(p => `<button type="button" class="pvbig wait" data-pvbig="${esc(p)}" title="Open ${esc(p.split("/").pop())}"><img alt="${esc(p.split("/").pop())}" loading="lazy" decoding="async" src="/raw?t=${encodeURIComponent(MP.token)}&${pvQuery(root, p)}"></button>`).join("");
   $$("img", box).forEach(im => { const b = im.parentNode; im.onload = () => b.classList.remove("wait"); im.onerror = () => b.remove(); });
   if (!old) row.after(box);
+  return big;
 }
 document.addEventListener("click", e => {
   const b = e.target.closest?.(".pvbig[data-pvbig]"); if (!b) return;

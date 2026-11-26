@@ -428,6 +428,11 @@ function srchIcon(it) {
   const ic = {chat: ICON.chat, code: ICON.codebr, project: ICON.stack, artifact: ICON.cube, scheduled: ICON.clock, action: it.id === "new_session" ? ICON.codebr : it.id === "settings" ? ICON.gear : ICON.plus}[it.kind] || ICON.chat;
   return `<span class="sic">${ic}${it.unread || it.waiting ? `<i class="bdot ${it.waiting ? "wait" : ""}"></i>` : ""}</span>`;
 }
+// The date of the chat a snippet is from: "Mar 4", with the year when it is not this year.
+function srchDate(t) {
+  const d = new Date(t * 1000);
+  return d.toLocaleDateString("en", {month: "short", day: "numeric", ...(d.getFullYear() !== new Date().getFullYear() ? {year: "numeric"} : {})});
+}
 // The match in a snippet, marked (the words of the query, in any order).
 function srchMark(text, q) {
   const words = String(q || "").toLowerCase().split(/\s+/).filter(w => w.length > 1).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
@@ -449,7 +454,8 @@ function openSearch(tab = "all", q0 = "") {
   const mark = n => { const rows = $$(".sres", list); if (!rows.length) return; act = (n + rows.length) % rows.length; rows.forEach((r, i) => r.classList.toggle("act", i === act)); rows[act].scrollIntoView({block: "nearest"}); };
   const draw = r => {
     items = [];
-    list.innerHTML = (r.groups || []).map(g => `<div class="sgrp">${esc(g.label)}</div>` + g.items.map(it => { const i = items.push(it) - 1; return `<div class="sres ${i === 0 ? "act" : ""}" role="option" data-i="${i}">${srchIcon(it)}${it.snippet ? `<span class="sbody"><span class="stt">${esc(it.title)}</span><span class="ssn">${srchMark(it.snippet, inp.value)}</span></span>` : `<span class="stt">${esc(it.title)}</span><span class="ssub">${esc(it.sub || "")}</span>`}<button class="iconbtn smore" aria-label="Actions" tabindex="-1">${ICON.more}</button><span class="sret">↵</span></div>`; }).join("")).join("")
+    if (S.mode !== "code") for (const g of r.groups || []) g.items = g.items.filter(it => it.id !== "new_session");     // Chat mode says "New chat" only
+    list.innerHTML = (r.groups || []).filter(g => g.items.length).map(g => `<div class="sgrp">${esc(g.label)}</div>` + g.items.map(it => { const i = items.push(it) - 1; return `<div class="sres ${i === 0 ? "act" : ""}" role="option" data-i="${i}">${srchIcon(it)}${it.snippet ? `<span class="sbody"><span class="stt">${esc(it.title)}${it.updated ? `<span class="sdate">${esc(srchDate(it.updated))}</span>` : ""}</span><span class="ssn">${srchMark(it.snippet, inp.value)}</span></span>` : `<span class="stt">${esc(it.title)}</span><span class="ssub">${esc(it.sub || "")}</span>`}<button class="iconbtn smore" aria-label="Actions" tabindex="-1">${ICON.more}</button><span class="sret">↵</span></div>`; }).join("")).join("")
       || `<div class="sempty">${inp.value.trim() ? `Nothing matches “${esc(inp.value.trim())}”. Try fewer words, or another type.` : "Nothing here yet."}</div>`;
     act = 0;
   };
@@ -465,7 +471,7 @@ function openSearch(tab = "all", q0 = "") {
     if (!it) return;
     if (alt && (it.kind === "chat" || it.kind === "code")) { const row = $(`.sres[data-i="${items.indexOf(it)}"] .smore`, sc); return threadMenu({type: "click", currentTarget: row}, it.id); }
     closeSearch();
-    if (it.kind === "chat" || it.kind === "code") { S.mode = it.kind === "code" ? "code" : "chat"; store("appmode", S.mode); syncMode(); openThread(it.id); }
+    if (it.kind === "chat" || it.kind === "code") { S.mode = it.kind === "code" ? "code" : "chat"; store("appmode", S.mode); syncMode(); openThread(it.id, false, inp.value.trim()); }
     else if (it.kind === "project") { S.mode = "chat"; syncMode(); openProject(it.id); }
     else if (it.kind === "artifact") openPreview(it.root, it.path);
     else if (it.kind === "scheduled") goPage("scheduled");

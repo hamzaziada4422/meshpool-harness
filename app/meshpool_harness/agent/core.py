@@ -1031,6 +1031,13 @@ def plain_step(name: str, summary: str, mcp: bool = False) -> dict | None:
                     what = ", ".join(dict.fromkeys(m2.group(0).rsplit("/", 1)[-1] for m2 in _FILE_WORD.finditer(title))) or "the data"
                 return {"base": f"{v[0]} {what}", "run": f"{v[1]} {what}", "done": f"{v[2]} {what}"}
         return {"base": f"Work on {what}", "run": f"Working on {what}", "done": f"Worked on {what}"}
+    if not (mcp or nm.startswith("mcp__")) and short in ("read_file", "read", "grep", "glob", "search", "list", "find") \
+            and re.match(r"(?:List|Read|Search|Find|Look|Open|View|Show|Grep|Glob|Get|Check)\b \S", s.strip()):
+        # an outside agent's own title ("List files in 'rooms-summary.xlsx'") is a sentence, not the path a built-in step has
+        if short in ("read_file", "read") and _FILE_WORD.search(s):
+            f = _FILE_WORD.search(s).group(0)
+            return {"base": f"Read {f}", "run": f"Reading {f}", "done": f"Read {f}"}
+        return {"base": "Look through the files", "run": "Looking through the files", "done": "Looked through the files"}
     if mcp or nm.startswith("mcp__"):
         if short in ("web_search", "web_fetch", "web_research", "memory_save", "run_subtasks", "schedule_task") \
                 or short.startswith("browser_"):
@@ -3078,6 +3085,36 @@ def office_detail(name: str, args: dict, root=None) -> str:
     call = json.dumps({k: v for k, v in (args or {}).items() if not str(k).startswith("_")}, indent=1,
                       ensure_ascii=False)
     return "\n".join(lines) + DETAILS_MARK + (call if len(call) <= 6000 else call[:6000] + "\n...")
+
+
+_SCRATCH_PATH = re.compile(r"(?:/tmp|/var/folders|/private/var)/[^\s'\"<>;&|)]*")
+
+
+def approval_view(kind: str, title: str, detail: str) -> dict:
+    """What an approval card shows a person who does not read shell: {"sum": one plain line, "file": {"name", "text", "run"}
+    when the command writes a file with a heredoc}. The command itself, scratch paths and all, stays in the card's
+    "Details" fold (it is the card's `detail`, unchanged). {} when the card needs no plain view."""
+    if kind != "bash" or not str(detail or "").strip():
+        return {}
+    d = str(detail)
+    line = re.sub(r"\s+", " ", str(title or "")).strip().rstrip("?").strip()
+    if not line or line.lower().startswith(("run this", "run these", "start this", "execute terminal", "terminal")):
+        line = _plain_command_title(d).rstrip("?").strip()
+    line = _SCRATCH_PATH.sub("a temporary folder", line)
+    out: dict = {"sum": line[:160]} if line else {}
+    if "<<" in d:
+        head, bodies = _strip_heredocs(d)
+        w = re.search(r"(?:\bcat|\btee(?:\s+-a)?)\s*(?:>>?\s*)?(?P<f>[^\s<>|;&]+)\s*<<|\bcat\s*>>?\s*(?P<g>[^\s<>|;&]+)\s*<<", head)
+        name = os.path.basename((w.group("f") or w.group("g") or "").strip("'\"")) if w else ""
+        if name and bodies:
+            text = bodies[0].rstrip()
+            lines = text.split("\n")
+            if len(lines) > 40 or len(text) > 3000:
+                text = "\n".join(lines[:40])[:3000].rstrip() + "\n..."
+            ran = bool(re.search(r"(?:python[\d.]*|node|Rscript|ruby|perl|bash|sh)\s+\S*" + re.escape(name), head))
+            out["file"] = {"name": name, "text": text, "run": ran}
+            out["sum"] = f"Save {name}" + (" and run it" if ran else "")
+    return out
 
 
 class Agent:

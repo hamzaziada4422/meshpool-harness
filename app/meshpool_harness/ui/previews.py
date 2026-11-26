@@ -195,7 +195,7 @@ def friendly_error(p: Path, e: BaseException) -> str:
     if isinstance(e, subprocess.TimeoutExpired):
         return f"Converting this {what} took too long. Try again in a moment."
     if isinstance(e, (OSError, MemoryError)) and not isinstance(e, (ValueError, RuntimeError)) and getattr(e, "errno", None) in (13, 1):
-        return f"Meshpool is not allowed to read this {what}."
+        return f"meshpool is not allowed to read this {what}."
     return f"This {what} is damaged or is not what its name says, so it cannot be previewed here. Open it in its app."
 
 

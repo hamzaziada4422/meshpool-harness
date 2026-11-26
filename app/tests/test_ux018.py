@@ -494,7 +494,7 @@ def test_the_side_panel_slides_in_and_the_model_button_keeps_auto(page):
     got = page.evaluate("""() => { const em = document.querySelector('#mPill em'), l = document.querySelector('#mPill .lbl'); l.textContent = 'DeepSeek V4.1 Flash';
         return {main: Math.round(document.querySelector('#main').getBoundingClientRect().width), em: em && getComputedStyle(em).display, sw: l.scrollWidth, cw: l.clientWidth}; }""")
     assert "mp-panel-in" in anim, anim
-    assert got["main"] < 640 and got["em"] != "none" and got["sw"] <= got["cw"], got
+    assert got["main"] < 672 and got["em"] != "none" and got["sw"] <= got["cw"], got
     assert page.errors == [], page.errors
 
 

@@ -83,7 +83,7 @@ def safe(root_s: str, rel: str) -> tuple[Path, Path]:
     if p != root and root not in p.parents:
         raise ValueError("Path is outside the project.")
     if any(_hidden_name(root, part) for part in p.relative_to(root).parts):
-        raise ValueError("Meshpool keeps that file private.")
+        raise ValueError("meshpool keeps that file private.")
     return root, p
 
 
@@ -448,10 +448,10 @@ def save(body: dict) -> dict:
                 pass
             os.replace(tmp, p)
         except PermissionError:                  # Windows refuses the rename while Excel or Word has the file open
-            raise ValueError(f"Meshpool could not save {p.name}: it is read-only, or another app has it open. Close "
+            raise ValueError(f"meshpool could not save {p.name}: it is read-only, or another app has it open. Close "
                              "it there and save again.") from None
         except OSError as e:                     # a full disk, a folder that went away
-            raise ValueError(f"Meshpool could not save {p.name} ({e.strerror or 'the disk refused it'}). Nothing "
+            raise ValueError(f"meshpool could not save {p.name} ({e.strerror or 'the disk refused it'}). Nothing "
                              "was changed.") from None
         finally:
             try:

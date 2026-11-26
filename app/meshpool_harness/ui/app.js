@@ -111,6 +111,14 @@ function shortPath(p) {
   const parts = p.split(/[\\/]/);
   return p.length > 48 && parts.length > 3 ? "…/" + parts.slice(-2).join("/") : p;
 }
+// A folder as people read it: the home folder is "Home" and a folder inside it is "Home/Documents/Maya's Flowers"; a path
+// outside Home stays whole. No system path pieces ("/Users/maya") in front.
+function homePath(p) {
+  p = String(p || ""); const h = String(S.settings?.user_home || "").replace(/[\\/]+$/, "");
+  if (!h) return p;
+  if (p.replace(/[\\/]+$/, "") === h) return "Home";
+  return p.startsWith(h + "/") || p.startsWith(h + "\\") ? "Home" + p.slice(h.length).replace(/\\/g, "/") : p;
+}
 const RES = id => document.getElementById(id) || {className: "", textContent: "", innerHTML: ""};   // results outlive a re-render
 // A folder is a non-empty path string. Anything else (an event a handler passed in, or {"isTrusted":true} that an
 // earlier version saved when New chat was clicked) means no folder, so a saved bad value cannot break the app again.
@@ -209,6 +217,7 @@ function clip(s, n) { if (s.length <= n) return s; const c = s.slice(0, n); cons
 function toast(text, ms = 5000, action, group) {
   text = plainTemp(text);
   let box = $("#toasts"); if (!box) { box = document.createElement("div"); box.id = "toasts"; box.className = "toasts"; box.setAttribute("role", "status"); document.body.appendChild(box); }
+  box.classList.toggle("low", !!$("#app.pvopen"));      // with a file preview open, a toast sits at the bottom, clear of the preview's bar
   if (group) {
     const g = [...box.children].find(x => x.dataset.g === group && !x.classList.contains("out"));
     if (g) { const l = document.createElement("div"); l.textContent = text; $(".tl", g).appendChild(l); clearTimeout(g._gone); if (g._gone2) g._gone2(ms); return g; }
@@ -235,6 +244,7 @@ const plainTemp = s => typeof s === "string" ? s.replace(TEMP_PATH_RX, (m, a, b)
 let fitRaf = 0;
 function fitInput(inp) {
   const v = inp.value;
+  if (inp.dataset.hold) { inp.dataset.hold = ""; inp.dataset.fit = ""; inp.style.height = "auto"; }     // typing again lets go of the height a sent message held
   if (v.length < 40 && v.indexOf("\n") < 0) { if (inp.dataset.fit !== "1") { inp.dataset.fit = "1"; inp.style.height = ""; } return; }
   inp.dataset.fit = "";
   if (fitRaf) return;
@@ -520,7 +530,7 @@ function browseFolder(start, opts = {}) {
       <div class="fbcrumbs" id="fbCrumbs"></div>
       <input id="fbIn" spellcheck="false" aria-label="Folder path" placeholder="Or type a folder path and press Enter">
       <ul class="fblist" id="fbList" role="listbox" tabindex="0"></ul>
-      <div class="row"><button class="btn" id="fbNew">New folder</button><span class="fbsel" id="fbSel"></span><input id="fbNewIn" placeholder="Name of the new folder" aria-label="Name of the new folder" spellcheck="false" autocomplete="off" hidden><button class="btn" data-a="0">Cancel</button><button class="btn primary" data-a="1">Use this folder</button></div></div>`;
+      <div class="row"><button class="btn" id="fbNew">New folder</button><span class="fbsel" id="fbSel"></span><input id="fbNewIn" placeholder="Folder name" aria-label="Name of the new folder" spellcheck="false" autocomplete="off" hidden><button class="btn" data-a="0">Cancel</button><button class="btn primary" data-a="1">Use this folder</button></div></div>`;
     document.body.appendChild(sc);
     let cur = "", home = "", act = -1, chosen = "";
     const done = v => { sc.remove(); document.removeEventListener("keydown", key, true); if (v) store("fb_last", v); resolve(v); };
@@ -536,7 +546,7 @@ function browseFolder(start, opts = {}) {
     const mark = n => { const it = items(); if (!it.length) return; act = Math.max(0, Math.min(it.length - 1, n)); it.forEach((b, k) => b.classList.toggle("act", k === act)); it[act].scrollIntoView({block: "nearest"}); };
     // New folder: the name is typed in the row at the bottom (same size as before, so the dialog does not change shape);
     // Enter makes the folder in the folder shown and goes into it, Esc puts the row back.
-    const newMode = on => { $("#fbNewIn", sc).hidden = !on; $("#fbSel", sc).hidden = on; $("#fbNew", sc).textContent = on ? "Create" : "New folder"; if (on) { $("#fbNewIn", sc).value = ""; $("#fbNewIn", sc).focus(); } else $("#fbList", sc).focus(); };
+    const newMode = on => { $("#fbNewIn", sc).hidden = !on; $("#fbSel", sc).hidden = on; $("[data-a='1']", sc).hidden = on; $("#fbNew", sc).textContent = on ? "Create" : "New folder"; if (on) { $("#fbNewIn", sc).value = ""; $("#fbNewIn", sc).focus(); } else $("#fbList", sc).focus(); };
     const make = async () => {
       const name = $("#fbNewIn", sc).value.trim(); if (!name) { $("#fbNewIn", sc).focus(); return; }
       try { const r = await post("/api/projects", {action: "mkdir", path: cur, name}); newMode(false); await go(r.path); }
@@ -562,14 +572,16 @@ function browseFolder(start, opts = {}) {
         const sep = r.path.includes("\\") ? "\\" : "/";
         const parts = r.path.split(/[\\/]/).filter(Boolean);
         let acc = r.path.startsWith("/") ? "" : "";
-        const crumbs = parts.map((p, k) => {
+        let crumbs = parts.map((p, k) => {
           acc = (k === 0 && !r.path.startsWith("/")) ? p + sep : acc + (acc.endsWith(sep) || acc === "" ? "" : sep) + p;
           const full = r.path.startsWith("/") ? "/" + parts.slice(0, k + 1).join("/") : acc;
           return {full, label: full === home ? "Home" : p, here: k === parts.length - 1};
         });
+        const hi = crumbs.findIndex(c => c.full === home);
+        if (hi > 0) crumbs = crumbs.slice(hi);          // inside Home the trail starts at Home: no system folders before it
         // a long path shows its last three parts, with an ellipsis that goes up to the part before them
         const shownC = crumbs.length > 3 ? crumbs.slice(-3) : crumbs, up = crumbs.length > 3 ? crumbs[crumbs.length - 4] : null;
-        $("#fbCrumbs", sc).innerHTML = (up ? `<button data-c="${esc(up.full)}" class="more" title="${esc(up.full)}" aria-label="Up to ${esc(up.label)}">…</button><span class="sep">›</span>` : r.path.startsWith("/") ? `<button data-c="/">/</button>` : "")
+        $("#fbCrumbs", sc).innerHTML = (up ? `<button data-c="${esc(up.full)}" class="more" title="${esc(up.full)}" aria-label="Up to ${esc(up.label)}">…</button><span class="sep">›</span>` : r.path.startsWith("/") && hi <= 0 ? `<button data-c="/">/</button>` : "")
           + shownC.map(c => `<button data-c="${esc(c.full)}" class="${c.here ? "here" : ""}">${esc(c.label)}</button>`).join(`<span class="sep">›</span>`);
         $$("#fbCrumbs [data-c]", sc).forEach(b => b.onclick = () => go(b.dataset.c));
         $("#fbCrumbs", sc).scrollLeft = $("#fbCrumbs", sc).scrollWidth;       // one row: a long path scrolls, it does not wrap
@@ -663,6 +675,7 @@ async function addAttachments(files) {
     S.attachments.push({name: f.name, mime: f.type || "application/octet-stream", data, image: /^image\/(png|jpe?g|gif|webp)$/.test(f.type)});
   }
   renderAttach();
+  $("#input")?.focus({preventScroll: true});      // typing goes on in the message box, not nowhere
 }
 function renderAttach() {
   $("#attachRow").innerHTML = S.attachments.map((a, i) => `<span class="att-chip"${a.pasted ? ` title="${esc(a.text.slice(0, 600))}" data-paste="${i}"` : ""}>${a.image ? `<img src="data:${a.mime};base64,${a.data}" alt="">` : ICON.file}<span>${esc(a.name)}</span><button data-i="${i}" aria-label="Remove ${esc(a.name)}">×</button></span>`).join("");
@@ -707,7 +720,9 @@ async function sendNow(interrupt) {
   if (!S.cur && S.mode === "code" && !S.draft.project) { toast("Choose a folder or a repository first."); $("#envSel")?.click(); return; }
   const atts = S.attachments; S.attachments = []; renderAttach();
   clearTimeout(S.suggT); if ($("#sugg")) $("#sugg").hidden = true;
-  inp.value = ""; inp.style.height = "auto";
+  // A long message leaves the box as tall as it was until the next key: the box shrinking by 27 px at the press of Send
+  // moved the composer and everything above it. (fitInput lets go on the first key.)
+  inp.value = ""; if (inp.offsetHeight > 60) inp.dataset.hold = "1"; else inp.style.height = "auto";
   // Doherty threshold: answer the press at once, before the server does
   S.sendHold = Date.now() + 2500; setWorking("Sending"); scrollConv(true);
   let created = null; const draft0 = {project: S.draft.project, pid: S.draft.pid, incognito: !!S.draft.incognito};
@@ -1061,6 +1076,7 @@ function newThread(opt) {
   if (opt && typeof opt === "object" && opt.pid) return openProject(opt.pid, {focus: true});
   const where = opt === undefined && typeof lastWhere === "function" ? lastWhere() : {project: "", pid: ""};   // the last folder or project used
   clearColHandlers(); window.navPush?.("new:");
+  if (S.cur || S.view !== "chat") leavePreview();      // (not at start-up, when nothing was open before this)
   leaveChat(S.cur);
   S.view = "chat"; S.pjId = "";
   S.draft.project = typeof opt === "string" ? opt : where.project;
@@ -1116,7 +1132,26 @@ function commitStage(cur) {
   col.classList.add("settle"); S.settling = true;
   S.pinned = true; scrollConv(true);
   if (cur.live) easeStart(cur.live);
-  requestAnimationFrame(() => requestAnimationFrame(() => { col.classList.remove("settle"); S.settling = false; if (S.pinned) scrollConv(); }));
+  const find = cur.find; cur.find = "";
+  requestAnimationFrame(() => requestAnimationFrame(() => { col.classList.remove("settle"); S.settling = false; if (find && S.cur === cur) findInChat(find); else if (S.pinned) scrollConv(); }));
+}
+// Coming from a search: scroll to the first message that holds the words and mark the match for a moment.
+function findInChat(q) {
+  const col = $("#col"), conv = $("#conv"); if (!col || !conv) return false;
+  const words = String(q || "").toLowerCase().split(/\s+/).filter(Boolean); if (!words.length) return false;
+  const phrase = words.join(" "), msgs = $$(".msg-user .b, .msg-ai", col);
+  const text = el => (el.textContent || "").replace(/\s+/g, " ").toLowerCase();
+  const el = msgs.find(m => text(m).includes(phrase)) || msgs.find(m => words.every(w => text(m).includes(w)));
+  if (!el) { S.pinned = true; scrollConv(true); return false; }
+  const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT); let hit = null;
+  for (const w of [phrase, ...words]) { tw.currentNode = el; for (let t; (t = tw.nextNode());) { const i = t.data.toLowerCase().indexOf(w); if (i >= 0) { hit = [t, i, w.length]; break; } } if (hit) break; }
+  S.pinned = false;
+  let mk = null;
+  if (hit) { const r = document.createRange(); r.setStart(hit[0], hit[1]); r.setEnd(hit[0], hit[1] + hit[2]); mk = document.createElement("mark"); mk.className = "findhit"; r.surroundContents(mk); }
+  const go = () => { const box = (mk || el).getBoundingClientRect(), cb = conv.getBoundingClientRect(); conv.scrollTop += box.top - cb.top - cb.height / 3; };
+  go(); setTimeout(go, 250);
+  setTimeout(() => { if (mk && mk.isConnected) { mk.replaceWith(document.createTextNode(mk.textContent)); el.normalize(); } }, 3500);
+  return true;
 }
 /* Long chats: with thousands of items directly in #col, every frame of a streaming reply laid out, hit-tested and
    paint-walked all of them, even though each skips its own content (content-visibility): a 3000-event chat used a
@@ -1154,8 +1189,11 @@ function foldHistory(col) {
   if (conv) conv.scrollTop = S.pinned ? conv.scrollHeight : conv.scrollHeight - fromEnd;
   return made.length;
 }
-function openThread(id, fresh) {
+// Another or a new chat starts without the file preview of the last one beside it.
+function leavePreview() { if (typeof PVX !== "undefined" && PVX.open) closePreview(true); }
+function openThread(id, fresh, find) {
   clearColHandlers(); window.navPush?.("chat:" + id);
+  if (!(S.cur && S.cur.id === id && !fresh)) leavePreview();      // a file open beside another chat is not carried into this one
   const seen = S.threads.find(t => t.id === id);
   if (seen?.unread) { seen.unread = false; post(`/api/threads/${id}`, {action: "seen"}).catch(() => {}); }
   store("last_chat", id);
@@ -1165,7 +1203,7 @@ function openThread(id, fresh) {
   const known = S.threads.find(t => t.id === id);
   if (known) { const m = isCodeThread(known) ? "code" : "chat"; if (S.mode !== m) { S.mode = m; store("appmode", m); syncMode(); } }
   const hit = !fresh && CACHE.get(id);
-  S.cur = {id, total: 0, view: fresh ? {id, state: "starting", harness: {id: S.draft.harness}, model: S.draft.model || S.models?.default, mode: S.draft.mode || defaultMode(), events: []} : null, epoch: -1, groups: null, live: null, tools: {}, pollT: null, turn: 0, log: [], q: []};
+  S.cur = {id, total: 0, view: fresh ? {id, state: "starting", harness: {id: S.draft.harness}, model: S.draft.model || S.models?.default, mode: S.draft.mode || defaultMode(), events: []} : null, epoch: -1, groups: null, live: null, tools: {}, pollT: null, turn: 0, log: [], q: [], find: find || ""};
   if (!fresh && known) S.cur.view = {id, title: known.title, state: known.state, kind: known.kind, workdir: known.workdir, scratch: known.scratch, project_id: known.project_id || "", pinned: known.pinned, harness: harness(known.harness), events: [], prefill: true};
   const cur = S.cur;
   S.pinned = true; setWorking(null);
@@ -1177,6 +1215,13 @@ function openThread(id, fresh) {
     cur.turn = hit.turn || cur.turn; flushLive(cur); commitStage(cur); cur.cached = true;
   }
   renderSide(); if (cur.view) { renderTop(); renderBar(); } $("#input").value = ""; restoreDraft(); poll();
+}
+// A command's approval card for a person who does not read shell: one plain line, the file it writes shown under its name,
+// and the exact command (scratch paths and all) folded under "Details".
+function plainApproval(ev, folder) {
+  const f = ev.file;
+  const line = f ? `Save ${f.name} in ${folder}${f.run ? " and run it" : ""}` : String(ev.sum || "");
+  return `<p class="apone">${esc(line)}</p>${f ? `<div class="apfile"><span class="apfn">${esc(f.name)}</span><pre>${esc(f.text)}</pre></div>` : ""}<details class="apdet"><summary>Details</summary><pre>${esc(ev.detail)}</pre></details>`;
 }
 function resetChat(cur) {                        // the history changed under us (undo, rewind): rebuild from the start
   stopStream(cur); cur.total = 0; cur.next = 0; cur.log = []; cur.epoch = -2; cur.turn = 0; beginStage(cur);
@@ -1826,6 +1871,7 @@ function applyEvRaw(ev) {
       // showed edit_office_file's raw JSON and the model's own brief).
       const [plain, more] = String(ev.detail || "").split("\n\nDetails:\n");
       const body = more !== undefined ? `${plain ? `<ul class="apsum">${plain.split("\n").filter(Boolean).map(l => `<li>${esc(l)}</li>`).join("")}</ul>` : ""}<details class="apdet"><summary>Details</summary><pre>${esc(more)}</pre></details>`
+        : chatMode() && ev.kind === "bash" && (ev.sum || ev.file) && ev.detail ? plainApproval(ev, fname)
         : ev.detail ? (ev.kind === "doc" ? `<div class="docprev">${md(ev.detail)}</div>` : `<pre>${ev.kind === "edit" ? diffLines(ev.detail) : esc(ev.detail)}</pre>`) : "";
       const d = add(`<b>${esc(title)}</b>${body}<div class="acts">${opts}</div>`, "appr");
       if (g0) { $(".rows", g0).appendChild(d); cur.group = g0; bumpGroup(g0); g0.open = true; }   // the Allow buttons must stay visible
@@ -1838,7 +1884,7 @@ function applyEvRaw(ev) {
       });
       scrollConv(true); break; }
     case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /approval|waiting/i.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = t.dataset.prun || TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
-      const d = cardEl("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); $(".apdet", d)?.remove(); $(".apsum", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.closed ? "Closed when meshpool restarted." : ev.decision === "stopped" ? "Stopped before running." : ev.decision === "timeout" ? "No answer in time." : ev.reason ? esc(ev.reason) : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "save" ? "Allowed, and saved for this folder." : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
+      const d = cardEl("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); $(".apdet", d)?.remove(); $(".apsum", d)?.remove(); $(".apone", d)?.remove(); $(".apfile", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.closed ? "Closed when meshpool restarted." : ev.decision === "stopped" ? "Stopped before running." : ev.decision === "timeout" ? "No answer in time." : ev.reason ? esc(ev.reason) : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "save" ? "Allowed, and saved for this folder." : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
         const g = d.previousElementSibling; if (g?.classList.contains("work") && d === col.lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
       if (ev.final && cur.thoughtLive) {      // the saved copy of what streamed live: add only what this page missed
@@ -1946,6 +1992,7 @@ function applyEvRaw(ev) {
       break; }
     case "turn_end": {
       endLook(cur, "");
+      if (/^Checking it as\b/i.test(String(cur.activity || ""))) cur.activity = "";      // the check is over: the status line does not keep its words
       cur.gateEl?.remove(); cur.gateEl = null; cur.jobStage = ""; cur.down = false; cur.downEl = null;
       settleSteps("");
       closeGroup();
@@ -2078,7 +2125,7 @@ async function drawRules(box, r) {
   box.innerHTML = `<h3 style="font-size:16px;margin:16px 0 4px">Saved rules</h3><p class="pnote plain-rules">These are the things you told meshpool to always allow, always ask about, or never do. Most people never need to change them.</p>
     <details class="advrules"><summary>Advanced rules</summary><p class="pnote adv-rules">For people who want the exact syntax: a rule is a tool name (<code>edit</code>), or <code>bash:</code> and a command with * for any text (<code>bash:git push*</code>). Saved in ${esc(r.path)}.</p>
     ${Object.entries(NAMES).map(([k, [h, d]]) => `<h4 style="margin:12px 0 4px">${h}</h4><small class="pnote">${d}</small><ul class="rows2">${(r[k] || []).map(x => row(k, x)).join("") || `<li class="pnote">None.</li>`}</ul>`).join("")}
-    ${r.folders.length ? `<h4 style="margin:12px 0 4px">Allowed in one folder</h4>${r.folders.map(f => `<small class="pnote">${esc(f.folder)}</small><ul class="rows2">${f.allow.map(x => row("allow", x, f.folder)).join("")}</ul>`).join("")}` : ""}
+    ${r.folders.length ? `<h4 style="margin:12px 0 4px">Allowed in one folder</h4>${r.folders.map(f => `<small class="pnote" title="${esc(f.folder)}">${esc(homePath(f.folder))}</small><ul class="rows2">${f.allow.map(x => row("allow", x, f.folder)).join("")}</ul>`).join("")}` : ""}
     <div class="srow" style="margin-top:8px"><select id="ruleList" aria-label="Kind of rule"><option value="ask">Always ask</option><option value="deny">Never allow</option><option value="allow">Always allow</option></select><input id="ruleText" placeholder="bash:git push*" spellcheck="false"><button class="btn" id="ruleAdd">Add rule</button></div><div class="res" id="ruleRes"></div></details>`;
   const act = async body => { try { drawRules(box, await post("/api/rules", body)); } catch (e) { const x = $("#ruleRes", box); x.className = "res bad"; x.textContent = e.message; } };
   $$("[data-rrm]", box).forEach(x => x.onclick = () => act({action: "remove", list: x.dataset.rrm, rule: x.dataset.rule, folder: x.dataset.folder || ""}));
@@ -2282,8 +2329,10 @@ function chatRoomWithSide() {
   const vw = innerWidth, side = 288, pv = typeof PVX !== "undefined" && PVX.open;
   let w = 0;
   if (vw > 980) {
-    if (pv) w = Math.min(Math.min(920, Math.max(480, vw * 0.46)), Math.max(vw - side - CHAT_ROOM_MIN, 460));     // the same room the chat keeps beside Progress
-    else { const pw = Number(store("pw")) || 460; w = vw < 1440 ? Math.min(pw, Math.max(340, vw * 0.32)) : pw; }
+    // one rule for both panels (app.css): what the window leaves after the sidebar and a 672px chat. Progress takes 340px at
+    // the least and the preview 400px; the sidebar folds only when the chat would be narrower than 672px even then.
+    if (pv) w = Math.min(Math.min(920, Math.max(480, vw * 0.46)), Math.max(vw - side - CHAT_ROOM_MIN, 400));
+    else { const pw = Number(store("pw")) || 460; w = vw < 1440 ? Math.min(pw, Math.max(340, vw - side - CHAT_ROOM_MIN)) : pw; }
   }
   return vw - side - w;
 }
@@ -2334,28 +2383,41 @@ function progressSteps() {
   const turn = log.slice(Math.max(0, lastUser));
   const plan = [...turn].reverse().find(e => e.type === "plan");
   if (plan && (plan.entries || []).length) return {kind: "plan", items: plan.entries.map((e, i) => ({key: "p" + i, text: e.content, status: e.status}))};
-  const tools = {};
+  const tools = {}, latest = {}, seq = {};
   let turnIds = [];
+  // A step is told apart by its id AND its order: some agents number every round of calls from 1 again, and one row
+  // then replaced the one before it (the panel showed only the latest step of the turn).
+  const keyOf = id => latest[id], one = id => tools[latest[id]];
   for (const e of turn) {
-    if (e.type === "tool_start") { const nm = e.mcp ? String(e.name || "").split("__").slice(2).join("__") : e.name; const pl = chatMode() && e.plain ? e.plain : null; const sm = pl ? "" : stepSummary(nm, e); tools[e.id] = {name: nm, sm, pl, text: pl ? pl.run : `${TOOL_RUN[nm] || e.label || plainTool(nm, e.mcp, "run")}${sm ? " " + sm : ""}`, status: "in_progress", mcp: !!e.mcp}; }
-    if (e.type === "tool_end" && tools[e.id] && tools[e.id].pl) tools[e.id].text = e.ok ? tools[e.id].pl.done : tools[e.id].pl.base;
-    else if (e.type === "tool_end" && tools[e.id] && e.ok) tools[e.id].text = `${TOOL_DONE[tools[e.id].name] || TOOL_LABEL[tools[e.id].name] || plainTool(tools[e.id].name, tools[e.id].mcp, "done")}${tools[e.id].sm ? " " + tools[e.id].sm : ""}`;
-    if (e.type === "tool_end" && tools[e.id]) tools[e.id].status = tools[e.id].status === "stopped" ? "stopped" : e.ok ? "completed" : /^Not finished: the turn ended/.test(String(e.output || "")) ? "stopped" : "failed";
-    if (e.type === "steps_retried") for (const id of e.ids || []) if (tools[id] && tools[id].status === "failed") tools[id].status = "completed";
+    if (e.type === "tool_start") { const id = e.id, n = seq[id] = (seq[id] || 0) + 1, k = n > 1 ? id + "#" + n : id; latest[id] = k;
+      const nm = e.mcp ? String(e.name || "").split("__").slice(2).join("__") : e.name; const pl = chatMode() && e.plain ? e.plain : null; const sm = pl ? "" : stepSummary(nm, e); tools[k] = {name: nm, sm, pl, text: pl ? pl.run : `${TOOL_RUN[nm] || e.label || plainTool(nm, e.mcp, "run")}${sm ? " " + sm : ""}`, status: "in_progress", mcp: !!e.mcp}; }
+    const t = e.type === "tool_end" ? one(e.id) : null;
+    if (t && t.pl) t.text = e.ok ? t.pl.done : t.pl.base;
+    else if (t && e.ok) t.text = `${TOOL_DONE[t.name] || TOOL_LABEL[t.name] || plainTool(t.name, t.mcp, "done")}${t.sm ? " " + t.sm : ""}`;
+    if (t) t.status = t.status === "stopped" ? "stopped" : e.ok ? "completed" : /^Not finished: the turn ended/.test(String(e.output || "")) ? "stopped" : "failed";
+    if (e.type === "steps_retried") for (const id of e.ids || []) { const r = one(id); if (r && r.status === "failed") r.status = "completed"; }
     if (e.type === "user" && !e.steer) turnIds = [];
-    if (e.type === "tool_start") turnIds.push(e.id);
-    if (e.type === "interrupted") for (const id of turnIds) { const t = tools[id]; if (t && (t.status === "in_progress" || t.status === "failed")) { t.status = "stopped"; t.text = t.pl ? `${t.pl.base} (stopped)` : `${TOOL_LABEL[t.name] || t.name}${t.sm ? " " + t.sm : ""} (stopped)`; } }
-    if (e.type === "turn_end") for (const t of Object.values(tools)) if (t.status === "in_progress") t.status = "completed";
+    if (e.type === "tool_start") turnIds.push(keyOf(e.id));
+    if (e.type === "interrupted") for (const k of turnIds) { const t2 = tools[k]; if (t2 && (t2.status === "in_progress" || t2.status === "failed")) { t2.status = "stopped"; t2.text = t2.pl ? `${t2.pl.base} (stopped)` : `${TOOL_LABEL[t2.name] || t2.name}${t2.sm ? " " + t2.sm : ""} (stopped)`; } }
+    if (e.type === "turn_end") for (const t3 of Object.values(tools)) if (t3.status === "in_progress") t3.status = "completed";
   }
-  const items = Object.entries(tools).map(([id, t]) => Object.assign({key: "t" + id}, t));
+  let items = Object.entries(tools).map(([id, t]) => Object.assign({key: "t" + id}, t));
   items.forEach((t, i) => { if (t.status === "failed" && items.slice(i + 1).some(u => u.name === t.name && u.sm === t.sm && u.status === "completed")) t.status = "completed"; });   // tried again and it worked
-  return {kind: "steps", items};
+  // The same step four times is one row: "Read rooms-summary.xlsx (4 times)".
+  const rank = {in_progress: 3, failed: 2, stopped: 1}, byText = new Map(), merged = [];
+  for (const it of items) {
+    const m = byText.get(it.text);
+    if (!m) { byText.set(it.text, it); it.n = 1; merged.push(it); continue; }
+    m.n++; if ((rank[it.status] || 0) > (rank[m.status] || 0)) m.status = it.status;
+  }
+  for (const it of merged) if (it.n > 1) it.text = `${it.text} (${it.n} times)`;
+  return {kind: "steps", items: merged};
 }
 const OUT_RX = /(?:Saved(?: the [\w ]+)?|[Ww]rote|[Cc]reated)[: ]+((?:[A-Za-z]:)?[^\n"'`<>():]+?\.(?:docx|xlsx|pptx|pdf|csv|md|png|jpg|html|txt|json))(?![\w.])/g;
 const relPath = p => { const n = String(p).replace(/\\/g, "/"), r = String(curRoot()).replace(/\\/g, "/").replace(/\/$/, ""); return n.startsWith(r + "/") ? n.slice(r.length + 1) : n; };
 function outputFiles() {
   const seen = new Map(), rel = relPath;
-  for (const t of S.cur?.view?.turns || []) for (const c of t.changed || []) if (c.status !== "deleted") seen.set(c.path, {path: c.path, turn: t.n});
+  for (const t of S.cur?.view?.turns || []) for (const c of t.changed || []) if (c.status !== "deleted") seen.set(rel(c.path), {path: rel(c.path), turn: t.n});
   for (const e of threadLog()) if (e.type === "tool_end" && e.output) for (const m of String(e.output).matchAll(OUT_RX)) { const r = rel(m[1]); if (!r.startsWith("/") && !/^[A-Za-z]:/.test(r)) seen.set(r, {path: r}); }
   return [...seen.values()].filter(o => !pvBuildFile(o.path) && !S.cur?.gone?.has(o.path));   // the user's files, not an engine's build files or one since deleted
 }
@@ -2380,6 +2442,7 @@ function progressUpdate() {
   const body = $("#pbody .cw"); if (!body || !S.cur) return;
   const v = S.cur.view || {}; const pr = progressSteps(); const outs = outputFiles();
   const busy = ["working", "waiting", "starting"].includes(v.state);
+  if (!busy && !threadLog().slice(-12).some(e => e.type === "interrupted")) for (const it of pr.items) if (it.status === "pending" || it.status === "in_progress") it.status = "completed";   // the turn is over: no step stays unticked
   const icon = st => st === "completed" ? `<span class="pi ok">${ICON.check2}</span>` : st === "failed" ? `<span class="pi bad">${ICON.x}</span>` : st === "in_progress" ? `<span class="pi run"><span class="dot run"></span></span>` : `<span class="pi">${ICON.ring}</span>`;
   const hd = $("#pgState", body);
   const stateHTML = busy ? `<span class="cwbusy">${v.state === "waiting" ? "Waiting for you" : "Working"}</span>` : v.state === "idle" && pr.items.length ? (threadLog().slice(-12).some(e => e.type === "interrupted") ? `<span class="cwstop">Stopped</span>` : `<span class="cwdone">Done</span>`) : "";
@@ -2396,7 +2459,7 @@ function progressUpdate() {
   if (!outs.length) { ul?.remove(); setHTML(fbox, `<div class="pnote" style="padding:4px 0">Documents, sheets, decks and other files the task creates show up here.</div>`); }
   else {
     if (!ul) { fbox.innerHTML = ""; fbox._h = null; ul = document.createElement("ul"); ul.className = "outs"; fbox.appendChild(ul); }
-    reconcile(ul, outs, o => o.path, o => { const li = document.createElement("li"); li.innerHTML = `<button data-open="${esc(o.path)}" title="Open ${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button>`; $("button", li).onclick = () => openPreview(curRoot(), o.path); return li; }, () => {});
+    reconcile(ul, outs, o => o.path, o => { const li = document.createElement("li"); li.innerHTML = `<button data-open="${esc(o.path)}" title="Open ${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}${o.path.includes("/") ? `<small>${esc(o.path)}</small>` : ""}</span></button>`; $("button", li).onclick = () => openPreview(curRoot(), o.path); return li; }, () => {});
   }
   setTxt($("#pgHarness", body), lowBrand(v.harness?.name || "")); setTxt($("#pgModel", body), modelName(v.model || ""));
 }
@@ -2426,7 +2489,7 @@ function panelOutputs(body) {
   const own = !!S.cur?.view?.scratch;
   body.innerHTML = `<div class="pbar"><span class="chip" title="${esc(curRoot())}">${ICON.dir}${esc(rootLabel())}</span><span style="flex:1"></span><button class="btn" id="oOpen" aria-label="Show every file in the folder">Browse files</button></div>
     ${own && outs.length ? `<div class="pnote" id="oCopyNote">These files are in this chat's own folder. A file you attached is a copy here: your original is unchanged. Use Download to keep one.</div>` : ""}
-    ${outs.length ? `<ul class="outs" style="padding:12px">${outs.map(o => `<li><button data-open="${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button></li>`).join("")}</ul>` : `<div class="pnote">Files this chat makes or changes show here. Click one to preview it.</div>`}
+    ${outs.length ? `<ul class="outs" style="padding:12px">${outs.map(o => `<li><button data-open="${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}${o.path.includes("/") ? `<small>${esc(o.path)}</small>` : ""}</span></button></li>`).join("")}</ul>` : `<div class="pnote">Files this chat makes or changes show here. Click one to preview it.</div>`}
     <div style="border-top:1px solid var(--line-2);flex:1;min-height:160px;display:flex;flex-direction:column"><div class="pnote" style="padding:8px 12px 0">All files in the folder</div><div style="flex:1;overflow:auto" id="tree"></div></div></div>`;
   // the folder in the in-app file list (the viewer pane): the list below was already on screen, so scrolling to it did nothing
   $("#oOpen").onclick = () => { if (curRoot()) edFolderPane(curRoot(), ""); };
@@ -3124,7 +3187,7 @@ async function renderSection(sec) {
         ${r.platform === "darwin" ? `<button class="btn primary" id="permAll" style="margin-bottom:8px">Allow all</button>` : ""}
         <ul class="rows2">${r.rows.map(x => `<li><span class="dot ${x.ok === true ? "" : "wait"}" style="margin-top:8px;${x.ok === true ? "background:var(--add)" : ""}"></span><span class="tg"><b>${esc(x.name)}</b><small>${x.ok === true ? "Allowed. " : x.ok === false ? "Not allowed yet. " : ""}${esc(x.why)}</small></span>${x.ok === true || r.platform !== "darwin" ? "" : `<button class="btn" data-perm="${esc(x.id)}">${x.ok === false ? "Allow" : "Open settings"}</button>`}</li>`).join("")}</ul>
         <h3 style="font-size:16px;margin:16px 0 8px">Folders meshpool works in</h3>
-        <ul class="rows2">${S.projects.map(p => `<li><span class="tg"><b>${esc(p.name)}</b><small>${esc(p.managed ? "GitHub" : p.path)}</small></span><button class="iconbtn" data-rmp="${esc(p.path)}" aria-label="Remove">${ICON.x}</button></li>`).join("") || `<li class="pnote">No folders yet.</li>`}</ul>
+        <ul class="rows2">${S.projects.map(p => `<li><span class="tg"><b>${esc(p.name)}</b><small title="${esc(p.managed ? "" : p.path)}">${esc(p.managed ? "GitHub" : homePath(p.path))}</small></span><button class="iconbtn" data-rmp="${esc(p.path)}" aria-label="Remove">${ICON.x}</button></li>`).join("") || `<li class="pnote">No folders yet.</li>`}</ul>
         <button class="btn" id="addP">${ICON.folder} Add a folder</button>
         <div id="rulesBox"></div>`;
       done();
@@ -3302,9 +3365,9 @@ async function contextPanel(box, opts = {}) {
   box.innerHTML = `<h3 class="onb-h">Bring your chats and memory</h3>
     <p class="muted">It all stays on this computer.</p>
     <ol class="ctx-steps">
-      <li><b>Chats from another assistant</b>
+      <li><b>Bring in chats from ChatGPT or Claude (export file)</b>
         <div class="ctx-acts">${links.map(l => `<button class="btn" data-ext="${esc(l.url)}">1. Get your ${esc(l.name)} export</button>`).join("")}</div>
-        <div class="dropzone" id="ctxDrop" tabindex="0" role="button">2. Drop the .zip here<input type="file" id="ctxZip" accept=".zip" hidden></div></li>
+        <div class="dropzone" id="ctxDrop" tabindex="0" role="button">2. Drop the export file here<input type="file" id="ctxZip" accept=".zip" hidden></div></li>
       ${srcs.length ? `<li><b>On this computer</b>
         ${srcs.map(([k, v]) => `<span class="ctx-src"><span>${esc(v.name)} <small class="muted">${n(v.found)} session${v.found === 1 ? "" : "s"}</small></span><button class="btn" data-local="${esc(k)}" ${v.imported >= v.found ? "disabled" : ""}>${v.imported >= v.found ? "Imported" : "Import"}</button></span>`).join("")}</li>` : ""}
       <li><b>What an assistant knows about you</b>
@@ -3326,7 +3389,7 @@ async function contextPanel(box, opts = {}) {
   };
   const upload = async f => {
     if (!f) return;
-    if (!/\.zip$/i.test(f.name)) return res("Choose the .zip file from ChatGPT or another assistant, without unzipping it.", true);
+    if (!/\.zip$/i.test(f.name)) return res("Choose the export file you downloaded from ChatGPT or Claude, without opening it.", true);
     res(`Importing ${f.name}…`);
     try {
       const r = await api("/api/import-file?chats=1&context=1", {method: "POST", body: f, headers: {"Content-Type": "application/zip"}});
@@ -3426,9 +3489,12 @@ async function drawMcpLibrary(b) {
 
 /* Bring your setup: skills and MCP servers from Claude, Codex, Cursor and other apps on this computer. */
 async function importPanel(box, onDone) {
-  box.innerHTML = `<div class="res">Looking…</div>`;
+  box.innerHTML = "";
+  let loading = true;
+  const slow = setTimeout(() => { if (loading) box.innerHTML = `<div class="res">Looking…</div>`; }, 300);      // a quick answer shows no loading text at all
   let f;
-  try { f = await api("/api/import-agents"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
+  try { f = await api("/api/import-agents"); } catch (e) { loading = false; clearTimeout(slow); box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
+  loading = false; clearTimeout(slow);
   // Plain labels for what other apps hold ("Notes from Claude Code", "Saved skills"); a hook has no plain name, so it is not listed
   const agents = f.agents.map(a => Object.assign({}, a, {items: a.items.filter(i => i.kind !== "hook")})).filter(a => a.items.length);
   if (!agents.length) { box.innerHTML = `<span></span>`; onDone?.(null); return; }
@@ -3684,7 +3750,6 @@ async function restartApp(bootBefore) {
   await loadPj();
   loadAccount(); loadCaps(); loadConnectors(); loadStyles().then(() => renderBar());
   newThread();
-  if (S.panel) renderPanel();
   if (!S.settings.ready) showOnboarding();
   else {
     loadModels().then(renderBar);
@@ -3695,6 +3760,10 @@ async function restartApp(bootBefore) {
     if (waiting) openThread(waiting.id);
     else if (last && S.threads.some(t => t.id === last && !t.archived)) openThread(last);
   }   // set up but onboarding left halfway
+  // A panel left open comes back with its chat. With no chat to open there is nothing to show in it, and the sidebar it folded
+  // would leave New out of reach: start with the panel shut (it stays remembered for the next chat).
+  if (S.panel && !S.cur) { S.panelWas = S.panel; S.panel = null; }
+  renderPanel();
   if (MP.desktop) { const ping = () => post("/api/ping").catch(() => {}); ping(); setInterval(ping, 30000); }
   setTimeout(() => checkUpdate(false), 3000); setTimeout(updStatus, 1000);
   window.addEventListener("resize", () => { clearTimeout(S.rzT); S.rzT = setTimeout(fitPanel, 120); });
