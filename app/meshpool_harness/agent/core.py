@@ -1802,7 +1802,7 @@ def _docx_hidden_text_miss(asked: str, root, since: float) -> str:
                 hits = list(Path(root).glob(f"*/{n}"))[:1]          # ./data/reference.txt (the task names the file only)
                 fp = hits[0] if hits else fp
             if fp.is_file() and fp.stat().st_size <= 200_000:
-                body = _norm_text(fp.read_text(errors="replace"))
+                body = _norm_text(fp.read_text(encoding="utf-8", errors="replace"))   # not the locale (cp1252)
                 if len(body) >= 15:
                     snippets.append((fp.name, body[:40]))
         if not snippets:

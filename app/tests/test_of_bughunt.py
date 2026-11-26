@@ -459,3 +459,25 @@ def test_of13_hidden_sheets_are_marked_and_a_wrong_sheet_name_lists_the_sheets(t
     out = _read(tmp_path / "h.xlsx", sheet="Nope")
     assert out == "h.xlsx has no sheet named 'Nope'. Sheets: Sheet, Workings (hidden)"
     assert "old numbers" in _read(tmp_path / "h.xlsx", sheet="workings")
+
+
+# ---------- OF-15: the hidden-text check read a UTF-8 reference file in the locale's code page (Windows) -----------
+
+def test_of15_hidden_text_check_reads_the_text_file_as_utf8(tmp_path, monkeypatch):
+    import pathlib
+    import time
+    from meshpool_harness.agent import core
+    text = "Zoë Müller and José Álvarez wrote the reference study on café pricing in 2021."
+    (tmp_path / "reference.txt").write_text(text, encoding="utf-8")
+    since = time.time() - 5
+    d = Document()
+    d.add_paragraph("Project report.")
+    d.add_paragraph(text)
+    d.save(str(tmp_path / "project_report.docx"))
+    real = pathlib.Path.read_text
+
+    def windows_locale(self, encoding=None, errors=None):    # what open() does on Windows without an encoding
+        return real(self, encoding=encoding or "cp1252", errors=errors)
+    monkeypatch.setattr(pathlib.Path, "read_text", windows_locale)
+    asked = "Retrieve reference text from reference.txt and add it to the end of project_report.docx"
+    assert core._docx_hidden_text_miss(asked, tmp_path, since) == ""
