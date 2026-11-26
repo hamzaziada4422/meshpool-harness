@@ -2257,12 +2257,14 @@ function renderPanel() {
   flipLayout(() => { fitPanel(); p.hidden = !S.panel; });
   if (S.panel !== "browser") brwStop();
   if (!S.panel) return;
-  $("#ptabs").innerHTML = `<div class="pstrip" role="tablist" aria-label="Side panel tabs">` + panelSet().map(k => [k, PTABS_ALL[k]]).map(([k, lb]) => `<button role="tab" aria-selected="${S.panel === k}" data-t="${k}">${lb}</button>`).join("") + `</div><span class="sp"></span><button class="iconbtn" id="pclose" aria-label="Close panel">${ICON.x}</button>`;
+  $("#ptabs").innerHTML = `<button class="pnav" id="pnavl" aria-label="Show tabs to the left" hidden>${ICON.chevR}</button><div class="pstrip" role="tablist" aria-label="Side panel tabs">` + panelSet().map(k => [k, PTABS_ALL[k]]).map(([k, lb]) => `<button role="tab" aria-selected="${S.panel === k}" data-t="${k}">${lb}</button>`).join("") + `</div><button class="pnav" id="pnavr" aria-label="Show more tabs" hidden>${ICON.chevR}</button><span class="sp"></span><button class="iconbtn" id="pclose" aria-label="Close panel">${ICON.x}</button>`;
   $$("#ptabs [data-t]").forEach(b => b.onclick = () => togglePanel(b.dataset.t, true));
   $("#pclose").onclick = () => togglePanel(S.panel);
   { const st = $("#ptabs .pstrip"), on = $('[aria-selected="true"]', st);   // one row that scrolls: the open tab is brought into view, the wheel scrolls it sideways
     if (on && st.scrollWidth > st.clientWidth) st.scrollLeft += on.getBoundingClientRect().left - st.getBoundingClientRect().left - (st.clientWidth - on.offsetWidth) / 2;
-    const fade = () => { st.classList.toggle("fl", st.scrollLeft > 1); st.classList.toggle("fr", st.scrollLeft + st.clientWidth < st.scrollWidth - 1); };
+    const nl = $("#pnavl"), nr = $("#pnavr");      // an arrow at each end where tabs are out of sight, so none is hidden without a sign
+    const fade = () => { const l = st.scrollLeft > 1, r = st.scrollLeft + st.clientWidth < st.scrollWidth - 1; st.classList.toggle("fl", l); st.classList.toggle("fr", r); nl.hidden = !l; nr.hidden = !r; };
+    nl.onclick = () => st.scrollBy({left: -Math.max(80, st.clientWidth * 0.7), behavior: "smooth"}); nr.onclick = () => st.scrollBy({left: Math.max(80, st.clientWidth * 0.7), behavior: "smooth"});
     fade(); st.addEventListener("scroll", fade, {passive: true});
     st.addEventListener("wheel", e => { if (e.deltaY && !e.deltaX && st.scrollWidth > st.clientWidth) { st.scrollLeft += e.deltaY; e.preventDefault(); } }, {passive: false}); }
   const body = $("#pbody"); body.innerHTML = "";
