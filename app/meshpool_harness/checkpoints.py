@@ -859,6 +859,26 @@ class Checkpoints:
         self._save_cache(True)
         self.gc()
 
+    def to_journal(self, message_index: int | None = None) -> None:
+        """The chat moved mid-turn from an outside agent (booked by scanning the folder) to meshpool's own (whose tools
+        book their writes): what the scan window saw so far is booked, the window closes, and the open turn goes on
+        in journal mode from `message_index` (the conversation position Undo cuts back to)."""
+        with self._lk:
+            t = self._open_turn()
+            if t is not None and self.mode == "scan":
+                w, self._win, self._begin = self._win, None, None
+                if w is not None:
+                    self._book(t, *self._end_window(w))
+                with contextlib.suppress(OSError):
+                    (self.store / "open.json").unlink()
+            self.mode = "journal"
+            if t is not None:
+                t["mode"] = "journal"
+                if message_index is not None:
+                    t["message_index"] = message_index
+                self._dirty = True
+                self._flush()
+
     def _begin_manifest(self, t: dict):
         if self._begin is not None:
             return self._begin

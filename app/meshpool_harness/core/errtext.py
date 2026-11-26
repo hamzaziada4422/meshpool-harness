@@ -342,3 +342,76 @@ def _clean_inline(raw: str, key: str) -> str:
         return f"HTTP {code}" + (f" {_REASON[code]}" if code in _REASON else "") + (f": {text}" if text else "")
     from meshpool_harness.core import endpoint as EP
     return _INLINE.sub(sub, EP.redact_key(raw, key))      # the service's words are redacted in said()
+
+
+# ---------- an outside engine's or harness's own error text (Codex, Pi, Hermes, an office engine) --------------------
+# They write errors their own way: "unexpected status 404 Not Found: not found, url: http://127.0.0.1:44615/v1/responses",
+# "stream disconnected before completion: error sending request for url (...)", "exceeded retry limit, last status:
+# 500 Internal Server Error", a JSON-RPC error, a Python exception. None of that is for the person reading the chat.
+_URL = re.compile(r"\bhttps?://[^\s)\]>'\"]+", re.I)
+_CODE = re.compile(r"\b(?:unexpected status|last status:?|status(?: code)?:?|HTTP(?:/\d(?:\.\d)?)?|error code:?)\s*"
+                   r"([1-5]\d\d)\b|\b([45]\d\d) (?:Not Found|Bad Request|Unauthori[sz]ed|Forbidden|Payment Required|"
+                   r"Method Not Allowed|Request Timeout|Conflict|Payload Too Large|Unprocessable|Too Many Requests|"
+                   r"Internal Server Error|Bad Gateway|Service Unavailable|Gateway Time-?out)\b", re.I)
+_REFUSED = re.compile(r"connection refused|errno 111\b|errno 61\b|winerror 10061|econnrefused|actively refused|"
+                      r"name or service not known|getaddrinfo|dns error|failed to lookup address|"
+                      r"network is unreachable|no route to host", re.I)
+_CUT = re.compile(r"connection reset|econnreset|reset by peer|broken pipe|remote end closed|connection aborted|"
+                  r"stream disconnected|stream closed before|error sending request|error decoding response|"
+                  r"incomplete ?message|unexpected eof|incompleteread", re.I)
+_SLOW = re.compile(r"timed out|timeout|deadline exceeded", re.I)
+_RAWISH = re.compile(r"\bunexpected status\b|\bTraceback\b|\b[A-Z]\w*(?:Error|Exception)\b:|\[Errno|\bErrno\b|"
+                     r"\bJSON-?RPC\b|\{\s*\"|<html|\bstack ?trace\b|\bpanicked at\b", re.I)
+
+
+def _code_of(text: str) -> int | None:
+    m = _CODE.search(str(text or ""))
+    return int(m.group(1) or m.group(2)) if m else None
+
+
+def is_raw(text: str) -> bool:
+    """The text carries what people should not have to read: a URL, a status code, "unexpected status", an exception
+    name or a raw body."""
+    t = str(text or "")
+    return bool(_URL.search(t) or _CODE.search(t) or _RAWISH.search(t))
+
+
+def engine_failed(text: str) -> bool:
+    """An outside engine's error that means the work never started: the AI service answered with an HTTP 4xx or 5xx,
+    or nothing answered (connection refused, a reset, a name that does not resolve)."""
+    t = str(text or "")
+    code = _code_of(t)
+    return bool((code is not None and 400 <= code < 600) or _REFUSED.search(t) or _CUT.search(t))
+
+
+def outside(raw: str) -> tuple[str, str]:
+    """(the plain sentence the chat shows, the raw text for its Details fold) for an outside engine's or harness's
+    error. A text that is already plain words comes back unchanged, with no details. The plain sentence names no
+    engine, URL or status code. Keys never reach either part."""
+    t = str(raw or "").strip()
+    if not t or not is_raw(t):
+        return t, ""
+    code = _code_of(t)
+    low = t.lower()
+    if code in (401, 403) or re.search(r"api.?key|unauthori[sz]ed|invalid.{0,20}token|authenticat", low):
+        plain = "The AI service did not accept the API key. Check it in Settings, then send your message again."
+    elif code == 429 or re.search(r"rate.?limit|too many requests|quota", low):
+        plain = "The AI service is limiting requests right now. Wait a minute, then send your message again."
+    elif code == 404:
+        plain = ("The AI service did not recognize the request. Check the model and the endpoint address in Settings, "
+                 "or pick another model.")
+    elif code is not None and code >= 500:
+        plain = "The AI service had a problem on its side. Try again in a moment."
+    elif code is not None and code >= 400:
+        plain = ("The AI service refused the request. Check the model in Settings or pick another one, then send your "
+                 "message again.")
+    elif _REFUSED.search(t):
+        plain = ("The AI service is not answering. Check that it is running and its address in Settings, then send "
+                 "your message again.")
+    elif _CUT.search(t):
+        plain = "The connection to the AI service was cut off. Send your message again."
+    elif _SLOW.search(t):
+        plain = "The AI service did not answer in time. Try again in a moment."
+    else:
+        plain = "Something went wrong while working on this. Send your message again; the details are below."
+    return plain, _redact(t)

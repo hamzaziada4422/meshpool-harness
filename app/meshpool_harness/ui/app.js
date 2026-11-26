@@ -1402,9 +1402,9 @@ function workTick(cur) {
   const steps = Object.values(cur.tools || {}).some(d => !d.dataset.done);
   const quiet = cur.working && !waiting && !cur.live && !cur.stage && !steps ? Math.round((Date.now() - Math.max(cur.since || 0, cur.lastEvAt || 0)) / 1000) : 0;
   // The server says whether a model request is in flight (view.model_inflight). None in flight and 60 s of quiet means
-  // the turn is stuck, not slow: say so and offer Try again. A real wait offers it after 3 minutes.
+  // the turn is stuck, not slow: say so and offer Try again. A request with nothing back offers it after 90 s.
   const stuck = quiet >= 60 && cur.view?.model_inflight === false && !cur.gateEl && !cur.down;
-  waitNote(quiet >= 20 && !cur.down ? quiet : 0, stuck, quiet >= 180);   // the service-down line already says what it waits for
+  waitNote(quiet >= 20 && !cur.down && !cur.retrying ? quiet : 0, stuck, quiet >= 90);   // the service-down line already says what it waits for
 }
 // The service-down line in plain words: no "model endpoint", no error name, no attempt count.
 function downWords(ev) {
@@ -1415,17 +1415,17 @@ function downWords(ev) {
   if (/Another chat/.test(t)) return "The AI service is not answering. Another chat is already checking it; this one carries on when it is back.";
   return t.replace(/The model endpoint isn't answering[^.]*\./, "The AI service is not answering.").replace(/\bmodel endpoint\b/g, "AI service");
 }
-// Stop the turn, then send the last message again.
+// Try again: the server stops the turn, waits for it to end, and runs the last message again in place of that
+// attempt, so the message shows once and no "Stopped." line is left (it was a stop, then a second send).
 async function retryLast() {
-  const cur = S.cur; if (!cur) return;
-  let text = ""; for (let i = cur.log.length - 1; i >= 0; i--) { const e = cur.log[i]; if (e.type === "user" && !e.steer && String(e.text || "").trim()) { text = String(e.text); break; } }
-  if (!text) { stopNow(); return; }
-  await stopNow();
+  const cur = S.cur; if (!cur || cur.retrying) return;
+  cur.retrying = true; waitNote(0); setWorking("Trying again", 0);
+  try { await post(`/api/agent/${cur.id}/retry`, {since: 1e9}); }
+  catch (e) { toast(e.message, 5000); }
+  finally { cur.retrying = false; }
   if (S.cur !== cur) return;
-  const inp = $("#input"), draft = inp.value;
-  inp.value = text; inp.dispatchEvent(new Event("input"));
-  await sendNow(false);
-  if (draft && S.cur === cur && !inp.value) { inp.value = draft; inp.dispatchEvent(new Event("input")); }
+  cur.since = Date.now(); cur.lastEvAt = 0; if (cur.view) cur.view.state = "working";
+  renderBar(); clearTimeout(cur.pollT); poll();
 }
 function waitNote(secs, stuck, again) {
   let n = $("#waitNote");

@@ -461,6 +461,18 @@ def report(jid: str, rel_to: Path | None = None, reused: str = "") -> tuple[str,
     if not res:
         return f"The {j['engine']} engine failed. {j.get('stderr', '')}", True
     notes = "\n".join((s.get("answer") or "") for s in res.get("steps") or []).strip()
+    if not made and not res.get("ok"):
+        # Priya: the engine stopped after one step (a slow model call) and saved nothing, and the report read "finished;
+        # its quality checks did not all pass (review the file). Files:" with no file. The agent then checked a file
+        # that did not exist, three times, and wrote it with a script. Say what happened and what to do.
+        from meshpool_harness.core import errtext as ET
+        why = " ".join(str(s.get("reason") or "") for s in res.get("steps") or [] if not s.get("ok")).strip() \
+            or str(res.get("reason") or "")
+        plain = ET.outside(why)[0] if why else ""
+        return (f"The {j['engine']} engine stopped before it made the file, so nothing was saved and there is nothing "
+                f"to check." + (f" Why: {plain}" if plain else "") + " Call the same tool again once with the same "
+                "request; a stop like this usually does not happen twice. If it stops again, make the file another "
+                "way and tell the user in plain words."), True
     qa = _qa(j)
     # "passed" only when nothing is flagged: an engine's ok means "a file was made", and a headline saying "passed"
     # above a list of failing rules sent the agent into rebuild after rebuild (seen live: 8 deck builds, 20 minutes).

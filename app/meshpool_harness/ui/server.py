@@ -1424,7 +1424,7 @@ class Handler(BaseHTTPRequestHandler):
                 s, b = A.get(m.group(1)), self._json()
                 s.reply(b.get("question_id", ""), b.get("answers"))
                 return self._send(200, s.view(int(b.get("since", 10**9))))
-            m = re.fullmatch(r"/api/agent/([\w-]+)/(send|stop|answer|mode|compact|grade|take_back)", u.path)
+            m = re.fullmatch(r"/api/agent/([\w-]+)/(send|stop|answer|mode|compact|grade|take_back|retry)", u.path)
             if m:
                 return self._send(200, A.session_action(m.group(1), m.group(2), self._json()))
         except MissingField as e:                 # the request lacks a field: say which, as a bad request
