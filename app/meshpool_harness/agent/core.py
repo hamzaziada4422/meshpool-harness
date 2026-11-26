@@ -751,12 +751,62 @@ def _git_discard_title(steps) -> str:
     return ""
 
 
+_HEREDOC_OPEN = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n")
+
+
+def _strip_heredocs(s: str):
+    """(script without the heredoc bodies, [bodies])."""
+    out, bodies, pos = [], [], 0
+    while True:
+        m = _HEREDOC_OPEN.search(s, pos)
+        if not m:
+            out.append(s[pos:])
+            break
+        out.append(s[pos:m.end()])
+        end = re.search(r"^[ \t]*" + re.escape(m.group(2)) + r"[ \t]*$", s[m.end():], re.M)
+        if not end:
+            bodies.append(s[m.end():])
+            break
+        bodies.append(s[m.end():m.end() + end.start()])
+        pos = m.end() + end.end()
+    return "".join(out), bodies
+
+
+def _heredoc_title(s: str) -> str:
+    """Title for a script with a heredoc (`cat > chart.py <<'EOF' ... EOF` then `python chart.py`, or `python - <<'EOF'`):
+    from what it does, not from the lines of the program text (Lina, 0.0.19: "Run 27 steps: cat, import, ...")."""
+    if "<<" not in s:
+        return ""
+    head, bodies = _strip_heredocs(s)
+    if not bodies:
+        return ""
+    w = re.search(r"(?:\bcat|\btee(?:\s+-a)?)\s*(?:>>?\s*)?(?P<f>[^\s<>|;&]+)\s*<<|\bcat\s*>>?\s*(?P<g>[^\s<>|;&]+)\s*<<",
+                  head)
+    written = os.path.basename((w.group("f") or w.group("g") or "").strip("'\"")) if w else ""
+    if not written and not re.search(r"(?:^|[;&|\s])(?:python[\d.]*|node|Rscript|ruby|perl)\b[^\n<]*<<", head):
+        return ""
+    hfiles = [f for f in dict.fromkeys(m.group(0).rsplit("/", 1)[-1] for b in bodies + [head] for m in _FILE_WORD.finditer(b))
+              if f != written][:3]
+    on = (" on " + ", ".join(hfiles)) if hfiles else ""
+    lang = next((v for k, v in _PROGRAMS.items() if re.search(r"\b" + k + r"\b", head)), "")
+    if not lang and re.search(r"\bimport\b|\bdef\b|\bprint\(", " ".join(bodies)):
+        lang = "Python"
+    step = f"a {lang} step{on}" if lang else f"a step{on}"
+    if written:
+        ran = bool(re.search(r"(?:python[\d.]*|node|Rscript|ruby|perl|bash|sh)\s+\S*" + re.escape(written), head))
+        return f"Write {written} and run it ({step})?" if ran else f"Write {written}?"
+    return f"Run {step}?"
+
+
 def _plain_command_title(script: str) -> str:
     """What a command does, in words a person can judge, for the approval card (persona runs, 0.0.18: every card was
     a raw `D=/tmp/...; python3 -I -c "..."` line nobody could judge). The command itself stays below the title.
     Never milder than the command (review, 0.0.18): "Read" only when every step only reads, a write, delete or the
     network is named as such, and a chain says how many steps it has."""
     s = str(script or "")
+    hd = _heredoc_title(s)                            # a heredoc's lines are text for a program, never steps
+    if hd:
+        return hd
     files = list(dict.fromkeys(m.group(0).rsplit("/", 1)[-1] for m in _FILE_WORD.finditer(s)))[:3]
     on = (" on " + ", ".join(files)) if files else ""
     words = re.findall(r"(?:^|[;&|]\s*|\bdo\s+|\bthen\s+)([A-Za-z][\w.+-]*)", s)

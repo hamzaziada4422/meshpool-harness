@@ -162,3 +162,19 @@ def test_6_the_plain_bash_hint_no_longer_claims_to_exclude_deletes():
     d = TS._denied({"kind": "bash", "title": "Run a Python step?", "detail": "python3 -c 'print(1)' && ls"})
     what, how, kind = TS._allow_hint(d, "ask")
     assert "does not delete" not in how
+
+
+def _chart_body():
+    return "\n".join(["import pandas as pd", "import matplotlib", "matplotlib.use('Agg')",
+                      "df = pd.read_csv('sales_2025_clean.csv')", "m = df.groupby('month')", "src = df['month']"] * 5)
+
+
+def test_6_a_heredoc_script_is_titled_from_what_it_does_not_from_its_lines():
+    body = _chart_body()
+    two = f"cat > chart.py <<'EOF'\n{body}\nEOF\npython chart.py"
+    one = f"python - <<'EOF'\n{body}\nEOF"
+    assert core._plain_command_title(two) == "Write chart.py and run it (a Python step on sales_2025_clean.csv)?"
+    assert core._plain_command_title(one) == "Run a Python step on sales_2025_clean.csv?"
+    for t in (core._plain_command_title(two), core._plain_command_title(one)):
+        assert "steps" not in t and "matplotlib" not in t
+    assert core._plain_command_title(f"cat > notes.txt <<'EOF'\nhello\nEOF") == "Write notes.txt?"

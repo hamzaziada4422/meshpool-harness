@@ -50,7 +50,7 @@ def _mask_think(text: str) -> str:
 def _decode_at(text: str, i: int):
     """(value, end) of the JSON value starting at text[i], or None."""
     try:
-        return json.JSONDecoder().raw_decode(text, i)
+        return json.JSONDecoder(strict=False).raw_decode(text, i)    # a raw newline inside a string is still the call
     except ValueError:
         return None
 
@@ -319,10 +319,35 @@ def _whole_json(text: str, names):
     if not s or s[0] not in "[{":
         return None
     try:
-        v = json.loads(s)
+        v = json.loads(s, strict=False)
     except ValueError:
         return None
     return _calls_from_value(v, names)
+
+
+_LONE_TAG = re.compile(r"(?:\A|\n)[ \t]*</?[A-Za-z_][\w:.-]*/?>[ \t]*\Z")
+
+
+def _trailing_json(text: str, names):
+    """(calls, prose) when the text ends with a JSON call after some words ("I'll commit only those files." then
+    {"tool_calls": [{"name": "exec_command", "arguments": {...}}]}): the words stay as narration, the call runs. The
+    object must name an offered tool and end the text (a closing code fence may follow). Persona run, Omar 0.0.19: the
+    reply was the raw call, and no commit was made."""
+    t = text.rstrip()
+    fm = re.search(r"\n?```\s*\Z", t)
+    if fm:
+        t = t[:fm.start()].rstrip()
+    for m in re.finditer(r"(?:\A|\n)[ \t]*(?:```[A-Za-z]*[ \t]*\n[ \t]*)?(?=[\[{])", t):
+        i = m.end()
+        d = _decode_at(t, i)
+        if not d or t[d[1]:].strip():
+            continue
+        got = _calls_from_value(d[0], names)
+        if got:
+            prose = t[:m.start()].rstrip()
+            prose = _LONE_TAG.sub("", prose).rstrip()         # a stray tag the model put before the call
+            return got, prose
+    return None
 
 
 def recover(msg: dict, tool_names) -> bool:
@@ -351,15 +376,39 @@ def recover(msg: dict, tool_names) -> bool:
             rest.append(content[pos:])
             prose = "".join(rest).strip()
         else:
-            calls = _whole_json(masked if "<think>" in content.lower() and masked.strip() else content, names)
-            if not calls:
-                return False
+            body = masked if "<think>" in content.lower() and masked.strip() else content
+            calls = _whole_json(body, names)
             prose = ""
+            if not calls:
+                tj = _trailing_json(body, names)
+                if not tj:
+                    return False
+                calls, prose = tj
         msg["tool_calls"] = _make(calls)
         msg["content"] = prose or None
         return True
     except Exception:
         return False
+
+
+def _strip_json_call(text: str) -> str:
+    """The text without a JSON tool call that ends it or is all of it (any tool name: the tools are off here, so
+    nothing may run). Words before it stay."""
+    any_name = _AnyNames()
+    t = text.rstrip()
+    if not t or "tool_calls" not in t and '"arguments"' not in t and '"parameters"' not in t:
+        return text
+    got = _whole_json(t, any_name)
+    if got:
+        return ""
+    tj = _trailing_json(t, any_name)
+    return tj[1] if tj else text
+
+
+class _AnyNames:
+    """A set that contains every name."""
+    def __contains__(self, x):
+        return isinstance(x, str) and bool(x)
 
 
 def strip_markup(text: str) -> str:
@@ -371,7 +420,7 @@ def strip_markup(text: str) -> str:
             return text
         dsml, xml = bool(_DSML_ANY.search(text)), bool(_XML_INVOKE.search(text))
         if not dsml and not xml:
-            return text
+            return _strip_json_call(text)
         out = text
         if dsml:
             out = _DSML_WRAP.sub("", out)
