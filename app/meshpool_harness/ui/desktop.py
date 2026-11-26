@@ -369,7 +369,7 @@ def run() -> int:
         if not ready.wait(60):
             print("The Meshpool server did not start. See the lines above.")
             return 1
-        url = SV.app_url(box["port"])                  # the launch key: only this window gets the API token
+        url = SV.open_url(box["port"])                 # a one-time key: only this window gets the API token
         if os.name == "nt":
             shown = _window_process(url) == "closed"    # blocks until the window closes
         else:
@@ -379,7 +379,7 @@ def run() -> int:
             t.join(10)
         else:
             SV.NATIVE[0] = False
-            open_window(url)
+            open_window(SV.open_url(box["port"]))       # the first key may be used up by the window that failed
             t.join()
         return 0
     finally:

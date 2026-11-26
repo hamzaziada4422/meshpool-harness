@@ -447,6 +447,12 @@ def save(body: dict) -> dict:
             except OSError:
                 pass
             os.replace(tmp, p)
+        except PermissionError:                  # Windows refuses the rename while Excel or Word has the file open
+            raise ValueError(f"Meshpool could not save {p.name}: it is read-only, or another app has it open. Close "
+                             "it there and save again.") from None
+        except OSError as e:                     # a full disk, a folder that went away
+            raise ValueError(f"Meshpool could not save {p.name} ({e.strerror or 'the disk refused it'}). Nothing "
+                             "was changed.") from None
         finally:
             try:
                 tmp.unlink()

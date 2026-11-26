@@ -113,6 +113,22 @@ def office_get() -> tuple[int, dict]:
                      trust_note=OF.TRUST_NOTE)
 
 
+def _cert_bytes(OF) -> bytes:
+    """The certificate the Office listener would load now (empty when there is none)."""
+    cp = OF.cert_paths()
+    try:
+        return cp[0].read_bytes() + cp[1].read_bytes() if cp else b""
+    except OSError:
+        return b""
+
+
+def _stop_office(S) -> None:
+    for srv in list(S.OFFICE_HTTPD):
+        srv.shutdown()
+        srv.server_close()
+    S.OFFICE_HTTPD.clear()
+
+
 def office_post(b: dict) -> tuple[int, dict]:
     """The click on Settings' button is the user's say-so to trust the certificate (the system shows its own
     confirmation too: Windows asks before adding a root, macOS asks for the login password)."""
@@ -121,15 +137,15 @@ def office_post(b: dict) -> tuple[int, dict]:
     act = b.get("action") or "install"
     try:
         if act == "install":
+            before = _cert_bytes(OF)
             lines = OF.install([str(a) for a in (b.get("apps") or list(OF.APPS))], confirm=lambda cmd: True)
+            if S.OFFICE_HTTPD and _cert_bytes(OF) != before:   # renewed: the listener still holds the old one
+                _stop_office(S)
             if not S.OFFICE_HTTPD:
                 S._start_office()
         elif act == "uninstall":
             lines = OF.uninstall()
-            for srv in list(S.OFFICE_HTTPD):
-                srv.shutdown()
-                srv.server_close()
-            S.OFFICE_HTTPD.clear()
+            _stop_office(S)
         else:
             raise ValueError("action is install or uninstall")
     except OF.OfficeError as e:

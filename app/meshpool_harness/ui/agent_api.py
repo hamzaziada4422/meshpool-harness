@@ -205,7 +205,14 @@ def _meta_path(sid: str) -> Path:
 _METAS: dict = {}                   # meta.json path -> (mtime, size, meta): the sidebar lists every chat every few s
 
 
+def _plain_id(sid) -> bool:
+    """A chat id is one folder name (the routes take [\\w-]+): "", ".." or a path would reach outside the chats folder."""
+    return isinstance(sid, str) and bool(re.fullmatch(r"[\w-]+", sid))
+
+
 def read_meta(sid: str) -> dict:
+    if not _plain_id(sid):
+        return {}
     p = _meta_path(sid)
     try:
         st = p.stat()
@@ -223,6 +230,8 @@ _META_LOCK = threading.RLock()      # read-modify-write of meta.json: turn, post
 
 
 def write_meta(sid: str, **kw) -> dict:
+    if not _plain_id(sid):
+        return {}
     s = LIVE.get(sid)
     if s is None and not (SESSIONS / sid).is_dir():
         return {}                                     # deleted thread: do not recreate its folder
@@ -2163,16 +2172,43 @@ def _default_style() -> str:
         return "normal"
 
 
+_TRUST_NOTES: dict = {}             # workdir -> (stamp of the files the note depends on, note)
+
+
+def _trust_stamp(workdir: str) -> tuple:
+    """What the trust note depends on: the trusted-folders files and the project's risky files (inode, mtime, size)."""
+    from meshpool_harness import trust as TR
+    w = Path(workdir)
+    out: list = [os.environ.get("MH_TRUST_PROJECT", ""), str(C.home())]
+    for f in (TR._store(), C.home() / "trusted_projects.json", w / ".meshpool" / "hooks.json",
+              w / ".meshpool" / "permissions.json", w / ".mcp.json", w / ".meshpool" / "mcp.json"):
+        try:
+            st = os.stat(f)
+            out.append((st.st_ino, st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append(None)
+    return tuple(out)
+
+
 def _trust_note(workdir: str) -> dict | None:
-    """When the folder has hooks or allow rules that are being ignored until the user trusts it."""
+    """When the folder has hooks or allow rules that are being ignored until the user trusts it. Every chat view asks,
+    so the answer is kept until one of the files it depends on changes."""
     if not workdir:
         return None
     try:
         from meshpool_harness import trust as TR
+        stamp = _trust_stamp(workdir)
+        hit = _TRUST_NOTES.get(workdir)
+        if hit and hit[0] == stamp:
+            return dict(hit[1], files=list(hit[1]["files"])) if hit[1] else None
         files = TR.needs_prompt(workdir)
+        note = {"files": files, "text": TR.message(workdir)} if files else None
     except Exception:  # noqa: BLE001 - a status line must never break the chat view
         return None
-    return {"files": files, "text": TR.message(workdir)} if files else None
+    if len(_TRUST_NOTES) > 200:
+        _TRUST_NOTES.clear()
+    _TRUST_NOTES[workdir] = (stamp, note)
+    return dict(note, files=list(files)) if note else None
 
 
 def create(body: dict) -> dict:

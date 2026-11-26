@@ -74,10 +74,10 @@ def _session_files(r: dict) -> list[dict]:
     return rows
 
 
-def artifacts(limit: int = 300) -> dict:
+def artifacts(limit: int = 300, listing: list | None = None) -> dict:
     """Files made or changed across all chats, newest first."""
     out = []
-    for r in A.listing()[:150]:
+    for r in (A.listing() if listing is None else listing)[:150]:
         for f in _session_files(r):
             fp = Path(r["workdir"]) / f["path"]
             try:
@@ -97,13 +97,13 @@ def artifacts(limit: int = 300) -> dict:
     return {"artifacts": out[:limit], "types": counts}
 
 
-def _task_row(t: dict, threads: dict) -> dict:
+def _task_row(t: dict, threads: dict, names: dict | None = None) -> dict:
     last = threads.get(t.get("last_thread") or "")
     pj = ""
     if t.get("folder"):
-        for p in W.projects():
-            if p.get("path") == t["folder"]:
-                pj = p.get("name", "")
+        if names is None:
+            names = {p.get("path"): p.get("name", "") for p in W.projects()}
+        pj = names.get(t["folder"], "")
     return {"id": t["id"], "name": t.get("name") or "Scheduled task", "prompt": t.get("prompt", ""),
             "enabled": bool(t.get("enabled")), "status": AS.status(t),
             "error": (t.get("last_error") or {}).get("text", ""), "invalid": t.get("invalid", ""),
@@ -123,9 +123,12 @@ TEMPLATES = [
 ]
 
 
-def scheduled() -> dict:
-    threads = {r["id"]: r for r in A.listing()}
-    rows = [_task_row(t, threads) for t in AS.tasks()]
+def scheduled(listing: list | None = None) -> dict:
+    """The tasks as cards. `listing` is the chat list when the caller has it already (it is not cheap to build)."""
+    threads = {r["id"]: r for r in (A.listing() if listing is None else listing)}
+    tasks = AS.tasks()
+    names = {p.get("path"): p.get("name", "") for p in W.projects()} if any(t.get("folder") for t in tasks) else {}
+    rows = [_task_row(t, threads, names) for t in tasks]
     return {"tasks": rows, "templates": TEMPLATES, "problem": AS.tasks_problem()}
 
 
@@ -146,7 +149,7 @@ def account() -> dict:
             "code_waiting": len([r for r in code if r.get("state") == "waiting"]),
             "chat_unread": len([r for r in rows if not is_code_session(r) and r.get("unread") and not r.get("archived")]),
             "code_unread": len([r for r in code if r.get("unread")]),
-            "scheduled_unread": len([t for t in scheduled()["tasks"] if t["unread"]])}
+            "scheduled_unread": len([t for t in scheduled(rows)["tasks"] if t["unread"]])}
 
 
 def _item(kind: str, id_: str, title: str, sub: str = "", **kw) -> dict:
@@ -164,7 +167,8 @@ def search(q: str, tab: str = "all") -> dict:
     """Search results as groups. An empty query gives what needs attention, recent items and actions."""
     q = (q or "").strip().lower()
     tab = tab if tab in TABS else "all"
-    rows = [r for r in A.listing() if not r.get("archived")]
+    every = A.listing()                             # once: artifacts and scheduled below use it too
+    rows = [r for r in every if not r.get("archived")]
     chats = [r for r in rows if not is_code_session(r)]
     codes = [r for r in rows if is_code_session(r)]
     want = lambda t: tab in ("all", t)  # noqa: E731
@@ -192,10 +196,10 @@ def search(q: str, tab: str = "all") -> dict:
                                          for p in PS.list_projects()[:5]])
         if want("artifacts"):
             add("artifacts", "Artifacts", [_item("artifact", a["id"], a["name"], a["type"], session_id=a["session_id"], root=a["root"], path=a["path"])
-                                           for a in artifacts(20)["artifacts"][:5]])
+                                           for a in artifacts(20, every)["artifacts"][:5]])
         if want("scheduled"):
             add("scheduled", "Scheduled", [_item("scheduled", t["id"], t["name"], t["schedule"], unread=t["unread"])
-                                           for t in scheduled()["tasks"][:5]])
+                                           for t in scheduled(every)["tasks"][:5]])
         if tab == "all":
             add("actions", "Actions", [_item("action", "new_chat", "New chat"), _item("action", "new_session", "New session"),
                                        _item("action", "settings", "Open settings")])
@@ -229,8 +233,8 @@ def search(q: str, tab: str = "all") -> dict:
     if want("artifacts"):
         add("artifacts", "Artifacts", [_item("artifact", a["id"], a["name"], a["type"] + " · " + a["session_title"], session_id=a["session_id"],
                                              root=a["root"], path=a["path"])
-                                       for a in artifacts()["artifacts"] if q in a["name"].lower()][:8])
+                                       for a in artifacts(listing=every)["artifacts"] if q in a["name"].lower()][:8])
     if want("scheduled"):
         add("scheduled", "Scheduled", [_item("scheduled", t["id"], t["name"], t["schedule"], unread=t["unread"])
-                                       for t in scheduled()["tasks"] if q in t["name"].lower() or q in t["prompt"].lower()][:8])
+                                       for t in scheduled(every)["tasks"] if q in t["name"].lower() or q in t["prompt"].lower()][:8])
     return {"q": q, "tab": tab, "groups": groups, "now": time.time()}
