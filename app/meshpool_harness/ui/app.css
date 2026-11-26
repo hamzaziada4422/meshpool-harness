@@ -204,7 +204,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .appr b{display:block;margin-bottom:8px;font-weight:600}
 .appr pre{background:var(--fill);border:0;border-radius:4px;padding:8px 12px;max-height:280px;overflow:auto;font:var(--fs-xs)/1.5 var(--mono);margin:0 0 12px;white-space:pre-wrap;overflow-wrap:anywhere}
 .appr .acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.appr .apsum{margin:0 0 8px;padding-left:18px;color:var(--ink-2)}
+.appr .apsum{margin:0 0 8px;padding-left:20px;color:var(--ink-2)}
 .appr .apdet{margin:0 0 12px;color:var(--ink-2);font-size:var(--fs-xs)}
 .appr .apdet summary{cursor:pointer}
 .appr .apdet pre{margin:8px 0 0}

@@ -251,7 +251,11 @@ def _details(run_id: str) -> list[str]:
                 d = json.loads(r.get("subject") or "{}")
             except ValueError:
                 continue
-            out += [str(x) for x in d.get("lines", []) if x not in out]
+            # "P3: placeholder failed" names a rule by its code: the code means nothing to a person, the words after it do
+            for x in d.get("lines", []):
+                x = re.sub(r"^[A-Za-z]{1,3}\d{1,3}:\s*", "", str(x))
+                if x and x not in out:
+                    out.append(x)
     return out
 
 

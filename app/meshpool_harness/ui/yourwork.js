@@ -38,9 +38,10 @@
 .mw-hours span.top{background:var(--pool)}
 .mw-axis{display:flex;justify-content:space-between;color:var(--ink-3);font-size:var(--fs-xs);margin-top:4px}
 .mw-gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
-.mw-file{border:1px solid var(--line);border-radius:var(--r-m);padding:12px 12px;background:var(--bg);min-width:0}
+.mw-usage{margin:0 0 32px}.mw-usage>summary{cursor:pointer;font:600 var(--fs-l)/1.3 var(--display);margin:0 0 16px}
+.mw-file{text-align:left;font:inherit;color:inherit;cursor:pointer;display:block;width:100%;border:1px solid var(--line);border-radius:var(--r-m);padding:12px 12px;background:var(--bg);min-width:0}
 .mw-file b{display:block;font-weight:500;font-size:var(--fs-s);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.mw-file small{color:var(--ink-3);font-size:var(--fs-xs)}
+.mw-file small{display:block;color:var(--ink-3);font-size:var(--fs-xs)}.mw-file:hover{background:var(--hover)}
 .mw-line{display:flex;gap:8px;padding:8px 0;border-bottom:1px solid var(--line-2);font-size:var(--fs-m)}
 .mw-line small{color:var(--ink-3);min-width:56px}
 .mw-sug{display:flex;align-items:center;gap:12px;border:1px solid var(--line);border-radius:var(--r-l);padding:16px 16px;margin-bottom:8px;background:var(--bg)}
@@ -48,6 +49,7 @@
 .mw-recap{display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap}
 .mw-recap img{width:240px;border-radius:var(--r-m);border:1px solid var(--line);background:var(--fill)}
 .mw-note{color:var(--ink-3);font-size:var(--fs-s);margin-top:4px}
+.pjfiles{list-style:none;margin:8px 0;padding:0}.pjfiles .pjf{display:flex;align-items:center;gap:8px;width:100%;text-align:left}.pjfiles svg{width:16px;height:16px;flex:none;color:var(--ink-3)}
 .mw-brief h3{font:600 var(--fs-m)/1.3 var(--body);margin:16px 0 4px}
 .mw-brief ul{margin:0;padding-left:20px}.mw-brief li{margin:4px 0}
 .mw-catch{border:1px solid var(--line);border-radius:var(--r-l);padding:16px 16px;background:var(--pool-soft);margin:16px 0}
@@ -76,7 +78,9 @@
     const t = d.totals, u = d.usage, w = d.when;
     const maxH = Math.max(1, ...w.hour);
     const sec = (title, inner, extra = "") => inner ? `<section class="mw-sec ${extra}"><h2>${title}</h2>${inner}</section>` : "";
-    box.innerHTML = `
+    const dirOf = g => (g.path.includes("/") ? g.path.slice(0, g.path.lastIndexOf("/")) : (g.root || "").split(/[\\/]/).filter(Boolean).pop() || "");
+    const files = d.gallery.length ? `<section class="mw-sec mw-files"><h2>Your files</h2><div class="mw-gal">${d.gallery.slice(0, 40).map((g, i) => `<button type="button" class="mw-file" data-mw-file="${i}" title="${esc(g.root + "/" + g.path)}"><b>${esc(g.name)}</b><small>${esc(g.type)} · ${day(g.updated)}</small><small class="mw-dir">in ${esc(dirOf(g))}</small></button>`).join("")}</div></section>` : `<section class="mw-sec mw-files"><h2>Your files</h2><p class="mw-note">Files meshpool makes for you show up here, newest first. Click one to open it.</p></section>`;
+    box.innerHTML = files + `<details class="mw-usage"><summary>Usage and habits</summary>
       <div class="mw-stats">
         <div class="mw-stat"><b>${num(t.chats)}</b><span>chats</span></div>
         <div class="mw-stat"><b>${num(t.turns)}</b><span>requests</span></div>
@@ -85,21 +89,22 @@
       </div>
       ${sec("What you worked on", d.topics.length ? `<div class="mw-chips">${d.topics.map(x => `<span class="mw-chip">${esc(x.topic)}<b>${x.chats}</b></span>`).join("")}</div>` : "")}
       <div class="mw-cols">
-        ${sec("Kinds of work", d.kinds.length ? bars(d.kinds, k => k.label, k => k.count) : `<p class="mw-note">Kinds of work show once meshpool has routed a few requests.</p>`)}
+        ${sec("What you asked for", d.kinds.length ? bars(d.kinds, k => k.label, k => k.count) : `<p class="mw-note">Kinds of work show once meshpool has routed a few requests.</p>`)}
         ${sec("Agents", d.agents.length ? bars(d.agents, a => a.name, a => a.chats) + (d.models.length ? `<p class="mw-note">Models: ${d.models.map(m => `${esc(m.name)} (${m.chats})`).join(", ")}</p>` : "") : "")}
       </div>
       ${sec("When you work", `<div class="mw-hours" role="img" aria-label="Requests by hour of the day">${w.hour.map((n, h) => `<span class="${h === w.busiest_hour ? "top" : ""}" style="height:${Math.round(100 * n / maxH)}%" title="${hourLabel(h)}: ${n}"></span>`).join("")}</div>
         <div class="mw-axis"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>23:00</span></div>
         <p class="mw-note">${w.busiest_weekday ? `Busiest day: ${esc(w.busiest_weekday)}. ` : ""}${w.busiest_hour !== null ? `Busiest hour: ${hourLabel(w.busiest_hour)}.` : ""}</p>`)}
-      ${sec("Things you made", d.gallery.length ? `<div class="mw-gal">${d.gallery.slice(0, 18).map(g => `<div class="mw-file" title="${esc(g.title)}"><b>${esc(g.name)}</b><small>${esc(g.type)} · ${day(g.updated)}</small></div>`).join("")}</div>` : "")}
       <div class="mw-cols">
         ${sec("Skills and connectors", (d.skills.length || d.connectors.length) ? `<div class="mw-chips">${d.skills.map(s => `<span class="mw-chip">Skill ${esc(s.name)}<b>${s.chats}</b></span>`).join("")}${d.connectors.map(s => `<span class="mw-chip">${esc(s.name)}<b>${s.chats}</b></span>`).join("")}</div>` : "")}
         ${sec("Cost", `<p class="mw-note">${esc(u.note)}</p>`)}
       </div>
       ${sec("What you taught meshpool", d.taught.length ? d.taught.slice(0, 12).map(x => `<div class="mw-line"><small>${day(x.ts)}</small><span>${esc(x.what)}: ${esc(x.text)}</span></div>`).join("") : "")}
+      </details>
       ${sec("Worth doing next", d.suggestions.length ? d.suggestions.map((s, i) => `<div class="mw-sug"><div><b>${esc(s.title)}</b><span>${esc(s.detail)}</span></div>${actionButton(s, i)}</div>`).join("") : `<p class="mw-note">No repeated pattern worth a change yet. meshpool stays quiet when it has nothing real to suggest.</p>`)}
       <section class="mw-sec"><h2>Share a recap</h2><div class="mw-recap"><div><button class="btn" id="mwRecap">Preview recap image</button><p class="mw-note">Drawn on your computer from counts and categories only. No chat text, file names or memory.</p></div><div id="mwPrev"></div></div></section>
       <p class="mw-note">${esc(d.privacy)}</p>`;
+    box.querySelectorAll("[data-mw-file]").forEach(b => b.onclick = () => { const g = d.gallery[+b.dataset.mwFile]; if (g && typeof window.openPreview === "function") window.openPreview(g.root, g.path); });
     box.querySelectorAll("[data-mw-act]").forEach(b => b.onclick = () => {
       const s = d.suggestions[+b.dataset.mwAct];
       document.dispatchEvent(new CustomEvent("meshpool:work-action", {detail: s}));   // the shell opens the matching flow
@@ -167,8 +172,13 @@
     async render(container, pid) {
       css();
       container.innerHTML = `<p class="mw-note">Reading the project…</p>`;
-      try { drawBrief(container, pid, await get(`/api/summaries/project?id=${encodeURIComponent(pid)}`)); }
-      catch (e) { container.innerHTML = `<p class="mw-note">${esc(e.message)}</p>`; }
+      // the brief can wait on a model: after 8 s the page says so and moves on, it never sits on "Reading the project"
+      const slow = new Promise(res => setTimeout(() => res(null), 8000));
+      try {
+        const b = await Promise.race([get(`/api/summaries/project?id=${encodeURIComponent(pid)}`), slow]);
+        if (b) drawBrief(container, pid, b);
+        else { container.innerHTML = `<p class="mw-note">The summary is taking a while. The files and chats are below. <button class="linkbtn" id="mwAgain">Try again</button></p>`; container.querySelector("#mwAgain").onclick = () => window.MeshBrief.render(container, pid); }
+      } catch (e) { container.innerHTML = `<p class="mw-note">${esc(e.message)}</p>`; }
     },
   };
 })();

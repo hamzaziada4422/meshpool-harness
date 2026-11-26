@@ -1,6 +1,6 @@
 /* In-app previews: the viewer pane beside the chat, the file cards under a reply, and the Preview button on code blocks.
    Server side: ui/previews.py (GET /api/preview). Loaded before app.js (its helpers are only called later); uses app.js helpers ($, esc, md, api, post, toast, ICON).
-   Page images and tables come from the server; HTML runs in a sandboxed frame (scripts yes, same origin no);
+   Page images and tables come from the server; HTML runs in a sandboxed frame (scripts and forms yes, same origin no);
    SVG is only ever an <img> from a blob, never markup in the page. */
 const PVX = {open: false, id: 0, root: "", path: "", m: null, page: 0, code: false, sheet: 0, urls: [], opener: null, snippet: null, poll: 0, back: null, backNext: null};
 
@@ -61,6 +61,7 @@ function pvDownload(root, path) {
   const a = document.createElement("a");
   a.href = `/raw?t=${encodeURIComponent(MP.token)}&${pvQuery(root, path)}&dl=1`; a.download = String(path).split("/").pop();
   a.rel = "noopener"; a.hidden = true; document.body.appendChild(a); a.click(); a.remove();
+  if (typeof toast === "function") toast(`Downloaded ${a.download}`, 3000);   // the browser saves it quietly: say so
 }
 function pvFree() { PVX.urls.forEach(u => { try { URL.revokeObjectURL(u); } catch (e) {} }); PVX.urls = []; }
 function pvShell(name, type, altLabel) {
@@ -153,7 +154,7 @@ function pvBody() {
     if (PVX.code) return pvCode(m.text);
     const f = document.createElement("iframe");
     f.className = "pv-frame"; f.title = m.name || "HTML preview";
-    f.setAttribute("sandbox", "allow-scripts");               // scripts run; no same-origin, forms, popups or navigation
+    f.setAttribute("sandbox", "allow-scripts allow-forms");   // scripts and forms work (a sign-up form can be tried); never allow-same-origin with scripts; no popups, no top navigation
     f.srcdoc = m.text; st.appendChild(f); return;
   }
   if (m.kind === "md") {
@@ -324,8 +325,13 @@ function pvFitCols(wrap, t, cols) {
     }
     let cg = t.querySelector("colgroup");
     if (!cg) { cg = document.createElement("colgroup"); t.prepend(cg); }
-    cg.replaceChildren(...[rn, ...nat.map(w => Math.min(w, cap))].map(w => { const c = document.createElement("col"); c.style.width = Math.ceil(w) + "px"; return c; }));
-    const total = Math.ceil(rn) + nat.reduce((a, w) => a + Math.ceil(Math.min(w, cap)), 0);
+    // whole pixels, rounded up, can add up to a pixel or two more than the pane: that was a horizontal scrollbar on a sheet that
+    // fits. The widest columns give the extra pixels back (never below 72) so the sheet is never wider than its pane.
+    const ws = [rn, ...nat.map(w => Math.min(w, cap))].map(Math.ceil);
+    let over = ws.reduce((a, w) => a + w, 0) - (wrap.clientWidth - 1);
+    while (over > 0 && ws.slice(1).some(w => w > 72)) { const k = ws.indexOf(Math.max(...ws.slice(1)), 1); ws[k]--; over--; }
+    cg.replaceChildren(...ws.map(w => { const c = document.createElement("col"); c.style.width = w + "px"; return c; }));
+    const total = ws.reduce((a, w) => a + w, 0);
     t.style.tableLayout = "fixed"; t.style.width = total + "px";
   };
   fit();
@@ -360,11 +366,12 @@ function pvTurnCards(cur, foot, turn) {
   // added (Sara: the PDF card twice). One turn, one row.
   let row = null;
   for (let n = foot.nextElementSibling; n && !n.classList.contains("turnfoot"); n = n.nextElementSibling) if (n.classList.contains("pvcards")) { row = n; break; }
-  if (!paths.length || !root) { row?.remove(); return; }
+  if (!paths.length || !root) { if (row?.nextElementSibling?.classList.contains("pvbigs")) row.nextElementSibling.remove(); row?.remove(); return; }
   const shown = paths.slice(0, 6);
   if (row && row.dataset.k === shown.join("|")) return;
   if (!row) { row = document.createElement("div"); row.className = "pvcards"; foot.after(row); }
   row.dataset.k = shown.join("|"); row.dataset.root = root;
+  pvBigImages(row, root, paths);
   // In a chat with its own folder, every file is in that folder, and a file you attached is a copy of yours there:
   // the card says so, so "I fixed Budget.xlsx" is not read as a change to your own file. Download gets it back.
   const own = !!cur.view?.scratch, att = pvAttached(cur);
@@ -378,6 +385,29 @@ function pvTurnCards(cur, foot, turn) {
   });
   $$("[data-pvdl]", row).forEach(b => b.onclick = e => { e.stopPropagation(); pvDownload(root, b.dataset.pvdl); });
 }
+// A picture the turn made, shown large in the reply when the person asked to see it ("show me the chart here") or when
+// pictures are all the turn made. The file card stays; the picture is capped at the column's width, loads lazily and
+// opens the preview on a click. A picture the reply text already shows (linkFiles) is not drawn twice.
+const PV_IMG_RX = /\.(png|jpe?g|gif|webp|svg)$/i;
+const PV_ASKED_RX = /\b(show|display|see|view|put|include|embed|attach|let me see)\b[^.?!]*\b(chat|here|inline|reply|below|me|this)\b|\b(in|into|inside) (the |this )?(chat|reply|conversation)\b|\bright here\b|\binline\b/i;
+function pvBigImages(row, root, paths) {
+  const old = row.nextElementSibling?.classList.contains("pvbigs") ? row.nextElementSibling : null;
+  const imgs = paths.filter(p => PV_IMG_RX.test(p));
+  let mu = row.previousElementSibling; while (mu && !mu.classList?.contains("msg-user")) mu = mu.previousElementSibling;
+  const asked = mu && typeof userText === "function" ? PV_ASKED_RX.test(userText(mu)) : false;
+  const main = imgs.length > 0 && imgs.length === paths.length;
+  const named = new Set($$(".rimg", row.parentElement || document).map(i => i.getAttribute("alt")));
+  const list = imgs.filter(p => !named.has(p)).slice(0, 3);
+  if (!(asked || main) || !list.length) { if (old) old.remove(); return; }
+  const box = old || document.createElement("div"); box.className = "pvbigs"; box.dataset.root = root;
+  box.innerHTML = list.map(p => `<button type="button" class="pvbig wait" data-pvbig="${esc(p)}" title="Open ${esc(p.split("/").pop())}"><img alt="${esc(p.split("/").pop())}" loading="lazy" decoding="async" src="/raw?t=${encodeURIComponent(MP.token)}&${pvQuery(root, p)}"></button>`).join("");
+  $$("img", box).forEach(im => { const b = im.parentNode; im.onload = () => b.classList.remove("wait"); im.onerror = () => b.remove(); });
+  if (!old) row.after(box);
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest?.(".pvbig[data-pvbig]"); if (!b) return;
+  openPreview(b.closest(".pvbigs")?.dataset.root || (typeof curRoot === "function" ? curRoot() : ""), b.dataset.pvbig);
+});
 // The files the person attached in this chat (the server adds "Attached files (in ...): a, b" to the message).
 function pvAttached(cur) {
   const out = new Set();

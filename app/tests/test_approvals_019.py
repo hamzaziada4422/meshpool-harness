@@ -286,13 +286,15 @@ def _repo(p: Path):
 
 
 GIT_OK = [COMMIT, "git add a.py", "git commit -am 'fix rounding'", "git stash", "git stash pop",
-          "git reset --soft HEAD~1", "git restore --staged a.py", "git restore a.py", "git checkout a.py",
+          "git reset --soft HEAD~1", "git restore --staged a.py",
           "git checkout -b feature/x", "git switch -c topic", "git branch topic2",
           "git status --short && git add a.py && git commit -q -m x"]
 GIT_ASK = ["git push origin main", "git pull", "git fetch", "git clone https://x.org/r.git", "git reset --hard",
            "git clean -fd", "git rebase main", "git filter-branch --all", "git config core.hooksPath x",
            "echo x > .git/hooks/pre-commit", "git checkout main", "git branch -D topic", "git stash drop",
-           "git add ../other.py", "git commit --amend -m y && git push"]
+           "git add ../other.py", "git commit --amend -m y && git push",
+           # release review: a.py has uncommitted changes, which these throw away
+           "git restore a.py", "git checkout a.py", "git restore --worktree --staged a.py"]
 
 
 def test_5_local_git_writes_run_in_accept_edits(proj, monkeypatch):
@@ -414,3 +416,17 @@ def test_a_delete_card_names_only_what_the_delete_removes():
     from meshpool_harness.agent import core as K
     t = K._plain_command_title("sed -i 's/a/b/' report.py && rm sample.csv")
     assert t == "Delete sample.csv?", t
+
+
+def test_5_restoring_a_file_with_no_uncommitted_changes_runs(proj, monkeypatch):
+    """Release review: a restore throws away the file's uncommitted changes, so it asks when there are some; on a
+    file with none (nothing to lose) it runs, as a local git write."""
+    _repo(proj)
+    subprocess.run(["git", "-C", str(proj), "commit", "-qam", "second"], check=True, capture_output=True)
+    monkeypatch.setenv("MH_SANDBOX_AUTO", "0")
+    a, asked = _agent(proj, monkeypatch, sandbox=False, mode="edits")
+    for c in ("git restore a.py", "git checkout a.py"):   # (git checkout -- f always asks: OSS-18)
+        assert a._permit("bash", {"command": c}) == (True, ""), c
+    (proj / "a.py").write_text("x = 3\n")                       # now there is work to lose
+    for c in ("git restore a.py", "git checkout a.py"):
+        assert a._permit("bash", {"command": c})[0] is False, c

@@ -30,7 +30,7 @@ provided gave made built created wrote produced received tried started finished 
 there here which who whom whose when where while also very much many lot lots way ways today yesterday""".split())
 # a stored chat summary reads "The user wanted a number of ...": its filler is not a topic (WF-05)
 _SPEC_LABELS = {"docs.slides": "Slides", "docs.sheets": "Spreadsheets", "docs.word": "Documents", "docs": "Documents",
-                "code": "Code", "data": "Data analysis", "research": "Research", "debug": "Debugging",
+                "code": "Coding", "data": "Data analysis", "research": "Research", "debug": "Debugging",
                 "build": "Building", "write": "Writing", "browse": "Browsing", "lead": "Lead generation",
                 "refactor": "Refactoring", "chat": "Everyday questions"}
 
@@ -156,7 +156,13 @@ def _artifacts(chats: list[dict]) -> list[dict]:
             out.append({"name": fp.name, "path": f["path"], "root": c["workdir"], "ext": f["ext"], "type": label,
                         "tint": tint, "updated": mt, "chat_id": c["id"], "title": c["title"]})
     out.sort(key=lambda a: -a["updated"])
-    return out
+    seen, once = set(), []                      # one entry per file: the same path made in several chats is one deliverable
+    for a in out:                               # (newest first, so the newest copy is the one kept)
+        key = (str(a["root"]).rstrip("/\\"), str(a["path"]).replace("\\", "/"))
+        if key not in seen:
+            seen.add(key)
+            once.append(a)
+    return once
 
 
 def _skills_used(chats: list[dict]) -> list[dict]:
