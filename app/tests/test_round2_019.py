@@ -514,10 +514,12 @@ def _vd(problems, ok=False, also=""):
 
 def test_the_checked_line_claims_only_what_the_last_verdict_states():
     from meshpool_harness.agent import lookreview as LR
-    # a guess about a typo that was fixed, and a bare "section 3": no claims at all
+    # guesses are not claimed; a bare "section 3" is not said in words but is still open, so it is counted (release
+    # review item 4: dropping it made the footer say "all good")
     probs = [("the typo 'teh' looks swapped for 'the'", "major"), ("section 3", "minor"), ("the totals may be off", "minor")]
     st = {"persona": "a board member", "evals": [_vd(probs), _vd(probs)]}
-    assert LR.summary_line("doc", st) == "Checked it as a board member.", LR.summary_line("doc", st)
+    assert LR.summary_line("doc", st) == "Checked as a board member: fixed nothing. Still open: 1 thing.", \
+        LR.summary_line("doc", st)
     # a named problem is still open: said whole, and with no "(and N more)"
     solid = [("the Q4 total shows an error", "blocker"), ("the chart has no title", "major"), ("a third problem here", "minor")]
     st = {"persona": "a board member", "evals": [_vd(solid), _vd(solid)]}

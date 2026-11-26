@@ -20,9 +20,19 @@ from .common import candidates, failure as F, numbers
 _MON = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
 _MNAME = r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|" \
          r"oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?"
-DATE = re.compile(r"(?i)\b(?:(\d{1,2})(?:st|nd|rd|th)?\s+)?" + _MNAME + r"\s+((?:19|20)\d\d)\b|"
-                  r"\b(q[1-4]|h[12])\s+((?:19|20)\d\d)\b|\b((?:19|20)\d\d)\b")
+DATE = re.compile(r"(?i)\b(?:(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?)?" + _MNAME + r"\s+((?:19|20)\d\d)\b|"
+                  r"\b(q[1-4]|h[12])\s+((?:19|20)\d\d)\b|\b((?:19|20)\d\d)\b")       # "29th of January 2027" too
 _DATE_FIRST = re.compile(r"(?i)\b" + _MNAME + r"\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+((?:19|20)\d\d)\b")   # "January 29, 2027"
+_ISO = re.compile(r"(?<![\d-])((?:19|20)\d\d)-(\d{1,2})-(\d{1,2})(?!\d)")                 # "2027-01-29"
+_NUMERIC = re.compile(r"(?<![\d/.])(\d{1,2})([/.])(\d{1,2})\2((?:19|20)\d\d)(?!\d)")    # "29/01/2027", "29.01.2027"
+
+
+def _numeric(m) -> list[tuple]:
+    """The dates "a/b/yyyy" can mean: day first ("29/01/2027"), month first when day first cannot be ("01/29/2027"),
+    and both when both can ("05/03/2027"), day first leading."""
+    a, b, y = int(m.group(1)), int(m.group(3)), int(m.group(4))
+    keys = [(y, mo, d) for d, mo in ((a, b), (b, a)) if 1 <= mo <= 12 and 1 <= d <= 31]
+    return list(dict.fromkeys(keys))
 ROLES = re.compile(r"\b(?:CEO|CFO|COO|CTO|CIO|CHRO|CMO|CDO|HR|PMO|Ops|Procurement|Sourcing|Purchasing|Finance team|"
                    r"Legal|Head of [A-Z][a-z]+(?: [A-Z][a-z]+)?|VP [A-Z][a-z]+|Plant managers?|Maintenance lead|"
                    r"Operations director|Steering committee|Programme office|Program office)\b")
@@ -61,10 +71,22 @@ def _month(name: str) -> int:
     return _MON.index(name.lower()[:3]) + 1
 
 
-def _dates(text: str) -> list[tuple[str, tuple]]:
-    """(as written, key) for each date: key (y, m, d), (y, m, None), (y, 'q3'), or (y, None, None) for a year."""
+def _dates(text: str, every: bool = False) -> list[tuple[str, tuple]]:
+    """(as written, key) for each date: key (y, m, d), (y, m, None), (y, 'q3'), or (y, None, None) for a year. A
+    numeric date that reads both ways ("05/03/2027") gives its day-first key, or with every=True both (what the sources
+    may mean). The user's dates in ISO form, as 29/01/2027 and as "29th of January 2027" are whole dates too."""
     out = []
     t = str(text or "")
+    for m in _ISO.finditer(t):
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 1 <= mo <= 12 and 1 <= d <= 31:
+            out.append((m.group(0), (y, mo, d)))
+            t = t.replace(m.group(0), " ", 1)
+    for m in _NUMERIC.finditer(t):
+        keys = _numeric(m)
+        if keys:
+            out += [(m.group(0), k) for k in (keys if every else keys[:1])]
+            t = t.replace(m.group(0), " ", 1)
     for m in _DATE_FIRST.finditer(t):
         out.append((m.group(0), (int(m.group(3)), _month(m.group(1)), int(m.group(2)))))
     t = _DATE_FIRST.sub(" ", t)
@@ -86,7 +108,7 @@ class Known:
         self.request = _norm(request)
         self.raw = str(corpus or "")
         d = when or today()
-        self.dates = {k for _, k in _dates(corpus)}
+        self.dates = {k for _, k in _dates(corpus, every=True)}
         self.dates |= {(d.year, d.month, None), (d.year, d.month, d.day), (d.year, None, None)}
         self.years = {k[0] for k in self.dates}
         self.months = {(k[0], k[1]) for k in self.dates if len(k) == 3 and k[1]}
