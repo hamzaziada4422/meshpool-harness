@@ -150,10 +150,22 @@ def test_azure_auth_header_and_api_version_are_applied():
 
 @pytest.mark.skipif(not (small_codex.find_codex() and small_codex.find_codex()[0] != "npx"),
                     reason="Codex CLI not installed")
-def test_real_codex_is_metered_per_request():
+def test_real_codex_is_metered_per_request(monkeypatch, tmp_path):
     """The earlier Codex number (1.0 calls/task) came from Codex's own per-turn usage event. Run the real Codex CLI
     on a 3-step script through the meter: the meter's count must equal the requests the fake received, and exceed 1."""
     import tempfile
+    # Isolate what the Codex child inherits from this worker. A request that goes through a proxy variable, a Codex
+    # setting left by another test, or a helper folder shared by every worker never reaches the meter, and then
+    # totals() has no row for t7 (the KeyError seen under `pytest -n 6`).
+    for k in list(os.environ):
+        if k.upper() in ("ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY", "OPENAI_BASE_URL", "OPENAI_API_BASE") \
+                or k.startswith("CODEX_") and k not in ("CODEX_BIN", "CODEX_PKG"):
+            monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    monkeypatch.setenv("MESHPOOL_API_KEY", "test-key-codex")           # the key Codex reads (env_key in its config)
+    monkeypatch.delenv("MH_SMALL_CODEX_SANDBOX", raising=False)
+    monkeypatch.setattr(small_codex, "CACHE", tmp_path / "small-cache")   # its own CODEX_HOME folder, not a shared one
     cmd = small_codex.find_codex()
     fake = small_fake.FakeServer(steps=["ls", "cat notes.txt"]).start()
     m = SM.Meter(fake.base, PRICES).start()
@@ -162,6 +174,7 @@ def test_real_codex_is_metered_per_request():
     try:
         r = small_codex.run(cmd, "Read notes.txt and tell me how many lines it has.", wd,
                             m.base_for("t7", "codex", 0), "deepseek-v4.1-flash", timeout=15)
+        assert ("t7", "codex", "0") in m.totals(), (r, m.totals(), fake.count())   # Codex reached the meter
         got = m.totals()[("t7", "codex", "0")]
         assert r["answer"].startswith("Done"), r
         assert got["calls"] == fake.count() == 3, (got, fake.count())

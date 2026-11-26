@@ -594,6 +594,15 @@ def reap_stale_login() -> bool:
     pid, owner = rec.get("pid"), rec.get("owner")
     if owner == os.getpid() or (isinstance(owner, int) and owner > 0 and _pid_alive(owner)):
         return False
+    if not (isinstance(owner, int) and owner > 0):
+        # no owner on the record: an older meshpool may still be running this sign-in. Only one past the timeout is stale.
+        import time
+        try:
+            started = float(rec.get("started") or 0)
+        except (TypeError, ValueError):
+            started = 0.0
+        if time.time() - started <= LOGIN_TIMEOUT_S:
+            return False
     if not _pid_alive(pid):
         _login_file().unlink(missing_ok=True)
         return False

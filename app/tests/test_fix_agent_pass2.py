@@ -40,6 +40,7 @@ def test_terminal_emit_strips_sequences():
     t = T.Terminal(print_mode=True, out=out, err=io.StringIO())
     t.emit({"type": "text_delta", "text": "hi \x1b]52;c;AAAA\x07there"})
     t.emit({"type": "assistant", "text": "", "streamed": True})
+    t.flush_held()        # -p holds the last answer until no review round can follow (LP2); the run flushes it at the end
     assert "\x1b" not in out.getvalue() and "hi there" in out.getvalue()
 
 
@@ -50,6 +51,7 @@ def test_print_mode_discards_partial_reply_on_reset():
     t.emit({"type": "stream_reset"})
     t.emit({"type": "text_delta", "text": "The answer is partial-free."})
     t.emit({"type": "assistant", "text": "", "streamed": True})
+    t.flush_held()        # as the -p run does when send() returns
     assert out.getvalue() == "The answer is partial-free.\n"
 
 

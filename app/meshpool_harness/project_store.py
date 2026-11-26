@@ -216,7 +216,7 @@ def for_folder(path: str, name: str = "") -> dict:
             m = _meta(d)
             got = m.get("link")
             if m.get("id") == d.name and isinstance(got, dict) and got.get("path") == link["path"]:
-                return detail(d.name)
+                return update(d.name, pinned=True)
         made = create(name or Path(link["path"]).name or link["path"], link=link)
         return update(made["id"], pinned=True)
 
