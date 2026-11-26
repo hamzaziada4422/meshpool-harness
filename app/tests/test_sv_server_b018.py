@@ -330,6 +330,32 @@ def test_chat_view_does_not_reread_the_trust_files_every_time(httpd, live_chat, 
     assert json.loads(body)["trust"] is None              # trusted: the note goes at once
 
 
+# ---------------------------------------------------------------------------------------------------- SV-10
+@pytest.mark.parametrize("err", [PermissionError(13, "Access is denied"), OSError(28, "No space left on device")])
+def test_editor_save_that_cannot_write_is_a_plain_400(httpd, tmp_path, monkeypatch, err):
+    """SV-10: POST /api/fs/save caught a permission error only while reading the file. Writing it could still fail:
+    on Windows the final rename is refused while Excel or Word has the file open, and a full disk or a read-only
+    folder fails the temporary file. The server then answered 500 with the raw "PermissionError: [Errno 13] ...
+    .x.csv.mp-123.tmp". It is now a 400 in plain words, and the file and folder are left as they were."""
+    from meshpool_harness.ui import files_api as FA
+    from meshpool_harness.ui import workbench as W
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "x.csv").write_text("a,b\n")
+    W.add_project(str(proj))
+
+    def refuse(src, dst):
+        raise err
+    monkeypatch.setattr(FA.os, "replace", refuse)
+    st, out = _post(httpd, "/api/fs/save", {"root": str(proj), "path": "x.csv", "text": "a,b\n1,2\n"})
+    msg = json.loads(out)["error"]
+    assert st == 400, out
+    assert "Errno" not in msg and ".tmp" not in msg and "PermissionError" not in msg and "OSError" not in msg
+    assert "x.csv" in msg
+    assert (proj / "x.csv").read_text() == "a,b\n"
+    assert sorted(p.name for p in proj.iterdir()) == ["x.csv"]          # no temporary file left behind
+
+
 def _serve_quietly(monkeypatch, tmp_path, desktop: bool):
     """Run the real serve() on a free port with its background helpers stubbed; returns (port, stop)."""
     from meshpool_harness import autoupdate as AU
