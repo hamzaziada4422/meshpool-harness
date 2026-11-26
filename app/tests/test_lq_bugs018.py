@@ -209,3 +209,75 @@ def test_lq02_merged_slides_copy_tags_media_and_slide_links_under_fresh_names(tm
     assert movie(prs.slides[0]).startswith(b"target") and movie(prs.slides[1]).startswith(b"source")
     link = next(r.target_part for r in prs.slides[1].part.rels.values() if r.reltype == RT.SLIDE)
     assert link is prs.slides[2].part                 # the copy of the slide it linked to, in this deck
+
+
+def test_lq03_session_panel_runs_one_git_process_per_refresh_and_still_shows_each_edit(tmp_path, monkeypatch):
+    """LQ-03: each Session panel refresh ran 8 git processes (7 for git_status, 1 for diff --numstat), and the 1.5 s
+    cache never lasts from one refresh to the next. Now a refresh with nothing changed runs only git status, and
+    an edit through meshpool's own tools shows on the next refresh."""
+    import os
+    import subprocess
+    import threading
+    import time
+    from types import SimpleNamespace
+
+    from meshpool_harness.core.tools import Workspace
+    from meshpool_harness.ui import agent_api as A
+    from meshpool_harness.ui import workbench as W
+    if not W.git_exe():
+        pytest.skip("no git")
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(W, "_MODELS", {"t": 0, "key": "", "rows": [{"id": "m", "context": 32000}], "error": ""})
+    repo = tmp_path / "proj"
+    repo.mkdir()
+
+    def git(*a):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=repo, check=True, capture_output=True)
+    git("init", "-q", "-b", "main")
+    (repo / "a.txt").write_text("one\ntwo\n")
+    git("add", "-A")
+    git("commit", "-qm", "init")
+    git("remote", "add", "origin", "https://github.com/o/r.git")
+    agent = SimpleNamespace(context=None, messages=[], current_model=lambda: "m", _delegations={})
+    A.LIVE["lq3"] = SimpleNamespace(id="lq3", workdir=str(repo), lock=threading.RLock(), events=[], mcp=None,
+                                    agent=agent, cp=None, state="idle", scheduled=None, stop=lambda: None)
+    monkeypatch.setattr(W, "_GS_TTL", 0)             # refreshes 15 s apart: the short cache has always run out
+    W._GS.clear()
+    runs = []
+    real = subprocess.run
+
+    def counting(cmd, *a, **k):
+        if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == W.git_exe():
+            runs.append(next((c for c in cmd[1:] if not c.startswith("-") and "=" not in c), ""))
+        return real(cmd, *a, **k)
+    try:
+        assert W.session_panel("lq3")["tree"]["files"] == 0
+        old = time.time() - 10                        # files written a while ago, as in a real project
+        os.utime(repo / "a.txt", (old, old))
+        W.session_panel("lq3")
+        monkeypatch.setattr(subprocess, "run", counting)
+        for _ in range(5):
+            d = W.session_panel("lq3")
+        assert d["tree"] == {"files": 0, "added": 0, "removed": 0} and d["branch"]["name"] == "main"
+        assert d["repo"]["slug"] == "o/r"
+        assert len(runs) <= 5, f"{len(runs)} git processes for 5 refreshes with nothing changed: {runs}"
+
+        ws = Workspace(str(repo), str(tmp_path / "run"))
+        ws.edit("a.txt", "two\n", "two\nthree\n")     # a clean file changed by the agent's own edit tool
+        assert W.session_panel("lq3")["tree"] == {"files": 1, "added": 1, "removed": 0}
+        os.utime(repo / "a.txt", (old, old))          # long enough ago that its size and time are trusted
+        assert W.session_panel("lq3")["tree"]["added"] == 1
+        ws.edit("a.txt", "three\n", "three\nfour\n")  # the same, already changed file again
+        assert W.session_panel("lq3")["tree"] == {"files": 1, "added": 2, "removed": 0}
+        os.utime(repo / "a.txt", (old, old))
+        assert W.session_panel("lq3")["tree"]["added"] == 2
+        ws.edit("a.txt", "four\n", "four\nfive\n")    # and again, with the next refresh seconds later
+        os.utime(repo / "a.txt", (old + 5, old + 5))
+        assert W.session_panel("lq3")["tree"] == {"files": 1, "added": 3, "removed": 0}
+        ws.write_file("b.txt", "new\n")
+        assert W.session_panel("lq3")["tree"]["files"] == 2
+        git("checkout", "-q", "-b", "next")           # outside meshpool: a new branch shows too
+        d = W.session_panel("lq3")
+        assert d["branch"]["name"] == "next" and "next" in d["branch"]["branches"]
+    finally:
+        A.LIVE.pop("lq3", None)

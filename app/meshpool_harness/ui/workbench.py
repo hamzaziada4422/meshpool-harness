@@ -445,8 +445,8 @@ _GS_TTL = 1.5
 
 
 def git_status(root: str, fresh: bool = False) -> dict:
-    """Status of a project's repository. It is six git processes, so calls within a moment share one answer, and
-    callers at the same time wait for it instead of each starting their own. fresh=True after a change."""
+    """Status of a project's repository. Calls within a moment share one answer, and callers at the same time wait
+    for it instead of each starting their own. fresh=True after a change."""
     key = str(root)
     gate = _GS_LOCKS.setdefault(key, threading.Lock())
     with gate:
@@ -454,6 +454,8 @@ def git_status(root: str, fresh: bool = False) -> dict:
         hit = _GS.get(key)
         if hit and not fresh and hit[2] == stamp and time.monotonic() - hit[0] < _GS_TTL:
             return dict(hit[1])
+        if fresh:
+            _GX.clear()
         res = _git_status(root)
         if len(_GS) > 50:
             _GS.clear()
@@ -473,14 +475,127 @@ def _git_stamp(root: str) -> tuple:
     return tuple(out)
 
 
+# project folder -> what changes only with the repository's commits, refs or config: its top folder and git folders,
+# the log of the current commit, the origin URL and the branch list, each with the stamp it was read under. A status
+# is then one git process (status --porcelain=v2 --branch) instead of seven. The ceiling covers what the stamps miss
+# (an included config file, a reftable repository).
+_GX: dict = {}
+_GX_CEIL = 60.0
+
+
+def _stat_key(*paths) -> tuple:
+    out = []
+    for p in paths:
+        try:
+            st = os.stat(p)
+            out.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append(None)
+    return tuple(out)
+
+
+def _refs_key(common: str) -> tuple:
+    """Branches made, moved or deleted change a folder's mtime under refs/heads, or packed-refs."""
+    if os.path.isdir(os.path.join(common, "reftable")):
+        return (time.monotonic(),)                    # refs this check cannot see: read every time
+    out = [_stat_key(os.path.join(common, "packed-refs"))]
+    for d, _subs, _files in os.walk(os.path.join(common, "refs", "heads")):
+        out.append((d, _stat_key(d)))
+    return tuple(out)
+
+
+def _git_facts(r: Path) -> dict | None:
+    """The cached facts of r's repository, None when r is not in one. Only a repository is remembered."""
+    key = str(r)
+    hit = _GX.get(key)
+    now = time.monotonic()
+    if hit and (now - hit["t"] > _GX_CEIL or not os.path.isdir(hit["gitdir"])
+                or hit["dotgit"] != os.path.exists(os.path.join(key, ".git"))):
+        hit = None
+    if not hit:
+        try:
+            lines = _git(r, "rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir").splitlines()
+        except ValueError:
+            _GX.pop(key, None)
+            return None
+        top, gitdir, common = (lines + ["", "", ""])[:3]
+        if common and not os.path.isabs(common):
+            common = os.path.normpath(os.path.join(key, common))
+        if not os.path.isdir(common):
+            common = gitdir
+        if len(_GX) > 50:
+            _GX.clear()
+        hit = _GX[key] = {"t": now, "top": top, "gitdir": gitdir, "common": common,
+                          "dotgit": os.path.exists(os.path.join(key, ".git"))}
+    return hit
+
+
 def _git_status(root: str) -> dict:
     r = check_root(root)
     if not git_exe():
         return {"repo": False, "git": False}
-    try:
-        top = _git(r, "rev-parse", "--show-toplevel").strip()
-    except ValueError:
+    fx = _git_facts(r)
+    if fx is None:
         return {"repo": False, "git": True}
+    top = fx["top"]
+    raw = _git(r, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--", ".", check=False).split("\0")
+    branch, oid, ahead, behind, upstream = "", "", 0, 0, False
+    files, i = [], 0
+    while i < len(raw):
+        line = raw[i]
+        i += 1
+        if line.startswith("# "):                     # "# branch.head main", "# branch.ab +1 -2"
+            k, _, v = line[2:].partition(" ")
+            if k == "branch.head":
+                branch = "" if v == "(detached)" else v
+            elif k == "branch.oid":
+                oid = v
+            elif k == "branch.ab":
+                ab = v.split()
+                ahead, behind, upstream = int(ab[0].lstrip("+")), int(ab[1].lstrip("-")), True
+            continue
+        kind = line[:1]
+        if kind == "?":
+            xy, path = "??", line[2:]
+        elif kind in "12u" and line:
+            parts = line.split(" ", {"1": 8, "2": 9, "u": 10}[kind])
+            if len(parts) < {"1": 9, "2": 10, "u": 11}[kind]:
+                continue
+            xy, path = parts[1].replace(".", " "), parts[-1]
+            if kind == "2":                           # a rename or copy: the old path comes next
+                i += 1
+        else:
+            continue
+        rel = os.path.relpath(Path(top) / path, r).replace(os.sep, "/")   # git gives repository paths
+        files.append(((xy == "??", path), {"status": xy.strip(), "path": rel, "xy": xy,
+                                           "staged": xy[0] not in (" ", "?"), "unstaged": xy[1] != " " or xy[0] == "?"}))
+    files = [f for _, f in sorted(files, key=lambda x: x[0])]   # by path, untracked last, as the v1 format lists them
+    if not oid:                                       # a git too old for --porcelain=v2 --branch
+        _GX.pop(str(r), None)
+        return _git_status_v1(r, top)
+    lg = fx.get("log")
+    if not lg or lg[0] != oid or time.monotonic() - lg[2] > 60:   # by commit, and "2 minutes ago" ages
+        log = []
+        for line in _git(r, "log", "-15", "--pretty=format:%h%x1f%an%x1f%ar%x1f%s", check=False).splitlines():
+            p = line.split("\x1f")
+            if len(p) == 4:
+                log.append({"hash": p[0], "author": p[1], "when": p[2], "subject": p[3]})
+        fx["log"] = (oid, log, time.monotonic())
+    cfg = _stat_key(os.path.join(fx["common"], "config"), os.path.join(fx["gitdir"], "config.worktree"))
+    if fx.get("remote", (None,))[0] != cfg:
+        fx["remote"] = (cfg, _git(r, "remote", "get-url", "origin", check=False).strip())
+    refs = _refs_key(fx["common"])
+    if fx.get("branches", (None,))[0] != refs:
+        fx["branches"] = (refs, [b.strip().lstrip("* ").strip() for b in
+                                 _git(r, "branch", "--format=%(refname:short)", check=False).splitlines() if b.strip()])
+    remote, branches = fx["remote"][1], fx["branches"][1]
+    return {"repo": True, "git": True, "top": top, "branch": branch or "(detached)", "files": files[:500],
+            "dirty": len(files), "staged": sum(1 for f in files if f["staged"]), "log": list(fx["log"][1]),
+            "ahead": ahead, "behind": behind, "upstream": upstream, "remote": remote, "branches": branches[:200],
+            "github": _github_slug(remote), "oid": oid, "gitdir": fx["gitdir"]}
+
+
+def _git_status_v1(r: Path, top: str) -> dict:
     branch = _git(r, "branch", "--show-current", check=False).strip() or "(detached)"
     raw = _git(r, "status", "--porcelain", "-z", "--untracked-files=all", "--", ".", check=False).split("\0")
     files, i = [], 0
@@ -1621,15 +1736,45 @@ def session_panel(sid: str) -> dict:
             env["name"] = slug
         out["branch"] = {"name": g["branch"], "branches": g["branches"], "ahead": g["ahead"], "behind": g["behind"],
                          "upstream": g["upstream"]}
-        add = rem = 0
-        for line in _git(r, "diff", "--numstat", "HEAD", check=False).splitlines():
-            a_, d_ = (line.split("\t") + ["0", "0"])[:2]
-            add += int(a_) if a_.isdigit() else 0
-            rem += int(d_) if d_.isdigit() else 0
+        add, rem = _tree_size(r, g)
         out["tree"] = {"files": g["dirty"], "added": add, "removed": rem}
     out["outputs"] = session_outputs(s, Path(root))
     out["plan"] = session_plan(s)
     return out
+
+
+_NUMSTAT: dict = {}                  # project folder -> (stamp, lines added, lines removed)
+
+
+def _tree_size(r: Path, g: dict) -> tuple[int, int]:
+    """Lines added and removed against HEAD (git diff --numstat). The answer only changes with the commit, the index,
+    the list of changed files or one of those files, so it is kept while all of them stay the same. A file changed in
+    the last 2 seconds is not trusted to show its next change in its mtime, and a project inside a larger repository
+    (whose diff covers files the status of this folder does not list) is read every time."""
+    stamp = None
+    files = g.get("files") or []
+    if (g.get("oid") and g.get("top") and os.path.realpath(g["top"]) == os.path.realpath(str(r))
+            and len(files) == g.get("dirty") and len(files) < 500):
+        now = time.time_ns()
+        stats = _stat_key(*(r / f["path"] for f in files))
+        if all(st is None or now - st[0] > 2_000_000_000 for st in stats):
+            stamp = (g["oid"], _stat_key(os.path.join(g["gitdir"], "index")),
+                     tuple((f["path"], f["xy"]) for f in files), stats)
+    hit = _NUMSTAT.get(str(r))
+    if stamp is not None and hit and hit[0] == stamp:
+        return hit[1], hit[2]
+    add = rem = 0
+    for line in _git(r, "diff", "--numstat", "HEAD", check=False).splitlines():
+        a_, d_ = (line.split("\t") + ["0", "0"])[:2]
+        add += int(a_) if a_.isdigit() else 0
+        rem += int(d_) if d_.isdigit() else 0
+    if len(_NUMSTAT) > 50:
+        _NUMSTAT.clear()
+    if stamp is None:
+        _NUMSTAT.pop(str(r), None)
+    else:
+        _NUMSTAT[str(r)] = (stamp, add, rem)
+    return add, rem
 
 
 def session_pr(sid: str) -> dict:
