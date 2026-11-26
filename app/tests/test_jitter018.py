@@ -48,6 +48,24 @@ def test_the_chat_does_not_jump_when_the_panel_or_the_sidebar_opens_or_closes(ap
     assert page.errors == [], page.errors
 
 
+@pytest.mark.parametrize("width,height", [(1366, 768), (1280, 800), (1024, 700)])
+def test_the_chat_glides_when_the_file_preview_opens_or_closes(app, page, width, height):
+    """The file preview did not go through the glide: the chat and the message box snapped 300 to 460 px in one frame
+    (layout shift 0.43 to 0.46) on every open and close. It moves like the side panel now."""
+    ids = _chats(app, page, 1)
+    page.set_viewport_size({"width": width, "height": height})
+    page.evaluate("id => openThread(id)", ids[0])
+    page.wait_for_timeout(1500)
+    page.evaluate(CLS)
+    got = {"preview open": _shift(page, "() => pvShell('notes.txt', 'Text')"),
+           "preview close": _shift(page, "() => closePreview()")}
+    # at 1024 there is no room for the preview beside a full-width chat, so the text wraps again (narrower): that part
+    # is a real change of shape a glide cannot hide; it was 0.45 before. 1366 and 1280 keep the width and only move.
+    limit = 0.2 if width <= 1024 else 0.02
+    assert all(v < limit for v in got.values()), got
+    assert page.errors == [], page.errors
+
+
 def test_the_column_keeps_its_width_while_the_panel_opens_at_1280(app, page):
     """J-01: the shift came from the text of the column wrapping again at a narrower width. With the sidebar folded while
     the panel is open, the column is as wide open as shut."""
