@@ -703,6 +703,9 @@ def _plain_command_title(script: str) -> str:
         return "Use the internet" + (f" ({host.group(1)})" if host else "") + "?"
     if PR.NETWORK.search(s):
         return "Use the internet? (" + s.strip().splitlines()[0][:80] + ")"
+    if PR._HOME_REF.search(s) or re.search(r"(?:^|[\s'\"=(])~(?:/|\s|$)|/(?:home|Users)/|\b[A-Za-z]:\\Users\\", s):
+        # release review: `cat $HOME/.ssh/id_rsa` asked under "Look at files in this folder?", which anyone would allow
+        return "Use files outside this folder, in your home folder? (" + s.strip().splitlines()[0][:80] + ")"
     if PR.DELETES.search(s):
         # name only what the deleting steps remove: "sed -i … report.py && rm sample.csv" deletes sample.csv, not both
         dsegs = [x for x in steps if PR.DELETES.search(x)] or [s]
