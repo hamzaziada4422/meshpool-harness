@@ -39,6 +39,9 @@ def _denied(ev: dict) -> dict:
         d = {"kind": ev.get("kind"), "title": ev.get("title")}
         if ev.get("kind") == "bash" and str(ev.get("detail") or "").strip():
             d["command"] = str(ev.get("detail")).strip()[:300]
+            from meshpool_harness.agent import core as K
+            if K._destructive({"command": d["command"]}):      # git checkout -- file, reset --hard: a yes, even with --auto
+                d["destructive"] = True
         return d
     cmd = ""
     try:
@@ -339,7 +342,7 @@ def _allow_hint(d: dict, mode: str) -> tuple[str, str, str]:
             if K._allow_hit([rule], "bash", {"command": cmd}):
                 return shown, f'--allowed-tools "{rule}"', "command"
         if K._allow_hit(["bash"], "bash", {"command": cmd}):
-            return shown, "--allowed-tools bash (every command that does not delete things)", "command"
+            return shown, "--allowed-tools bash (allows every shell command except the destructive ones)", "command"
         return shown, "--permission-mode auto", "command"
     if d.get("kind") == "edit":
         if title.startswith("Your rule"):

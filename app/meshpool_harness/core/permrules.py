@@ -413,6 +413,42 @@ def _deletes_unasked_ok(cmd: str, root, cwd=None, made=None) -> bool:
     return True
 
 
+def _git_shelves_unasked_ok(cmd: str, root, cwd=None, touched=None) -> bool:
+    """`git stash` (push or save) and `git restore` of a file with uncommitted changes shelve or throw away work. They run
+    unasked only when every changed file is one this chat changed (`touched`): Omar, 0.0.19, ran `git stash` and
+    `git stash pop` five times over his own hand edit with no card."""
+    if "git" not in cmd:
+        return True
+    for seg in _segments(cmd):
+        w = _tokens(seg) or []
+        while w and re.match(r"^[A-Za-z_]\w*=", w[0]):
+            w = w[1:]
+        if len(w) < 2 or os.path.basename(w[0]) != "git":
+            continue
+        i = 1
+        while i < len(w) and w[i].startswith("-"):                 # git -C dir, --no-pager
+            i += 2 if w[i] in ("-C", "-c") else 1
+        verb, rest = (w[i], w[i + 1:]) if i < len(w) else ("", [])
+        if verb == "stash":
+            sub = rest[0] if rest and not rest[0].startswith("-") else "push"
+            if sub in ("push", "save") and _git_unmade_changes(
+                    root, cwd, touched, any(a in ("-u", "--include-untracked", "-a", "--all") for a in rest)):
+                return False
+        elif verb == "restore" and not (any(a in ("--staged", "-S") for a in rest)
+                                        and not any(a in ("--worktree", "-W") for a in rest)):
+            paths = [a for a in rest if not a.startswith("-")]
+            if paths and _git_dirty(root, cwd, paths) and not _only_touched(root, cwd, paths, touched):
+                return False
+    return True
+
+
+def _only_touched(root, cwd, paths, touched) -> bool:
+    """Every path is a file this chat changed."""
+    made = {os.path.realpath(str(x)) for x in (touched or ())}
+    base = str(cwd or root)
+    return all(os.path.realpath(os.path.join(base, p)) in made for p in paths)
+
+
 def _rm_targets(cmd: str, root: Path, cwd=None) -> list:
     """The paths the rm commands in cmd name, resolved from where each one runs (a `cd` before it counts)."""
     try:
@@ -464,7 +500,7 @@ def url_argument(cmd: str) -> bool:
     return False
 
 
-def sandbox_auto_ok(cmd: str, root, cwd=None, made=None) -> bool:
+def sandbox_auto_ok(cmd: str, root, cwd=None, made=None, touched=None) -> bool:
     """A command that may run without a question inside the OS sandbox (writes only in the project and temp folders,
     network cut): it does not reach the network or install software, and every path it names is in the project, a
     temp folder, or outside the user's home folder (programs, system files). A path elsewhere in the home folder
@@ -479,6 +515,8 @@ def sandbox_auto_ok(cmd: str, root, cwd=None, made=None) -> bool:
     if re.search(_GIT + r"commit\b[^;&|\n]*--amend\b", cmd) and amend_pushed(root):
         return False
     if not _deletes_unasked_ok(cmd, root, cwd, made):
+        return False
+    if not _git_shelves_unasked_ok(cmd, root, cwd, touched if touched is not None else made):
         return False
     # paths from the words of the command (when it parses) and from anywhere in its text, heredoc bodies and
     # `python -c` code included: '/home/u/.ssh/id_rsa' inside a script is a path like any other
@@ -551,7 +589,37 @@ def _git_dirty(root, cwd, files) -> bool:
     return r.returncode != 0
 
 
-def _git_local_seg(w: list, root, cwd) -> bool:
+def _git_unmade_changes(root, cwd, chat_made, untracked: bool) -> bool:
+    """Uncommitted changes the chat did not make (or git cannot tell): `git stash` would shelve the user's work."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", str(cwd or root), "status", "--porcelain=v1", "-z",
+                            "--untracked-files=" + ("all" if untracked else "no")],
+                           capture_output=True, timeout=10, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return True
+    if r.returncode != 0:
+        return True
+    top = subprocess.run(["git", "-C", str(cwd or root), "rev-parse", "--show-toplevel"], capture_output=True,
+                         timeout=10, stdin=subprocess.DEVNULL).stdout.decode("utf-8", "replace").strip()
+    made = {os.path.realpath(str(x)) for x in (chat_made or ())}
+    parts = r.stdout.decode("utf-8", "replace").split("\0")
+    i = 0
+    while i < len(parts):
+        e = parts[i]
+        i += 1
+        if len(e) < 4:
+            continue
+        paths = [e[3:]]
+        if e[0] in "RC" and i < len(parts):
+            paths.append(parts[i])                              # a rename lists the old name next
+            i += 1
+        if any(os.path.realpath(os.path.join(top, q)) not in made for q in paths):
+            return True
+    return False
+
+
+def _git_local_seg(w: list, root, cwd, chat_made=None) -> bool:
     """One `git <verb> ...` (already split into words) that only writes the local repository."""
     if len(w) < 2 or w[0] != "git":
         return False
@@ -585,6 +653,10 @@ def _git_local_seg(w: list, root, cwd) -> bool:
         sub = rest[0] if rest and not rest[0].startswith("-") else "push"
         if sub not in ("push", "save", "list", "show", "apply", "pop", "create", "store"):
             return False                                        # drop, clear, branch: ask
+        if sub in ("push", "save") and _git_unmade_changes(root, cwd, chat_made,
+                                                           any(a in ("-u", "--include-untracked", "-a", "--all")
+                                                               for a in rest)):
+            return False                                        # shelving the user's own uncommitted work: ask
         return all(inside(a) for a in rest[1:] if not a.startswith("-") and sub == "push" and "--" in rest)
     if verb == "reset":
         return "--soft" in rest and not any(a in ("--hard", "--merge", "--keep", "--mixed") for a in rest)
@@ -612,7 +684,7 @@ def _git_local_seg(w: list, root, cwd) -> bool:
     return False
 
 
-def git_local_ok(cmd: str, root, cwd=None) -> bool:
+def git_local_ok(cmd: str, root, cwd=None, chat_made=None) -> bool:
     """A command made only of local git writes in the project's repository and plain reads: add, commit (--amend only
     while the commit is not pushed), stash, reset --soft, restore, checkout of a file, and a new branch (git branch x,
     checkout -b, switch -c). The repository's config and hooks must not run programs (tools.git_config_safe), no
@@ -629,7 +701,7 @@ def git_local_ok(cmd: str, root, cwd=None) -> bool:
         if T.git_read_only(seg) or safe_read(seg, root, cwd):
             continue
         w = _tokens(seg)
-        if not w or not _git_local_seg(w, root, cwd):
+        if not w or not _git_local_seg(w, root, cwd, chat_made):
             return False
         wrote = True
     return wrote and T.git_config_safe(root)

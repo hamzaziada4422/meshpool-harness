@@ -257,6 +257,8 @@ _GIT_FLAGS = {
     "tag": {"-l", "--list"},
     "remote": {"-v", "--verbose"},
     "stash": set(),
+    "clean": {"-n", "--dry-run", "-d", "-nd", "-dn", "-x", "-nx", "-xn", "-ndx", "-nxd", "-dnx", "-dxn", "-xnd", "-xdn",
+              "-X", "-nX", "-Xn", "-ndX", "-nXd", "-dnX", "-dXn", "-Xnd", "-Xdn"},   # only a dry run: it deletes nothing
 }
 _GIT_VALUE_FLAGS = ("-n", "--max-count=", "--since=", "--until=", "--author=", "-L", "-U", "--unified=",
                     "--format=", "--pretty=")      # flags that carry a value, checked as plain tokens too
@@ -295,6 +297,9 @@ def git_read_only(cmd: str) -> bool:
         return True
     if sub == "remote":                                   # "git remote" and "git remote -v": no network
         return all(a in _GIT_FLAGS["remote"] for a in args)
+    if sub == "clean" and not any(a == "--dry-run" or (a.startswith("-") and not a.startswith("--") and "n" in a)
+                                  for a in args):
+        return False                                      # git clean without -n deletes files
     after_dashdash = False
     for a in args:
         if a == "--":

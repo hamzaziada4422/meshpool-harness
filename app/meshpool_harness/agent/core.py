@@ -715,6 +715,42 @@ _PROGRAMS = {"python": "Python", "python3": "Python", "node": "JavaScript", "Rsc
              "perl": "Perl", "soffice": "LibreOffice", "libreoffice": "LibreOffice", "pandoc": "Pandoc"}
 
 
+_GIT_PRE = r"git(?:\s+(?:-[Cc]\s*\S+|--?[\w-]+(?:=\S*)?))*\s+"
+
+
+def _git_discard_title(steps) -> str:
+    """A title for a step that throws away work the user may not have saved elsewhere: git checkout or restore of files,
+    reset --hard, clean, and stash (Omar, 0.0.19: the card read "Run a Python step on cli.py, report.py ..."). "" if no
+    step is one of these."""
+    for x in steps:
+        x = x.strip()
+        m = re.match(_GIT_PRE + r"(checkout|restore)\b(.*)$", x, re.S)
+        if m:
+            args = m.group(2).split()
+            if m.group(1) == "restore" and any(a in ("--staged", "-S") for a in args) and \
+                    not any(a in ("--worktree", "-W") for a in args):
+                continue                                          # only unstages: nothing is lost
+            if m.group(1) == "checkout" and not ("--" in args or args[:1] == ["."]):
+                continue                                          # a branch switch or a new branch
+            paths = [a.strip("'\"") for a in (args[args.index("--") + 1:] if "--" in args else args)
+                     if not a.startswith("-")]
+            if not paths:
+                continue
+            if paths == ["."]:
+                return "Discard all your changes in this folder?"
+            if len(paths) == 1:
+                return "Discard your changes to " + os.path.basename(paths[0].rstrip("/")) + "?"
+            return f"Discard your changes to {len(paths)} files?"
+        if re.match(_GIT_PRE + r"reset\b.*--hard\b", x):
+            return "Discard all your uncommitted changes (git reset --hard)?"
+        m = re.match(_GIT_PRE + r"clean\b(.*)$", x)
+        if m and not re.search(r"(?:^|\s)(?:-[a-z]*n[a-z]*|--dry-run)(?=\s|$)", m.group(1)):
+            return "Delete the files git does not track (git clean)?"
+        if re.match(_GIT_PRE + r"stash(?:\s+(?:push|save)\b.*|(?:\s+-[-\w]+.*)?)?$", x):
+            return "Shelve your uncommitted changes (git stash)?"
+    return ""
+
+
 def _plain_command_title(script: str) -> str:
     """What a command does, in words a person can judge, for the approval card (persona runs, 0.0.18: every card was
     a raw `D=/tmp/...; python3 -I -c "..."` line nobody could judge). The command itself stays below the title.
@@ -741,6 +777,9 @@ def _plain_command_title(script: str) -> str:
         return "Send your commits to the remote repository?"
     if re.search(r"\bgit\s+(?:clone|fetch|pull)\b", s):
         return "Download from a git repository?"
+    why = _git_discard_title(steps)
+    if why:
+        return why
     if re.search(r"(?:^|[\s;&|(])(?:curl|wget)(?=\s|$)", s):   # a URL that is only text (an XML namespace in a
         host = re.search(r"https?://([^/\s'\"]+)", s)         # script, a link in a commit message) is not the network
         return "Use the internet" + (f" ({host.group(1)})" if host else "") + "?"
@@ -4558,6 +4597,20 @@ class Agent:
                         "tests, or answer with what you have." if len(prev) >= 4 else "")
                 return ("[Meshpool] Not run: you already ran this; the result is unchanged and no file changed since. "
                         "It was: " + str(prev[-1][4])[:200].replace("\n", " ") + more)
+        if nm in ("shell", "exec_command", "bash", "bash_many") and os.environ.get("MH_REPEAT_SHELL", "1") != "0" \
+                and not self._POLL.search(str(f.get("arguments", ""))):
+            # the same command three times in a row with no file changed between them, whatever it printed, or a
+            # pair of commands taking turns (git stash, git stash pop, five times: Omar's run): the fourth is refused
+            tail = [r for r in runs if r[2] == edits]
+            ks = [r[0] for r in tail]
+            bg = self.ws.__dict__.get("_bg") or {}
+            if not any(e["p"].poll() is None for e in list(bg.values())) and (
+                    (len(ks) >= 3 and ks[-1] == ks[-2] == ks[-3] == key) or
+                    (len(ks) >= 5 and ks[-1] != key and ks[-2] == ks[-4] == key and ks[-1] == ks[-3] == ks[-5])):
+                g["refused"] = g.get("refused", 0) + 1
+                return ("[Meshpool] Not run: you are repeating yourself. This command (or this pair of commands) "
+                        "has just run again and again, and no file changed in between. Running it once more changes "
+                        "nothing. Do something different, or answer with what you have.")
         if os.environ.get("MH_REPEAT_WINDOW") == "1":
             stuck = (sum(1 for r in runs if r[0] == key and r[2] == edits and r[3]) >= 3
                      and len({r[1] for r in runs if r[0] == key and r[2] == edits}) == 1)
@@ -6302,7 +6355,20 @@ class Agent:
                 return False
         cmds = PR.commands_of(name, args)
         return bool(cmds) and not _destructive(args, self.root) and \
-            all(PR.git_local_ok(c, self.root, wd) for c in cmds)
+            all(PR.git_local_ok(c, self.root, wd, self._chat_touched()) for c in cmds)
+
+    def _chat_touched(self) -> set:
+        """Full paths of every file this chat changed (added, edited or removed), for the stash rule: shelving
+        changes the chat did not make is the user's work and asks."""
+        out = set(self._chat_made())
+        out.update(str(x) for x in getattr(self.ws, "turn_files", ()) or ())
+        cp = getattr(self, "checkpoint", None)
+        try:
+            for t in (cp.turns() if cp is not None else []):
+                out.update(str(self.root / c["path"]) for c in t.get("changed") or [] if c.get("path"))
+        except Exception:  # noqa: BLE001
+            pass
+        return out
 
     def _edit_unasked(self, name: str, args: dict) -> bool:
         """The rule for a file change that needs no question, for every way of making one (edit, write_file,
@@ -6566,7 +6632,7 @@ class Agent:
             # Still asked: destructive commands, the network and installs, paths elsewhere in the user's home,
             # meshpool's own rule files (the guard above), and anything outside the folder.
             if name in ("bash", "shell", "exec_command") and cmds and wd_ok and not _destructive(args, self.root) \
-                    and all(PR.sandbox_auto_ok(c, self.root, wd, self._chat_made()) and not PR.open_office_write(c, self.root, wd)
+                    and all(PR.sandbox_auto_ok(c, self.root, wd, self._chat_made(), self._chat_touched()) and not PR.open_office_write(c, self.root, wd)
                             for c in cmds):
                 if self._sandboxed():
                     script = (T.shell_script(args.get("command")) if name == "shell"
@@ -6653,7 +6719,7 @@ class Agent:
                   and not _destructive(args, self.root) and not destr
                   and self.mode in ("ask", "edits") and _sandbox_auto_on()
                   and not self._sandboxed() and (group == "edit" or office_w or
-                                                 (cmds and all(PR.sandbox_auto_ok(c, self.root, wd, self._chat_made()) for c in cmds))))
+                                                 (cmds and all(PR.sandbox_auto_ok(c, self.root, wd, self._chat_made(), self._chat_touched()) for c in cmds))))
         folder = folder and not outside_edit
         scope = ("once" if risky == "destructive" or _destructive(args, self.root) or orisk or outside_edit else   # a destructive command: this once only
                  # no sandbox: one yes for the chat. Said plainly (review, 0.0.18): nothing isolates these commands

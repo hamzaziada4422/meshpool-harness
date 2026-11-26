@@ -285,7 +285,7 @@ def _repo(p: Path):
     (p / "a.py").write_text("x = 2\n")
 
 
-GIT_OK = [COMMIT, "git add a.py", "git commit -am 'fix rounding'", "git stash", "git stash pop",
+GIT_OK = [COMMIT, "git add a.py", "git commit -am 'fix rounding'", "git stash pop",
           "git reset --soft HEAD~1", "git restore --staged a.py",
           "git checkout -b feature/x", "git switch -c topic", "git branch topic2",
           "git status --short && git add a.py && git commit -q -m x"]
@@ -294,7 +294,9 @@ GIT_ASK = ["git push origin main", "git pull", "git fetch", "git clone https://x
            "echo x > .git/hooks/pre-commit", "git checkout main", "git branch -D topic", "git stash drop",
            "git add ../other.py", "git commit --amend -m y && git push",
            # release review: a.py has uncommitted changes, which these throw away
-           "git restore a.py", "git checkout a.py", "git restore --worktree --staged a.py"]
+           "git restore a.py", "git checkout a.py", "git restore --worktree --staged a.py",
+           # a stash of changes the chat did not make shelves the user's work (test_omar_dev2.py)
+           "git stash", "git stash push -m wip"]
 
 
 def test_5_local_git_writes_run_in_accept_edits(proj, monkeypatch):
