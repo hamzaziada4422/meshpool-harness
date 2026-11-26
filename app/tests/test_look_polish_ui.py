@@ -20,7 +20,8 @@ def _play(page, evs):
         return {ai: Array.from(document.querySelectorAll('#col .msg-ai')).map(txt),
                 open: Array.from(document.querySelectorAll('#col > .msg-ai')).map(txt),
                 folded: Array.from(document.querySelectorAll('#col details.notedet')).map(txt),
-                notes: Array.from(document.querySelectorAll('#col .note')).map(txt),
+                notes: Array.from(document.querySelectorAll('#col .note')).map(txt)
+                    .filter(t => t !== 'This chat is gone.'),   // the fake chat is not on the server; its load may say so
                 log: cur.log.filter(e => e.type === 'assistant' && !e.folded).map(e => e.text)};
     }""", evs)
 
