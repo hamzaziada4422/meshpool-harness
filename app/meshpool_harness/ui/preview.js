@@ -381,7 +381,7 @@ async function pvThumb(root, path, box) {
   for (let i = 0; i < 90 && box.isConnected; i++) {
     let m; try { m = await api(`/api/preview?${pvQuery(root, path)}`); } catch (e) { box.classList.remove("wait"); return; }
     if (m.state === "ready" && m.pages) {
-      const im = new Image(); im.alt = ""; im.onload = () => { if (box.isConnected) { box.innerHTML = ""; box.appendChild(im); box.classList.remove("wait"); } };
+      const im = new Image(); im.alt = ""; im.onload = () => { if (box.isConnected) { box.innerHTML = ""; box.appendChild(im); box.classList.remove("wait"); box.classList.add("page"); } };
       im.src = pvPage(root, path, 0, 320, m.mtime); return;
     }
     if (m.state !== "working") { box.classList.remove("wait"); return; }

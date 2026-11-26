@@ -44,7 +44,7 @@
 .sec .sechd:hover{color:var(--ink)}
 .sec .sechd .chev{display:inline-grid;transition:transform var(--t-hover) ease}.sec .sechd .chev svg{width:16px;height:16px}
 .sec .sechd[aria-expanded="false"] .chev{transform:rotate(-90deg)}
-.sec .cnt{font-size:var(--fs-xs);color:var(--ink-3);background:var(--hover);border-radius:999px;padding:0 8px}
+.sec .cnt{font-size:var(--fs-xs);color:var(--ink-3);background:none;padding:0;font-variant-numeric:tabular-nums}
 .sec .flt{opacity:0;transition:opacity var(--t-hover) ease;margin-left:auto}.sec:hover .flt,.sec .flt.on,.sec .flt:focus-visible{opacity:1}.sec .flt.on{color:var(--pool-text)}
 .threads{list-style:none;margin:0;padding:0 0 4px}
 .threads.sub{padding:0 0 4px 0}
@@ -118,11 +118,11 @@
 .setupcard .sci{width:36px;height:36px;border-radius:var(--r-m);border:1px solid var(--line);display:grid;place-items:center;color:var(--ink-3);flex:none}
 .setupcard .sct{flex:1;min-width:0;display:flex;flex-direction:column}.setupcard .sct b{font-weight:500}.setupcard .sct span{color:var(--ink-3);font-size:var(--fs-s)}
 .starters{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:16px;width:100%}
-.starters button{border:1px solid var(--line);background:none;border-radius:999px;padding:8px 12px;color:var(--ink-2);font-size:var(--fs-s);transition:background-color var(--t-hover) ease,color var(--t-hover) ease}
+.starters button{border:1px solid var(--line);background:none;border-radius:var(--r-m);padding:8px 12px;color:var(--ink-2);font-size:var(--fs-s);transition:background-color var(--t-hover) ease,color var(--t-hover) ease}
 .starters button:hover{background:var(--hover);color:var(--ink);transform:none;box-shadow:none}
 .hero.code .chome{display:flex;flex-direction:column;align-items:center;gap:12px;max-width:100%}
 .hero.code h1{margin:0;font-size:var(--fs-2xl)}
-.waitcard{display:flex;flex-direction:column;border:1px solid var(--line);background:var(--side);border-radius:var(--r-l);padding:8px;min-width:320px;max-width:100%}
+.waitcard{display:flex;flex-direction:column;border:1px solid var(--line);background:var(--side);border-radius:var(--r-l);padding:4px;min-width:320px;max-width:100%}
 .wrow{display:flex;gap:8px;align-items:baseline;border:0;background:none;padding:8px 12px;border-radius:var(--r-m);text-align:left;color:var(--ink);font-size:var(--fs-m);cursor:pointer}
 .wrow:hover{background:var(--hover)}.wrow .wl{color:var(--warn);font-weight:500}.wrow .wt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46ch}
 .tipbar{display:flex;align-items:center;gap:12px;width:100%;margin-top:20px;padding:12px 16px;border-radius:var(--r-l);background:var(--side);color:var(--ink-2);font-size:var(--fs-s);text-align:left}
@@ -166,7 +166,7 @@
 @container main (max-width:520px){.sel .lbl{max-width:110px}}
 
 /* ---------- menus and popovers ---------- */
-.ctx,.pop{background:var(--raise);border:1px solid var(--line);border-radius:var(--r-l);box-shadow:var(--shadow);padding:8px}
+.ctx,.pop{background:var(--raise);border:1px solid var(--line);border-radius:var(--r-l);box-shadow:var(--shadow);padding:4px}
 .ctx{min-width:230px;max-width:min(340px,calc(100vw - 16px));animation:mp-menu var(--t-menu) ease-out both;transform-origin:bottom left}
 .pop{animation:mp-menu var(--t-menu) ease-out both;transform-origin:bottom left;min-width:min(230px,calc(100vw - 16px))}
 @keyframes mp-menu{from{opacity:0;transform:translateY(4px) scale(.98)}to{opacity:1;transform:none}}
