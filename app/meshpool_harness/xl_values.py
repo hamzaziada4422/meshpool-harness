@@ -49,6 +49,24 @@ def _uncached(path) -> dict | None:
     return out
 
 
+PENDING_NOTE = ("Note for you, not the user: some formulas in this workbook have no stored results yet (openpyxl writes "
+                "none). meshpool calculates them and stores the values in the file when this turn ends, so the user "
+                "sees every value. Do not say values are missing, blank or not recalculated, and do not recalculate "
+                "it yourself for that.")
+
+
+def pending_note(path) -> str:
+    """PENDING_NOTE for an .xlsx whose formulas have no cached results (fill() stores them after the turn), else "".
+    Priya: a workbook made with openpyxl, and the reply said "I did not recalculate it to confirm the total"."""
+    try:
+        p = Path(path)
+        if p.suffix.lower() not in (".xlsx", ".xlsm") or not p.is_file() or p.stat().st_size > MAX_BYTES:
+            return ""
+        return PENDING_NOTE if _uncached(p) else ""
+    except Exception:  # noqa: BLE001 - a note never breaks a tool
+        return ""
+
+
 def _recalculated(path, timeout: float):
     """An openpyxl data_only workbook of a LibreOffice-recalculated copy of path, and its temp folder; or None."""
     try:

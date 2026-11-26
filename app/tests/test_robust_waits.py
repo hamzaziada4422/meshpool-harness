@@ -3,7 +3,8 @@
 1. A turn that stalls with no way out (the app says "Still waiting for the model" for ever, or shows nothing, and the
    notice has no retry). The server now says whether a model request is in flight (view.model_inflight); the page's
    tick (workTick) shows "This is taking longer than it should. Try again?" after 60 s with no request and no
-   progress, and "Try again" on a real wait after 3 minutes.
+   progress, and "Try again" on a request with nothing back after 90 s (it was 3 minutes). Try again is one server
+   call (/retry): the stopped attempt leaves the chat, so the message shows once and no "Stopped." line is left.
 2. `meshpool -p` printed nothing during a long model wait: it now writes "waiting for the model (N min)" to stderr
    every 60 s (MH_WAIT_NOTE_S shortens that for tests); the terminal UI shows it on the spinner line.
 3. Two `meshpool ui` servers on one MESHPOOL_HOME ran against the same chats: the second one now stops and says where
@@ -300,25 +301,32 @@ def test_a_turn_with_no_request_and_no_progress_says_so_and_offers_try_again(pag
     assert page.errors == [], page.errors
 
 
-def test_a_real_wait_keeps_its_line_and_gets_try_again_after_three_minutes(page):
+def test_a_real_wait_keeps_its_line_and_gets_try_again_after_ninety_seconds(page):
     _fake_chat(page)
-    _working(page, True, 100)
+    _working(page, True, 75)
     note = page.evaluate(NOTE)
     assert note and note["text"].startswith("Still waiting for the model (1 min)") and not note["retry"], note
-    _working(page, True, 200)
+    _working(page, True, 95)
     note = page.evaluate(NOTE)
-    assert note and note["text"].startswith("Still waiting for the model (3 min)") and note["retry"], note
+    assert note and note["text"].startswith("Still waiting for the model (1 min)") and note["retry"], note
     assert page.errors == [], page.errors
 
 
-def test_try_again_stops_the_turn_then_sends_the_last_message_again(page):
+def test_try_again_is_one_retry_call_not_a_stop_then_a_second_send(page):
+    """It was stopNow() then sendNow(): the send went in while the stop was still landing, so the message was posted
+    a second time under "Stopped. Send a message to continue." (Maya)."""
     _fake_chat(page)
     _working(page, False, 75)
     page.evaluate("""() => { window.__calls = []; stopNow = async () => { __calls.push('stop'); };
-        sendNow = async () => { __calls.push('send:' + document.querySelector('#input').value); }; }""")
+        sendNow = async () => { __calls.push('send'); }; poll = () => {}; }""")
+    sent = []
+    page.route(re.compile(r"^https?://[^/]+/api/agent/t-robust/(retry|stop|send)"),
+               lambda route, request: (sent.append(request.url.split("/api/agent/")[1]),
+                                       route.fulfill(status=200, body="{}", content_type="application/json")))
     page.click("#waitNote [data-retry]")
-    page.wait_for_function("() => __calls.length === 2")
-    assert page.evaluate("() => __calls") == ["stop", "send:make the memo shorter"]
+    _until(lambda: sent, 10)
+    page.wait_for_timeout(300)
+    assert sent == ["t-robust/retry"] and page.evaluate("() => __calls") == [], (sent, page.evaluate("() => __calls"))
 
 
 def test_the_server_says_whether_a_model_request_is_in_flight(page, stuck):
@@ -338,6 +346,10 @@ def test_the_server_says_whether_a_model_request_is_in_flight(page, stuck):
                            timeout=20000)
     page.click("#waitNote [data-retry]")
     assert _until(lambda: stuck["n"]() >= 2, 60), "Try again did not send the message again"
+    v = page.evaluate("id => api('/api/agent/' + id + '?since=0')", cid)
+    users = [e for e in v["events"] if e.get("type") == "user"]
+    assert len(users) == 1 and users[0]["text"] == "say hi", users          # shown once, not twice
+    assert not [e for e in v["events"] if e.get("type") == "interrupted"]  # and no "Stopped. Send a message" line
     assert page.errors == [], page.errors
 
 

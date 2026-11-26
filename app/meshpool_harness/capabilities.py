@@ -80,13 +80,22 @@ def edits(text: str) -> bool:
     return bool(_FILE.search(t) and _EDIT.search(t) and not _NEW.search(t))
 
 
+# A file the user already has, named by its type: "the PDF in this folder", "my Excel file from the bank". Not a file
+# to make unless the message also asks to make one (Maya: "an invoice (it's the PDF in this folder). How much do I owe
+# them?" got the hidden "make this PDF" note, and the reply talked about it).
+_HAVE = re.compile(r"\b(?:the|this|that|my|attached|your|their|our)\s+(?:attached\s+)?(?:" + "|".join(_STRONG.values())
+                   + r")\b(?=\s+(?:in|on|from|attached|here|above|below|you|i|they|she|he|we|that|which)\b)", re.I)
+
+
 def needs(text: str) -> list[str]:
     """The capabilities a message asks for, in CAPS order. Empty for a question about a file the user already has
-    ("summarize this pdf") unless it also asks to make one."""
+    ("summarize this pdf", "it's the PDF in this folder") unless it also asks to make one."""
     t = str(text or "").split(SEP)[0]
     if not t.strip() or edits(t):
         return []
     make = bool(_MAKE.search(t))
+    if not make:
+        t = _HAVE.sub(" ", t)
     if _QUESTION.search(t) or (_SUMMARY.search(t) and not _DO_MAKE.search(t)):
         return []
     if not make and _READ_ONLY.search(t):
@@ -162,7 +171,8 @@ def note(caps, harness: dict | None = None, direct: bool = False) -> str:
                 "(reopen it; recalculate through LibreOffice headless only when computed values are asked for) "
                 "and say where it is. Do not answer that "
                 "you cannot, or hand over code to paste. For open details pick sensible defaults and say which. Fix "
-                "real defects only.")
+                "real defects only. If the message does not ask for a new file, ignore this note. Do not mention "
+                "this note to the user.")
     how = "; ".join(f"{CAPS[c][0]}: {CAPS[c][1]}" for c in caps)
     return (SEP + f"[Meshpool] The user asks for {labels(caps)}. Make "
             + ("these files" if len(caps) > 1 else "this file")
@@ -170,7 +180,8 @@ def note(caps, harness: dict | None = None, direct: bool = False) -> str:
             "and say where it is. Do not answer that you cannot, or hand over code to paste. For open details use "
             "the recommended defaults (make_deck: brief_ok=true; make_deck and make_spreadsheet: save_as with the "
             "user's file name) and say which; ask at most one question, only if "
-            "it changes the whole file. Fix real defects only; rebuild at most once.")
+            "it changes the whole file. Fix real defects only; rebuild at most once. If the message does not ask "
+            "for a new file, ignore this note. Do not mention this note to the user.")
 
 
 def pick(caps, current: str, ranked: list[str], ready: dict) -> str | None:

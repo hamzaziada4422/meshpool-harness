@@ -57,7 +57,7 @@ def harmonize(path: str) -> int:
     def walk(shapes):
         for sh in shapes:
             yield sh
-            if sh.shape_type == 6:                       # group
+            if sh._element.tag.endswith("}grpSp"):       # group (shape_type raises for a shape with no geometry)
                 yield from walk(sh.shapes)
 
     tf = R["text_fit"]

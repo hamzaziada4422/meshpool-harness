@@ -308,6 +308,7 @@ def test_the_checked_line_says_what_was_checked_in_plain_words(tmp_path, monkeyp
     st = {f"X{i}": "pass" for i in range(16)} | {f"X{i}": "fail" for i in range(16, 20)}
     K.rules_ran("workbook_rules", "workbook rules", st, "rooms.xlsx",
                 names={"X16": "Lengths are typed in, not linked", "X17": "No checks sheet"})
+    K.fact("workbook_totals", True, "rooms.xlsx")
     sm = K.summary("priya")
     K.end("priya")
     assert sm["line"] == "Checked the totals and formulas, and that the file opens cleanly.", sm["line"]
@@ -403,7 +404,7 @@ def test_jargon_stays_out_of_the_chat(page):
         applyEv({type: 'tool_start', id: 'c', name: 'read_file', summary: 'c.txt', i: 6}); applyEv({type: 'tool_end', id: 'c', ok: true, output: 'x', i: 7});
         return {text: document.querySelector('#col').textContent, group: document.querySelector('#col .work .wl').textContent}; }""")
     assert "older steps" not in got["text"] and "model table" not in got["text"], got
-    assert got["group"] == "3 steps, 1 had a problem" and "did not work" not in got["text"], got
+    assert got["group"] == "3 steps" and "did not work" not in got["text"], got      # a failure the turn went on from is not counted (round 2)
     assert page.errors == [], page.errors
 
 
@@ -437,7 +438,7 @@ def test_the_code_sessions_group_is_only_for_code_chats(page):
 def test_saved_rules_begin_with_a_plain_sentence(page):
     page.evaluate("""() => { const b = document.createElement('div'); b.id = 'rulesBoxT'; document.body.appendChild(b);
         drawRules(b, {allow: [], ask: [], deny: [], folders: [], path: '/x/permissions.json'}); }""")
-    got = page.evaluate("() => [...document.querySelectorAll('#rulesBoxT > p')].map(p => p.textContent)")
+    got = page.evaluate("() => [...document.querySelectorAll('#rulesBoxT p')].map(p => p.textContent)")
     assert got[0].startswith("These are the things you told meshpool to always allow") and "bash:git push*" in got[1], got
 
 

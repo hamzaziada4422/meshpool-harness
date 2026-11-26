@@ -460,8 +460,14 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
     try:
         m = measure(path, rules)
     except Exception as e:  # the package is too broken to read: report P0 and stop
-        failures.append(F("P0", "package", f"python-pptx cannot read the deck ({type(e).__name__}: {e}).",
-                          fix_scope="renderer"))
+        opens = not any(f.get("rule") == "P0" and f.get("status", "fail") == "fail" for f in failures)
+        # a checker that cannot measure a file that opens is the checker's limit, never "the file is broken"
+        # (Daniel, 0.0.18: "the deck checker and my reader could not parse it", and the deck was fine)
+        failures.append(F("P0", "package", (f"The checker could not measure this deck ({type(e).__name__}: {e}). "
+                          "The file itself opens and reads correctly: this is a limit of the checker, not a damaged "
+                          "file. Do not tell the user the file is broken.") if opens else
+                          f"python-pptx cannot read the deck ({type(e).__name__}: {e}).",
+                          status="not_run" if opens else "fail", fix_scope="renderer"))
         status = {r: "not_run" for r in RULES}                # nothing else could be evaluated
         status["P0"] = "fail"
         return {"file": str(path), "sha256": None, "rules": status, "failures": failures,

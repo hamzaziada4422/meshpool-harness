@@ -188,7 +188,7 @@ def _walk(shapes, depth=0, xform=None):
             x, y, w, h = ox + (x - cx) * sx, oy + (y - cy) * sy, w * sx, h * sy
         box = None if None in (x, y, w, h) else (x, y, w, h)
         yield sh, depth, box
-        if sh.shape_type is not None and "GROUP" in str(sh.shape_type):
+        if sh._element.tag.endswith("}grpSp"):           # not shape_type: it raises for a shape with no geometry
             xf = sh._element.find(qn("p:grpSpPr") + "/" + qn("a:xfrm"))
             if xf is not None and box:
                 off, ext = xf.find(qn("a:off")), xf.find(qn("a:ext"))

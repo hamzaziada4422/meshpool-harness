@@ -33,6 +33,7 @@ def test_all_that_matters_passed_says_what_was_checked(home):
                     | {"X10": "fail", "X1": "fail", "X12": "fail"}, name,
                     names={"X1": "Rooms: 16 typed-in numbers on a calc sheet", "X10": "Rooms: header panes are not "
                            "frozen.", "X12": "No checks sheet. Add one row per integrity check"})
+    K.fact("workbook_totals", True, "rooms summary.xlsx")
     sm = K.summary("p")
     assert sm["line"] == "Checked the totals and formulas, and that the file opens cleanly.", sm["line"]
     assert not any(w in sm["line"] for w in ("of", "flag", "rule", "pass", "fail", "36", "27")), sm["line"]
@@ -43,6 +44,7 @@ def test_a_real_problem_is_named_in_plain_words(home):
     K.begin("q")
     K.rules_ran("workbook_rules", "workbook rules", {"X1": "pass", "X5": "fail", "X10": "fail"}, "b.xlsx",
                 names={"X5": "Summary!C4: evaluates to #DIV/0!", "X10": "Data: 3 cells where..."})
+    K.fact("workbook_totals", True, "b.xlsx")
     sm = K.summary("q")
     assert sm["line"] == "Checked the totals and formulas. One thing to look at: some formulas show errors.", sm["line"]
     assert "#DIV/0!" not in sm["line"] and "X5" not in sm["line"]

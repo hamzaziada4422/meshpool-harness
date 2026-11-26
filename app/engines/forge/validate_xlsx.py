@@ -747,6 +747,18 @@ def validate(path: str, rules: dict | None = None, recompute: dict | None = None
         from meshpool_harness import checks
         checks.rules_ran("workbook_rules", "workbook rules", rules_status, subject=os.path.basename(str(path)),
                          names={f["rule"]: f.get("message", "") for f in failures if f.get("status") == "fail"})
+        has_total = has_formula = False                  # what the closing line may say it checked ("totals" needs one)
+        for ws in wb.worksheets:
+            for row in ws.iter_rows(max_row=3000):
+                for c in row:
+                    if isinstance(c.value, str):
+                        if c.value.startswith("="):
+                            has_formula = True
+                            has_total = has_total or "SUM(" in c.value.upper() or "SUBTOTAL(" in c.value.upper()
+                        elif re.match(r"\s*(?:grand\s+|sub)?totals?\b", c.value, re.I):
+                            has_total = True
+        checks.fact("workbook_totals", has_total, os.path.basename(str(path)))
+        checks.fact("workbook_formulas", has_formula, os.path.basename(str(path)))
     except Exception:  # noqa: BLE001 - the recorder never changes a validation
         pass
     return {"file": str(path), "sha256": file_sha, "rules": rules_status, "failures": failures,

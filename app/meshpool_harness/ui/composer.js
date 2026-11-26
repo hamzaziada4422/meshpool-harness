@@ -133,7 +133,8 @@ function modelMenu(anchor) {
 const heroTitle = () => (S.pj || []).find(p => p.id === S.draft?.pid)?.name || "New chat";
 function renderSel() {
   const c = cfg(), code = S.mode === "code", home = !S.cur && S.view === "chat";
-  const label = c.model ? modelName(c.model) + (provOf(c.model) === "chatgpt" ? " · ChatGPT" : "") : "Model";
+  const chatUi = S.cur ? chatMode() : !code;      // Chat mode keeps the model name in the picker's list, not on the page
+  const label = chatUi ? "Model" : c.model ? modelName(c.model) + (provOf(c.model) === "chatgpt" ? " · ChatGPT" : "") : "Model";
   const eff = EFFORT_NAME[c.effort || ""] || "Auto", perm = MODE_NAME[c.mode] || "Ask";   // the muted word is the effort
   const pj = S.pj.find(p => p.id === S.draft.pid);
   const root = S.draft.project, mg = isMgd(root);
@@ -141,7 +142,7 @@ function renderSel() {
   if (home && !code) left = `<button class="sel" id="projSel" aria-haspopup="listbox">${pj ? esc(clip(pj.name, 28)) : "Project"}${ICON.chev}</button>`;
   else if (home && code) left = `<button class="sel" id="envSel" aria-haspopup="listbox">${mg ? ICON.cloud : ICON.monitor}<span>${root ? esc(clip(projName(root), 24)) : "Choose a folder"}</span>${ICON.chev}</button><button class="sel" id="repoSel" aria-haspopup="listbox">${ICON.pr}<span>${mg ? esc(clip(projName(root), 22)) : "Repo"}</span>${ICON.chev}</button>`;
   else left = `<span class="disc">Answers can be wrong. Check what matters.</span>`;
-  const html = `<span class="sl">${left}</span><span class="sr2"><button class="sel mdl" id="mPill" aria-haspopup="menu" aria-label="Model: ${esc(label)}, effort: ${esc(eff)}" data-tip="Model, and how hard it thinks (effort: ${esc(eff)})" data-tip-pos="above"><span class="lbl">${esc(label)}</span><em>${esc(eff)}</em></button><button class="sel ${c.mode === "auto" ? "hot" : ""}" id="aPill" aria-haspopup="menu" aria-label="Permissions: ${esc(perm)}" data-tip="Permissions: what it may do without asking (${esc(perm)})" data-tip-pos="above">${esc(perm)}</button></span>`;
+  const html = `<span class="sl">${left}</span><span class="sr2"><button class="sel mdl" id="mPill" aria-haspopup="menu" aria-label="Model: ${esc(c.model ? modelName(c.model) : label)}, effort: ${esc(eff)}" data-tip="Model, and how hard it thinks (effort: ${esc(eff)})" data-tip-pos="above"><span class="lbl">${esc(label)}</span><em>${esc(eff)}</em></button><button class="sel ${c.mode === "auto" ? "hot" : ""}" id="aPill" aria-haspopup="menu" aria-label="Permissions: ${esc(perm)}" data-tip="Permissions: what it may do without asking (${esc(perm)})" data-tip-pos="above">${esc(perm)}</button></span>`;
   if (setHTML($("#selrow"), html, true)) {
     $("#mPill").onclick = e => modelMenu(e.currentTarget);
     $("#aPill").onclick = e => permMenu(e.currentTarget);
