@@ -52,3 +52,16 @@ def test_looking_line_does_not_stay_without_a_checked_line(page, tail, note):
     assert not any(n.startswith("Looking at the result") for n in got["notes"]), got
     assert (note in got["notes"]) if note else not any("Could not finish" in n for n in got["notes"]), got
     assert page.errors == [], page.errors
+
+
+def test_the_looking_note_names_who_is_checking_it(page):
+    """The reviewer's persona replaces the words in the same grey note, and the note still goes when the line arrives."""
+    who = "a customer on her phone ordering a birthday cake from the bakery"
+    persona = {"type": "status", "look": True, "persona": who, "text": "Checking it as: " + who + "..."}
+    got = _play(page, [{"type": "user", "text": "x"}, _reply("Made it."), LOOK, persona])
+    assert got["notes"] == ["Checking it as: " + who + "..."], got
+    assert page.evaluate("S.cur.activity") == "Checking it as: " + who
+    done = _play(page, [{"type": "user", "text": "x"}, _reply("Made it."), LOOK, persona, _reply(LINE, append=True),
+                        {"type": "turn_end", "turn": {}}])
+    assert done["notes"] == [], done
+    assert page.errors == [], page.errors

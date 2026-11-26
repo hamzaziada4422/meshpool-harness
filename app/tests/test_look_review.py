@@ -49,6 +49,7 @@ def _env(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHPOOL_MCP", str(tmp_path / "none.json"))
     monkeypatch.setenv("MESHPOOL_API_KEY", "k")
     monkeypatch.setenv("MH_LOOK_REVIEW", "1")
+    monkeypatch.setenv("MH_LOOK_REVIEWER", "0")        # these tests are the measured-only path: the builder reads the measurements (test_look_reviewer.py has the independent reviewer)
     monkeypatch.setenv("MH_GRADER", "0")
     monkeypatch.delenv("MH_VISION", raising=False)
     C.ensure_home()

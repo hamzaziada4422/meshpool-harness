@@ -46,6 +46,19 @@ def plan(messages, tools):
     lu = max(i for i, m in enumerate(messages) if m["role"] == "user")
     lc = messages[lu]["content"]
     lt = (lc if isinstance(lc, str) else " ".join(x.get("text", "") for x in lc if isinstance(x, dict))).lower()
+    if str(messages[0].get("content", "")).startswith("You are a reviewer. You did not build"):   # the look reviewer (agent/lookreview.py)
+        who = ("a customer on her phone ordering a birthday cake from the bakery" if "bakery" in lt else
+               "a finance director reading this memo before a board meeting" if "memo" in lt or "deck" in lt else
+               "a shopper on her phone looking for fresh bouquets at the Petal flower shop")
+        if "actions: up to" in lt:                                                    # the first call: persona and actions
+            return ("text", json.dumps({"persona": who, "actions": [{"do": "click", "target": "Order now", "width": "phone"}]
+                                        if "bakery" in lt else []}))
+        broken = "sideways" in lt or "initgallery" in lt or "did not work" in lt
+        probs = ([{"what": "the page scrolls sideways on my phone", "where": "the banner", "severity": "blocker"},
+                  {"what": "a script error shows where the gallery should be", "where": "gallery", "severity": "major"}]
+                 if broken else [])
+        return ("text", json.dumps({"persona": who, "can_do_the_job": not broken, "problems": probs, "pass": not broken}))
+
     if "landing page demo" in lt:                           # the look-at-it review (agent/look.py, 0.0.18)
         step = len([m for m in messages[lu + 1:] if m["role"] == "tool"])
         review = "look at what you made" in lt
