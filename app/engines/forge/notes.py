@@ -144,8 +144,10 @@ def _drop_json(t: str) -> str:
 _SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(\[])")
 
 
-def clean(text) -> str:
-    """Notes as presenter-facing prose only. Never raises: on any error the text goes out with only its markers cut."""
+def clean(text, punctuate: bool = True) -> str:
+    """Notes as presenter-facing prose only. Never raises: on any error the text goes out with only its markers cut.
+    punctuate=False (notes a person dictated through an edit): sentences are kept as written, not capitalised or
+    closed with a full stop."""
     if text is None:
         return ""
     if not isinstance(text, str):
@@ -173,6 +175,9 @@ def clean(text) -> str:
                     continue
                 st = st.rstrip(":,; ")
                 if re.search(r"[A-Za-z]", st):
+                    if not punctuate:
+                        keep.append(st)
+                        continue
                     st = st[0].upper() + st[1:]
                     keep.append(st if st[-1] in ".!?\"')" else st + ".")
             if keep:

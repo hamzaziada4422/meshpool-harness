@@ -959,7 +959,7 @@ def _notes_text(text) -> str:
         if str(APP) not in sys.path:
             sys.path.insert(0, str(APP))
         from engines.forge.notes import clean
-        return clean(text)
+        return clean(text, punctuate=False)
     except Exception:  # noqa: BLE001 - engines not shipped: the text as given
         return str(text or "")
 

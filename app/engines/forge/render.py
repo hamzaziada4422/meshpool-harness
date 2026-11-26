@@ -4828,6 +4828,7 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
     ctx = Ctx({})
     ctx.design = {}                                       # slide number -> which path drew it (design.py)
     errors = []
+    remarks: list[str] = []                               # what was cut, moved or not used, slide by slide
     try:
         queue = plan_forms(list(slides))
     except Exception:                                      # noqa: BLE001 - one bad slide must not lose the deck
@@ -4927,7 +4928,7 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
                                for r in left)])
         if s.get("notes"):                                  # the one writer of a slide's notes: presenter prose only
             NT.write(sl, s["notes"])
-        errors += [f"slide {n}: {m}" for m in NT.qa_of(s)]   # the renderer's remarks go to the checks
+        remarks += [f"slide {n}: {m}" for m in NT.qa_of(s)]   # the renderer's remarks: for the record, not the notes
         if ctx.carry and carry:
             queue.insert(0, ctx.carry)
             errors.append(f"slide {n}: rows carried to a continuation slide (content longer than one slide)")
@@ -4951,7 +4952,7 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
         errors.append(f"type-scale pass skipped: {type(e).__name__}: {e}")
     prov_path = str(Path(out_path).with_suffix("")) + ".provenance.json"
     Path(prov_path).write_text(json.dumps({"slides": ctx.prov}, indent=1))
-    return {"slides": n, "errors": errors, "provenance": prov_path, "design": ctx.design}
+    return {"slides": n, "errors": errors, "provenance": prov_path, "design": ctx.design, "remarks": remarks}
 
 
 def _reading_order(prs) -> None:

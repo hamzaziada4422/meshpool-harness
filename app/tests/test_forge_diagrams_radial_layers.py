@@ -226,7 +226,7 @@ def test_text_that_does_not_fit_is_cut_and_noted_not_overflowed(kind, tmp_path):
     r, prs = _render([_grid(kind, OVERFULL[kind])], tmp_path)
     sl = prs.slides[0]
     assert any("does not fit at the minimum size" in e for e in r["errors"])        # reported as a content failure
-    assert "Did not fit and was left out" in _notes(sl)
+    assert _notes(sl).strip() and "[QA]" not in _notes(sl)   # moved text: plain presenter notes
     for shp in sl.shapes:                                    # the shapes still hold only what fits
         if shp.name.startswith("ov_") and shp.has_text_frame:
             assert len(shp.text_frame.text.split()) < 30

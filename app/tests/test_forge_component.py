@@ -251,8 +251,8 @@ def test_off_without_knowledge_base_draws_fallback(monkeypatch, tmp_path):
     assert "arch:argument_only" in sl._element.find(
         "{http://schemas.openxmlformats.org/presentationml/2006/main}cSld").get("name")
     notes = sl.notes_slide.notes_text_frame.text if sl.has_notes_slide else ""
-    assert "[QA]" not in notes                       # why the library was not used goes to the build's errors
-    assert any("library" in e and "off" in e for e in res["errors"]), res["errors"]
+    assert "[QA]" not in notes                       # why the library was not used is a remark for the checks
+    assert any("library" in e and "off" in e for e in res["remarks"]), res["remarks"]
     assert not [s for s in sl.shapes if s.name.startswith("ov_Lib")]
 
 
@@ -263,7 +263,7 @@ def test_bad_item_and_missing_item_draw_fallback(lib, tmp_path):
         txt = " ".join(s.text_frame.text for s in sl.shapes if s.has_text_frame)
         assert "Unit cost fell 9% on the new line" in txt, item
         notes = sl.notes_slide.notes_text_frame.text if sl.has_notes_slide else ""
-        assert "[QA]" not in notes and any("library layout was not used" in e for e in res["errors"]), res["errors"]
+        assert "[QA]" not in notes and any("library layout was not used" in e for e in res["remarks"]), res
         assert item not in notes and item not in _slide_xml(out)
 
 

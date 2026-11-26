@@ -128,7 +128,8 @@ def test_deal_terms_never_show_value_na():
     assert [r[0] for r in rows] == ["Offer price", "Debt assumed"]
     assert not any("N/A" in c for r in rows for c in r)
     assert n["table"]["highlight_rows"] == [1]                       # the focus row follows its row
-    assert "Shares acquired" in n["notes"] and "Equity value" in n["notes"]
+    qa = " ".join(n.get("_qa") or [])                                   # for the checks, not the speaker notes (0.0.19)
+    assert "Shares acquired" in qa and "Equity value" in qa
     assert not any("N/A" in f for f in n.get("footnotes") or [])      # nothing left to footnote
 
 
@@ -142,7 +143,8 @@ def test_mostly_gap_column_goes_with_a_footnote_that_keeps_its_values():
     assert t["columns"] == ["Target", "Value", "Status"] and t["col_widths"] == [3, 2, 2]
     assert [r[0] for r in t["rows"]] == ["Core Scientific", "ZT Systems", "Mellanox"]   # an all-gap row goes
     assert any(f.startswith("Premium: 66% for Core Scientific; not available") for f in n["footnotes"])
-    assert "Groq" in n["notes"] and "Premium" in n["notes"]
+    qa = " ".join(n.get("_qa") or [])
+    assert "Groq" in qa and "Premium" in qa
 
 
 def test_explicit_dashes_and_grid_tables():
@@ -164,9 +166,10 @@ def test_decision_band_is_dropped_when_it_repeats_the_title(tmp_path, monkeypatc
             "points": [{"lead": "The backlog is the prize", "bullets": ["$132.5B at 30 Sep"]},
                        {"lead": "The premium is defensible", "bullets": ["35% above $48.42"]}], "source": SRC}
     out = tmp_path / "e.pptx"
-    R.render([dict(base, decision="Decision: buy CoreWeave's remaining shares at $65.37")], str(out), fix_labels=False)
+    r = R.render([dict(base, decision="Decision: buy CoreWeave's remaining shares at $65.37")], str(out),
+                 fix_labels=False)
     assert "ov_Decision" not in _shapes(out)
-    assert "repeats the title" in Presentation(str(out)).slides[0].notes_slide.notes_text_frame.text
+    assert any("repeats the title" in m for m in r["remarks"])          # a remark, not a speaker note (0.0.19)
     R.render([dict(base, decision="Decision today: approve a $33.6B offer and antitrust pre-filing by 1 Dec")],
              str(out), fix_labels=False)
     assert "ov_Decision" in _shapes(out)
@@ -186,10 +189,10 @@ def test_long_subtitle_keeps_one_line_under_a_two_line_title(tmp_path):
          "categories": ["Standalone", "Year 1", "Year 2"], "series": [{"name": "EPS", "values": [2.46, 2.42, 2.55]}]},
          "takeaway": {"text": "Year 2 is accretive"}, "bullets": ["Synergies reach 100% in year 2"], "source": SRC}
     out = tmp_path / "s.pptx"
-    R.render([s], str(out), fix_labels=False)
+    r = R.render([s], str(out), fix_labels=False)
     sub = _shapes(out)["role_subtitle_Subtitle"].text_frame.text
     assert sub == "Pro forma diluted EPS ($ per share)"
-    assert "subtitle shortened" in Presentation(str(out)).slides[0].notes_slide.notes_text_frame.text
+    assert any("subtitle shortened" in m for m in r["remarks"])
 
 
 # ------------------------------------------------------------------ build: substance, count, verdict

@@ -249,7 +249,7 @@ def test_the_check_details_name_what_failed_in_plain_words(tmp_path, monkeypatch
     finally:
         sm = checks.summary("run-d019")
         checks.end("run-d019")
-    assert sm["failed"] >= 1 and "all" not in sm["line"].split(":", 1)[1], sm
+    assert sm["failed"] >= 1 and not re.search(r"\ball \d+ checks passed", sm["line"]), sm
     assert any(d.startswith("Chart labels clear of the bars: Slide 1") and "Target 47%" in d for d in sm["details"]), \
         sm["details"]
     assert not any(re.match(r"P\d+:", d) for d in sm["details"]), sm["details"]

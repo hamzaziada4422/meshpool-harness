@@ -2291,7 +2291,7 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             if asked and res["rules"].get("P28") == "fail":   # the request's brand did not hold: fixed in this job,
                 done = RQ.enforce(str(pptx), asked)            # then checked again
                 if done:
-                    r.setdefault("errors", []).extend(f"brand fixed after rendering: {d}" for d in done)
+                    r.setdefault("remarks", []).extend(f"brand fixed after rendering: {d}" for d in done)
                     res = validate(str(pptx), rules, brief=qbrief, provenance=prov, storyline={"nodes": nodes},
                                    render=True, density=density)
             content_check(res, pptx)
