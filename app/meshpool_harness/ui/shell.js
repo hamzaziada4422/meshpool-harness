@@ -203,14 +203,14 @@ const NAV = {
   chat: [["new", "New", "plus"], ["search", "Search", "search"], ["projects", "Projects", "stack"], ["artifacts", "Artifacts", "cube"], ["scheduled", "Scheduled", "clock"], ["memory", "Memory", "brain"], ["work", "Your work", "star"], ["plugins", "Plugins", "plug"]],
   code: [["new", "New", "plus"], ["search", "Search", "search"], ["artifacts", "Artifacts", "cube"], ["plugins", "Plugins", "plug"], ["more", "More", "more"]],
 };
-// A chat's state as the sidebar draws it: running (brand dot), waiting for you (amber), finished and unread (blue).
+// A chat's state as the sidebar draws it: running (a pool blue dot that fades), waiting for you (amber), finished and unread (pool blue).
 const stateOf = t => t.state === "working" ? "run" : t.state === "waiting" ? "wait" : t.unread && !(S.cur?.id === t.id && S.view === "chat") ? "done" : "";
 const pinnedPj = () => S.pj.filter(p => p.pinned).sort((a, z) => (z.updated || 0) - (a.updated || 0));
 const chatList = () => S.threads.filter(t => !t.archived && !S.pendingDelete?.has(t.id)).sort((a, z) => (Number(z.updated) || 0) - (Number(a.updated) || 0));
 function navHTML() {
   const a = S.acct || {};
   return `<div class="nav">${NAV[S.mode === "code" ? "code" : "chat"].map(([id, label, ic]) => {
-    const on = id === "new" ? S.view === "chat" && !S.cur : S.view === "page" && S.page === id;
+    const on = id !== "new" && S.view === "page" && S.page === id;   // "New" is an action, never drawn as the current page
     const dot = id === "scheduled" && a.scheduled_unread ? `<i class="bdot" aria-label="Unread"></i>` : "";
     return `<button class="nv ${on ? "on" : ""}" data-nv="${id}" ${id === "new" ? `id="newThread"` : ""} ${id === "search" ? `id="navSearch" data-kbd="${MOD}K"` : ""} ${id === "new" ? `data-kbd="${MOD}N"` : ""}>${ICON[ic]}<span>${label}</span>${dot}${id === "artifacts" ? `<span class="nvplus" data-nv-add="artifacts" aria-hidden="true">${ICON.plus}</span>` : ""}</button>`;
   }).join("")}</div>`;
