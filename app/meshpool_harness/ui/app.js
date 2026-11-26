@@ -3019,7 +3019,7 @@ function setupStep(o, prev) {
   importPanel($("#oImport", card)).then(() => { const b = $("#impGo", card); if (b) b.hidden = true; });
   contextPanel($("#oContext", card));
   let found = {};
-  api("/api/import-chats").then(l => { found = l; const n = Object.values(l).filter(v => v.default).reduce((a, v) => a + v.found - v.imported, 0); if (n) { $("#oLocalTxt", card).textContent = `Copy my past chats from ${Object.values(l).filter(v => v.default).map(v => v.name).join(" and ")} into Meshpool (${n.toLocaleString()} chat${n === 1 ? "" : "s"})`; $("#oLocalRow", card).hidden = false; } }).catch(() => {});
+  api("/api/import-chats").then(l => { found = l; const n = Object.values(l).filter(v => v.default).reduce((a, v) => a + v.found - v.imported, 0); if (n) { $("#oLocalTxt", card).textContent = `Copy my past chats from ${Object.values(l).filter(v => v.default).map(v => v.name).join(" and ")} into meshpool (${n.toLocaleString()} chat${n === 1 ? "" : "s"})`; $("#oLocalRow", card).hidden = false; } }).catch(() => {});
   store("onbStep", 3);
   $("#oFinish", card).onclick = async () => {
     store("onbDone", 1); store("onbFull", 0); post("/api/settings", {values: {MH_ONBOARDED: "1"}}).catch(() => {});        // ticked items are imported on the way out; no extra click
