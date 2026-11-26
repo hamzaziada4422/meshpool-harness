@@ -1,5 +1,6 @@
 """delegate_task: Hermes-style sub-agents for Meshpool's own agent (agent/delegate.py). No network, no model: a fake
 model answers the chat and its sub-agents (told apart by the sub-agent block in their system prompt)."""
+import itertools
 import json
 import os
 import threading
@@ -252,10 +253,14 @@ def test_only_goals_that_are_nothing_but_a_placeholder_are_refused(_env):
 
 
 def test_stop_during_delegation_returns_the_finished_reports(monkeypatch, _env):
+    n = itertools.count()
+
     def child(b):
         if "slow" in _goal(b):
             time.sleep(0.2)
-            return _msg("", [("glob", {"pattern": "*"})])            # never finishes on its own
+            # never finishes on its own: a new pattern each step, so the repeat guards (which end a looping turn after
+            # ~14 refused steps, under 3 s on a fast runner) never fire before Stop does
+            return _msg("", [("glob", {"pattern": f"*{next(n)}*"})])
         return _msg("fast report: acme sells widgets")
 
     def parent(b):
