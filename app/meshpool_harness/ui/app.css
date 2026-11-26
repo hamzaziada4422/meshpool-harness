@@ -216,7 +216,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .notedet{display:inline}.notedet summary{display:inline;cursor:pointer;text-decoration:underline;text-underline-offset:3px}.notedet[open]>div{margin-top:4px;overflow-wrap:anywhere;font-size:var(--fs-xs)}
 .note.bad{color:var(--del)} .note.warn{color:var(--warn)}
 .turnfoot{display:flex;gap:8px;align-items:center;color:var(--ink-3);font-size:var(--fs-xs);font-variant-numeric:tabular-nums;margin:4px 0 20px}
-.turnfoot button{border:0;background:none;color:var(--ink-3);padding:2px 8px;border-radius:var(--r-s);font-size:var(--fs-xs);display:inline-flex;align-items:center;gap:4px}
+.turnfoot button{border:0;background:none;color:var(--ink-3);padding:2px 8px;border-radius:var(--r-s);font-size:var(--fs-xs);display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 .turnfoot button:hover{background:var(--hover);color:var(--ink)}
 .turnfoot svg{width:16px;height:16px}
 .turnfoot .stat{display:none}.app.steps .turnfoot .stat{display:inline}
@@ -360,6 +360,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .pbar{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line-2);flex:none;flex-wrap:nowrap}
 .pbar select,.pbar input{border:1px solid var(--line-3);border-radius:var(--r-s);padding:4px 8px;background:var(--surface);font-size:var(--fs-s)}
 .pbar select{flex:1;min-width:0}
+.pbar .btn{white-space:nowrap;flex:none}
 .pbar input{flex:1;min-width:0}
 .pnote{padding:16px;color:var(--ink-3);font-size:var(--fs-s)}
 .flist{list-style:none;margin:0;padding:4px 0;border-bottom:1px solid var(--line-2)}
@@ -576,7 +577,7 @@ table.t td.n,table.t th:not(:first-child){text-align:right}
 .onb .res:empty{display:none}
 .onb #oRes{margin:8px 0 4px}.onb details summary.linkbtn{margin-left:0}
 .scope{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-.scope.prov{grid-template-columns:repeat(2,1fr);margin:4px 0 12px}
+.scope.prov{grid-template-columns:minmax(0,1fr);margin:4px 0 12px}
 .scopeopt{display:flex;flex-direction:column;gap:4px;text-align:left;padding:12px;border:1px solid var(--line);border-radius:var(--r-m);background:var(--surface);color:var(--ink);font:inherit;cursor:pointer}
 .scopeopt b{font-size:var(--fs-s);font-weight:600}.scopeopt small{font-size:var(--fs-xs);color:var(--ink-3);line-height:1.35}
 .scopeopt:hover{background:var(--hover)}
@@ -851,7 +852,7 @@ details .keyrow input{flex:1;min-width:0;padding:8px 12px;border:1px solid var(-
 .hintline .working .el{flex:none}
 .composer-wrap{position:relative}
 .jumpdown{left:50%;right:auto;transform:translateX(-50%);bottom:calc(100% + 8px)}
-#pgSteps{min-height:136px}#pgFiles{min-height:52px}
+#pgSteps.live{min-height:136px}#pgFiles{min-height:52px}
 
 /* the plan, and quiet transcript notes */
 .stepl.plan li{display:flex;gap:8px;align-items:flex-start;padding:4px 0;color:var(--ink-3)}
@@ -996,7 +997,7 @@ details .keyrow input{flex:1;min-width:0;padding:8px 12px;border:1px solid var(-
 @media (max-width:640px){.rows2 li:has(.stact){flex-wrap:wrap}.rows2 li .stact{margin-left:0}}
 
 /* ---------- previews: the viewer pane, the cards under a reply, the Preview button on code ---------- */
-.pvp{grid-column:3;width:clamp(480px,46vw,920px);border-left:1px solid var(--line-2);background:var(--bg);display:flex;flex-direction:column;min-width:0;min-height:0;position:relative;outline:none}
+.pvp{grid-column:3;width:max(360px,min(clamp(480px,46vw,920px),calc(100vw - var(--sw,0px) - 560px)));border-left:1px solid var(--line-2);background:var(--bg);display:flex;flex-direction:column;min-width:0;min-height:0;position:relative;outline:none}
 .app.pvopen>.panel{display:none}
 .pvp:not([hidden]){animation:mp-fade .16s ease-out both}
 .pv-bar{display:flex;align-items:center;gap:8px;padding:8px 12px 8px 16px;border-bottom:1px solid var(--line-2);background:var(--surface);min-height:48px}

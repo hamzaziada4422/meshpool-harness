@@ -1978,7 +1978,8 @@ function setupPanelResize() {
   });
 }
 function fitPanel() {
-  const want = (!!S.panel || (typeof PVX !== "undefined" && PVX.open)) && innerWidth < 1180 && innerWidth > 760 && !S.keepSide;   // only where both cannot fit
+  const pv = typeof PVX !== "undefined" && PVX.open;   // the preview needs more room than the panel: 560px of chat beside it
+  const want = ((!!S.panel && innerWidth < 1180) || (pv && innerWidth < 1366)) && innerWidth > 760 && !S.keepSide;   // only where both cannot fit
   if ($("#app").classList.contains("autoside") !== want) { $("#app").classList.toggle("autoside", want); renderTop(); }
 }
 // Each drawing of the side panel gets a number. A tab that loads its data (Git and CI, Changes) checks it after the
@@ -2059,6 +2060,7 @@ function progressUpdate() {
   const stateHTML = busy ? `<span class="cwbusy">${v.state === "waiting" ? "Waiting for you" : "Working"}</span>` : v.state === "idle" && pr.items.length ? (threadLog().slice(-12).some(e => e.type === "interrupted") ? `<span class="cwstop">Stopped</span>` : `<span class="cwdone">Done</span>`) : "";
   if (hd._h !== stateHTML) { hd._h = stateHTML; hd.innerHTML = stateHTML; }
   const box = $("#pgSteps", body); let ol = $("ol", box);
+  if (box.classList.contains("live") !== busy) box.classList.toggle("live", busy);
   if (!pr.items.length) { ol?.remove(); setHTML(box, `<div class="pnote" style="padding:4px 0">${busy ? "Getting started..." : "No steps yet for this task."}</div>`); }
   else {
     if (!ol) { box.innerHTML = ""; box._h = null; ol = document.createElement("ol"); ol.className = "stepl"; box.appendChild(ol); }
