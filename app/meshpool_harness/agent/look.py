@@ -110,9 +110,23 @@ TAIL = ("The user's explicit choices win over these checks: if the request says 
         "nothing yet, leave it as it is. List what is wrong or missing in a few short lines, then fix it in the files. If nothing is wrong, say so in "
         "one line. Do not start servers or open other programs for this: meshpool looks again after your fix. End "
         "with your answer to the user as before: what you made and where it is.")
+SCOPE_RULE = ("Change only what the user's request asked for in this turn. Anything else you notice, in this file or in "
+              "any other, you leave as it is: do not fix it, and do not create another copy of a file to change it. If you "
+              "think it matters, say it in one line at the end of your answer and ask if they want it fixed.")
+SCOPE_RULE_ASKED = {
+    "convert": ("This turn only asked to convert or export an existing file. Do not edit the source file's content: not its "
+                "titles, its wording, its numbers or its design. Fix only the output itself, if it is missing, empty or "
+                "does not open."),
+    "read": "This turn only asked to read something or answer a question. Do not edit any file for it.",
+}
 HEAD = "[meshpool] "
 AGAIN = ("[meshpool] meshpool looked again after your fix. These problems are still there. Fix them, or say in one "
          "line why they are right as they are.")
+
+
+def request_scope(request: str) -> str:
+    from meshpool_harness.agent import lookreview as LR
+    return LR.request_scope(request)
 
 
 def _lead_again(msg: dict) -> None:
@@ -953,6 +967,10 @@ def message(kind: str, target: dict, res: dict, request: str, blind: bool, verdi
                  "reviewer looks again after your fix."]
     else:
         text += ["", rubric]
+    text += ["", SCOPE_RULE]
+    scope = request_scope(request)
+    if scope != "change":
+        text += ["", SCOPE_RULE_ASKED[scope]]
     text += ["", TAIL]
     body = "\n".join(text)
     if blind or not shots:
@@ -998,19 +1016,18 @@ def _phrases(res: dict) -> list:
 
 
 def summary_line(kind: str, st: dict) -> str:
-    """The closing line. With the reviewer's verdicts: "Checked: a customer on her phone ordering a birthday cake tried
-    it; fixed the order form error and low contrast; still open: no delivery date picker." Without: from the measured
-    findings before and after: "Checked: looked at the page at desktop and phone width; fixed low contrast on 'See
-    prices' and a console error; still open: keyboard focus is invisible on the nav links". When the reviewer was
-    meant to run and could not, it starts "Checked: measured only"."""
+    """The closing line. With the reviewer's verdicts: "Checked as a customer on her phone ordering a birthday cake:
+    fixed 2 things: the order form error and low contrast. Still open: no delivery date picker." (agent/lookreview.py
+    builds it from the verdicts' fields). Without: from the measured findings before and after: "Checked: looked at the
+    page at desktop and phone width; fixed low contrast on 'See prices' and a console error; still open: keyboard focus
+    is invisible on the nav links". When the reviewer was meant to run and could not, it starts "Checked: measured
+    only"."""
     last = st.get("last") or {}
     if st.get("evals"):
         from meshpool_harness.agent import lookreview as LR
         extra = _phrases(last) if st.get("measured_after") else []
-        line = LR.summary_line(kind, st, extra)
-        if st.get("measured_only"):
-            line = line[:-1] + "; the second review could not run, so that look was measured only."
-        return line
+        note = "The second review could not run, so that look was measured only." if st.get("measured_only") else ""
+        return LR.summary_line(kind, st, extra, note)
     if st.get("measured_only") and not last.get("error"):
         return "Checked: measured only (the reviewer could not run); " + _measured_line(kind, st)[len("Checked: "):]
     return _measured_line(kind, st)
@@ -1138,6 +1155,9 @@ def gate(agent, g: dict, final: str, *, render_web_fn=None, render_doc_fn=None, 
                 st["done"] = True
                 return False, final
         kind, target = st["kind"], st["target"]
+        if kind == "doc" and not st.get("rounds") and _conversion_only(target, request_of(agent, g)):
+            st["done"] = True                          # a PDF or picture made from a file: it exists and opens, that is all
+            return False, _close(agent, final, opens_line(target["files"]))
         if target.get("none"):
             st["done"] = True
             line = f"Checked: could not look at the page: {target['none']}."
@@ -1236,6 +1256,39 @@ def gate(agent, g: dict, final: str, *, render_web_fn=None, render_doc_fn=None, 
                 hold.close(wait=1.0)
             except Exception:  # noqa: BLE001
                 pass
+
+
+OUT_EXT = {".pdf"} | IMG_EXT
+_MAGIC = {".pdf": (b"%PDF",), ".png": (b"\x89PNG",), ".jpg": (b"\xff\xd8",), ".jpeg": (b"\xff\xd8",),
+          ".gif": (b"GIF8",), ".webp": (b"RIFF",), ".svg": (b"<", b"\xef\xbb\xbf<")}
+
+
+def _conversion_only(target: dict, request: str) -> bool:
+    """True for a conversion or export turn: the request only asked to turn an existing file into a PDF or a picture (no
+    change to its content), and everything the turn made is such an output. Its content is the source's, not this turn's
+    work: the look checks that the output exists and opens, and nothing more."""
+    files = [Path(f) for f in target.get("files") or []]
+    return bool(files) and all(f.suffix.lower() in OUT_EXT for f in files) and request_scope(request) == "convert"
+
+
+def output_opens(path) -> bool:
+    """A file that exists, is not empty and starts the way its own kind of file starts."""
+    try:
+        p = Path(path)
+        if p.stat().st_size <= 0:
+            return False
+        head = p.open("rb").read(8).lstrip() if p.suffix.lower() == ".svg" else p.open("rb").read(8)
+    except OSError:
+        return False
+    return any(head.startswith(m) for m in _MAGIC.get(Path(path).suffix.lower(), (b"",)))
+
+
+def opens_line(files) -> str:
+    names = [Path(f).name for f in files]
+    bad = [n for f, n in zip(files, names) if not output_opens(f)]
+    if bad:
+        return "Checked: " + _join(bad) + (" is empty or does not open." if len(bad) == 1 else " are empty or do not open.")
+    return "Checked: " + _join(names) + (" was made and opens." if len(names) == 1 else " were made and open.")
 
 
 def _close(agent, final: str, line: str) -> str:

@@ -45,6 +45,9 @@ Rules:
 - Write each problem as a short phrase that names what is wrong, in the words of the person, such as "no way to pick a delivery date" or "the order form shows an error after a valid email". Say where it is (a section, a button, a page).
 - severity: "blocker" means I cannot do what I came to do. "major" means I can, but it is confusing, broken or wrong. "minor" means it is rough or unfinished but does not stop me.
 - "pass" is true only when you can do the job and there is no blocker or major problem.
+- Judge only what the request asked for in this turn. A problem is something that stops the request from being met. If you notice something else, such as wording or design in a file the request did not ask to change, it is not a problem. Put it in "also_noticed" as one short line, or leave that empty.
+- When the request is to convert, export, read, summarize or answer a question about an existing file, the file's own content is not yours to judge. Judge only whether the result is what was asked: it opens, it is complete, and it matches the source. Never list the source's wording, titles, numbers or design as a problem.
+- When nothing needs changing, "problems" is [] and "pass" is true. Do not list complaints next to a pass.
 - Answer with one JSON object and nothing else."""
 
 PLAN_ASK = ("""Reply with this JSON object:
@@ -54,8 +57,8 @@ actions: up to %d things you want to see tried, that the pictures and the log do
 Examples: click the "Order now" button; fill the email field with "x" and submit it; open the menu at phone width. "submit" on its own fills the form with sample values and sends it. Use [] when you have seen enough. meshpool tries each one on a fresh copy of the page, in the same browser, and tells you what happened. You get this one chance.""" % MAX_ACTIONS)
 
 VERDICT_ASK = """Reply with this JSON object:
-{"persona": "%s", "can_do_the_job": true | false, "problems": [{"what": "<short>", "where": "<where>", "severity": "blocker" | "major" | "minor"}], "pass": true | false}
-Use [] for problems when there are none."""
+{"persona": "%s", "can_do_the_job": true | false, "problems": [{"what": "<short>", "where": "<where>", "severity": "blocker" | "major" | "minor"}], "pass": true | false, "also_noticed": "<one short line about something outside the request, or empty>"}
+Use [] for problems when there are none. "problems" holds only what the request asked for and did not get. Anything else goes in "also_noticed", never in "problems"."""
 
 DOC_NOTE = ("This is a file, not a page: you see its first pages as pictures and the text on them. You cannot click "
             "anything, so judge what a person reading or using the file would see.")
@@ -65,6 +68,46 @@ _BAD_PERSONA = re.compile(r"\b(?:who|that)\s+(?:asked|requested|wrote|commission
                           r"the person who)\b", re.I)
 _SELF_USE = re.compile(r"\b(?:for me|for myself|i(?:'ll| will| am going to| want to| need to) (?:use|read|run|open)|"
                        r"my own use|just for me|i will be the)\b", re.I)
+
+
+# ---------- what this turn asked for -------------------------------------------------------------------------------------
+_EDIT_VERBS = re.compile(r"\b(?:fix|change|update|edit|rewrite|reword|rephrase|add|remove|delete|replace|correct|improve|"
+                         r"redesign|restyle|translate|shorten|expand|insert|rename|tidy|clean(?:\s|-)?up|polish|"
+                         r"make\s+it|make\s+them|adjust|resize|reorder|sort|merge|split|build|create|write|draw|design|"
+                         r"generate|draft|compose)\b", re.I)
+_CONVERT = re.compile(r"\b(?:convert|export|save\s+(?:it\s+|this\s+|that\s+|them\s+)?as|turn\s+(?:it|this|that|them)\s+into|"
+                      r"print\s+(?:it\s+|this\s+)?to\s+pdf|(?:make|give|get|produce|need|want)\s+(?:me\s+)?(?:a|an|the|my)\s+"
+                      r"(?:\w+\s+){0,2}(?:pdf|png|jpe?g|image|picture|csv)\b|"
+                      r"(?:a|the)\s+(?:pdf|png|jpe?g|image|picture)\s+(?:of|from|version\s+of)|"
+                      r"\bto\s+(?:a\s+)?(?:pdf|png|jpe?g|csv)\b|\bas\s+(?:a|an)\s+(?:pdf|png|jpe?g|image)\b)", re.I)
+_SOURCE = re.compile(r"[\w\-. ()]+\.(?:docx?|pptx?|xlsx?|odt|ods|odp|rtf|html?|md|txt|csv|svg|png|jpe?g)\b|"
+                     r"\b(?:of|from|my|this|that|the|our|your)\s+(?:\w+\s+){0,2}(?:deck|slides?|presentation|document|"
+                     r"doc|spreadsheet|workbook|sheet|file|page)\b", re.I)
+_READ = re.compile(r"^\W*(?:please\s+)?(?:what|which|who|when|where|why|how|is|are|does|do|did|can\s+you\s+tell|tell\s+me|"
+                   r"summari[sz]e|read|explain|show\s+me|list|count|find|look\s+up|check\s+(?:if|whether)|compare)\b", re.I)
+
+
+def request_scope(request: str) -> str:
+    """What this turn asked for: "convert" (turn an existing file into a PDF, an image or another format, with no content
+    change asked), "read" (read, summarize or answer a question) or "change" (make or change something). Only a request
+    that names no edit decides "convert" or "read": when in doubt it is "change", the review that was always done."""
+    t = re.sub(r"\s+", " ", str(request or "")).strip()
+    if not t:
+        return "change"
+    if _CONVERT.search(t) and _SOURCE.search(t) and not _EDIT_VERBS.search(_CONVERT.sub(" ", t)):
+        return "convert"                              # an existing file, named or pointed at, and nothing to change in it
+    if _READ.search(t) and not _EDIT_VERBS.search(t):
+        return "read"
+    return "change"
+
+
+SCOPE_NOTE = {
+    "convert": ("This turn only asked to convert or export an existing file. Judge only whether the result is a faithful, "
+                "complete copy that opens. The source file's own wording, titles, numbers and design are not in scope: "
+                "never list them as problems."),
+    "read": ("This turn only asked to read something or answer a question. Nothing was to be edited. The source file's own "
+             "content is not in scope: never list it as a problem."),
+}
 
 
 def persona_fallback(kind: str) -> str:
@@ -136,16 +179,20 @@ def normalize_verdict(d: dict | None, request: str, kind: str, persona_given: st
     persona = persona_given or clean_persona(d.get("persona"), request, kind)[0]
     if not persona:
         return None
-    probs = []
+    probs, outside = [], []
     for p in d.get("problems") or []:
         if isinstance(p, str) and p.strip():
             p = {"what": p}
         if isinstance(p, dict):
             p = dict(p, what=p.get("what") or p.get("problem") or p.get("issue") or p.get("description") or "")
         if isinstance(p, dict) and str(p.get("what") or "").strip():
-            probs.append({"what": re.sub(r"\s+", " ", str(p["what"])).strip()[:240],
-                          "where": re.sub(r"\s+", " ", str(p.get("where") or "")).strip()[:120],
-                          "severity": _sev(p.get("severity"))})
+            q = {"what": re.sub(r"\s+", " ", str(p["what"])).strip()[:240],
+                 "where": re.sub(r"\s+", " ", str(p.get("where") or "")).strip()[:120],
+                 "severity": _sev(p.get("severity"))}
+            if p.get("in_request") is False or p.get("outside_request") is True:
+                outside.append(q["what"])                  # the reviewer itself said it is outside the request
+            else:
+                probs.append(q)
     probs.sort(key=lambda p: SEVERITIES.index(p["severity"]))
     probs = probs[:MAX_PROBLEMS]
     can = d.get("can_do_the_job")
@@ -153,7 +200,29 @@ def normalize_verdict(d: dict | None, request: str, kind: str, persona_given: st
     if any(p["severity"] == "blocker" for p in probs):
         can = False
     ok = bool(d.get("pass")) and can and not any(p["severity"] in ("blocker", "major") for p in probs)
-    return {"persona": persona, "can_do_the_job": can, "problems": probs, "pass": ok}
+    also = _also_line(d.get("also_noticed") or d.get("also")) or _also_line(outside)
+    return settle({"persona": persona, "can_do_the_job": can, "problems": probs, "pass": ok, "also": also})
+
+
+def settle(v: dict) -> dict:
+    """A verdict that needs no change carries no fix list. No problems is a pass. A pass keeps no problems: the first of
+    them becomes the one line "also" offers to the user, and none of them goes to the builder."""
+    if not v["problems"]:
+        return dict(v, **{"pass": True, "can_do_the_job": True})
+    if v["pass"]:
+        seen = next((p for p in v["problems"] if not unsure(p)), None)      # "could not confirm" is not something noticed
+        return dict(v, problems=[], also=v.get("also") or (_also_line(seen["what"]) if seen else ""))
+    return v
+
+
+def _also_line(x) -> str:
+    """One short line about something outside the request, or "". A list or a non-string is read tolerantly."""
+    if isinstance(x, (list, tuple)):
+        x = next((i for i in x if isinstance(i, str) and i.strip()), "")
+    if not isinstance(x, str):
+        return ""
+    t = re.sub(r"\s+", " ", x).strip().strip('"').rstrip(".")
+    return "" if re.fullmatch(r"(?:none|nothing|n/?a|no|-+)?", t, re.I) else t[:160]
 
 
 def apply_choices_to_verdict(v: dict, request: str) -> dict:
@@ -169,7 +238,7 @@ def apply_choices_to_verdict(v: dict, request: str) -> dict:
     out = dict(v, problems=left)
     out["pass"] = out["pass"] or not any(p["severity"] in ("blocker", "major") for p in left)
     out["can_do_the_job"] = out["can_do_the_job"] or not any(p["severity"] == "blocker" for p in left)
-    return out
+    return settle(out)
 
 
 def plan_actions(raw) -> list:
@@ -602,6 +671,8 @@ def _evidence(kind: str, target: dict, res: dict, request: str, blind: bool, fin
             else f"{target['label']}, drawn as pictures of its first pages")
     t = ["The request that led to this being made:", request or "(not available)", "", f"What was made: {what}.", ""]
     t += _files_line(target)
+    if SCOPE_NOTE.get(request_scope(request)):
+        t += [SCOPE_NOTE[request_scope(request)], ""]
     data = ["What meshpool measured:" if finding_lines else "What meshpool measured: no problems found by the checks."]
     data += ["- " + ln for ln in finding_lines[:30]]
     if steps:
@@ -792,7 +863,7 @@ def unsure(p: dict) -> bool:
     return bool(_UNSURE.search(re.sub(r"\s+", " ", str(p.get("what") or "")).strip()))
 
 
-def _phrase(p: dict) -> str:
+def _phrase(p: dict, limit: int = 80) -> str:
     """The problem as a short clean phrase for the Checked line: one clause, never "could not find" or an "instead of"
     tail, never ending in the middle of a word or on a small word."""
     t = re.sub(r"\s+", " ", str(p["what"])).strip().rstrip(".")
@@ -809,8 +880,8 @@ def _phrase(p: dict) -> str:
                r"(?:width|screen size|size)|\d+\s*px(?:\s+width)?)$", "", t, flags=re.I)
     t = re.sub(r"\s+(?:on the page|anywhere on the page)$", "", t, flags=re.I).strip(" ,;:")
     t = t[:1].lower() + t[1:] if t[:2] != t[:2].upper() else t
-    if len(t) > 80:
-        t = t[:80].rsplit(" ", 1)[0]                                    # never in the middle of a word
+    if len(t) > limit:
+        t = t[:limit].rsplit(" ", 1)[0]                                    # never in the middle of a word
     words = t.split(" ")
     while len(words) > 1 and words[-1].lower().strip(",;:") in _STOPWORDS:
         words.pop()                                                     # never on "an", "the", "of"
@@ -826,38 +897,183 @@ def _join(xs: list) -> str:
     return L._join(xs)
 
 
-def summary_line(kind: str, st: dict, extra: list | None = None) -> str:
-    """The closing line from the reviewer's first and last verdicts: "Checked: a customer on her phone ordering a
-    birthday cake tried it; fixed the order form error and low contrast; still open: no delivery date picker."
 
-    Something is "still open" only when the last look shows it: the last verdict lists it (a "could not confirm" is
-    not evidence), or `extra`, the last measurement, has it. When the builder changed the page after the only verdict
-    and no later verdict could be had, its problems read "changed after the check", not "still open"."""
+# ---------- the line the user reads: a fixed template over structured data -----------------------------------------------
+# "Checked as <short persona>: fixed <N> things: <item> and <item>. Nothing left open." Every part is built from the
+# verdicts' own fields. A part that would be malformed (an empty persona, an item that ends on a small word) is left
+# out, never printed as a fragment.
+_DANGLING = _STOPWORDS | {"it's", "there", "has", "have", "had", "can", "could", "would", "should", "does", "do",
+                          "did", "will", "only", "just", "very", "also", "about", "over", "under", "per", "via", "like",
+                          "such", "some", "any", "each", "every", "both", "e.g", "i.e", "etc", "my", "your", "our",
+                          "their", "her", "his", "she", "he", "they", "we", "i", "you", "nor", "yet", "because",
+                          "which", "who", "whose", "where", "what", "how", "up", "out", "off", "between", "through",
+                          "across", "against", "without", "within"}
+_NOT_VERBS = {"morning", "evening", "during", "something", "anything", "nothing", "everything", "ceiling", "wedding",
+              "building", "meeting", "booking", "clothing", "pricing", "shopping", "housing", "training"}
+PERSONA_WORDS = 8
+_NOT_VERBS |= {"thing", "king", "ring", "spring", "string", "wing", "bring"}
+
+
+def _gerund(w: str) -> bool:
+    return bool(re.fullmatch(r"[a-z]{2,}ing", w.lower())) and w.lower() not in _NOT_VERBS
+ITEM_CHARS = 60
+
+
+def _last_word(t: str) -> str:
+    return re.sub(r"[^\w']+$", "", t.rsplit(" ", 1)[-1]).lower()
+
+
+def _fine(t: str) -> bool:
+    """True when t is a whole phrase: not empty, no doubled spaces, no orphan punctuation, no open quote or bracket, and
+    not ending on an article, a preposition, a conjunction or a helper word."""
+    if not t or len(t) < 3 or t != t.strip() or "  " in t or "…" in t or ".." in t:
+        return False
+    if re.match(r"^[\W_]", t) and not re.match(r"^['\"(]\w", t):
+        return False                                           # starts on punctuation
+    if re.search(r"[,;:\-(\[/\\]$", t) or re.search(r"\s[,;:.)]|[,;:]{2,}|\(\s|\s\)", t):
+        return False                                           # an orphan comma, colon, dash or bracket
+    for o, c in (("(", ")"), ("[", "]")):
+        if t.count(o) != t.count(c):
+            return False
+    if t.count('"') % 2:
+        return False
+    if len(re.findall(r"(?<!\w)'|'(?!\w)", t)) % 2:
+        return False                                           # an open single quote (an apostrophe inside a word is fine)
+    if t.lower().rstrip(".!?").endswith(("so it's", "so it is", "e.g", "i.e", "etc")):
+        return False
+    return _last_word(t) not in _DANGLING
+
+
+def short_persona(p: str, words: int = PERSONA_WORDS) -> str:
+    """The persona in at most `words` words, cut at a word and never on a small word or a clause opener ("ordering a").
+    "" when nothing whole is left: the line then says "Checked:" alone."""
+    t = re.sub(r"\s*\([^()]*\)", "", re.sub(r"\s+", " ", str(p or ""))).strip(" ,;:.\"'")
+    t = re.split(r"[;:]\s|,\s|\s[-–]\s", t, 1)[0]                # the first clause
+    if t.split(" ")[0] in ("A", "An", "The", "Someone", "Anyone", "One", "Her", "His", "Their"):
+        t = t[:1].lower() + t[1:]
+    ws = t.split(" ") if t else []
+    cut = len(ws) > words
+    if cut:                                                    # who they are, not what they are doing: cut before "reading ..."
+        g = next((i for i in range(2, len(ws)) if _gerund(ws[i])), 0)
+        if g and g <= words:
+            ws = ws[:g]
+    ws = ws[:words]
+    popped = False
+    while ws and (_last_word(ws[-1]) in _DANGLING
+                  or ((cut or popped) and len(ws) > 3 and _gerund(_last_word(ws[-1])))):
+        ws.pop()
+        popped = True                                           # never on "a", "the", "of", or a verb that opens a clause
+    t = " ".join(ws).strip(" ,;:")
+    return t if _fine(t) else ""
+
+
+_QUOTED = re.compile(r"""(?:(?<![\w'])'[^'\n]{1,160}'(?!\w))|(?:"[^"\n]{1,160}")|(?:‘[^’\n]{1,160}’)|(?:“[^”\n]{1,160}”)""")
+_SPLIT = re.compile(r";\s|:\s|,\s|\s[-–—]\s|\s\(|\s(?:so|because|which|but)\s",
+                    re.I)
+_DROP_QUOTE = re.compile(r"(?<!\bsays )(?<!\breads )(?<!\bshows )(?<!\bwith )(?<!\bas )(?<!\bis )(?<!\bare )"
+                         r"(?:%s)(?=\s+(?:is|are|was|were|appears?|looks?|reads?|repeats?|has|does)\b)" % _QUOTED.pattern)
+
+
+_HARD_STOP = re.compile(r";\s|:\s|\s[-\u2013\u2014]\s")
+_EXTRA_CUT = re.compile(r"\s+(?:on|at|in) the (?:page|screen|phone|desktop|mobile)\b|\s+at (?:phone|desktop|mobile|narrow|\d+px)\b|\swhen\s",
+                        re.I)
+_MISSING = re.compile(r"^(?:i\s+)?(?:could\s?n[o']t|can(?:no|')?t|unable to|did\s?n[o']t)\s+(?:find|see|locate)\s+"
+                      r"(?:the\s+|any\s+|an?\s+)?", re.I)
+
+
+def _item(p: dict, limit: int = ITEM_CHARS) -> str:
+    """One problem as its own whole phrase of at most `limit` characters: the reviewer's own words, cut only at a break
+    (a comma, a colon, "so", "because", "on the page"...) that is not inside a quote, as long as the part before it reads
+    whole. The longest such part wins. "" when none fits: a phrase is never cut mid-way."""
+    w = _MISSING.sub("missing ", re.sub(r"\s+", " ", str(p.get("what") or "")).strip().rstrip("."))
+    for cand in (w, _DROP_QUOTE.sub("", w)):
+        cand = re.sub(r"\s+", " ", cand).strip(" ,;:")
+        spans = [m.span() for m in _QUOTED.finditer(cand)]
+        cuts = {m.start() for rx in (_SPLIT, _EXTRA_CUT) for m in rx.finditer(cand)
+                if not any(a < m.start() < b for a, b in spans)} | {len(cand)}
+        hard = [m.start() for m in _HARD_STOP.finditer(cand) if not any(a < m.start() < b for a, b in spans)]
+        for c in sorted((x for x in cuts if not hard or x <= hard[0]), reverse=True):   # what follows a colon only explains
+            t = cand[:c].strip(" ,;:")
+            if t[:1].isupper() and not t[:2].isupper():
+                t = t[:1].lower() + t[1:]
+            if 8 <= len(t) <= limit and _fine(t):
+                return t
+    return ""
+
+
+def _items(ps: list, n: int = 2, limit: int = ITEM_CHARS) -> list:
+    out: list = []
+    for p in ps:
+        t = _item(p, limit) if isinstance(p, dict) else (str(p) if _fine(str(p)) and len(str(p)) <= limit else "")
+        if t and t.lower() not in [x.lower() for x in out]:
+            out.append(t)
+        if len(out) >= n:
+            break
+    return out
+
+
+def _things(n: int) -> str:
+    return f"{n} thing" + ("" if n == 1 else "s")
+
+
+def _also_offer(st: dict) -> str:
+    """"I also noticed <one thing outside the request>, want me to fix it?" for the user, or "". It is never sent to the
+    builder."""
+    for v in reversed(st.get("evals") or []):
+        t = _also_line(v.get("also"))
+        if not t:
+            continue
+        t = t[:1].lower() + t[1:] if t[:2] != t[:2].upper() else t
+        if len(t) > 110:
+            t = t[:110].rsplit(" ", 1)[0]
+        t = t.strip(" ,;:")
+        if _fine(t):
+            return f"I also noticed {t}, want me to fix it?"
+    return ""
+
+
+def summary_line(kind: str, st: dict, extra: list | None = None, note: str = "") -> str:
+    """The closing line, from the verdicts' fields and a fixed template:
+        "Checked as a customer on her phone ordering a birthday cake: fixed 2 things: the order form error and low
+        contrast. Still open: no delivery date picker."
+    The persona is at most 8 words and each item one whole phrase of at most 60 characters. Something is "still open" only
+    when the last look shows it (a "could not confirm" is not evidence), or `extra`, the last measurement, has it. When the
+    builder changed the page after the only verdict and no later verdict could be had, it says "changed ... after the
+    check". What the reviewer noticed outside the request follows as one offer on its own line."""
     evals = st.get("evals") or []
-    persona = st.get("persona") or persona_fallback(kind)
-    verb = "tried it" if kind == "web" else "looked it over"
+    persona = short_persona(st.get("persona") or persona_fallback(kind))
     first, last = evals[0], evals[-1]
     known = [p for p in first["problems"] if not unsure(p)]
     seen_last = [p for p in last["problems"] if not unsure(p)]
-    changed: list = []
+    changed = False
     if len(evals) > 1:
         fixed = [p for p in known if not any(_same(p, q) for q in seen_last)]
         left = seen_last
     elif st.get("changed"):                       # fixed after this verdict, then no reviewer saw it again
-        fixed, left, changed = [], [], known
+        fixed, left, changed = known, [], True
     else:
         fixed, left = [], seen_last
-    left_p = list(dict.fromkeys(p for p in (_phrase(x) for x in left) if p))
-    measured = [x for x in (extra or []) if not any(_words(x) & _words(q) for q in left_p)]
-    bits = []
-    if fixed:
-        bits.append("fixed " + _join(list(dict.fromkeys(p for p in (_phrase(x) for x in fixed) if p))))
+    left_items = _items(left, 1) if left else []
+    measured = [x for x in (extra or []) if not any(_words(x) & _words(q) for q in left_items)]
+    n_open = len(left) + len(measured)
+    open_items = left_items or _items(measured, 1)
+    head = f"Checked as {persona}" if persona else "Checked"
+    listed = _items(fixed, 2)
+    tail = (": " + "; ".join(listed)) if listed else ""
     if changed:
-        bits.append("changed after the check: " + _join(list(dict.fromkeys(p for p in (_phrase(x) for x in changed)
-                                                                               if p))))
-    if left_p or measured:
-        bits.append(("minor things left: " if last["pass"] and not measured else "still open: ")
-                    + _join(list(dict.fromkeys(left_p + measured))))
-    if not bits:
-        bits.append("no problems found")
-    return f"Checked: {persona} {verb}; " + "; ".join(bits) + "."
+        body = f"changed {_things(len(fixed))} after the check, not looked at again{tail}" if fixed else "found nothing to fix"
+    elif fixed:
+        body = f"fixed {_things(len(fixed))}{tail}"
+    else:
+        body = "fixed nothing" if n_open else "found nothing to fix"
+    parts = [f"{head}: {body}."]
+    if n_open:
+        what = (open_items[0] + (f" (and {n_open - 1} more)" if n_open > 1 else "")) if open_items else _things(n_open)
+        parts.append(f"Still open: {what}.")
+    elif fixed and not changed:
+        parts.append("Nothing left open.")
+    if note:
+        parts.append(note)
+    line = " ".join(parts)
+    offer = _also_offer(st)
+    return line + ("\n\n" + offer if offer else "")
