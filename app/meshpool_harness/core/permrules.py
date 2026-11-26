@@ -355,6 +355,9 @@ NETWORK = re.compile(
     r"|\bdocker\s+(?:pull|push|login|build|run)\b|https?://", re.I)
 
 
+_PATHLIKE = re.compile(r"(?<![\w.:/-])(~[\w.~/-]*|/[\w.~/-]*|\.\./[\w.~/-]*)")
+
+
 def _home() -> Path | None:
     try:
         return Path(os.path.realpath(os.path.expanduser("~")))
@@ -371,25 +374,27 @@ def sandbox_auto_ok(cmd: str, root, cwd=None) -> bool:
         return False
     if cwd is not None and not _inside(str(cwd), root):
         return False
-    toks = _tokens(cmd.replace("&&", " ").replace("||", " ").replace("|", " ").replace(";", " "))
-    if toks is None:
-        return False
+    # paths from the words of the command (when it parses) and from anywhere in its text, heredoc bodies and
+    # `python -c` code included: '/home/u/.ssh/id_rsa' inside a script is a path like any other
+    toks = _tokens(cmd.replace("&&", " ").replace("||", " ").replace("|", " ").replace(";", " ")) or []
+    # a lone "/" found in the text is division in code (a / b), not the root folder; as a word (find /) it counts
+    cands = [v for a in toks for v in _arg_paths(a)] + [v for v in _PATHLIKE.findall(cmd) if v != "/"]
     home, temps = _home(), _temp_roots()
-    for a in toks:
-        for v in _arg_paths(a):
-            if not (v.startswith(("/", "~", "..", "./")) or "/" in v or "\\" in v):
-                continue                              # a word, not a path
-            if _inside(v, root, cwd):
-                continue
-            try:
-                rp = Path(os.path.realpath(os.path.expanduser(v) if os.path.isabs(os.path.expanduser(v))
-                                           else os.path.join(str(cwd or root), v)))
-            except (OSError, ValueError):
-                return False
-            if home is not None and (rp == home or home in rp.parents):
-                return False                          # the user's own files outside the project (checked first: a
-            if any(t == rp or t in rp.parents for t in temps):      # home folder can sit under a temp folder)
-                continue
+    for v in cands:
+        v = v.strip("'\"")
+        if not (v.startswith(("/", "~", "..", "./")) or "/" in v or "\\" in v):
+            continue                                  # a word, not a path
+        if _inside(v, root, cwd):
+            continue
+        try:
+            rp = Path(os.path.realpath(os.path.expanduser(v) if os.path.isabs(os.path.expanduser(v))
+                                       else os.path.join(str(cwd or root), v)))
+        except (OSError, ValueError):
+            return False
+        # the user's own files outside the project, or a folder above them (find /, ls /home). Checked before the
+        # temp folders: a home folder can sit under one.
+        if home is not None and (rp == home or home in rp.parents or rp in home.parents):
+            return False
     return True
 
 

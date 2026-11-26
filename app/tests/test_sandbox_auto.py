@@ -133,3 +133,33 @@ def test_paths_in_the_users_home_outside_the_project_still_ask(tmp_path, monkeyp
     assert not PR.sandbox_auto_ok("cat ~/Documents/tax.pdf", proj)
     assert not PR.sandbox_auto_ok("python3 x.py ../other/secret.txt", proj)
     assert not PR.sandbox_auto_ok("ls", proj, cwd=str(tmp_path))          # a workdir outside the project
+
+
+def test_the_persona_traces_run_without_a_question_and_the_risky_ones_still_ask(tmp_path, monkeypatch):
+    """The commands that asked in the 0.0.18 persona runs (data analyst: 17, consultant: 6), all in their folder."""
+    proj = _home_project(tmp_path, monkeypatch)
+    p = str(proj)
+    ordinary = [
+        "ls -la && wc -l sales_2024_2025.csv && head -30 sales_2024_2025.csv",
+        f"cd {p} && python3 -c \"import csv; rows=list(csv.DictReader(open('sales_2024_2025.csv'))); "
+        "print(sum(float(r['amount']) / 1000 for r in rows))\"",
+        f"cd {p} && python3 << 'EOF'\nimport pandas as pd\ndf = pd.read_csv('sales_2024_2025.csv')\n"
+        "df.to_csv('sales_clean.csv')\nimport matplotlib\nmatplotlib.use('Agg')\nEOF",
+        "python3 -c \"import matplotlib; print(matplotlib.__version__)\"",
+        "cat revenue_by_store.csv | head -12 && python3 -c \"print(1)\"",
+        "ls -la && file Northfield-Digital-Report-2026.pdf",
+        "which pdftotext pdfinfo python3; python3 -c \"import pypdf\"",
+        "pdftotext -layout X.pdf out.txt && wc -l out.txt && cat out.txt",
+        "for i in $(seq 1 20); do pdftotext -layout -f $i -l $i X.pdf - | grep -v '^$' ; done",
+        "pdftotext -layout X.pdf - | sed -n '418,425p;833,842p'",
+        "mkdir -p /tmp/scratch-x && cat > /tmp/scratch-x/make_memo.py <<'EOF'\nprint('x')\nEOF",
+        "python3 -I - <<'EOF'\nfrom docx import Document\ndoc = Document(\"Halden-memo.docx\")\ndoc.save(\"Halden-memo.docx\")\nEOF",
+    ]
+    for c in ordinary:
+        assert PR.sandbox_auto_ok(c, proj), c
+    risky = [f"pdftotext {tmp_path}/home/Reports/Q3-board-pack.pdf -",
+             "ls -la ~/Reports; find / -iname '*Q3*board*pack*.pdf'",
+             "python3 -c \"print(open('" + str(tmp_path / "home" / ".ssh" / "id_rsa") + "').read())\"",
+             f"ls {tmp_path}"]                                # a folder above the user's home
+    for c in risky:
+        assert not PR.sandbox_auto_ok(c, proj), c

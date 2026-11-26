@@ -122,6 +122,8 @@ def test_the_office_token_reaches_only_the_panels_own_chats(monkeypatch):
     h.command, h.path = "POST", "/api/agent"
     h.wfile = io.BytesIO()
     h.send_response = h.send_header = h.end_headers = lambda *a, **k: None
+    from meshpool_harness.ui import office_pair as OP
+    h._op = OP.session_of(tok)              # what _gate set on this request: the chat belongs to this panel (0.0.18)
     h._send(200, {"id": "panel-chat", "state": "idle"})
     assert "panel-chat" in S.OFFICE_CHATS
     assert handler("GET", "/api/agent/panel-chat", tok)._gate()
