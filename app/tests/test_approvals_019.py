@@ -407,3 +407,10 @@ def test_8_the_step_row_of_a_shell_patch_is_plain():
     assert core._summary("shell", {"command": ["bash", "-lc", script.split("\npython")[0]]}) == \
         "Edit ledgerly/report.py, ledgerly/cli.py"
     assert core._summary("exec_command", {"cmd": "ls -la"}) == "ls -la"          # other commands stay as written
+
+
+def test_a_delete_card_names_only_what_the_delete_removes():
+    """Cosmetic from the approvals work: a sed before an rm made the card read "Delete report.py, sample.csv?"."""
+    from meshpool_harness.agent import core as K
+    t = K._plain_command_title("sed -i 's/a/b/' report.py && rm sample.csv")
+    assert t == "Delete sample.csv?", t

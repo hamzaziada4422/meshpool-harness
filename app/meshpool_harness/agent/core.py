@@ -704,7 +704,10 @@ def _plain_command_title(script: str) -> str:
     if PR.NETWORK.search(s):
         return "Use the internet? (" + s.strip().splitlines()[0][:80] + ")"
     if PR.DELETES.search(s):
-        return ("Delete " + ", ".join(files) + "?") if files else f"Delete files?{more}"
+        # name only what the deleting steps remove: "sed -i … report.py && rm sample.csv" deletes sample.csv, not both
+        dsegs = [x for x in steps if PR.DELETES.search(x)] or [s]
+        gone = list(dict.fromkeys(m.group(0).rsplit("/", 1)[-1] for x in dsegs for m in _FILE_WORD.finditer(x)))[:3]
+        return ("Delete " + ", ".join(gone) + "?") if gone else f"Delete files?{more}"
     lang = next((_PROGRAMS[p] for p in progs if p in _PROGRAMS), "")
     if lang:
         return f"Run a {lang} step{on}?" if not more else f"Run a {lang} step{on}{more}?"
