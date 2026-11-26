@@ -97,6 +97,25 @@ async function checkThis010(btn) {
   btn.disabled = false;
 }
 
+/* ---------- the receipt line: time, cost, model ----------
+   Drawn from the receipt's own fields the way receipts.py line() writes it now, so a chat saved by an older version
+   reads the same: "3 min 45 s · <$0.01 · DeepSeek V4.1 Flash, chosen for documents". The saved text is the fallback. */
+function receiptBits010(ev) {
+  if (!("secs" in ev) && !("model" in ev)) return String(ev.text || "").split(" · ");
+  const bits = [], unp = Number(ev.unpriced_calls) || 0, tok = (Number(ev.tokens_in) || 0) + (Number(ev.tokens_out) || 0);
+  if (ev.secs != null) bits.push(fmtDur(ev.secs));
+  if (ev.cost != null) bits.push(fmtCost(ev.cost) + (unp ? ` + ${unp} unpriced call${unp === 1 ? "" : "s"}` : ""));
+  else if (unp) bits.push("cost not known (unpriced model)");
+  else if (tok) bits.push(`${tok >= 1000 ? (tok / 1000).toFixed(1) + "k" : tok} tokens, cost not measured`);
+  const rv = String(ev.text || "").split(" · ").find(b => b.startsWith("checked independently: "));
+  if (rv) bits.push(rv);
+  const own = /^meshpool/i.test(String(ev.harness || ev.harness_name || ""));
+  const who = [own ? "" : lowBrand(ev.harness_name || ""), ev.model ? modelName(ev.model) : ""].filter(Boolean).join(" on ");
+  const why = String(ev.text || "").match(/, (chosen for [^·]+|[^,·]+)$/);
+  if (who) bits.push(who + (why && ev.reason ? ", " + why[1].trim() : ""));
+  return bits;
+}
+
 /* ---------- events after a turn ---------- */
 const seen010 = new Set();
 function foot010() { return S.cur?.lastFoot || null; }
@@ -118,7 +137,7 @@ function ev010(ev) {
   }
   if (ev.type === "task_receipt") {
     // "cost not known (unpriced model)" on every reply said nothing new: it moves to the line's tooltip.
-    const bits = String(ev.text || "").split(" · "), unk = bits.some(b => /^cost not known/.test(b));
+    const bits = receiptBits010(ev), unk = bits.some(b => /^cost not known/.test(b));
     const tip = [unk ? "The cost is not known: this model has no price list." : "", ev.reason || ""].filter(Boolean).join(" ");
     under010(`<span title="${esc(tip)}">${esc(bits.filter(b => !/^cost not known/.test(b)).join(" · "))}</span>`, "rcpt010"); return;
   }
