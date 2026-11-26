@@ -4544,7 +4544,7 @@ class Agent:
                             final = done
                             break
                     from meshpool_harness.core import textcalls as _TCM
-                    if _TCM.malformed_reply(final):
+                    if not getattr(self, "reports_to_agent", False) and _TCM.malformed_reply(final):
                         # Priya, round 3: the answer was a raw shell command, a link, a machine path and "30000".
                         # Not an answer: it goes from the chat, the model is asked once for words, then the turn ends
                         # on what it made.
