@@ -188,8 +188,9 @@ def _p24(n, sl, out):
                 full = [ri for ri in body if tb.cell(ri, ci).text.strip()]
                 if head and not any(tb.cell(ri, ci).text.strip() for ri in range(1, len(rows))):
                     empty.append(f"the table column '{head[:30]}' is empty")
-                elif head and ci and full and len(full) < len(body):   # a column filled in some rows, with
-                    gone = [str(ri) for ri in body if ri not in full]                        # holes in it
+                elif head and ci and len(full) * 2 >= len(body) and len(full) < len(body):   # a column filled in
+                    # most rows, with holes (an actual-year column blank under its forecast rows is by design)
+                    gone = [str(ri) for ri in body if ri not in full]
                     empty.append(f"the table column '{head[:30]}' has empty cells in row"
                                  f"{'s' if len(gone) > 1 else ''} {', '.join(gone)}")
     for sh in sl.placeholders:                            # an empty placeholder ("Click to add text")

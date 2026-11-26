@@ -63,6 +63,7 @@ def append(target: str, source: str, out: str) -> int:
             else:                                                # media, tags, SmartArt, ...: copied under fresh names
                 ids[rel.rId] = _copy_part(rel.target_part, new.part, rel.reltype, pkg, copied)
         tree = new.shapes._spTree
+        keep_title = _has_title(new.slide_layout)               # the title stays the slide's title placeholder
         for el in s.shapes._spTree.iterchildren():
             if el.tag.endswith("}nvGrpSpPr") or el.tag.endswith("}grpSpPr"):
                 continue
@@ -72,7 +73,10 @@ def append(target: str, source: str, out: str) -> int:
                 _scale(el, f, dx, dy)
             _renumber(el, base + added + 1)
             pin(el)
-            _unplaceholder(el)
+            P_ = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+            is_title = any(ph.get("type") in ("title", "ctrTitle") for ph in el.iter(f"{P_}ph"))
+            _unplaceholder(el, keep_title and is_title)
+            keep_title = keep_title and not is_title             # one title per slide
             for node in el.iter():
                 for k, v in list(node.attrib.items()):
                     if k.startswith(_R) and v in ids:
@@ -188,16 +192,30 @@ def _inherit(el, slide):
                         r.set(k, d.get(k))
 
 
-def _unplaceholder(el):
+def _unplaceholder(el, keep_title: bool = False):
     """A copied placeholder would take the target layout's formatting (a centred, middle-anchored title over the
-    rule): when it has its own position it becomes a plain shape and keeps the look it was drawn with."""
+    rule): when it has its own position it becomes a plain shape and keeps the look it was drawn with. The title
+    stays the slide's title placeholder when the target layout has one (keep_title): its own position and the
+    formatting _inherit wrote onto it win over the layout's, and outline view, accessibility tools and the checks
+    (P7, "a filled title placeholder") still find it. Daniel, round 2: slide 7, added to his deck, had its title as a
+    plain shape named "Title 1"."""
     P = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
     for nv in el.iter(f"{P}nvPr"):
         ph = nv.find(f"{P}ph")
         sp = nv.getparent().getparent() if nv.getparent() is not None else None
         has_xfrm = sp is not None and any(c.tag.endswith("}xfrm") for c in sp.iter())
+        if ph is not None and keep_title and ph.get("type") in ("title", "ctrTitle"):
+            for k in [k for k in ph.attrib if k not in ("type",)]:
+                del ph.attrib[k]                             # the target layout's title, not the source's index
+            continue
         if ph is not None and has_xfrm:
             nv.remove(ph)
+
+
+def _has_title(layout) -> bool:
+    P = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+    return any((sp._element.find(f".//{P}ph") is not None and sp._element.find(f".//{P}ph").get("type")
+                in ("title", "ctrTitle")) for sp in layout.placeholders)
 
 
 def _renumber(el, n: int):

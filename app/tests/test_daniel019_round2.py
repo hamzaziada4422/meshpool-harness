@@ -128,7 +128,7 @@ def test_empty_cells_in_a_filled_table_column_fail_the_checks(tmp_path):
     s = {"archetype": "table_focus", "title": "Pilot-first pays back in 19 months against 31 for plant-wide",
          "table": {"columns": ["Approach", "Payback (months)", "Main trade-off"],
                    "rows": [["Pilot line", "19", "Data issues found early"], ["Vendor service", "24", "Lock-in"],
-                            ["Plant-wide", "31", "Data problems found late"]]},
+                            ["Plant-wide", "31", "Data problems found late"], ["Do nothing", "0", "Downtime stays"]]},
          "takeaway": {"text": "Start with one line"}, "bullets": [{"text": "Pilot first pays back fastest"}],
          "source": {"text": "Northfield Research, Industry Benchmark Report 2025"}}
     out = tmp_path / "t.pptx"
@@ -136,13 +136,13 @@ def test_empty_cells_in_a_filled_table_column_fail_the_checks(tmp_path):
     assert not [k for k in _fails(out) if k[0] == "P24"]
     prs = Presentation(str(out))
     tb = next(sh for sh in prs.slides[0].shapes if getattr(sh, "has_table", False) and sh.has_table).table
-    for ri in (2, 3):                                     # the column keeps its first value, the rest go blank
+    for ri in (3, 4):                                     # rows 1 and 2 keep their text, 3 and 4 go blank (slide 6)
         for p in tb.cell(ri, 2).text_frame.paragraphs:
             for r in p.runs:
                 r.text = ""
     prs.save(str(out))
     msgs = " ".join(m for (r, _), v in _fails(out).items() if r == "P24" for m in v)
-    assert "'Main trade-off' has empty cells in rows 2, 3" in msgs, msgs
+    assert "'Main trade-off' has empty cells in rows 3, 4" in msgs, msgs
 
 
 # ---------------------------------------------------------------------------------------------------- item 2
@@ -306,6 +306,30 @@ def test_slides_added_to_a_deck_are_saved_into_that_deck(tmp_path, quiet_build):
     assert len(Presentation(str(deck)).slides) == 8
     assert not list(tmp_path.glob("*(updated*")), list(tmp_path.iterdir())
     assert "changed in place" in res["answer"] and "Undo" in res["answer"]
+
+
+def test_a_slide_added_to_a_deck_keeps_its_title_in_the_title_placeholder(tmp_path, quiet_build):
+    """Slide 7 of Daniel's deck, added by the forge, had its title as a plain shape "Title 1": the checks reported
+    "no filled title placeholder" (P7)."""
+    from pptx.enum.shapes import PP_PLACEHOLDER
+    old = Presentation(str(DECK)).slides[6]
+    assert old.shapes.title is None                                   # the round 2 deck, as delivered
+    deck = tmp_path / "Ridgeway_PdM_Client_Deck.pptx"
+    shutil.copy(DECK, deck)
+    (tmp_path / "work").mkdir()
+    _add_one(deck, tmp_path)
+    prs = Presentation(str(deck))
+    new = prs.slides[5]                                                # "after slide 5"
+    t = new.shapes.title
+    assert t is not None and t.is_placeholder, [sh.name for sh in new.shapes]
+    assert t.placeholder_format.type == PP_PLACEHOLDER.TITLE
+    assert t.text_frame.text.startswith("A five-plant rollout turns positive in year 1")
+    assert len([sh for sh in new.placeholders if sh.placeholder_format.type == PP_PLACEHOLDER.TITLE]) == 1
+    assert t.left is not None and t.width is not None and t.top is not None      # its own geometry
+    from engines.forge.validate_pptx import validate
+    res = validate(str(deck), render=False)
+    assert not [f for f in res["failures"] if f["status"] == "fail" and f.get("slide") == 6 and
+                "title" in f["message"].lower() and "placeholder" in f["message"].lower()], res["failures"]
 
 
 def test_a_copy_only_for_a_lock_file_or_an_explicit_save_as(tmp_path, quiet_build):
