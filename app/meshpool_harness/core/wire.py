@@ -333,8 +333,9 @@ def sse_to_chat(lines, *, on_text=None, on_reasoning=None, data_idle=None, check
                 err = ev["error"]
                 msg = err.get("message") or json.dumps(err)[:300] if isinstance(err, dict) else str(err)[:300]
                 code = err.get("code") or err.get("status") if isinstance(err, dict) else None
-                code = int(code) if str(code).isdigit() and 400 <= int(code) < 600 else 502
-                raise RuntimeError(f"meshpool HTTP {code}: {msg}")
+                stated = str(code).isdigit() and 400 <= int(code) < 600
+                code = int(code) if stated else 502          # no status given: retried like a server error
+                raise RuntimeError(f"meshpool HTTP {code}: {msg}" + ("" if stated else " (an error event in the reply stream)"))
             rid = ev.get("id") or rid
             if ev.get("usage"):
                 usage = ev["usage"]
@@ -401,7 +402,8 @@ def sse_to_chat(lines, *, on_text=None, on_reasoning=None, data_idle=None, check
             raise RuntimeError(f"meshpool HTTP 200 but not a model reply: {str(msg)[:200]}")   # a 200: not transient
         raise RuntimeError("meshpool HTTP 200 but not a model reply: " + "\n".join(plain)[:200])
     if finish is None and not done:                      # closed cleanly mid-reply: do not pass a cut-off reply on
-        raise RuntimeError("HTTP 0: the stream ended before the reply was complete")
+        raise RuntimeError("HTTP 0: the stream ended before the reply was complete"
+                           + ("" if events or plain else " (the reply was empty)"))
     msg = {"role": "assistant", "content": "".join(content) or None}
     if reasoning:
         msg["reasoning_content"] = "".join(reasoning)

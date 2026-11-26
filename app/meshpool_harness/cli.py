@@ -114,7 +114,7 @@ def _run_request(request: str, files: list[str], out: str, engine: str | None = 
             res = _engine(name).solve(task, workdir=wd, task_id=f"{task_id}-{name}", client=client, **kw)
         except Exception as e:   # one clean message instead of a traceback (kept, short, for whoever debugs it)
             import traceback
-            res = {"ok": False, "answer": "", "reason": f"{type(e).__name__}: {e}", "artifacts": [],
+            res = {"ok": False, "answer": "", "reason": _engine_reason(name, e, model), "artifacts": [],
                    "trace": traceback.format_exc()[-3000:]}
         finally:
             os.environ.clear()
@@ -803,6 +803,21 @@ def _main(argv=None):
     return 0 if res["ok"] else 1
 
 
+def _engine_reason(name: str, e: BaseException, model: str | None = None) -> str:
+    """Why an engine stopped, for the person who asked: a failed model call in plain words (where, the service's own
+    words, what to do), a file problem as errors.plain says it, anything else with what it said."""
+    from meshpool_harness.core import errtext as ET
+    text = str(e)
+    if ET.parse(text)[0] is not None:                  # a model call that failed (core/wire.py, core/chatgpt.py)
+        from meshpool_harness import providers as PV
+        prov, bare = PV.split(model or os.environ.get("MH_MODEL") or "")
+        from urllib.parse import urlparse
+        host = "ChatGPT" if prov == "chatgpt" else urlparse(PV.key_base()).netloc
+        return ET.explain(text, host=host, model=bare, key="" if prov == "chatgpt" else PV.key())
+    from meshpool_harness.errors import os_error
+    return os_error(e) or f"The {name} engine stopped on an error: {text or type(e).__name__}."
+
+
 def ping(model: str | None = None, base: str = "", key: str = "", kind: str = "", api_version: str = "") -> dict:
     """One tiny model call with the current settings (or `model`, and a `base` URL and `key` not saved yet), always
     to the key endpoint (never the ChatGPT sign-in). Returns {ok, detail, model, seconds, endpoint}."""
@@ -841,8 +856,12 @@ def ping(model: str | None = None, base: str = "", key: str = "", kind: str = ""
                 "model": model, "seconds": round(time.time() - t0, 1), "endpoint": led.base_url}
     except Exception as e:
         import re
-        m_st = re.match(r"^meshpool HTTP (\d+): ", str(e))
-        msg = re.sub(r"^meshpool HTTP \d+: ", "", str(e))     # wire.py already explains the status in plain words
+        m_st = re.match(r"^meshpool HTTP (\d+)\b", str(e))
+        from meshpool_harness.core import errtext as ET
+        _base = (led.base_url if led else base) or ""
+        from urllib.parse import urlparse as _up
+        msg = ET.explain(str(e), host=_up(_base).netloc if _base else "", model=model or "",
+                         key=(led.api_key if led else key) or "")   # the reply's own words, never a raw body
         return {"ok": False, "detail": msg[:400], "status": int(m_st.group(1)) if m_st else 0,
                 "model": model or "", "seconds": round(time.time() - t0, 1),
                 "endpoint": led.base_url if led else (base or __import__("meshpool_harness.providers", fromlist=["x"]).key_base())}
@@ -863,7 +882,11 @@ def _check(live: bool) -> int:
     for_ = "" if kn == "Meshpool" else f" for {kn}"        # the key belongs to the endpoint above, not to Meshpool
     print(f"API key       : {'set' + for_ + ' (ends ' + key[-4:] + ')' if key else 'not set' + for_}")
     names = [_safe(lambda p=p: PV.name(p), p) for p, ok in ready.items() if ok]
-    print(f"Ready to use  : {', '.join(names) if names else 'nothing yet (run: meshpool setup)'}")
+    r = ping() if live and usable else None          # the live test first: "ready" is never claimed when it fails
+    if r is not None and not r["ok"] and names:
+        print("Ready to use  : not yet: the live test below failed")
+    else:
+        print(f"Ready to use  : {', '.join(names) if names else 'nothing yet (run: meshpool setup)'}")
     print()
     for row in _config.system_check():
         detail = row["detail"]
@@ -880,8 +903,9 @@ def _check(live: bool) -> int:
         if not usable:
             print("Live test skipped: no API key or signed-in subscription.")
             return 1
-        r = ping()
-        print(("Live test OK: " if r["ok"] else "Live test FAILED: ") + r["detail"] + f" ({r['seconds']} s)")
+        from meshpool_harness.core import errtext as ET
+        print(("Live test OK: " if r["ok"] else "Live test FAILED: ") + ET.for_terminal(r["detail"])
+              + f" ({r['seconds']} s)")
         return 0 if r["ok"] else 1
     return 0 if usable else 1
 

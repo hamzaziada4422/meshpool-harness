@@ -142,8 +142,9 @@ def _messages_from_events(events: list) -> list:
 
 
 def _redact(text: str) -> str:
+    from meshpool_harness.errors import tool_card    # a reopened chat's cards read like the live ones
     from meshpool_harness.redact import redact
-    return redact(text)
+    return redact(tool_card(text))
 
 
 def events_from_messages(messages: list) -> list:

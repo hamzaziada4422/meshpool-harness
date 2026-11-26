@@ -461,12 +461,13 @@ def _msg(body, key: str = "") -> tuple[str, str]:
     if not isinstance(d, dict):
         return "", ""
     e = d.get("error", d)
+    from meshpool_harness.core.errtext import _from_json      # {"detail": [{"loc", "msg"}]} as words, not a repr
     if isinstance(e, str):
         return redact_key(e, key)[:200], ""
     if isinstance(e, dict):
-        return (redact_key(str(e.get("message") or e.get("detail") or ""), key)[:200],
+        return (redact_key(_from_json({k: e.get(k) for k in ("message", "detail")}), key)[:200],
                 str(e.get("code") or e.get("type") or ""))
-    return redact_key(str(d.get("message") or d.get("detail") or ""), key)[:200], str(d.get("code") or "")
+    return redact_key(_from_json({k: d.get(k) for k in ("message", "detail")}), key)[:200], str(d.get("code") or "")
 
 
 def redact_key(text: str, key: str) -> str:
@@ -543,8 +544,12 @@ def explain(status: int, body=None, *, kind: str = "generic", host: str = "", mo
         out = [f"{who} had a problem on its side ({status or 'no answer'}). Try again in a moment."]
     elif 300 <= status < 400 and "did not send your key" in msg:
         return msg                               # a refused redirect (core.http): names the host and what to set
+    elif status == 405:
+        out = [f"{who} does not take chat requests at this address ({status})."]
+        out.append("Check the base address: it usually ends in /v1.")
     else:
-        out = [f"{who} answered {status}."]
+        out = [f"{who} refused the request ({status})."]
+        out.append("Check the model name and this endpoint's settings, or pick another model, then try again.")
     if msg and status not in (401, 429, 402) and status < 500:
         out.append(f"(The service said: {msg})")
     return " ".join(out)

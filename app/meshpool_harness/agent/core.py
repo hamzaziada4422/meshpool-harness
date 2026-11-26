@@ -3443,6 +3443,10 @@ class Agent:
             elif isinstance(e, _ModelFailing):       # every retry got a server error: waiting a moment will not help
                 msg = ("The model keeps failing: it returned a server error on every try. Everything done so far is "
                        "kept. Switch to another model and send \"continue\", or try this one again later.")
+            elif re.search(r"sent an unreadable reply|sent no usable reply|stream ended before the reply was complete",
+                           msg):                     # it answered, but not with a reply: not a network problem
+                from meshpool_harness.core import errtext as ET
+                msg = ET.explain(raw, **self._error_where())
             elif re.search(r"HTTP 0|connection problem|timed out|urlopen error", msg, re.I) and \
                     "answers small requests" not in msg and self._recover_off():
                 msg = (f"Couldn't reach the model endpoint ({self._endpoint_host()}). Check the network and the "
@@ -3461,8 +3465,14 @@ class Agent:
             if re.search(r"HTTP 0|connection problem|timed out|urlopen error|HTTP 5\d\d", raw, re.I):
                 _lighten(self.messages)                # the next message starts lighter, on a fresh route
                 self.rotate_route()
-            if msg != raw:
-                msg += f" ({_clip(raw)})"              # the detail, for support and the command line
+            where = self._error_where()
+            from meshpool_harness.core import errtext as ET
+            if msg == raw:                             # no plain sentence above: say what the reply itself said
+                msg = ET.explain(raw, **where)
+            elif msg.startswith(where["host"]) or msg.startswith("The reply from"):
+                pass                                   # errtext already said it all, with where it happened
+            else:                                      # the detail, for support and the command line: the status,
+                msg += f" ({_clip(ET.detail(raw, **where), 220)})"   # where, and the service's words, never a raw body
             rid = getattr(self, "last_request_id", "")
             if rid and rid not in msg:
                 msg += f" Request id: {rid}."
@@ -4764,7 +4774,8 @@ class Agent:
                 else:
                     h = GW.health(base, key, body["model"])
                     if h.is_down() and not self._await_endpoint(h, base, key, body["model"]):
-                        raise _EndpointDown("HTTP 0: the model endpoint did not come back")
+                        why = getattr(h, "last_why", "")         # what its last probe said (DNS, refused ...)
+                        raise _EndpointDown("HTTP 0: the model endpoint did not come back" + (f" ({why})" if why else ""))
                     slot = h.acquire(self._check_stop, self.emit)
                     tok: dict = {}                         # the worker gives the slot back when the request ends
                     resp, streamed = self._wait(self._post_slotted, h, slot, base, key, body, stream, tok,
@@ -4807,6 +4818,10 @@ class Agent:
                 if type(e).__name__ == "NotSignedIn":     # no sign-in: retrying cannot help
                     raise
                 kind = classify_error(msg)                 # the same reading as LiveClient.chat (core/client.py)
+                from meshpool_harness.core import errtext as _ETP
+                if kind == "fatal" and _ETP.permanent_200(msg):
+                    raise                                  # a 200 error body naming an unknown model or a refused key:
+                    #                                        a resend gets the same answer, so say it now
                 if kind == "tls":                          # an untrusted certificate: no probe, no waiting (S-11)
                     raise RuntimeError(self._tls_text(base, msg))
                 fix = self._diagnose(kind, msg, body)
@@ -5309,6 +5324,17 @@ class Agent:
             return mins is not None and float(mins) <= 0
         except ValueError:
             return False
+
+    def _error_where(self) -> dict:
+        """host, model and key for core/errtext: where a failed call went, and the key to keep out of the message."""
+        try:
+            from meshpool_harness import providers as PV
+            prov, bare = PV.split(self.current_model())
+            if prov == "chatgpt":
+                return {"host": "ChatGPT", "model": bare, "key": ""}
+            return {"host": self._endpoint_host(), "model": bare, "key": PV.endpoint(prov)[1] or ""}
+        except Exception:  # noqa: BLE001 - a message must still go out
+            return {"host": self._endpoint_host(), "model": "", "key": ""}
 
     def _endpoint_host(self) -> str:
         try:
@@ -6164,8 +6190,9 @@ class Agent:
                 pass
         self._open_calls.pop(cid, None)
         from meshpool_harness.redact import redact
+        from meshpool_harness.errors import tool_card    # the card: a raw exception in plain words (model text as is)
         self.emit({"type": "tool_end", "id": cid, "name": name, "ok": ok, "denied": denied,   # shown: secrets hidden
-                   "output": redact(out[:6000]) + ("\n..." if len(out) > 6000 else "")})
+                   "output": redact(tool_card(out[:6000])) + ("\n..." if len(out) > 6000 else "")})
         return out
 
     # ---------- questions (ask_user) -----------------------------------------------------------------------------
