@@ -1151,7 +1151,7 @@ function ingest(cur, v) {
     if (ev.type === "tool_start") { const raw = ev.name || ""; const nm = ev.mcp ? raw.split("__").slice(2).join("__") : raw; ev.label = TOOL_LABEL[nm] || nm.replace(/_/g, " "); }
     cur.q.push(ev); got++;
   }
-  if (got) wakeFrame();
+  if (got) { wakeFrame(); cur.lastEvAt = Date.now(); $("#waitNote")?.remove(); }
   if (cur.stage || document.hidden) { flushQ(cur); }          // history, or a hidden tab (no animation frames): apply at once
   if (cur.stage) commitStage(cur);
   else if (got) foldHistory($("#col"));                       // a long run keeps its column short too (cheap until FOLD_AT)
@@ -1314,6 +1314,24 @@ function workTick(cur) {
   const pd = cur.working ? planData() : null;
   if (cur.working && !waiting) setWorking(pd ? planLine(pd) : cur.live ? "Writing" : String(cur.activity || "Working").split(" ").slice(0, 3).join(" ").replace(/[:,]$/, ""), Math.round((Date.now() - (cur.since || Date.now())) / 1000));
   else if (cur.view?.state !== "starting" && Date.now() > (S.sendHold || 0)) setWorking(null);
+  // A long wait on the model (no reply text, no step running) gets a line in the chat after 20 s, with Stop. It is
+  // drawn by this same tick, so it costs no timer of its own.
+  const steps = Object.values(cur.tools || {}).some(d => !d.dataset.done);
+  const quiet = cur.working && !waiting && !cur.live && !cur.stage && !steps ? Math.round((Date.now() - Math.max(cur.since || 0, cur.lastEvAt || 0)) / 1000) : 0;
+  waitNote(quiet >= 20 ? quiet : 0);
+}
+function waitNote(secs) {
+  let n = $("#waitNote");
+  if (!secs) { n?.remove(); return; }
+  const t = secs < 60 ? `${secs} s` : `${Math.floor(secs / 60)} min`;
+  if (!n) {
+    const col = $("#col"); if (!col) return;
+    n = document.createElement("div"); n.id = "waitNote"; n.className = "note waitnote"; n.setAttribute("role", "status");
+    n.innerHTML = `<span class="dot run"></span><span class="wn"></span><button class="linkbtn" type="button">Stop</button>`;
+    $("button", n).onclick = () => stopNow();
+    col.appendChild(n); scrollConv();
+  }
+  setTxt($(".wn", n), `Still waiting for the model (${t}). Some answers take a while; you can stop it any time.`);
 }
 // ---- scrolling: follow the end while the reader is at the end; never pull them back once they scroll up
 function scrollConv(force) { const c = $("#conv"); if (!c) return; if (force) S.pinned = true; if (S.pinned) { c.scrollTop = c.scrollHeight; $(".jumpdown")?.setAttribute("hidden", ""); } }
@@ -1493,6 +1511,10 @@ function stepSummary(name, ev) {
   catch (e) { return ""; }
 }
 const TOOL_LABEL = {bash: "Ran", read_file: "Read", write_file: "Wrote", edit: "Edited", grep: "Searched", glob: "Listed", fetch_url: "Fetched", web_search: "Searched the web", web_research: "Researched", mcp__meshpool_web__web_search: "Searched the web", mcp__meshpool_web__web_fetch: "Read", mcp__meshpool_web__web_research: "Researched", mcp__meshpool_assistant__memory_save: "Saved to memory", mcp__meshpool_assistant__run_subtasks: "Ran sub-agents", run_subtasks: "Ran sub-agents", delegate_task: "Handed off to sub-agents", mcp__meshpool_assistant__schedule_task: "Scheduled", todo_write: "Updated the plan", use_skill: "Loaded skill", office_task: "Office"};
+// The command tools of Code chats (Codex-style) by what they do, not by their names ("exec_command", "apply_patch").
+Object.assign(TOOL_RUN, {exec_command: "Running a command", shell: "Running a command", terminal: "Running a command", apply_patch: "Editing files", write: "Writing", read: "Reading", write_stdin: "Answering a command", view_image: "Looking at an image"});
+Object.assign(TOOL_LABEL, {exec_command: "Ran a command", shell: "Ran a command", terminal: "Ran a command", apply_patch: "Edited files", write: "Wrote", read: "Read", write_stdin: "Answered a command", view_image: "Looked at an image"});
+Object.assign(TOOL_BASE, {exec_command: "Run a command", shell: "Run a command", terminal: "Run a command", apply_patch: "Edit files"});
 // A reopened chat is built in a detached column (cur.stage), where isConnected is false for every node: a check on it
 // started a new "1 step" group for each step and left each group spinning. inCol asks the column being built instead.
 const inCol = n => !!n && (n.isConnected || !!S.cur?.stage?.contains(n));
@@ -1506,7 +1528,7 @@ function workGroup() {
 }
 function bumpGroup(g, done) {
   const n = $$(".tool", g).length; const fails = $$(".tool .st.bad", g).length;
-  $(".wl", g).textContent = `${n} step${n === 1 ? "" : "s"}${fails ? `, ${fails} failed` : ""}`;
+  $(".wl", g).textContent = `${n} step${n === 1 ? "" : "s"}${fails ? `, ${fails} did not work` : ""}`;
   if (done) { g.dataset.done = "1"; g.open = !!S.steps || !!$(".appr:not(.done)", g); const el = $(".gel", g); if (el) el.textContent = ""; $(".gdots", g)?.remove(); }
 }
 function closeGroup() { const g = S.cur.group; if (inCol(g)) bumpGroup(g, true); S.cur.group = null; }

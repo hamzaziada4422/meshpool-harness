@@ -618,14 +618,20 @@ def test_a_project_page_has_no_empty_card_and_the_breadcrumb_keeps_the_project(a
 
 
 # ---------------------------------------------------------------------------------------------------- UX-24
-def test_nothing_shows_under_the_onboarding_start_button(page):
-    """UX-24: on onboarding's last step the sticky Start button left a 24 px band under it where the next card scrolled
-    into view (the button looked to sit on the card). The band is gone: the bottom row of the screen is the button's."""
+def test_the_onboarding_button_never_covers_the_steps_fields(page):
+    """UX-24: onboarding's Continue and Start buttons were sticky at the bottom of the screen: at 1024x700 the button
+    covered the API key field of step 1, and on step 3 it sat on "3. Add to memory" (1366 and 1024 px), with a 24 px
+    band under it where the next card showed. The button now closes the card in the flow: whatever the scroll, it
+    covers none of the step's fields."""
+    page.set_viewport_size({"width": 1024, "height": 700})
     got = page.evaluate("""() => { const o = document.createElement('div'); o.className = 'onb'; o.id = 'onbTest';
-        o.innerHTML = `<div class="onb-card"><div style="height:1500px">top</div><div class="onb-go"><button class="bigbtn">Start</button></div><section class="card" style="height:600px;border:1px solid red">next card</section></div>`;
-        document.body.appendChild(o); o.scrollTop = 300;
-        const el = document.elementFromPoint(innerWidth / 2, innerHeight - 3); const r = !!(el && el.closest('.onb-go')); o.remove(); return r; }""")
-    assert got, "the bottom of the screen shows the content under the Start button"
+        o.innerHTML = `<div class="onb-card"><h1>Step</h1><input id="kf" style="display:block;width:100%;height:36px;margin-top:520px"><section class="card" style="height:400px">3. Add to memory</section><div class="onb-go"><button class="bigbtn">Start</button></div></div>`;
+        document.body.appendChild(o); const hits = [];
+        for (const top of [0, 200, 400, 10000]) { o.scrollTop = top; const b = o.querySelector('.onb-go').getBoundingClientRect();
+          for (const el of o.querySelectorAll('#kf, .card')) { const r = el.getBoundingClientRect(); const vis = Math.min(r.bottom, innerHeight) - Math.max(r.top, 0) > 0;
+            if (vis && b.top < innerHeight && b.left < r.right && b.right > r.left && b.top < r.bottom && b.bottom > r.top) hits.push([top, el.id || el.className]); } }
+        o.remove(); return hits; }""")
+    assert got == [], got
 
 
 # ---------------------------------------------------------------------------------------------------- UX-26
@@ -812,3 +818,70 @@ def test_the_context_window_line_in_settings_reads_plainly():
         os.environ.pop("MESHPOOL_CONTEXT_WINDOW", None)
     assert row["detail"].startswith("Up to 1,000k tokens per chat (your setting)"), row
     assert "summarized above" not in row["detail"], row
+
+
+# ================================================== persona: first-time user (UX-37 to UX-40)
+# ---------------------------------------------------------------------------------------------------- UX-37
+def test_a_long_wait_on_the_model_says_so_in_the_chat_with_stop(page):
+    """UX-37: while the model took minutes to answer, the only sign was a small "Thinking 247s" under the box. After
+    20 s with no reply text and no step running, the chat says "Still waiting for the model (1 min)" with a Stop
+    button; the line goes as soon as anything arrives, and never shows while a step runs. It is drawn by the existing
+    tick: no timer of its own."""
+    _fake_chat(page)
+    got = page.evaluate("""() => { const cur = S.cur; applyEv({type: 'user', text: 'go', i: 0});
+        cur.view.state = 'working'; cur.working = true; cur.since = Date.now() - 75000; cur.lastEvAt = 0;
+        workTick(cur); const n = document.querySelector('#waitNote');
+        const first = n ? [n.textContent, !!n.querySelector('button')] : null;
+        applyEv({type: 'tool_start', id: 'x', name: 'bash', summary: 'sleep 99', i: 1}); workTick(cur);
+        const duringStep = !!document.querySelector('#waitNote');
+        applyEv({type: 'tool_end', id: 'x', ok: true, output: 'ok', i: 2}); cur.lastEvAt = Date.now() - 30000; workTick(cur);
+        const back = !!document.querySelector('#waitNote');
+        ingest(cur, {epoch: cur.epoch, total: 4, state: 'working', events: [{type: 'text_delta', text: 'Hello', i: 3}]});
+        return {first, duringStep, back, gone: !document.querySelector('#waitNote')}; }""")
+    assert got["first"] and "Still waiting for the model (1 min)" in got["first"][0] and got["first"][1], got
+    assert not got["duringStep"] and got["back"] and got["gone"], got
+    assert page.errors == [], page.errors
+
+
+# ---------------------------------------------------------------------------------------------------- UX-38
+@pytest.mark.parametrize("q,group,page_", [("folder", "privacy", "permissions"), ("approval", "privacy", "permissions"),
+                                           ("permission", "privacy", "permissions"), ("ask before", "privacy", "permissions")])
+def test_settings_search_finds_what_a_page_holds(page, q, group, page_):
+    """UX-38: Settings search matched page names only: "folder", "approval" and "permission" found nothing, and "ask"
+    found "Scheduled tasks" (t-ask-s). Each page now carries its own words, a query matches word starts, and Enter
+    opens the matching page itself (Privacy > Permissions)."""
+    page.evaluate("() => openSettings()")
+    page.wait_for_selector("#mnavq")
+    page.fill("#mnavq", q)
+    shown = page.evaluate("() => [...document.querySelectorAll('.mnav [data-g]:not([hidden])')].map(b => b.dataset.g)")
+    assert group in shown and "scheduled" not in shown, shown
+    page.press("#mnavq", "Enter")
+    page.wait_for_timeout(700)
+    assert page.evaluate("() => document.querySelector('#subtabs [aria-selected=true]')?.dataset.sub") == page_
+    assert page.errors == [], page.errors
+
+
+# ---------------------------------------------------------------------------------------------------- UX-39
+def test_a_long_file_name_on_a_card_ends_in_an_ellipsis(page):
+    """UX-39: a file card under a reply cut a long name at its edge with no ellipsis (the name box grew to the text's
+    width inside a card that hides overflow). The name now fits the card and ends in an ellipsis."""
+    got = page.evaluate("""() => { const b = document.createElement('div'); b.className = 'pvcards';
+        b.innerHTML = `<button class="pvcard"><span class="pvth"></span><span class="pvcm"><b>Q3_Quarterly_Review_final_version_for_the_board.pptx</b><small>Deck · .pptx</small></span></button>`;
+        document.querySelector('#col').appendChild(b); const n = b.querySelector('.pvcm b'), card = b.querySelector('.pvcard').getBoundingClientRect(), r = n.getBoundingClientRect();
+        const out = {inside: r.right <= card.right + 0.5, ell: getComputedStyle(n).textOverflow, cut: n.scrollWidth > n.clientWidth}; b.remove(); return out; }""")
+    assert got["inside"] and got["ell"] == "ellipsis" and got["cut"], got
+
+
+# ---------------------------------------------------------------------------------------------------- UX-40
+def test_code_steps_are_named_in_words(page):
+    """UX-40: a Code chat's steps showed their tool names ("exec command", "apply patch"), and a group with a failed
+    step read "1 step, 1 failed". Steps now read "Ran a command" and "Edited files", and the group "1 step, 1 did not
+    work". Display only: the tools themselves are unchanged."""
+    _fake_chat(page)
+    got = page.evaluate("""() => { applyEv({type: 'user', text: 'go', i: 0});
+        applyEv({type: 'tool_start', id: 'a', name: 'exec_command', summary: 'ls', i: 1}); applyEv({type: 'tool_end', id: 'a', ok: true, output: 'x', i: 2});
+        applyEv({type: 'tool_start', id: 'b', name: 'apply_patch', summary: 'a.py', i: 3}); applyEv({type: 'tool_end', id: 'b', ok: false, output: '[exit 1] no', i: 4});
+        return [document.querySelector('#tool-a .tn').textContent, document.querySelector('#tool-b .tn').textContent, document.querySelector('#col .work .wl').textContent]; }""")
+    assert got[0] == "Ran a command" and got[1] == "Edit files", got
+    assert got[2] == "2 steps, 1 did not work", got
+    assert page.errors == [], page.errors
