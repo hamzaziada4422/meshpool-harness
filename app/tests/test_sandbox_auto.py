@@ -194,3 +194,26 @@ def test_always_in_this_folder_is_not_offered_in_a_chat_with_no_folder():
     assert 'ev.folder !== false && ["edit", "bash", "mcp"].includes(ev.kind)' in js
     api = (Path(core.__file__).resolve().parents[1] / "ui" / "agent_api.py").read_text()
     assert '"folder": folder' in api and "is_scratch(self.workdir)" in api
+
+
+def test_a_file_open_in_office_asks_before_a_command_or_edit_replaces_it(tmp_path, monkeypatch):
+    """Persona run (Sara): `cp new.pptx Q3_Quarterly_Review.pptx` replaced the deck she had open in PowerPoint, with no
+    question once ordinary work stopped asking. Writing over an open Office file asks again; reading it does not."""
+    proj = _home_project(tmp_path, monkeypatch)
+    for n in ("Q3_Quarterly_Review.pptx", "new.pptx", "budget.xlsx", "notes.docx"):
+        (proj / n).write_bytes(b"x")
+    a, asked = _agent(proj, True, monkeypatch)
+    assert a._permit("bash", {"command": "cp new.pptx Q3_Quarterly_Review.pptx"})[0]          # not open: no question
+    (proj / "~$Q3_Quarterly_Review.pptx").write_bytes(b"")                                   # PowerPoint has it open
+    (proj / ".~lock.budget.xlsx#").write_bytes(b"")                                          # LibreOffice has it open
+    (proj / "~$tes.docx").write_bytes(b"")                                                   # Word's short form
+    for c in ("cp new.pptx Q3_Quarterly_Review.pptx", "mv new.pptx ./Q3_Quarterly_Review.pptx",
+              "python3 -c \"from openpyxl import load_workbook as L; w=L('budget.xlsx'); w.save('budget.xlsx')\"",
+              "python3 fix.py > notes.docx"):
+        assert not a._permit("bash", {"command": c})[0], c
+    for c in ("python3 -c \"from pptx import Presentation as P; print(len(P('Q3_Quarterly_Review.pptx').slides))\"",
+              "unzip -l budget.xlsx", "cp new.pptx copy.pptx"):
+        assert a._permit("bash", {"command": c})[0], c
+    assert not a._permit("write_file", {"path": "notes.docx", "content": "changed"})[0]
+    assert a._permit("write_file", {"path": "other.md", "content": "x"})[0]
+    assert PR.office_lock(proj / "Q3_Quarterly_Review.pptx") and not PR.office_lock(proj / "new.pptx")

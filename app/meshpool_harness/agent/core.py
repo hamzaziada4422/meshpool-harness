@@ -5909,14 +5909,17 @@ class Agent:
             # Still asked: destructive commands, the network and installs, paths elsewhere in the user's home,
             # meshpool's own rule files (the guard above), and anything outside the folder.
             if name in ("bash", "shell", "exec_command") and cmds and wd_ok and not _destructive(args, self.root) \
-                    and all(PR.sandbox_auto_ok(c, self.root, wd) for c in cmds):
+                    and all(PR.sandbox_auto_ok(c, self.root, wd) and not PR.open_office_write(c, self.root, wd)
+                            for c in cmds):
                 if self._sandboxed():
                     script = (T.shell_script(args.get("command")) if name == "shell"
                               else str(args.get("cmd") if name == "exec_command" else args.get("command") or ""))
                     self.ws.__dict__.setdefault("sbx_offline", set()).add(script.strip())
                 return True, ""
-            if group == "edit" and self._edit_inside(name, args):
-                return True, ""
+            if group == "edit" and self._edit_inside(name, args) and \
+                    not any(PR.office_lock(os.path.join(str(self.root), os.path.expanduser(str(args.get(k))))) for k in ("path", "notebook_path")
+                            if args.get(k)):
+                return True, ""                    # a file open in Office asks before it is replaced
         if cmds and wd_ok and self.mode in ("ask", "edits") and not _destructive(args, self.root) and \
                 all(PR.safe_read(c, self.root, wd) for c in cmds):
             return True, ""                    # H-15: a plain read-only command inside the project needs no question

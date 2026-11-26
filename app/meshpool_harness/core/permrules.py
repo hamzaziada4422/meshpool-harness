@@ -398,6 +398,37 @@ def sandbox_auto_ok(cmd: str, root, cwd=None) -> bool:
     return True
 
 
+_OFFICE_FILE = re.compile(r"[^\s'\"<>|;&()]+\.(?:pptx?|pptm|docx?|docm|xlsx?|xlsm|xlsb|odp|odt|ods|rtf)\b", re.I)
+# a command that can replace or rewrite a file it names: copy or move over it, redirect into it, or a script that saves
+_REWRITES = re.compile(r"(?:^|[\s;&|(])(?:cp|mv|tee|dd|install|rsync|ln|truncate|soffice|libreoffice|unoconv|pandoc)(?=\s)"
+                       r"|\.save\s*\(|\bto_excel\b|\bsave_as\b|\bSaveAs\b|open\([^)]*['\"][wa]b?\+?['\"]", re.I)
+
+
+def office_lock(path) -> bool:
+    """The file is open in Word, Excel, PowerPoint (they leave ~$name, or ~$ and the name less its first one or two
+    letters) or LibreOffice (.~lock.name#) right now."""
+    try:
+        f = Path(path)
+        d, n = f.parent, f.name
+        return any((d / x).exists() for x in ("~$" + n, "~$" + n[1:], "~$" + n[2:], ".~lock." + n + "#"))
+    except (OSError, ValueError):
+        return False
+
+
+def open_office_write(cmd: str, root, cwd=None) -> str:
+    """The open Office file a command may overwrite ("" for none): persona run, 0.0.18, `cp new.pptx Q3.pptx` replaced
+    the deck the user had open in PowerPoint, without a question once ordinary work stopped asking. Such a command
+    asks again; a command that only reads the open file does not."""
+    if not cmd or not (writes(cmd) or _REWRITES.search(cmd)):
+        return ""
+    for m in _OFFICE_FILE.finditer(cmd):
+        v = os.path.expanduser(m.group(0).strip("'\""))
+        f = v if os.path.isabs(v) else os.path.join(str(cwd or root), v)
+        if office_lock(f):
+            return os.path.basename(f)
+    return ""
+
+
 def approve_with_scope(approve, kind, title, detail, scope: str):
     """Call an approver, passing `scope` only when its signature accepts it."""
     try:
