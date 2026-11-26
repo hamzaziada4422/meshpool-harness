@@ -2301,11 +2301,13 @@ function renderPanel() {
   $$("#ptabs [data-t]").forEach(b => b.onclick = () => togglePanel(b.dataset.t, true));
   $("#pclose").onclick = () => togglePanel(S.panel);
   { const st = $("#ptabs .pstrip"), on = $('[aria-selected="true"]', st);   // one row that scrolls: the open tab is brought into view, the wheel scrolls it sideways
-    if (on && st.scrollWidth > st.clientWidth) st.scrollLeft += on.getBoundingClientRect().left - st.getBoundingClientRect().left - (st.clientWidth - on.offsetWidth) / 2;
+    const bring = () => { if (on && st.scrollWidth > st.clientWidth) st.scrollLeft += on.getBoundingClientRect().left - st.getBoundingClientRect().left - (st.clientWidth - on.offsetWidth) / 2; };
+    bring();
     const nl = $("#pnavl"), nr = $("#pnavr");      // an arrow at each end where tabs are out of sight, so none is hidden without a sign
     const fade = () => { const l = st.scrollLeft > 1, r = st.scrollLeft + st.clientWidth < st.scrollWidth - 1; st.classList.toggle("fl", l); st.classList.toggle("fr", r); nl.hidden = !l; nr.hidden = !r; };
     nl.onclick = () => st.scrollBy({left: -Math.max(80, st.clientWidth * 0.7), behavior: "smooth"}); nr.onclick = () => st.scrollBy({left: Math.max(80, st.clientWidth * 0.7), behavior: "smooth"});
-    fade(); st.addEventListener("scroll", fade, {passive: true});
+    fade(); bring(); fade();      // the arrows take room from the row: the open tab is brought into view once more with them in place
+    st.addEventListener("scroll", fade, {passive: true});
     st.addEventListener("wheel", e => { if (e.deltaY && !e.deltaX && st.scrollWidth > st.clientWidth) { st.scrollLeft += e.deltaY; e.preventDefault(); } }, {passive: false}); }
   const body = $("#pbody"); body.innerHTML = "";
   if (!S.cur && S.panel !== "session" && S.panel !== "browser") { body.innerHTML = `<div class="pnote">Start a chat and what it makes, changes or runs shows up here.</div>`; return; }
