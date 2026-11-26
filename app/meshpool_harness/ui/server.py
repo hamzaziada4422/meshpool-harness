@@ -568,6 +568,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._host_ok():
             return self._send(403, {"error": "forbidden"})
         u = urlparse(self.path)
+        self._chat_of(u)
         if u.path in ("/", "/index.html"):
             key = parse_qs(u.query).get("k", [""])[0]
             keyed = _key_ok(key, self._session_ok())
@@ -881,10 +882,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(500, {"error": _unexpected(e)})
         return self._send(404, {"error": "not found"})
 
+    def _chat_of(self, u):
+        """The chat the page is showing, for files_api: only it may open the files dropped into it."""
+        from meshpool_harness.ui import files_api as FA
+        chat = self.headers.get("X-Meshpool-Chat") or parse_qs(u.query).get("chat", [""])[0]
+        FA.CHAT.set(chat if re.fullmatch(r"[\w-]{1,80}", chat or "") else "")
+
     def do_POST(self):
         if not self._host_ok():
             return self._send(403, {"error": "forbidden"})
         u = urlparse(self.path)
+        self._chat_of(u)
         if u.path == "/show":                  # a second launch of the app asks this one to come to the front
             # A web page cannot send application/json without a CORS preflight (which this server never answers), but
             # "text/plain; x=json" is a simple request: the media type itself must be application/json. And a

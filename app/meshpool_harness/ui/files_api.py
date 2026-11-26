@@ -17,6 +17,7 @@ a symlink; inside the Meshpool home, files that hold keys and tokens are hidden 
 """
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import os
 import re
@@ -73,8 +74,41 @@ def _hidden_name(root: Path, name: str) -> bool:
     return bool(_is_home(root) and _SECRET.search(name))
 
 
+# The chat the page is showing, set by the server for each request (the X-Meshpool-Chat header, or chat= on a URL an
+# <img> loads). Files dropped into a chat are kept in runs/_uploads/chat-<id>: only that chat may open them.
+CHAT: contextvars.ContextVar[str] = contextvars.ContextVar("meshpool_fs_chat", default="")
+
+
+def _uploads_ok(p: Path) -> None:
+    """Refuses a path in runs/_uploads unless it is in the folder of the chat that asks (chat A never opens chat B's
+    dropped files, whatever path a message names)."""
+    try:
+        ups = (C.runs_dir() / "_uploads").resolve()
+    except OSError:
+        return
+    if p != ups and ups not in p.parents:
+        return
+    chat = CHAT.get()
+    parts = p.relative_to(ups).parts
+    if not chat or not parts or parts[0] != f"chat-{chat}":
+        raise ValueError("That file belongs to another chat.")
+
+
+def _other_upload(p: Path) -> bool:
+    """True for a folder in runs/_uploads that belongs to another chat (a search never walks into it)."""
+    if not p.name.startswith("chat-"):
+        return False
+    try:
+        ups = (C.runs_dir() / "_uploads").resolve()
+        q = p.resolve()
+    except OSError:
+        return False
+    return ups in q.parents and q.relative_to(ups).parts[0] != f"chat-{CHAT.get()}"
+
+
 def safe(root_s: str, rel: str) -> tuple[Path, Path]:
-    """(root, resolved path). Refuses an absolute path, `..`, a symlink that leaves the root and a secret in the home."""
+    """(root, resolved path). Refuses an absolute path, `..`, a symlink that leaves the root, a secret in the home and
+    another chat's dropped files."""
     root = fs_root(root_s)
     rel = str(rel or "").replace("\\", "/").strip()
     if "\0" in rel or rel.startswith("/") or re.match(r"^[A-Za-z]:", rel):
@@ -84,6 +118,8 @@ def safe(root_s: str, rel: str) -> tuple[Path, Path]:
         raise ValueError("Path is outside the project.")
     if any(_hidden_name(root, part) for part in p.relative_to(root).parts):
         raise ValueError("meshpool keeps that file private.")
+    if p != root:
+        _uploads_ok(p)
     return root, p
 
 
@@ -159,8 +195,9 @@ def search(root_s: str, q: str, content: bool = False) -> dict:
                 return {"results": hits, "truncated": True}
         return {"results": hits, "truncated": False}
     for cur, dirs, files in os.walk(root, followlinks=False):
-        dirs[:] = sorted(x for x in dirs if x not in HIDE_DIRS and not _hidden_name(root, x))
         base = Path(cur)
+        dirs[:] = sorted(x for x in dirs if x not in HIDE_DIRS and not _hidden_name(root, x)
+                         and not _other_upload(base / x))
         for name in sorted(files):
             if _hidden_name(root, name) or name in HIDE_DIRS:
                 continue
@@ -303,8 +340,9 @@ def _search_lines(root: Path, q: str) -> list:
     """Lines that contain q in the text files under root: at most 200, files up to 2 MB, about 3 seconds."""
     hits, deadline = [], time.time() + 3.0
     for cur, dirs, files in os.walk(root, followlinks=False):
-        dirs[:] = sorted(x for x in dirs if x not in HIDE_DIRS and not _hidden_name(root, x))
         base = Path(cur)
+        dirs[:] = sorted(x for x in dirs if x not in HIDE_DIRS and not _hidden_name(root, x)
+                         and not _other_upload(base / x))
         for name in sorted(files):
             if _hidden_name(root, name) or name in HIDE_DIRS:
                 continue

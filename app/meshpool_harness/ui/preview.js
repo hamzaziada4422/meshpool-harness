@@ -31,7 +31,10 @@ function pvType(path) {
   const ext = pvExt(path), g = PV_GROUPS.find(x => x[0].test(ext));
   return {label: g ? g[1] : (ext ? ext.toUpperCase() : "File"), ext};
 }
-const pvQuery = (root, path) => `root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`;
+// chat=: the chat on screen, for a file dropped into it (runs/_uploads/chat-<id>), which only that chat may open; an <img>
+// cannot send the X-Meshpool-Chat header.
+const pvQuery = (root, path) => `root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}` +
+  (typeof S !== "undefined" && S.cur && S.cur.id ? `&chat=${encodeURIComponent(S.cur.id)}` : "");
 const pvPage = (root, path, n, w, v) => `/api/preview?${pvQuery(root, path)}&page=${n}&w=${w}&v=${v || 0}&t=${encodeURIComponent(MP.token)}`;
 
 function pvEnsure() {

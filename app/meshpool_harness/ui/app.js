@@ -195,7 +195,9 @@ const ICON = {
 
 async function api(path, opts = {}) {
   let r;
-  try { r = await fetch(path, {...opts, headers: {"X-Meshpool-Token": MP.token, ...(opts.body ? {"Content-Type": "application/json"} : {}), ...(opts.headers || {})}}); }
+  // X-Meshpool-Chat: the chat on screen. Files dropped into a chat (runs/_uploads/chat-<id>) open only from that chat.
+  const chat = (typeof S !== "undefined" && S.cur && S.cur.id) ? {"X-Meshpool-Chat": String(S.cur.id)} : {};
+  try { r = await fetch(path, {...opts, headers: {"X-Meshpool-Token": MP.token, ...chat, ...(opts.body ? {"Content-Type": "application/json"} : {}), ...(opts.headers || {})}}); }
   catch (e) { throw new Error("meshpool isn't responding. If this keeps happening, quit and reopen meshpool."); }
   let j = null, unread = false; try { const t = await r.text(); if (t) j = JSON.parse(t); else unread = r.status !== 204; } catch (e) { unread = true; }   /* not JSON */
   if (j && j.inapp && r.ok && typeof showSignIn === "function") { try { showSignIn(); } catch (e) { /* the page still opened */ } }   // a sign-in page opened inside Meshpool
@@ -737,7 +739,8 @@ async function sendNow(interrupt) {
     const cur = S.cur;                              // before any wait: the user may open another chat meanwhile
     for (const a of atts.filter(a => a.pasted)) text += `\n\n[${a.name}]\n\`\`\`\n${a.text}\n\`\`\``;   // a long paste
     const refs = atts.filter(a => a.ref);         // files already in the folder (a message put back by Undo): named as before
-    if (refs.length) text = (text ? text + "\n\n" : "") + `Attached files (${refs[0].where || "in this chat's folder"}): ${refs.map(a => a.path).join(", ")}`;
+    for (const w of [...new Set(refs.map(a => a.where || "in this chat's folder"))])     // one line per place, as sent
+      text = (text ? text + "\n\n" : "") + `Attached files (${w}): ${refs.filter(a => (a.where || "in this chat's folder") === w).map(a => a.path).join(", ")}`;
     const files = atts.filter(a => !a.image && !a.pasted && !a.ref).map(a => ({name: a.name, data: a.data}));   // saved by the server, in the chat's own folder
     const images = atts.filter(a => a.image).map(a => ({name: a.name, mime: a.mime, data: a.data}));
     const wasStopping = S.stopping;               // Stop is still finishing: stopNow's wait loop owns the flag
@@ -2153,17 +2156,32 @@ function userText(mu) {
 // (in this chat's folder): a.xlsx") is not the user's words: it is taken out and the files come back as chips, named
 // again in the same words when the message is sent (they are still in the folder). A box that holds only what the last
 // fill put there is replaced, not added to: undoing two replies in a row ran both messages together.
-const ATT_LINE = /\n*Attached files \((in [^)\n]*)\): ([^\n]*)\s*$/;
+// A message can carry two such lines (files used where they are, and files kept with the chat): all of them go.
+const ATT_LINE = /\n*Attached files \((in [^)\n]*)\): ([^\n]*)/g;
 function splitAtt(text) {
-  text = String(text ?? ""); const m = text.match(ATT_LINE);
-  return m ? {text: text.slice(0, m.index).replace(/\s+$/, ""), where: m[1], files: m[2].split(", ").map(x => x.trim()).filter(Boolean)}
-    : {text, where: "", files: []};
+  text = String(text ?? "");
+  const files = [], wheres = [];
+  const rest = text.replace(ATT_LINE, (m, where, list) => {
+    for (const f of list.split(", ").map(x => x.trim()).filter(Boolean)) { files.push(f); wheres.push(where); }
+    return "";
+  });
+  if (!files.length) return {text, where: "", files: [], wheres: []};
+  return {text: rest.replace(/\s+$/, ""), where: wheres[0], files, wheres};
+}
+// A file name for a label: the last part of a path, with / or \ (a Windows path showed whole).
+const baseName = p => String(p ?? "").split(/[\\/]/).pop();
+// Where a chip opens its file. A file dropped into a chat is kept in meshpool's data (runs/_uploads/chat-<id>/name) and
+// named by its absolute path, which the file routes refuse: it opens from the runs folder by a relative path, and the
+// server lets only that chat open it.
+function attTarget(f) {
+  const m = String(f ?? "").match(/^(.*)[\\/]_uploads[\\/](chat-[\w-]+)[\\/](.+)$/);
+  return m ? {root: m[1], path: `_uploads/${m[2]}/${m[3].replace(/\\/g, "/")}`} : {root: "", path: String(f ?? "")};
 }
 // A message of yours as the chat shows it: the files sent with it as chips (a click opens them), not the line the
 // server adds for the model ("Attached files (in this chat's folder): ..."). What was sent is unchanged.
 function userBody(text) {
   const a = splitAtt(text);
-  return esc(a.text) + (a.files.length ? `<span class="att">${a.files.map(f => `<button class="flink" data-open="${esc(f)}" title="${esc(f)}">${ICON.file}${esc(f.split("/").pop())}</button>`).join(" ")}</span>` : "");
+  return esc(a.text) + (a.files.length ? `<span class="att">${a.files.map(f => { const o = attTarget(f); return `<button class="flink" data-open="${esc(o.path)}"${o.root ? ` data-root="${esc(o.root)}"` : ""} title="${esc(f)}">${ICON.file}${esc(baseName(f))}</button>`; }).join(" ")}</span>` : "");
 }
 // opts.back: Undo or Rewind put the message back. The box is focused with the caret at the end, so Enter sends it again
 // (Daniel, round 3: Enter did nothing because the box was not focused), and a note says so.
@@ -2173,13 +2191,14 @@ function fillInput(text, opts = {}) {
   text = sp.text;
   const norm = x => String(x).replace(/^\.\//, "");
   const gone = new Set((opts.removed || []).map(norm));            // copies Undo or Rewind just deleted: no chip, a note instead
-  const refs = sp.files.filter(r => !gone.has(norm(r))), where = sp.where;
-  const lost = sp.files.filter(r => gone.has(norm(r))).map(r => r.split("/").pop());
+  const whereOf = new Map(sp.files.map((f, k) => [f, sp.wheres[k]]));
+  const refs = sp.files.filter(r => !gone.has(norm(r)));
+  const lost = sp.files.filter(r => gone.has(norm(r))).map(baseName);
   const draft = inp.value, ours = S.filled != null && draft === S.filled;
   if (ours) S.attachments = S.attachments.filter(a => !a.filled);
   if (!draft.trim() || ours) inp.value = text;
   else if (text.trim() && draft.trim() !== text.trim()) inp.value = draft.replace(/\s+$/, "") + "\n\n" + text;
-  for (const r of refs) if (!S.attachments.some(a => a.ref && a.path === r)) S.attachments.push({name: r.split("/").pop(), path: r, ref: true, where, filled: true});
+  for (const r of refs) if (!S.attachments.some(a => a.ref && a.path === r)) S.attachments.push({name: baseName(r), path: r, ref: true, where: whereOf.get(r), filled: true});
   if (refs.length || ours) renderAttach();
   S.filled = inp.value;
   S.suggSkip = inp.value.trim();        // put back by Undo or Rewind, not typed: no "Use $skill" chips for it
