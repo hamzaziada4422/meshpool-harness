@@ -477,7 +477,7 @@ def test_receipt_counts_this_turns_lines_not_uncommitted_work(monkeypatch, proj,
     rc, out, err = run_main(proj, capfd, prompt="guard div", json_out="json", auto=True)
     assert rc == 0 and "def sub" in (proj / "ops.py").read_text()
     assert "ops.py (+1 -1)" in err, err[-600:]
-    assert "Checked:** `" in err and "Checked:** `cd " not in err
+    assert "Checked: `" in err and "Checked: `cd " not in err and "**" not in err   # plain text since round 4
 
 
 # ---------- release review: --permission-mode plan holds in -p ------------------------------------------------------

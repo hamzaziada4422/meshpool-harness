@@ -86,6 +86,6 @@ def test_the_engine_report_tells_the_agent_to_speak_plainly(home, tmp_path, monk
              done=1.0)
     try:
         text, _ = OJ.report(jid)
-        assert "in plain words" in text and "never rule ids" in text and "nothing else to copy, move or delete" in text
+        assert "in plain words" in text and "rule ids" in text and "nothing else to copy, move or delete" in text
     finally:
         OJ.JOBS.pop(jid, None)

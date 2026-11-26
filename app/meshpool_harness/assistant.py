@@ -23,8 +23,8 @@ HONESTY = ("Honesty comes first. Never make something up to fill a gap. If you o
 # here is in Pi's first request.
 # Sara, round 3: a lock file named "Sara Finance" and the reply said "she appears to have the workbook open ... ask her
 # to close it". The person reading the reply is the user: always "you".
-ADDRESS = ("Address the user as \"you\". Never refer to them in the third person (\"she\", \"he\", \"they\", \"the "
-           "user\" or their name), even when you read their name in a file, a lock file or a document's author field.")
+ADDRESS = ("Address the user as \"you\", never in the third person (\"she\", \"he\", their name), even when a "
+           "lock file or author field names them.")
 # Sara, round 3: Codex's reply pointed to a backup it had made in a temporary folder outside the project; the link
 # opened "That folder is not one of your projects."
 NO_SCRATCH_COPIES = ("Do not make backup copies of the user's files outside the project folder, and never point the "

@@ -1483,8 +1483,8 @@ TOOLS = {
                       "email, HTML or image file as text (OCR for scans). `sheet`, `pages` (\"1-3,7\"), `language`, "
                       "`ocr` (auto, always, never) are optional.",
                       {"path": S, "sheet": S, "pages": S, "language": S, "ocr": S}, ["path"]),
-    "edit_office_file": (edit_office_file, "Change an existing .docx, .xlsx or .pptx; formatting and formulas stay. "
-                         "Edits the file; in_place=false saves a copy. operations: [{op,...}]. "
+    "edit_office_file": (edit_office_file, "Change an existing .docx, .xlsx or .pptx, keeping its formats. "
+                         "in_place=false: a copy. operations: [{op,...}]. "
                          "Word: replace_text, "
                          "tracked_replace{find,replace}, tracked_delete, tracked_insert_after, add_comment. Excel: "
                          "set_cell{sheet,cell,value; =formula}, set_range{start,values}, clear_cell, add_row, "

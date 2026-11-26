@@ -508,6 +508,8 @@ def shell_script(argv) -> str:
     argv = [str(a) for a in argv or []]
     if len(argv) >= 3 and os.path.basename(argv[0]) in ("bash", "sh", "zsh") and argv[1] in ("-c", "-lc"):
         return argv[2]
+    if not argv:
+        return ""
     if len(argv) == 1:
         return argv[0]
     if os.path.basename(argv[0]) not in ("bash", "sh", "zsh") and any(_ARGV_OP.match(a) for a in argv[1:]) \

@@ -194,10 +194,11 @@ def test_first_message_block_is_small(home):
     assert len(builtin) <= 1400
     codex = A.context_block("t", tools="none", office=False)         # outside agent without Meshpool's servers
     assert A.HONESTY in codex and A.PLAIN in codex                   # kept once for outside harnesses
-    assert "memory_save" not in codex and "delegate_task" not in codex and len(codex) <= 1500
+    # 1500 until round 4 added the backup rule (NO_SCRATCH_COPIES) and the address rule for outside agents
+    assert "memory_save" not in codex and "delegate_task" not in codex and len(codex) <= 1850
     pi = A.context_block("t", tools="deferred")
     assert len(pi) <= 2600
-    assert len(A.HONESTY) + len(A.PLAIN) <= 1150 and len(A.ENGINES) <= 560
+    assert len(A.HONESTY) + len(A.PLAIN) <= 1250 and len(A.ENGINES) <= 560   # + the address rule (round 4)
 
 
 def test_honesty_and_plain_keep_their_rules():
