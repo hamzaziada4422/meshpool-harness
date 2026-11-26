@@ -278,7 +278,8 @@ def test_try_again_runs_the_message_once_more_without_a_second_copy_or_a_stopped
         r = A.session_action(s.id, "retry", {})
     finally:
         release.set()
-    assert r["sent"] == {"queued": False}, r["sent"]
+    assert r["sent"] == {"retrying": True}, r["sent"]       # the request returns at once; the attempt streams
+    assert _until(lambda: len(calls) == 2, 30)
     _idle(s)
     assert len(calls) == 2
     shown = _shown(s)

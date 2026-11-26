@@ -1405,6 +1405,8 @@ class Session:
             self.scheduled = None
         if files:                                    # saved first: if it fails, nothing was emitted or started
             text = self._save_files(text, files)
+        if images:
+            self._last_images = [dict(im) for im in images if isinstance(im, dict)]     # Try again sends them again
         self.touched = time.time()
         acp = self.harness.get("type") == "acp"
         if interrupt:
@@ -2760,28 +2762,72 @@ class Session:
 
     def retry(self) -> dict:
         """Try again (the page's line under a long wait): stop the turn if one runs, wait for it to end, then run the
-        user's last message again in place of that attempt. The attempt leaves the chat, so the message shows once and
-        no "Stopped. Send a message to continue." line is left behind (Maya: Try again posted the message twice under
-        "Stopped."). Files stay as they are. Returns what send returns."""
-        if getattr(self, "state", "idle") in _BUSY:
-            self.stop()
-            end = time.time() + float(os.environ.get("MH_RETRY_STOP_S", "25"))
-            while getattr(self, "state", "idle") in _BUSY and time.time() < end:
-                time.sleep(0.1)
-            if getattr(self, "state", "idle") in _BUSY:
-                raise ValueError("It is still stopping. Press Try again in a moment.")
+        user's last message again in place of that attempt, with the images it had. The attempt leaves the chat, so
+        the message shows once and no "Stopped. Send a message to continue." line is left behind (Maya: Try again
+        posted the message twice under "Stopped."). Files stay as they are.
+
+        A turn that is still running is waited for in the background: the request returns at once ({"retrying":
+        True}) and the new attempt streams in like any turn; a failure shows as an error line in the chat. Otherwise
+        returns what send returns."""
         with self.lock:
             pos = next((i for i in range(len(self.events) - 1, -1, -1) if self.events[i].get("type") == "user"
                         and not self.events[i].get("steer") and str(self.events[i].get("text") or "").strip()), None)
-            text = str(self.events[pos].get("text") or "") if pos is not None else ""
         if pos is None:
             raise ValueError("There is no message to send again.")
+        if getattr(self, "state", "idle") not in _BUSY:
+            return self._retry_from(pos)
+        self.stop()
+
+        def later():
+            try:
+                end = time.time() + float(os.environ.get("MH_RETRY_STOP_S", "25"))
+                while getattr(self, "state", "idle") in _BUSY and time.time() < end:
+                    time.sleep(0.1)
+                if getattr(self, "state", "idle") in _BUSY:
+                    raise ValueError("It is still stopping. Press Try again in a moment.")
+                self._retry_from(pos)
+            except Exception as e:  # noqa: BLE001 - shown in the chat: the request has already returned
+                self.emit({"type": "error", "text": str(e) or "Try again did not work. Send the message again."})
+        threading.Thread(target=later, daemon=True, name=f"retry-{self.id}").start()
+        return {"retrying": True}
+
+    def _retry_images(self, pos: int) -> list | None:
+        """The images the message at events[pos] was sent with, read back from the model's copy of it (the event only
+        keeps their names), else the ones the last send had."""
+        with self.lock:
+            ev = dict(self.events[pos]) if 0 <= pos < len(self.events) else {}
+        names = list(ev.get("images") or [])
+        if not names:
+            return None
+        out = []
+        try:
+            from meshpool_harness import chat_rewind as CR
+            msg = (getattr(self.agent, "messages", None) or [])[CR.message_for_event(self, pos)]
+            parts = msg.get("content") if isinstance(msg, dict) else None
+            for part in (parts if isinstance(parts, list) else [])[1:]:
+                if not isinstance(part, dict) or part.get("type") != "image_url":
+                    break                            # figure pages follow with their own labels: not the user's
+                url = str((part.get("image_url") or {}).get("url") or "")
+                head, _, data = url.partition(";base64,")
+                if head.startswith("data:") and data:
+                    out.append({"name": names[len(out)] if len(out) < len(names) else "image", "mime": head[5:],
+                                "data": data})
+        except Exception:  # noqa: BLE001
+            out = []
+        if not out:
+            out = [dict(im) for im in (getattr(self, "_last_images", None) or [])]
+        return out[:len(names)] or None
+
+    def _retry_from(self, pos: int) -> dict:
+        with self.lock:
+            text = str(self.events[pos].get("text") or "")
+        images = self._retry_images(pos)
         from meshpool_harness import chat_rewind as CR
         r = CR.rewind(self.id, CR.message_for_event(self, pos), files=False, session=self)
         if r.get("forked"):                           # an outside agent that cannot drop the attempt: send it as is
             text = r.get("text") or text
         self._was_stopped = False                    # the message itself runs again: no "I stopped" note with it
-        return self.send(text)
+        return self.send(text, images=images)
 
     def fork(self, event_index: int) -> str:
         """A new chat with the conversation up to the end of the exchange that starts at this message."""
