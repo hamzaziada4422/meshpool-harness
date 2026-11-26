@@ -2926,8 +2926,14 @@ class Agent:
                 if self.messages and self.messages[0].get("role") == "system":
                     self.messages[0] = {"role": "system", "content": self.system_prompt()}
         if not self.title:
-            self.title = os.environ.pop("MH_SESSION_NAME", "").strip()[:80] or (
-                text.strip().splitlines()[0][:80] if text.strip() else "Session")
+            # the first line (with the next one when it is only "Hi!"), never cut inside a word: a path cut at 80
+            # characters made the title name a different folder
+            ln = [x.strip() for x in text.strip().splitlines() if x.strip()]
+            hi = len(ln) > 1 and re.fullmatch(r"(?i)(?:hi|hello|hey|hiya|good (?:morning|afternoon|evening))\b"
+                                              r"[\w ]{0,20}[!.,]*", ln[0])
+            first = " ".join(ln[:2]) if hi else (ln[0] if ln else "")
+            first = (first[:80] + re.match(r"\S*", first[80:]).group(0))[:240]
+            self.title = os.environ.pop("MH_SESSION_NAME", "").strip()[:80] or first or "Session"
         body = text
         if self.plan:
             body = ("[Plan mode] Investigate as needed with read-only tools, then reply with a clear, numbered plan "

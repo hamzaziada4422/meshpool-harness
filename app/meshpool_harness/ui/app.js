@@ -2709,7 +2709,8 @@ async function renderSection(sec) {
 }
 
 /* ================================== first run ================================== */
-const onbSteps = n => `<div class="onb-steps" aria-label="Step ${n} of 3">${[1, 2, 3].map(i => `<span class="${i <= n ? "on" : ""}"></span>`).join("")}<small>Step ${n} of 3</small></div>`;
+// Three steps when the model step is shown; two when Meshpool already had a key, so a fresh start says step 1.
+const onbSteps = n => { const t = store("onbFull") ? 3 : 2, k = n - 3 + t; return `<div class="onb-steps" aria-label="Step ${k} of ${t}">${Array.from({length: t}, (_, i) => `<span class="${i < k ? "on" : ""}"></span>`).join("")}<small>Step ${k} of ${t}</small></div>`; };
 // Providers: what the models run on. Agents (harnesses) are picked separately.
 const PROVIDERS = [["meshpool", "Meshpool API key", "Recommended. Every model on one key, 20% cheaper."],
   ["custom", "Another API key", "OpenAI, OpenRouter or any OpenAI-compatible provider."],
@@ -2717,6 +2718,7 @@ const PROVIDERS = [["meshpool", "Meshpool API key", "Recommended. Every model on
 const SIGNIN = {chatgpt: {name: "ChatGPT", harness: "codex"}};
 function showOnboarding() {
   if ($("#onb")) return;
+  store("onbFull", 1);
   const o = document.createElement("div"); o.className = "onb"; o.id = "onb";
   o.innerHTML = `<div class="onb-card" id="onbKey">
     <img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
@@ -3012,18 +3014,18 @@ function setupStep(o, prev) {
     ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. You can skip this.</p>
     <div id="oImport"></div>
     <div id="oContext"></div>
-    <label class="switchrow" id="oLocalRow" hidden><input type="checkbox" id="oLocal" checked> <span id="oLocalTxt"></span></label>
+    <label class="switchrow" id="oLocalRow" hidden><input type="checkbox" id="oLocal"> <span id="oLocalTxt"></span></label>
     <div class="onb-go"><button class="bigbtn" id="oFinish">Start using Meshpool</button></div>`;
   importPanel($("#oImport", card)).then(() => { const b = $("#impGo", card); if (b) b.hidden = true; });
   contextPanel($("#oContext", card));
   let found = {};
-  api("/api/import-chats").then(l => { found = l; const n = Object.values(l).filter(v => v.default).reduce((a, v) => a + v.found - v.imported, 0); if (n) { $("#oLocalTxt", card).textContent = `Bring in my ${Object.values(l).filter(v => v.default).map(v => v.name).join(" and ")} chats (${n.toLocaleString()})`; $("#oLocalRow", card).hidden = false; } }).catch(() => {});
+  api("/api/import-chats").then(l => { found = l; const n = Object.values(l).filter(v => v.default).reduce((a, v) => a + v.found - v.imported, 0); if (n) { $("#oLocalTxt", card).textContent = `Copy my past chats from ${Object.values(l).filter(v => v.default).map(v => v.name).join(" and ")} into Meshpool (${n.toLocaleString()} chat${n === 1 ? "" : "s"})`; $("#oLocalRow", card).hidden = false; } }).catch(() => {});
   store("onbStep", 3);
   $("#oFinish", card).onclick = async () => {
-    store("onbDone", 1); post("/api/settings", {values: {MH_ONBOARDED: "1"}}).catch(() => {});        // ticked items are imported on the way out; no extra click
+    store("onbDone", 1); store("onbFull", 0); post("/api/settings", {values: {MH_ONBOARDED: "1"}}).catch(() => {});        // ticked items are imported on the way out; no extra click
     const box = $("#oImport", card);
     const srcs = Object.entries(found).filter(([, v]) => v.default).map(([k]) => k);
-    if (srcs.length && $("#oLocal", card)?.checked && !$("#oLocalRow", card).hidden) { try { const r = await post("/api/import-chats", {sources: srcs}); if (r.imported) toast(`${r.imported.toLocaleString()} chats imported.`, 9000, {label: "Open", fn: () => openThread(r.ids[0])}); await loadThreads(); } catch (e) { /* the page can import later */ } }
+    if (srcs.length && $("#oLocal", card)?.checked && !$("#oLocalRow", card).hidden) { try { const r = await post("/api/import-chats", {sources: srcs}); if (r.imported) toast(`${r.imported.toLocaleString()} chat${r.imported === 1 ? "" : "s"} imported.`, 9000, {label: "Open", fn: () => openThread(r.ids[0])}); await loadThreads(); } catch (e) { /* the page can import later */ } }
     if (box?._import && !box.dataset.done && $$("[data-key]", box).some(x => x.checked)) { $("#oFinish", card).disabled = true; $("#oFinish", card).textContent = "Importing…"; await box._import(); }
     o.remove(); renderBar(); renderHero();
   };
