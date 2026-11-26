@@ -574,3 +574,24 @@ def test_of19_two_requests_for_one_page_both_get_it(tmp_path, monkeypatch):
         t.join(10)
     assert not errors, errors
     assert got == [b"\x89PNG fake"] * 2
+
+
+def test_view_pictures_of_two_files_with_the_same_name_do_not_overwrite_each_other(tmp_path):
+    """view.render named pictures <stem>-pNN.png in one shared folder: a/report.pdf then b/report.pdf replaced the
+    first file's pictures."""
+    import pypdfium2 as pdfium
+    from meshpool_harness import view as V
+    paths = []
+    for d, n in (("a", 1), ("b", 2)):
+        (tmp_path / d).mkdir()
+        pdf = pdfium.PdfDocument.new()
+        for _ in range(n):
+            pdf.new_page(200 + 100 * n, 200)
+        pdf.save(str(tmp_path / d / "report.pdf"))
+        paths.append(tmp_path / d / "report.pdf")
+    out = tmp_path / "views"
+    first = V.render(str(paths[0]), out_dir=out)["shots"]
+    second = V.render(str(paths[1]), out_dir=out)["shots"]
+    a, b = {str(f) for _, f in first}, {str(f) for _, f in second}
+    assert a and b and not (a & b)
+    assert all(Path(f).exists() for f in a | b)

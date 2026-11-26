@@ -122,7 +122,10 @@ def render(path: str, pages=None, out_dir: Path | None = None, launch=None, widt
     texts.clear()
     out = Path(out_dir) if out_dir else Path(tempfile.mkdtemp(prefix="view_"))
     out.mkdir(parents=True, exist_ok=True)
-    stem = p.stem
+    import hashlib
+    # the folder's own hash in the name: a/report.pdf and b/report.pdf in one shared views folder kept overwriting
+    # each other's pictures
+    stem = f"{p.stem}-{hashlib.sha1(str(p.resolve()).encode('utf-8', 'surrogatepass')).hexdigest()[:6]}"
     shots: list = []
     notes: list[str] = []
     if k == "image":

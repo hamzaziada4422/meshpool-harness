@@ -35,6 +35,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 from functools import lru_cache
 from pathlib import Path
 
@@ -607,7 +608,7 @@ def path(name: str, set: str | None = None) -> Path | None:
         out = _cache_path(s, n)
         if not out.is_file():
             out.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            tmp = out.with_suffix(f".{os.getpid()}.tmp")
+            tmp = out.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")   # two threads: two names
             tmp.write_text(_icons(s)[n], encoding="utf-8")
             os.replace(tmp, out)
         return out
