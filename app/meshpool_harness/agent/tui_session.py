@@ -342,7 +342,7 @@ def _allow_hint(d: dict, mode: str) -> tuple[str, str, str]:
             if K._allow_hit([rule], "bash", {"command": cmd}):
                 return shown, f'--allowed-tools "{rule}"', "command"
         if K._allow_hit(["bash"], "bash", {"command": cmd}):
-            return shown, "--allowed-tools bash (allows every shell command except the destructive ones)", "command"
+            return shown, "--allowed-tools bash (every command except the destructive ones)", "command"
         return shown, "--permission-mode auto", "command"
     if d.get("kind") == "edit":
         if title.startswith("Your rule"):
