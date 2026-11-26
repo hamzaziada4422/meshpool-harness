@@ -1616,12 +1616,31 @@ def is_build_file(rel: str) -> bool:
     return "Meshpool outputs" in p.parts[:-1] and p.suffix.lower() in BUILD_SUFFIXES
 
 
+_SHA1_MEMO: dict = {}
+_OWN_MEMO: dict = {}
+
+
 def _sha1_file(p: Path) -> str:
+    """A file's sha1, read once per version: own_changes runs on every chat update, so a big output is hashed once
+    per (path, mtime, size), not on every poll (release review)."""
     import hashlib
     try:
-        return hashlib.sha1(p.read_bytes()).hexdigest()
+        st = p.stat()
     except OSError:
         return ""
+    key = (str(p), st.st_mtime_ns, st.st_size)
+    if key not in _SHA1_MEMO:
+        if len(_SHA1_MEMO) > 2000:
+            _SHA1_MEMO.clear()
+        try:
+            h = hashlib.sha1()
+            with open(p, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+            _SHA1_MEMO[key] = h.hexdigest()
+        except OSError:
+            return ""
+    return _SHA1_MEMO[key]
 
 
 def own_changes(turns: list, root) -> list:
@@ -1638,10 +1657,23 @@ def own_changes(turns: list, root) -> list:
             rel = str(c.get("path") or "")
             parts = rel.replace("\\", "/").split("/")
             if root is not None and c.get("status") == "added" and "Meshpool outputs" in parts[:-1]:
-                mine = _sha1_file(root / rel)
-                twins = [root / parts[-1], *sorted(root.glob("*/" + parts[-1]))[:20]]
-                if mine and any(q.is_file() and "Meshpool outputs" not in q.parts[len(root.parts):] and _sha1_file(q) == mine
-                                for q in twins):
+                try:
+                    st = (root / rel).stat()
+                    mk = (str(root), rel, st.st_mtime_ns, st.st_size)
+                except OSError:
+                    mk = None
+                if mk is not None and mk in _OWN_MEMO:        # decided once per version of the file, not on every poll
+                    twin = _OWN_MEMO[mk]
+                else:
+                    mine = _sha1_file(root / rel)
+                    twins = [root / parts[-1], *sorted(root.glob("*/" + parts[-1]))[:20]]
+                    twin = bool(mine) and any(q.is_file() and "Meshpool outputs" not in q.parts[len(root.parts):]
+                                              and _sha1_file(q) == mine for q in twins)
+                    if mk is not None:
+                        if len(_OWN_MEMO) > 2000:
+                            _OWN_MEMO.clear()
+                        _OWN_MEMO[mk] = twin
+                if twin:
                     continue
             keep.append(c)
         out.append(dict(t, changed=keep) if len(keep) != len(ch) else t)

@@ -491,3 +491,29 @@ def test_front_end_nits_are_gone():
     assert s2[i:].split("\n")[2].startswith("async function providerPage"), s2[i:i + 400]
     assert "// Plan and billing: what this computer runs on" in s2 and s2.index("// Plan and billing") < s2.index("function billingText")
     assert "text-decoration" not in ""      # (keeps the module's imports used)
+
+
+def test_own_changes_reads_each_output_once_per_version(tmp_path, monkeypatch):
+    """Release review: own_changes runs on every chat update; a big output must not be re-read on every poll."""
+    from meshpool_harness.ui import workbench as W
+    W._SHA1_MEMO.clear(); W._OWN_MEMO.clear()
+    (tmp_path / "rooms.xlsx").write_bytes(b"x" * 1000)
+    out = tmp_path / "Meshpool outputs" / "job1"
+    out.mkdir(parents=True)
+    (out / "rooms.xlsx").write_bytes(b"x" * 1000)
+    (out / "summary.xlsx").write_bytes(b"y" * 1000)
+    turns = [{"n": 1, "changed": [{"path": "Meshpool outputs/job1/rooms.xlsx", "status": "added"},
+                                  {"path": "Meshpool outputs/job1/summary.xlsx", "status": "added"}]}]
+    reads = []
+    real = W._sha1_file
+
+    def spy(p):
+        reads.append(str(p))
+        return real(p)
+    monkeypatch.setattr(W, "_sha1_file", spy)
+    first = W.own_changes(turns, tmp_path)
+    n = len(reads)
+    for _ in range(5):
+        assert W.own_changes(turns, tmp_path) == first
+    assert [c["path"] for c in first[0]["changed"]] == ["Meshpool outputs/job1/summary.xlsx"]
+    assert n > 0 and len(reads) == n, reads          # later polls read nothing
