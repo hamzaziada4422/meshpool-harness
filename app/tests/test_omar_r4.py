@@ -162,3 +162,58 @@ def test_the_terminal_ui_shows_bold_labels_not_asterisks(monkeypatch):
     assert "*" not in line
     assert "\x1b[1mChecked:" in line                       # terminal bold on the label
     assert receipt_line("**Checked:** ok", Style(0), 80) == "Checked: ok"
+
+
+# ---------------------------------------------------------------------------------------------- item 4
+import sys  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from testkit import cli_v2_shots as SH  # noqa: E402
+
+
+@pytest.fixture
+def _cfg(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "meshpool.config"))
+    monkeypatch.delenv("MH_TIPS", raising=False)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+
+
+def _idle_screen(t, out):
+    return "\n".join(SH.idle(t, out).lines())
+
+
+def test_tips_off_hides_the_try_placeholder_in_the_terminal_ui(_cfg, monkeypatch):
+    t, out, _ = SH.make_terminal()
+    t.startup()
+    assert 'Try "' in _idle_screen(t, out)
+    monkeypatch.setenv("MH_TIPS", "0")
+    t2, out2, _ = SH.make_terminal()
+    t2.startup()
+    assert 'Try "' not in _idle_screen(t2, out2)
+
+
+def test_tips_off_command_saves_the_setting_and_hides_the_placeholder(_cfg, tmp_path):
+    from types import SimpleNamespace
+
+    from meshpool_harness import config as C
+    t, out, _ = SH.make_terminal()
+    sess = SimpleNamespace(term=t)
+    TUI.Session.cmd_tips(sess, "off")
+    assert C.tips_on() is False
+    assert "MH_TIPS=0" in (tmp_path / "meshpool.config").read_text()
+    t.startup()
+    assert 'Try "' not in _idle_screen(t, out)
+    TUI.Session.cmd_tips(sess, "on")
+    assert C.tips_on() is True
+    t2, out2, _ = SH.make_terminal()
+    t2.startup()
+    assert 'Try "' in _idle_screen(t2, out2)
+
+
+def test_tips_is_listed_in_help_and_in_the_slash_menu(_cfg):
+    assert any(c[0] == "tips" for c in TUI.COMMANDS)
+    t, out, _ = SH.make_terminal(width=100)
+    from types import SimpleNamespace
+    TUI.Session.cmd_help(SimpleNamespace(term=t), "")
+    assert "/tips [on|off]" in out.getvalue()
