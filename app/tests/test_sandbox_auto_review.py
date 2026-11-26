@@ -125,3 +125,24 @@ def test_a_command_that_ran_unasked_cannot_read_secrets_or_plant_code(home):
     # a command the user said yes to keeps today's reach (installs need the package folders)
     assert "PRIVATE-KEY" in run(f"cat {h}/.ssh/id_rsa", offline=False).stdout
     assert run(f"echo ok > {h}/.local/bin/tool", offline=False).returncode == 0
+
+
+@pytest.mark.parametrize("cmd", ["cat $HOME/.ssh/id_rsa", "cd && cat .ssh/id_rsa", "D=$HOME; cat $D/.ssh/id_rsa",
+                                 "cat ~/.aws/credentials", "ls /home/u/Documents", "type C:\\Users\\me\\.ssh\\id_rsa"])
+def test_a_card_for_the_home_folder_never_says_this_folder(cmd):
+    """Release review: these asked, but under "Look at files in this folder?", which anyone would allow."""
+    t = title(cmd)
+    assert t.startswith("Use files outside this folder, in your home folder?") and "this folder?" not in t[:30], t
+
+
+@pytest.mark.parametrize("cmd,ok", [
+    ("python3 fetch.py https://example.com/data.csv", False), ("node get.js http://x/y", False),
+    ("wscat -c wss://x/ws", False), ("echo see https://example.com > notes.md", True),
+    ("printf 'https://x' > link.txt", True), ("python3 -c \"print('https://x')\"", True),
+    ("python3 make_report.py --title 'see https://x'", True),
+])
+def test_a_web_address_handed_to_a_program_asks(home, cmd, ok):
+    """Release review: with the bare https:// rule gone, `python3 fetch.py https://...` ran offline, failed, and nothing
+    ever offered the network. A web address as a plain argument asks; one in quoted text or echoed does not."""
+    _, proj, _ = home
+    assert PR.sandbox_auto_ok(cmd, proj) is ok, cmd
