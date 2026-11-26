@@ -499,6 +499,11 @@ class Terminal:
             self._write(h, self.out)
             self._write("\n", self.out)
 
+    def flush_held(self):
+        """-p: the last answer is held until the turn shows no review round follows it (turn_end and the like release
+        it). The run calls this when send() returns, so the answer is written even if no later event came."""
+        self._release_held()
+
     # ---------- agent events ----------
     def emit(self, ev: dict):
         ev = {k: (R.safe_text(v) if isinstance(v, str) else v) for k, v in ev.items()}   # model text never drives the tty
@@ -2115,6 +2120,7 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
             import contextlib
             with contextlib.redirect_stdout(sys.stderr) if json_out else contextlib.nullcontext():
                 front.send(text, images)
+                term.flush_held()
             failed = bool(term.failed)
             note = front.denial_note()
             if note:
