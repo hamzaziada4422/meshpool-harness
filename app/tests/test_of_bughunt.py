@@ -270,3 +270,22 @@ def test_of10_view_table_reads_only_the_start_of_a_big_file(tmp_path, monkeypatc
     html = V._table_html(f)
     assert html.count("<tr>") == 200
     assert 0 < sum(read) <= 2_000_001
+
+
+# ---------- OF-08: RTF lost every accented letter and kept font names and control words ------------------------------
+
+def test_of08_rtf_from_textedit_and_word_reads_clean_text(tmp_path):
+    cocoa = ("{\\rtf1\\ansi\\ansicpg1252\\cocoartf2709\n{\\fonttbl\\f0\\fswiss\\fcharset0 Helvetica;}\n"
+             "{\\colortbl;\\red255\\green255\\blue255;}\n{\\*\\expandedcolortbl;;}\n"
+             "\\pard\\tx566\\pardirnatural\\partightenfactor0\n\n\\f0\\fs24 \\cf0 Caf\\'e9 cr\\'e8me \\\n"
+             "Second line}")
+    (tmp_path / "mac.rtf").write_text(cocoa, encoding="latin-1")
+    out = _read(tmp_path / "mac.rtf")
+    assert out == "# mac.rtf\nCafé crème \nSecond line"
+    word = ("{\\rtf1\\ansi\\ansicpg1252{\\fonttbl{\\f0\\froman Times New Roman;}}{\\*\\generator Word;}"
+            "{\\info{\\title Secret title}}\\uc1\\pard Price \\u8364\\'80 5{\\field{\\*\\fldinst HYPERLINK x}"
+            "{\\fldrslt link}}\\par\\trowd\\cellx1000 A\\cell B\\cell\\row}")
+    (tmp_path / "w.rtf").write_text(word, encoding="latin-1")
+    out = _read(tmp_path / "w.rtf")
+    assert "Price € 5link" in out and "A | B |" in out
+    assert "Times" not in out and "Word" not in out and "Secret" not in out and "HYPERLINK" not in out

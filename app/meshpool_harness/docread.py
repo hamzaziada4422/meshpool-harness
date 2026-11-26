@@ -686,11 +686,96 @@ def _odf(p: Path) -> str:
         return f"# {p.name}\n" + re.sub(r"\n{3,}", "\n\n", _xml_text(z.read("content.xml"))).strip()
 
 
+_RTF_TOKEN = re.compile(r"\\([a-zA-Z]+)(-?\d+)? ?|\\'([0-9a-fA-F]{2})|\\([\s\S])|([{}])|([^\\{}\r\n]+)|[\r\n]+")
+# groups whose text is not part of the document: tables of fonts, colours and styles, metadata, pictures, field codes
+_RTF_SKIP = {"fonttbl", "colortbl", "stylesheet", "info", "pict", "listtable", "listoverridetable", "rsidtbl",
+             "generator", "xmlnstbl", "themedata", "colorschememapping", "datastore", "latentstyles", "fldinst",
+             "objdata", "header", "footer", "headerl", "headerr", "headerf", "footerl", "footerr", "footerf",
+             "expandedcolortbl", "filetbl", "revtbl", "mmathPr", "pgdsctbl", "listtext", "pntext"}
+_RTF_CHARS = {"par": "\n", "line": "\n", "sect": "\n\n", "page": "\n\n", "row": "\n", "cell": " | ", "tab": "\t",
+              "emdash": "\u2014", "endash": "\u2013", "bullet": "\u2022", "lquote": "\u2018", "rquote": "\u2019",
+              "ldblquote": "\u201c", "rdblquote": "\u201d", "emspace": " ", "enspace": " ", "qmspace": " "}
+
+
+def _rtf_text(s: str) -> str:
+    """The text of an RTF document: \\'e9 and \\u8364 decoded in the file's code page, the font, colour and style
+    tables, pictures and field codes left out (a regex left "Helvetica;" and dropped every accented letter)."""
+    out, pend = [], bytearray()
+    codepage, uc, skip_n = "cp1252", 1, 0
+    stack: list[tuple[bool, int]] = []
+    skip = False
+    star = False
+
+    def flush():
+        if pend:
+            out.append(bytes(pend).decode(codepage, errors="replace"))
+            pend.clear()
+    for m in _RTF_TOKEN.finditer(s):
+        word, arg, hexb, sym, brace, text = m.groups()
+        if brace == "{":
+            stack.append((skip, uc))
+            star = False
+            continue
+        if brace == "}":
+            flush()
+            skip, uc = stack.pop() if stack else (False, 1)
+            skip_n = 0
+            continue
+        if word is not None:
+            if word in _RTF_SKIP or star:
+                skip, star = True, False
+            if skip:
+                continue
+            if word == "ansicpg" and arg:
+                try:
+                    codepage = "cp" + str(int(arg))
+                    "".encode(codepage)
+                except (LookupError, ValueError):
+                    codepage = "cp1252"
+            elif word == "uc" and arg:
+                uc = max(0, int(arg))
+            elif word == "u" and arg:
+                flush()
+                n = int(arg)
+                out.append(chr(n + 65536 if n < 0 else n))
+                skip_n = uc
+            elif word in _RTF_CHARS:
+                flush()
+                out.append(_RTF_CHARS[word])
+            continue
+        if sym is not None:
+            if sym == "*":
+                star = True
+                continue
+            if skip:
+                continue
+            if skip_n:
+                skip_n -= 1
+                continue
+            flush()
+            out.append({"~": "\u00a0", "_": "-", "-": "", "\n": "\n", "\r": "\n"}.get(sym, sym))
+            continue
+        if skip:
+            continue
+        if hexb is not None:
+            if skip_n:
+                skip_n -= 1
+            else:
+                pend.append(int(hexb, 16))
+            continue
+        if text:
+            flush()
+            if skip_n:
+                drop = min(skip_n, len(text))
+                text, skip_n = text[drop:], skip_n - drop
+            out.append(text)
+    flush()
+    return re.sub(r"\n{3,}", "\n\n", "".join(out))
+
+
 def _rtf(p: Path) -> str:
-    s = p.read_text(encoding="latin-1", errors="replace")
-    s = re.sub(r"\\par[d]?", "\n", s)
-    s = re.sub(r"\{\\\*[^{}]*\}|\\[a-z]+-?\d* ?|[{}]", "", s)
-    return f"# {p.name}\n" + s.strip()
+    s = p.read_bytes()[:50_000_000].decode("latin-1")      # RTF is 7-bit: other bytes are escaped as \'hh
+    return f"# {p.name}\n" + _rtf_text(s).strip()
 
 
 def _ipynb(p: Path) -> str:
