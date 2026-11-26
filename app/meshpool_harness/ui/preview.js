@@ -70,10 +70,10 @@ function pvShell(name, type, altLabel) {
   pvFree(); PVX.open = true; PVX.id++; PVX.m = null; PVX.page = 0; PVX.code = false; PVX.sheet = 0;
   PVX.back = PVX.backNext; PVX.backNext = null; $("#pvBack").hidden = !PVX.back;
   const sb = $$("#pvSeg button"); sb[0].textContent = "Preview"; sb[1].textContent = "Code";
-  const keep = readerAnchor();                                  // the reader keeps their place when the panel takes room
-  el.hidden = false; app.classList.add("pvopen");
-  if (typeof fitPanel === "function") fitPanel();
-  keep();
+  // the chat glides to its new place, as it does for the side panel (a measured one-frame snap of 300 to 460 px before)
+  const show = () => { el.hidden = false; app.classList.add("pvopen"); if (typeof fitPanel === "function") fitPanel(); };
+  if (el.hidden && typeof flipLayout === "function") flipLayout(show);
+  else { const keep = readerAnchor(); show(); keep(); }     // the reader keeps their place when the panel takes room
   $("#pvName").textContent = name; $("#pvName").title = PVX.path || name; $("#pvType").textContent = type;
   $("#pvDl").hidden = !PVX.root || !PVX.path || type === "Folder";
   const ob = $("#pvAlt"); ob.hidden = !altLabel; ob.textContent = altLabel || "";
@@ -91,11 +91,13 @@ function closePreview(quiet) {
   if (typeof EDX !== "undefined" && EDX.dirty) { edGuard().then(ok => ok && closePreview(quiet)); return; }
   if (typeof edStop === "function") edStop();
   PVX.open = false; PVX.id++; pvFree();
-  const keep = readerAnchor();
-  const el = $("#pvp"); if (el) { el.hidden = true; $("#pvStage").innerHTML = ""; $("#pvThumbs").innerHTML = ""; }
-  $("#app")?.classList.remove("pvopen");
-  if (typeof fitPanel === "function") fitPanel();
-  keep();
+  const hide = () => {
+    const el = $("#pvp"); if (el) { el.hidden = true; $("#pvStage").innerHTML = ""; $("#pvThumbs").innerHTML = ""; }
+    $("#app")?.classList.remove("pvopen");
+    if (typeof fitPanel === "function") fitPanel();
+  };
+  if (typeof flipLayout === "function") flipLayout(hide);       // a glide back, not a snap
+  else { const keep = readerAnchor(); hide(); keep(); }
   if (typeof renderTop === "function") renderTop();
   if (!quiet && PVX.opener?.isConnected) try { PVX.opener.focus({preventScroll: true}); } catch (e) {}
   PVX.opener = null;
