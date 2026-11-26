@@ -90,6 +90,12 @@ def cw(ch: str) -> int:
     """Display columns of one character."""
     if unicodedata.combining(ch) or ch in "\u200b\u200d\ufe0f":
         return 0
+    # Marks that sit on the letter before them take no column even when their combining class is 0 (Thai and
+    # Devanagari vowel signs), and neither do format characters (the Persian zero-width non-joiner, direction
+    # marks) or Hangul medial vowels. The soft hyphen is the one format character a terminal draws.
+    cat = unicodedata.category(ch)
+    if cat in ("Mn", "Me") or (cat == "Cf" and ch != "\u00ad") or "\u1160" <= ch <= "\u11ff":
+        return 0
     return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
 
 

@@ -224,6 +224,21 @@ def test_continue_skips_an_empty_chat_for_the_last_real_conversation(tmp_path, m
     assert TUI._resume_target(str(wd), "empty2") == "empty2"          # an id given is used as given
 
 
+# ---- CL-10: Thai and Hindi vowel signs, the Persian zero-width non-joiner and direction marks counted as a column -
+@pytest.mark.parametrize("text,cols", [("ที่", 1), ("हिंदी", 4), ("می‌خواهم", 7), ("a‎b", 2),
+                                       ("⁠x", 1), ("é", 1), ("日本", 4), ("soft­hyphen", 11)])
+def test_display_width_of_marks_and_format_characters(text, cols):
+    from meshpool_harness.agent import tui_render as R
+    assert R.vlen(text) == cols
+
+
+def test_thai_line_is_not_cut_short():
+    from meshpool_harness.agent import tui_render as R
+    line = "ที่" * 10                                       # ten columns on screen
+    assert R.clip(line, 10) == line
+    assert R.hard_wrap(line, 10) == [line]
+
+
 def test_chatgpt_relay_answers_a_json_list_with_400(tmp_path, monkeypatch):
     import http.client
     from meshpool_harness.core import chatgpt_relay as CR
