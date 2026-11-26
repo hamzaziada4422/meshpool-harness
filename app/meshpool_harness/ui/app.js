@@ -232,6 +232,40 @@ async function reportProblem(what = "") {
   openExternal(`${ISSUES}?${q}`);
 }
 function openExternal(url) { post("/api/open-url", {url}).catch(() => { if (/^https?:\/\//i.test(url)) window.open(url, "_blank", "noopener"); }); }
+/* An Office panel asking to connect (ui/office_pair.py). The panel shows a code; the user allows the request with the
+   same code here. Only this window can answer (its launch key), so a process that fetched the panel page gets nothing
+   the user did not allow. Checked when this window comes forward, and every 4 s while the Office listener runs. */
+let opKey = "", opBusy = false;
+async function officePairs() {
+  if (opBusy || document.hidden) return;
+  opBusy = true;
+  let r;
+  try { r = await api("/api/office/pairs"); } catch (e) { r = null; } finally { opBusy = false; }
+  if (!r) return;
+  S.officeOn = !!r.running;
+  const list = r.pending || [], key = list.map(x => x.code).join(",");
+  if (key === opKey) return;
+  opKey = key;
+  $("#opDlg")?.remove();
+  if (!list.length) return;
+  const sc = document.createElement("div"); sc.className = "scrim dlg-scrim"; sc.id = "opDlg";
+  const many = list.length > 1;
+  sc.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="Connect an Office panel"><h3>Connect ${many ? "Office panels" : "the Office panel"}?</h3>
+    <p>${many ? "More than one request is waiting. Allow only the one whose code your meshpool panel in Office shows, and deny the rest." : "Allow it only if the meshpool panel in Office shows this same code. If you did not just open the panel, deny it."} A connected panel can start Work chats and answer their approvals.</p>
+    ${list.map(x => `<div class="row" style="justify-content:space-between;margin-bottom:10px"><span><b style="font:600 18px/1 ui-monospace,Consolas,monospace;letter-spacing:1px">${esc(x.code)}</b> <span style="color:var(--ink-2)">${esc(x.host)}</span></span><span style="display:flex;gap:8px"><button class="btn" data-c="${esc(x.code)}" data-a="deny">Deny</button><button class="btn primary" data-c="${esc(x.code)}" data-a="allow">Allow</button></span></div>`).join("")}
+    <div class="row"><button class="btn" data-a="later">Decide later</button></div></div>`;
+  document.body.appendChild(sc);
+  $$("[data-a]", sc).forEach(b => b.onclick = async () => {
+    if (b.dataset.a === "later") { sc.remove(); return; }
+    b.disabled = true;
+    try {
+      const res = await post("/api/office/pairs", {action: b.dataset.a, code: b.dataset.c});
+      toast(b.dataset.a === "allow" ? "The Office panel is connected." : "The request was denied.");
+      opKey = ""; sc.remove();
+      if ((res.pending || []).length) officePairs();
+    } catch (e) { toast(e.message); opKey = ""; sc.remove(); officePairs(); }
+  });
+}
 
 /* ================================== state ================================== */
 const S = {
@@ -2640,7 +2674,8 @@ async function renderSection(sec) {
       <div class="res" id="ofRes">Checking…</div>
       <p class="pnote" id="ofNote" hidden></p>
       <div style="display:flex;gap:8px;margin-top:8px"><button class="btn primary" id="ofInstall" hidden>Add meshpool to Office</button><button class="btn" id="ofRemove" hidden>Remove from Office</button></div>
-      <pre class="pnote" id="ofLines" hidden style="white-space:pre-wrap"></pre>`;
+      <pre class="pnote" id="ofLines" hidden style="white-space:pre-wrap"></pre>
+      <p class="pnote" id="ofPaired" hidden></p><button class="btn" id="ofForget" hidden>Disconnect Office panels</button>`;
     const show = r => {
       const on = !!(r.manifest && r.certificate) && !r.needs_trust && !(r.days_left !== null && r.days_left < 30);
       $("#ofRes").className = "res" + (on && r.running ? " ok" : "");
@@ -2654,6 +2689,9 @@ async function renderSection(sec) {
     $("#ofInstall").onclick = e => act("install", e.currentTarget);
     $("#ofRemove").onclick = e => act("uninstall", e.currentTarget);
     api("/api/office").then(show).catch(e => { $("#ofRes").className = "res bad"; $("#ofRes").textContent = e.message; });
+    const paired = r => { const n = r.sessions || 0; $("#ofPaired").hidden = !r.running; $("#ofPaired").textContent = n ? `${n} Office panel${n === 1 ? " is" : "s are"} connected. Each one asked with a code you allowed here.` : "No Office panel is connected. When you open the panel in Office, this app asks you to allow its code."; $("#ofForget").hidden = !n; };
+    $("#ofForget").onclick = async () => { try { paired(await post("/api/office/pairs", {action: "forget"})); } catch (e) { toast(e.message); } };
+    api("/api/office/pairs").then(paired).catch(() => {});
   } else if (sec === "advanced") {
     const CH = {MH_AGENT_PERMISSIONS: [["ask", "Ask"], ["edits", "Accept edits"], ["auto", "Full access"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]], MH_SUBAGENTS: [["1", "On"], ["0", "Off"]], MH_SUBAGENT_ACCESS: [["inherit", "Same as the chat"], ["edit", "Read and edit files, no commands"], ["read", "Read and research"]], MH_SUBAGENT_AUTO_APPROVE: [["0", "Off"], ["1", "On"]], MH_SUBAGENT_DEPTH: [["1", "1"], ["2", "2"], ["3", "3"]]};
     // Search keys and the GitHub token have their own pages (Web search, Connectors).
@@ -3156,6 +3194,9 @@ async function restartApp(bootBefore) {
   // The sidebar list: every 4 s while something runs, every 20 s otherwise, never while the tab is hidden.
   let thT = 0;
   setInterval(() => { if (document.hidden) return; const run = S.threads.some(t => ["working", "waiting"].includes(t.state)); if (Date.now() - thT < (run ? 3500 : 20000)) return; thT = Date.now(); Promise.resolve(loadThreads()).catch(() => {}); }, 4000);
+  officePairs();                                       // an Office panel asking to connect: every 4 s while the listener runs
+  setInterval(() => { if (S.officeOn) officePairs(); }, 4000);
+  window.addEventListener("focus", officePairs);
   window.addEventListener("focus", () => { if (!document.hidden) S.spTick?.(); });     // back from an editor: the Session panel shows its edits
   document.addEventListener("visibilitychange", () => { if (document.hidden) return; S.spTick?.(); thT = Date.now(); Promise.resolve(loadThreads()).catch(() => {}); wakeFrame(); const c = S.cur; if (c && !c.stage) { clearTimeout(c.pollT); c.quiet = 0; poll(); } });
 })();

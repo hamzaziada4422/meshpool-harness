@@ -12,11 +12,11 @@ fix once to see the test fail again. Rows from the 0.0.17 ledger were not counte
 | Web UI (UI) | 13 | 13 | 1 |
 | Agent core and tools (AG) | 15 | 15 | 2 |
 | Office files and engines (OF) | 19 | 19 | 2 |
-| Server and security (SV) | 12 | 12 | 4 |
+| Server and security (SV) | 13 | 13 | 3 |
 | Command line and setup (CL) | 13 | 13 | 3 |
 | Lead (LD) | 8 | 7 | 0 |
 | Later pass (LP, LQ) | 12 | 12 | 3 |
-| all | 105 | 104 | 6 |
+| all | 106 | 105 | 5 |
 
 The one fix without a test is LD-07. The race behind it could not be made to happen reliably.
 
@@ -133,6 +133,7 @@ tests that slept a fixed time now wait for an event).
 | SV-10 | An editor save that could not write returned a 500 with a raw PermissionError. |
 | SV-11 | The browser was opened with the app's lifetime launch key on its command line. The key is now single-use. |
 | SV-12 | A blank folder path became the app's own working folder. |
+| SV-13 | The Office panel token was baked into taskpane.html, which any local process can fetch without a token. The page now carries none: the panel pairs, the user allows its code in the app, and only then does it get a session token (ui/office_pair.py; app/tests/test_sv_office_pair.py). |
 
 ## Command line and setup (app/tests/test_cl_b018.py)
 
@@ -172,12 +173,12 @@ tests that slept a fixed time now wait for an event).
 ## Found, not fixed
 
 Needs the owner (a design decision):
-- SV: The Office panel token is in taskpane.html, which any local process can fetch without a token. Office loads the
-  page without a secret, so closing this needs a different design.
 - SV: The mp_s cookie is not tied to a port. Another server on 127.0.0.1 opened in the same browser receives it.
 - SV: The launch key printed in the terminal in browser mode still lasts for the app's life (testkit scripts reuse it).
 
 Known limits:
+- SV-13: A process that reads the Office webview's memory, or one that the user lets in by allowing its code, can
+  still use the panel's routes. A paired panel can answer approvals "yes" once, as before; "always" stays in the app.
 - LP-01: In a container without `timeout` (coreutils or busybox), Stop ends only the top process.
 - LP-05: An old chat that names an upload by path loses that file after 30 days. Today only company profiles upload,
   and learning a profile copies the files into the brand store.

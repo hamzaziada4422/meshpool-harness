@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from meshpool_harness import config as C
 from meshpool_harness import harnesses as HR
 from meshpool_harness.ui import agent_api as A
+from meshpool_harness.ui import office_pair as OP
 from meshpool_harness.settings_api import _key_follows_host  # noqa: F401  (test_connection and the tests use it here)
 from meshpool_harness.ui import workbench as W
 
@@ -37,8 +38,6 @@ EXTRA_PREFIXES = ("/api/memory", "/api/xray", "/api/insights", "/api/work", "/ap
 TOKEN = secrets.token_urlsafe(24)
 OF_DIR = HERE.parent / "office"
 _ICONS: dict = {}
-# The Office panel's own token: good only on the HTTPS listener and only for the few calls the panel makes.
-OFFICE_TOKEN = secrets.token_urlsafe(24)
 # A chat's event stream sends what is new at most about 30 times a second: a streaming reply came as ~80 frames a
 # second at 10 ms, each one parsed and applied by the page (CPU audit). The page paces the text per animation frame.
 SSE_FRAME_S = 0.03
@@ -504,9 +503,7 @@ class Handler(BaseHTTPRequestHandler):
         if size:
             png = _ICONS.get(size) or _ICONS.setdefault(size, OF.icon_png(int(size)))
             return self._send(200, png, "image/png", {"Cache-Control": "max-age=86400"})
-        data = (OF_DIR / name).read_bytes()
-        if name == "taskpane.html":
-            data = data.replace(b"__MESHPOOL_TOKEN__", OFFICE_TOKEN.encode())
+        data = (OF_DIR / name).read_bytes()             # no token in the page: the panel pairs (ui/office_pair.py)
         ctype = {"html": "text/html; charset=utf-8", "js": "text/javascript; charset=utf-8",
                  "css": "text/css; charset=utf-8"}[name.rsplit(".", 1)[1]]
         return self._send(200, data, ctype, {"Content-Security-Policy": OFFICE_FRAMES} if name.endswith(".html") else None)
@@ -1513,14 +1510,16 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
 
 
 class OfficeHandler(Handler):
-    """The HTTPS listener Excel, PowerPoint and Word load the panel from. It serves the panel's files and the few
-    calls the panel makes (start a chat, send, read, stop, answer an approval, read settings), with the panel's own
-    token. Nothing else of the app is reachable here, and what the panel can ask for is narrowed (_json)."""
+    """The HTTPS listener Excel, PowerPoint and Word load the panel from. It serves the panel's files, the pairing
+    calls (ui/office_pair.py), and the few calls a paired panel makes (start a chat, send, read, stop, answer an
+    approval, read settings) with the session token the user allowed in the app. Nothing else of the app is reachable
+    here, and what the panel can ask for is narrowed (_json)."""
     timeout = 60                                      # an idle or half-open connection never holds a thread for good
     _FILES = re.compile(r"/office/(taskpane\.html|taskpane\.js|taskpane\.css|compat\.js|commands\.html|help\.html|"
                         r"icon-(16|32|64|80)\.png)")
     _GET = re.compile(r"/api/agent/[\w-]+|/api/settings")
     _POST = re.compile(r"/api/agent(/[\w-]+/(send|stop|answer))?")
+    _PAIR = re.compile(r"/office/pair(/check)?")
 
     def _gate(self) -> bool:
         if not self._host_ok():
@@ -1533,8 +1532,8 @@ class OfficeHandler(Handler):
         if not rule.fullmatch(path):
             self._send(404, {"error": "not found"})
             return False
-        if self.headers.get("X-Meshpool-Token") != OFFICE_TOKEN:
-            self._send(403, {"error": "forbidden"})
+        if not OP.session_ok(self.headers.get("X-Meshpool-Token")):     # a panel the user allowed in the app
+            self._send(401, {"error": "This panel is not connected to meshpool."})   # 401: the panel pairs again
             return False
         m = re.fullmatch(r"/api/agent/([\w-]+)(/.*)?", path)
         if m and m.group(1) in A.DELETED:             # a deleted chat: forgotten here too
@@ -1571,7 +1570,47 @@ class OfficeHandler(Handler):
             return self._office(m.group(1), m.group(2))
         return super().do_GET()
 
+    def _origin_ok(self) -> bool:
+        """No Origin, or the panel's own (https://localhost:<this port>)."""
+        o = self.headers.get("Origin")
+        if o is None:
+            return True
+        try:
+            u = urlparse(o.strip())
+            return u.scheme == "https" and u.hostname in ("localhost", "127.0.0.1") and \
+                u.port == self.server.server_address[1]
+        except ValueError:
+            return False
+
+    def _pair(self, path: str):
+        """POST /office/pair {"host"} starts a request; POST /office/pair/check {"pair"} reads its answer. Neither
+        needs a token: what they hand out only works after the user allows the code in the app. The pairing id goes
+        in the body, never in the address. A web page cannot send application/json here (no CORS preflight is ever
+        answered), and its Origin would not be the panel's."""
+        if not self._json_type() or not self._origin_ok():
+            return self._send(403, {"error": "forbidden"})
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            if not 0 <= n <= 4096:
+                raise ValueError
+            b = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
+            if not isinstance(b, dict):
+                raise ValueError
+        except ValueError:
+            return self._send(400, {"error": "Bad request."})
+        if path.endswith("/check"):
+            return self._send(200, OP.check(str(b.get("pair") or "")))
+        try:
+            return self._send(200, OP.start(str(b.get("host") or "")))
+        except OP.TooMany as e:
+            return self._send(429, {"error": str(e)})
+
     def do_POST(self):
+        path = urlparse(self.path).path
+        if self._PAIR.fullmatch(path):
+            if not self._host_ok():
+                return self._send(403, {"error": "forbidden"})
+            return self._pair(path)
         if not self._gate():
             return None
         return super().do_POST()
