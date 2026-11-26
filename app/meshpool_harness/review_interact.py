@@ -595,7 +595,8 @@ def _tree(pids) -> list:
     return out
 
 
-def _kill(procs) -> None:
+def _kill(procs, wait: float = 3.0) -> None:
+    """Kill these processes, then wait up to `wait` s for them to be gone."""
     import psutil
     for p in procs:
         try:
@@ -603,7 +604,7 @@ def _kill(procs) -> None:
         except Exception:  # noqa: BLE001
             pass
     try:
-        psutil.wait_procs(procs, timeout=3)
+        psutil.wait_procs(procs, timeout=wait)
     except Exception:  # noqa: BLE001
         pass
 
@@ -1560,13 +1561,14 @@ class Worker:
             self.thread.join(max(0.0, seconds))
 
     def kill(self, wait: float = 5.0) -> None:
-        """End the driver and every browser process under it, then wait up to `wait` s for the thread."""
+        """End the driver and every browser process under it, then wait up to `wait` s for them and the thread."""
         self.killed = True
         procs = _tree(self.pids or _driver_pids(self.before))
         have = {p.pid for p in procs}
         procs += [p for p in self.procs if p.pid not in have]
-        _kill(procs)
-        self.join(wait)
+        t_end = time.monotonic() + wait
+        _kill(procs, min(3.0, wait))
+        self.join(t_end - time.monotonic())
 
     def finish(self) -> None:
         """After the thread is done: end anything it left (only when its processes are known exactly)."""

@@ -564,13 +564,17 @@ class Site:
         return None if rel is None else f"{self.origin}/{rel}"
 
     def close(self) -> None:
+        """Stop serving. It does not wait for the server's loop (up to half a second): Stop must be quick."""
         if not self._closed:
             self._closed = True
-            try:
-                self.srv.shutdown()
-                self.srv.server_close()
-            except Exception:  # noqa: BLE001
-                pass
+
+            def down():
+                try:
+                    self.srv.shutdown()
+                    self.srv.server_close()
+                except Exception:  # noqa: BLE001
+                    pass
+            threading.Thread(target=down, name="meshpool-look-site-close", daemon=True).start()
 
 
 def _origins(url: str) -> set:
@@ -785,7 +789,7 @@ def render_web(url: str, out_dir, tag: str = "r1", request: str = "", launch=Non
 
     def end(why: str | None = None) -> None:
         if why:
-            worker.kill()
+            worker.kill(wait=0.5 if why == "stopped" else 2.0)   # killed at once; the thread unwinds on its own
         else:
             worker.join(3)
             if worker.alive():
