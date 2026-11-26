@@ -1134,9 +1134,11 @@ def summary_line(kind: str, st: dict, extra: list | None = None, note: str = "")
     left_items = [t for t in _items(left, 2) if whole(t)] if left else []
     measured = [x for x in (extra or []) if not any(_words(x) & _words(q) for q in left_items)]
     open_items = left_items or [t for t in _items(measured, 1) if whole(t)]
-    if left and not left_items:
-        shaky = True                                            # open, but nothing worth saying about it
-    n_open = len(open_items)
+    # Every open problem counts, said in words or not: an item too short to print ("section 3") is still open, so the
+    # line says how many rather than nothing (the footer read "Checked · all good" over an open major problem).
+    n_open = len(left) or len(measured)
+    if n_open and not open_items:
+        open_items = [_things(n_open)]
     head = f"Checked as {persona}" if persona else "Checked"
     listed = _items(fixed, 2)
     tail = (": " + "; ".join(listed)) if listed else ""

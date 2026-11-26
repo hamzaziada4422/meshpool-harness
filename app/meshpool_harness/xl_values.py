@@ -158,7 +158,8 @@ def values(path, timeout: float = 25) -> dict | None:
     return res
 
 
-def _cell_xml(ref: str, attrs: str, f: str, v) -> str | None:
+def _cell_xml(attrs: str, f: str, v) -> str | None:
+    """One <c> element: attrs is its whole attribute string (r included), f its formula element, v the value."""
     from datetime import date, datetime, time as dtime
     attrs = re.sub(r'\st="[^"]*"', "", attrs)
     t = ""
@@ -173,10 +174,38 @@ def _cell_xml(ref: str, attrs: str, f: str, v) -> str | None:
         t, text = (' t="e"' if v.strip() in _ERRORS else ' t="str"'), escape(v)
     else:
         return None
-    return f'<c r="{ref}"{attrs}{t}>{f}<v>{text}</v></c>'
+    return f'<c{attrs}{t}>{f}<v>{text}</v></c>'
 
 
-_CELL = re.compile(r'<c r="([A-Z]+\d+)"([^>]*)>(<f[^>]*?(?:/>|>.*?</f>))<v\s*(?:/>|></v>)</c>', re.S)
+# One <c> element at a time: a self-closing <c .../> (no formula, left alone) or <c ...>...</c> that never runs past its
+# own </c>. B1: a lazy ".*?</f>" across the sheet let a formula cell with no <v> swallow the cells after it, up to the
+# next empty <v>, and the whole span was written back as one cell (B1 and A2 deleted from the sheet).
+_CELL = re.compile(r'<c\b([^>]*?)(?:/>|>((?:(?!</c>).)*)</c>)', re.S)
+_REF = re.compile(r'\sr="([A-Z]+\d+)"')
+_FORMULA = re.compile(r'\s*(<f\b[^>]*?(?:/>|>(?:(?!</f>).)*</f>))\s*(?:<v\s*/>|<v\s*>\s*</v>)?\s*', re.S)
+
+
+def _fill_xml(xml: str, cells: dict) -> tuple[str, int]:
+    """xml of a sheet part with the values of cells ({"B2": value}) stored in those formula cells whose <v> is empty or
+    missing. Every other cell, and all text between cells, stays byte for byte. Returns (xml, cells filled)."""
+    n = 0
+
+    def sub(m):
+        nonlocal n
+        inner = m.group(2)
+        ref = _REF.search(m.group(1) or "")
+        if inner is None or ref is None or ref.group(1) not in cells:
+            return m.group(0)
+        fm = _FORMULA.fullmatch(inner)                # only <f> and an empty or missing <v>, nothing else
+        if fm is None:
+            return m.group(0)
+        new = _cell_xml(m.group(1), fm.group(1), cells[ref.group(1)])
+        if new is None:
+            return m.group(0)
+        n += 1
+        return new
+
+    return _CELL.sub(sub, xml), n
 
 
 def _sheet_parts(z: zipfile.ZipFile) -> dict:
@@ -228,16 +257,9 @@ def fill(path, timeout: float = 25) -> int:
                     data = zin.read(info.filename)
                     cells = want.get(info.filename)
                     if cells:
-                        def sub(m, cells=cells):
-                            nonlocal n
-                            if m.group(1) not in cells:
-                                return m.group(0)
-                            new = _cell_xml(m.group(1), m.group(2), m.group(3), cells[m.group(1)])
-                            if new is None:
-                                return m.group(0)
-                            n += 1
-                            return new
-                        data = _CELL.sub(sub, data.decode("utf-8")).encode("utf-8")
+                        xml, k = _fill_xml(data.decode("utf-8"), cells)
+                        if k:
+                            data, n = xml.encode("utf-8"), n + k
                     zout.writestr(info, data)
         if n:
             os.replace(tmp, path)

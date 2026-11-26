@@ -183,11 +183,12 @@ def insert_position(task: str) -> int | None:
 
 
 def add_to_deck(task: str, deck: str, *, workdir: str, task_id: str, client=None, files: list[str] | None = None,
-                model: str | None = None, density: str | None = None) -> dict:
+                model: str | None = None, density: str | None = None, root: str | None = None) -> dict:
     """Slides added to a deck the user already has: forge builds them in that deck's look (its master and theme
     when it is 16:9, else its colours and fonts), then they are added to the deck itself, in place (Undo keeps the
-    earlier version). A copy "<name> (updated).pptx" is made only when the deck is open in another app or the request
-    asks for one ("save as", "keep the original"): see deck_target."""
+    earlier version). A copy "<name> (updated).pptx" is made when the deck is outside the chat's folder (root, else
+    MH_CHECKPOINT_ROOT, which the office job sets: Undo covers only that folder), is open in another app, or the
+    request asks for one ("save as", "keep the original"): see deck_target."""
     from engines.forge.brief import slide_count
     from engines.forge.build import build
     from engines.forge.merge import append
@@ -205,7 +206,8 @@ def add_to_deck(task: str, deck: str, *, workdir: str, task_id: str, client=None
     # the job works on a copy in "Meshpool outputs/<job>/": save next to the user's own deck when it is there
     orig = src.parent.parent.parent / src.name
     home = orig.parent if src.parent.parent.name == "Meshpool outputs" and orig.is_file() else src.parent
-    out, why = deck_target(home / src.name, task)
+    root = root or os.environ.get("MH_CHECKPOINT_ROOT") or None
+    out, why = deck_target(home / src.name, task, root)
     at = insert_position(task)
     part = out.with_name(f".{out.stem}.{os.getpid()}.part{out.suffix}")   # written whole, then moved into place:
     try:                                                  # a failed merge never leaves the user's deck half-written
@@ -219,10 +221,14 @@ def add_to_deck(task: str, deck: str, *, workdir: str, task_id: str, client=None
         if part.exists():
             part.unlink()
     left = sum(len(v) for v in (res.get("unresolved") or {}).values())
+    where = " in this chat's folder" if root and out.parent != (home / src.name).parent else ""
     saved = (f" and saved it as {out.name} (the same deck, changed in place; Undo puts the earlier version back)"
              if why == "in_place" else
-             f" and saved it as {out.name}: {src.name} is open in another app (its lock file is next to it), so it "
-             "was not changed" if why == "locked" else f" and saved it as {out.name}, as asked; {src.name} is unchanged")
+             f" and saved it as {out.name}{where}: {src.name} is open in another app (its lock file is next to it), so "
+             "it was not changed" if why == "locked" else
+             f" and saved it as {out.name}{where}, as asked; {src.name} is unchanged" if why == "save_as" else
+             f" and saved them in a copy, {out.name}{where}: {src.name} is outside this chat's folder, where Undo "
+             "could not put it back, so it was not changed")
     return {"ok": out.exists(), "artifacts": [str(out)], "evidence": [], "turns": res.get("calls"), "reason": None,
             "answer": (f"Added {added} slide{'s' if added != 1 else ''} to {src.name}"
                        + (f" at slide {at}" if at else "") + saved +
@@ -241,17 +247,27 @@ def _locked(p: Path) -> bool:
     return any((p.parent / x).exists() for x in ("~$" + n, "~$" + n[1:], "~$" + n[2:], f".~lock.{n}#"))
 
 
-def deck_target(deck: Path, task: str = "") -> tuple[Path, str]:
+def deck_target(deck: Path, task: str = "", root: str | Path | None = None) -> tuple[Path, str]:
     """Where slides added to a deck are saved: the deck itself, changed in place (the chat's Undo checkpoint keeps
-    the earlier version), unless the deck is open in another app (its lock file is next to it) or the request asks
-    for a copy ("save as", "keep the original"). Daniel, round 2: "update the same deck" made "Deck (updated).pptx"
-    beside the original and took more prompts to merge the two. Returns (path, "in_place" | "locked" | "save_as")."""
-    why = "locked" if _locked(deck) else "save_as" if _SAVE_AS.search(task or "") else "in_place"
+    the earlier version), unless the deck is open in another app (its lock file is next to it), the request asks
+    for a copy ("save as", "keep the original"), or the deck is outside root, the chat's folder that Undo covers
+    (no root known: nothing covers it). Daniel, round 2: "update the same deck" made "Deck (updated).pptx" beside
+    the original and took more prompts to merge the two. Release review: add_slides("~/Desktop/Board.pptx") changed
+    that deck in place, where Undo cannot put it back. The copy of a deck outside root is made in root, else next to
+    the deck. Returns (path, "in_place" | "locked" | "save_as" | "outside")."""
+    deck = Path(deck)
+    try:
+        inside = root is not None and Path(root).resolve() in deck.resolve().parents
+    except OSError:
+        inside = False
+    why = ("locked" if _locked(deck) else "save_as" if _SAVE_AS.search(task or "") else
+           "in_place" if inside else "outside")
     if why == "in_place":
         return deck, why
-    out, i = deck.with_name(f"{deck.stem} (updated){deck.suffix}"), 2
+    base = deck if inside or root is None else Path(root) / deck.name
+    out, i = base.with_name(f"{base.stem} (updated){base.suffix}"), 2
     while out.exists():
-        out = deck.with_name(f"{deck.stem} (updated {i}){deck.suffix}")
+        out = base.with_name(f"{base.stem} (updated {i}){base.suffix}")
         i += 1
     return out, why
 
