@@ -208,6 +208,22 @@ def test_look_at_tells_a_reviewer_with_no_picture_what_is_there(proj, tmp_path, 
     assert not _chrome_children()
 
 
+def test_look_at_a_section_name_finds_the_section_not_the_nav_link_to_it(proj, tmp_path, monkeypatch):
+    """PR-04: "look at Menu" matched the nav link "Menu" first, so the reviewer read the nav bar, not the menu."""
+    page = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" "
+            "content=\"width=device-width\"><title>Cakes</title></head><body><nav><a href=\"#menu\">Menu</a> "
+            "<a href=\"#hours\">Hours</a></nav><main><h1>Sweet Crumb</h1>"
+            "<section id=\"menu\"><h2>Menu</h2><p>Seeded rye 6 dollars</p></section></main></body></html>\n")
+    plan = {"persona": PERSONA, "actions": [{"do": "look_at", "target": "Menu", "width": "desktop"}]}
+    both = Both(monkeypatch, [write("index.html", page), "Made it."], [plan, verdict()])
+    a, _ = agent(proj)
+    from meshpool_harness import providers as PV
+    a._no_vision_models = {PV.split(a.current_model())[1]}
+    a.send("make a page for the bakery with its menu")
+    assert "it shows: Menu Seeded rye 6 dollars" in body_text(both.r_bodies[1])
+    assert not _chrome_children()
+
+
 def test_a_missing_browser_is_said_not_hidden(proj, tmp_path, monkeypatch):
     plan = {"persona": PERSONA, "actions": [{"do": "click", "target": "Order now"}]}
     both, _ = two_rounds(monkeypatch, tmp_path, [plan, verdict(), ])       # a fake render: no browser is held open

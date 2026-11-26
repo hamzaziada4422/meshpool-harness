@@ -39,8 +39,8 @@ independent persona reviewer (PR). The feature rows, UXR-01 and PR-01, count as 
 | Look review step (RV, UXR) | 4 | 4 | 1 |
 | Fixes from the review step's live check (VF) | 5 | 5 | 0 |
 | Review step polish (LP2) | 6 | 6 | 2 |
-| Independent persona reviewer (PR) | 5 | 4 | 1 |
-| all | 281 | 278 | 21 |
+| Independent persona reviewer (PR) | 5 | 5 | 1 |
+| all | 281 | 279 | 21 |
 
 "Still open" counts what the "Found, not fixed" section lists today: two questions for the owner and nineteen known
 limits and open bugs, all open for 0.0.19. What the first pass found but left was fixed in the later pass.
@@ -48,8 +48,7 @@ limits and open bugs, all open for 0.0.19. What the first pass found but left wa
 Rows listed but not counted: WF-E (counted under WF-07), SR-12 (under UX-20), SR-14 (under AP), AP-08 (under UX-33),
 OM-07 (not a bug) and UI-14 (under LD-06).
 
-Three fixes have no test. LD-07: the race behind it could not be made to happen reliably. MG-02: a word list. PR-04:
-the look_at test passes with and without the change, so none of the tests holds it.
+Two fixes have no test. LD-07: the race behind it could not be made to happen reliably. MG-02: a word list.
 
 The later pass fixed the items the first pass found but left, and closed PA-skills-13 from the 0.0.17 ledger (three
 tests that slept a fixed time now wait for an event).
@@ -499,7 +498,7 @@ shim) is not counted.
 | PR-01 | agent/lookreview.py (feature) | The builder reviewed its own work in its own conversation, with its own reasoning in view. | A separate model call with a fresh context (none of the builder's messages, system prompt or reasoning) first names who would really use the thing, such as a customer ordering on her phone, never the person who asked. It then tries a page as that person, with up to 4 actions of its own in the same browser, and returns problems ranked blocker, major or minor. The builder fixes them and the same persona checks again, at most twice. Files get a reader persona and no actions. The Checked line names the persona. The calls run on the chat's own model and gate, and are counted in the receipt. When the reviewer cannot be had, the builder gets the measured findings and the line says "Checked: measured only". | test_reviewer_call_has_a_fresh_context_and_none_of_the_builders, test_reviewer_text_never_shows_as_an_assistant_reply, test_persona_is_derived_kept_for_round_two_and_shown_in_the_note, test_action_requests_run_and_their_results_go_back_to_the_reviewer, test_actions_run_in_the_browser_that_drew_the_pictures_and_it_is_closed_after, test_a_pass_ends_the_loop_with_no_second_model_loop, test_at_most_two_rounds_when_the_reviewer_never_passes, test_blockers_reach_the_builder_first_with_the_persona, test_explicit_user_choices_win_over_the_reviewer, test_receipt_counts_the_reviewers_calls_and_tokens, test_a_bad_reviewer_reply_falls_back_to_the_measured_findings, test_a_docx_gets_a_reader_persona_and_no_action_requests, test_the_persona_is_the_end_user_never_the_requester, test_mock_server_full_loop_with_the_independent_reviewer and the other tests in the file | fixed |
 | PR-02 | agent/lookreview.py | On the live Claude adapter, a verdict with a stray closing bracket made the whole review fall back. The plan reply called a problem "problem" instead of "what". A "look at" action told a reviewer with no picture nothing, and an action the browser could not run was not reported. | The reply is read with the stray bracket left out (brackets inside text are kept), "problem" is read as "what", "look at" reports the text of the section, and an action the browser could not run is said to be "not tried". | test_replies_recorded_from_the_adapter_are_read, test_a_recorded_verdict_with_a_stray_bracket_no_longer_ends_the_review, test_look_at_tells_a_reviewer_with_no_picture_what_is_there, test_a_missing_browser_is_said_not_hidden | fixed |
 | PR-03 | agent/lookreview.py | A reply the tolerant reader could not parse sent the whole review back to measured only. | One retry in a fresh context that shows the reviewer its own reply and asks for only the JSON object. The retry is counted in the turn's usage. Only a second failure falls back. | test_a_reply_only_the_retry_fixes_is_retried_once_in_a_fresh_context_and_counted, test_a_reply_the_retry_cannot_fix_falls_back_after_one_retry, test_a_reply_the_tolerant_parser_reads_needs_no_retry, test_a_failing_reviewer_call_falls_back_too | fixed |
-| PR-04 | agent/lookreview.py | A "look at" action that names a section by its heading ("Hours") looked for a link or button with that name, so the section was not found. | look_at finds a section by its heading first, then by the old lookup. | none (the look_at test passes with or without the change) | fixed |
+| PR-04 | agent/lookreview.py | A "look at" action that names a section by its heading ("Hours") looked for a link or button with that name, so the section was not found. | look_at finds a section by its heading first, then by the old lookup. | test_look_at_a_section_name_finds_the_section_not_the_nav_link_to_it | fixed |
 | PR-05 | agent/lookreview.py | The Checked line carried the reviewer's whole sentences, cut in the middle of a word at 90 characters, with the reason after a comma ("..., so a keyboard user cannot see where they are"). | The reviewer is asked for each problem as a short phrase. The line keeps the thing and leaves out the why, and a long phrase ends on a word. | test_problem_phrases_in_the_checked_line_are_short_and_end_on_a_word | fixed |
 
 ## Persona testing
