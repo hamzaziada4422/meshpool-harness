@@ -3902,7 +3902,8 @@ class Agent:
         sig = self._tree_sig() if sh else None
         if sh and sig is not None:
             bg = self.ws.__dict__.get("_bg") or {}
-            killed = [r for r in runs if r[0] == key and len(r) > 6 and r[6]]
+            # killed with no project file changed since: a changed input or fixed code may well run now
+            killed = [r for r in runs if r[0] == key and len(r) > 6 and r[6] and r[5] == sig]
             if len(killed) >= 2 and not any(e["p"].poll() is None for e in list((self.ws.__dict__.get("_bg") or {}).values())):
                 return ("[Meshpool] Not run: this command was killed twice already (exit 137 or 124: it ran out of memory "
                         "or time). Running it again will not change that. Use a smaller input, a shorter timeout, or "
@@ -3949,8 +3950,10 @@ class Agent:
                 wnote += "\n[Meshpool] Your checks keep giving the same result; change approach or answer."
             sig = sig2
         out = str(out) + wnote if wnote else out
-        oom = bool(re.search(r"\[exit (137|124)\]|\brc=(137|124)\b|exit(?:ed with)? code (137|124)\b|\bKilled\b|timed out",
-                             str(out)))
+        # a kill by memory or time: the exit code, bash's "1234 Killed" line or the tool's own timeout note; not the
+        # words "timed out" or "Killed" anywhere in a log (a passing test_request_timed_out)
+        oom = bool(re.search(r"\[exit (137|124)\]|\brc=(137|124)\b|exit(?:ed with)? code (137|124)\b|"
+                             r"(?m:^|\d\s+)Killed\b|\[timed out after \d+s\]", str(out)))
         runs.append((key, h, edits, failed, str(out)[:240], sig, oom))   # a failed call counts for the failure breaker; a read for the read breaker
         del runs[:-12]
         return out
@@ -5617,7 +5620,7 @@ class Agent:
             answered = True
             notes.append(note or "")
         guard = self._power_file(name, args)
-        if guard and name in ("bash", "shell", "bash_start", "bash_many", "exec_command") and self.mode == "auto":
+        if guard and name in ("bash", "shell", "bash_start", "bash_many", "exec_command", "probe", "trace") and self.mode == "auto":
             guard = ""                             # full access: commands run as the user chose
         if guard:                                  # hooks, allow rules, MCP servers: the agent never grants itself these
             if not self.approve:
@@ -5661,8 +5664,14 @@ class Agent:
         if risky:
             group = "outside-" + name
         cmds = PR.commands_of(name, args) if group == "bash" and not risky else []
-        if cmds and self.mode in ("ask", "edits") and not _destructive(args, self.root) and \
-                all(PR.safe_read(c, self.root) for c in cmds):
+        wd, wd_ok = None, True                     # shell and exec_command run in their workdir: paths start there
+        if cmds and name in ("shell", "exec_command") and args.get("workdir"):
+            try:
+                wd = self.ws._path(str(args["workdir"]))
+            except Exception:  # noqa: BLE001
+                wd_ok = False                      # unresolvable: never the shortcut
+        if cmds and wd_ok and self.mode in ("ask", "edits") and not _destructive(args, self.root) and \
+                all(PR.safe_read(c, self.root, wd) for c in cmds):
             return True, ""                    # H-15: a plain read-only command inside the project needs no question
         if group == "bash":
             pats = [x[5:] for x in self.always if x.startswith("bash:")]
@@ -5751,9 +5760,11 @@ class Agent:
             s = os.path.normcase(str(x)).casefold()
             s = re.sub(r"::\$data$", "", s)
             return re.sub(r"[. ]+$", "", s)
-        if name in ("bash", "shell", "bash_start", "bash_many"):
+        if name in ("bash", "shell", "bash_start", "bash_many", "exec_command", "probe", "trace"):
+            # every shell tool, each with its own argument (exec_command's script is `cmd`)
             text = " ".join(str(x) for x in ([args.get("command")] if not isinstance(args.get("command"), list)
-                                             else args.get("command")) + list(args.get("commands") or []))
+                                             else args.get("command")) + list(args.get("commands") or [])
+                            + [args.get("cmd") or ""])
             low = text.casefold().replace("\\", "/")
             return next((f for f in (".meshpool", ".mcp", "hooks.json", "permissions.json", "mcp.json",
                                      "trusted-folders.json") if f in low), "")   # globs and writers included

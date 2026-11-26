@@ -922,6 +922,17 @@ def write_src(p: Path, text: str, eol: str = "\n", bom: bool = False, append: bo
     _drop_pyc(p)
 
 
+def text_lines(text: str) -> list[str]:
+    """The lines of a text the way compilers, tracebacks, grep and editors count them: split at \\n only (a CR before
+    it dropped). str.splitlines also splits at form feeds, \\x1c-\\x1e, \\x85 and U+2028, so a Python file with a
+    form feed had every later line number off by one against its tracebacks. A file with only CR endings (classic
+    Mac) is split at CR."""
+    lines = text.split("\n" if "\n" in text or "\r" not in text else "\r")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return [ln[:-1] if ln.endswith("\r") else ln for ln in lines]
+
+
 def shown(text: str) -> str:
     """Text safe to show the model: bytes that are not UTF-8 become U+FFFD."""
     return text.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
@@ -1122,7 +1133,7 @@ class Workspace:
             text = self._cread(path)
             self.seen[self._cpath(path)] = self._hash(text)
             self.original.setdefault(self._cpath(path), self.seen[self._cpath(path)])
-            lines = text.splitlines()
+            lines = text_lines(text)
             s, e = max(1, start or 1), min(len(lines), end or len(lines))
             body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(s, e + 1))
             return self._cap(f"{path} lines {s}-{e} of {len(lines)}\n{body}", "read")
@@ -1145,11 +1156,32 @@ class Workspace:
         text = read_src(p)[0]
         self.seen[str(p)] = self._hash(text)
         self.original.setdefault(str(p), self.seen[str(p)])
-        lines = shown(text).splitlines()
+        lines = text_lines(shown(text))
         s = max(1, start or 1)
         e = min(len(lines), end or len(lines))
         if s > len(lines) and lines:
             return f"{path}: file has {len(lines)} lines (start={s} is past the end)"
+        cap = self.max_tool_chars
+        if sum(len(x) + 8 for x in lines[s - 1:e]) > 20 * cap:
+            # a big file (a log, a data dump): only the head and the tail are shown, so only those are numbered, and no
+            # numbered copy of the whole file goes to the run folder (135 MB read whole: 3.8 s and a 152 MB copy)
+            keep = HEAD if cap >= MAX_TOOL_CHARS else max(250, int(cap * 0.375))
+
+            def rows(idx):
+                out, n = [], 0
+                for i in idx:
+                    row = f"{i:>5}  {lines[i - 1]}"[:keep]
+                    n += len(row) + 1
+                    if n > keep and out:
+                        break
+                    out.append(row)
+                return out
+            hl = rows(range(s, e + 1))
+            tl = rows(range(e, s + len(hl) - 1, -1))[::-1]
+            gap = e - s + 1 - len(hl) - len(tl)
+            return clean(f"{path} lines {s}-{e} of {len(lines)}\n" + "\n".join(hl)
+                         + f"\n... [{gap} lines not shown. Read them with read_file start/end, or search with grep] ...\n"
+                         + "\n".join(tl))
         body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(s, e + 1))
         return self._cap(f"{path} lines {s}-{e} of {len(lines)}\n{body}", "read")
 
@@ -1230,7 +1262,7 @@ class Workspace:
             if b"\0" in raw[:8192]:                               # a binary file: never matched as text
                 continue
             text = raw.decode("utf-8", errors="ignore")
-            lines = text.splitlines()
+            lines = text_lines(text)
             hits: list[int] = []                                   # 1-based line numbers that start a match
             need = head - len(out) + 1                             # enough to know the list is full; no more
             if multiline:
@@ -1287,10 +1319,8 @@ class Workspace:
             raise ToolError("glob patterns are relative to the working directory (no absolute paths or '..')")
         try:
             res = []
-            for p in self.root.glob(pattern):
-                if self.should_stop and self.should_stop():
-                    raise ToolError("stopped by the user")
-                if SKIP_DIRS.isdisjoint(p.relative_to(self.root).parts) and (not inside_only or self._inside(p)):
+            for p in self._glob_paths(pattern):
+                if not inside_only or self._inside(p):
                     res.append(str(p.relative_to(self.root)))
             if not any(ch in pattern for ch in ("node_modules", "dist/", "build/")):   # unless asked for by name
                 skip = {str(x.relative_to(self.root)) for x in self._ignored([self.root / r for r in res])}
@@ -1299,6 +1329,57 @@ class Workspace:
         except (NotImplementedError, ValueError) as e:
             raise ToolError(f"invalid glob pattern: {e}")
         return self._cap("\n".join(res[:2000]) or "no files", "glob")
+
+    @staticmethod
+    def _glob_hit(pat: list, parts: list) -> bool:
+        """parts (a path's names) matches pat (a glob's names, "**" for any number of folders), as pathlib does."""
+        if not pat:
+            return not parts
+        if pat[0] == "**":
+            return Workspace._glob_hit(pat[1:], parts) or (bool(parts) and Workspace._glob_hit(pat, parts[1:]))
+        return bool(parts) and fnmatch.fnmatch(parts[0], pat[0]) and Workspace._glob_hit(pat[1:], parts[1:])
+
+    def _glob_paths(self, pattern: str):
+        """What root.glob(pattern) finds outside SKIP_DIRS, found without entering them (H-11: pathlib walked all of
+        node_modules for **/*.py and the results were dropped afterwards, with no Stop check while it walked), and
+        no deeper than the pattern can match."""
+        parts = [x for x in pattern.replace("\\", "/").split("/") if x not in ("", ".")]
+        if not parts:
+            raise ValueError(f"Unacceptable pattern: {pattern!r}")
+        dirs_only = pattern.replace("\\", "/").endswith("/") or parts[-1] == "**"
+        magic = re.compile(r"[*?\[]")
+        n = 0
+        while n < len(parts) and not magic.search(parts[n]) and parts[n] != "**":
+            n += 1
+        lit, rest = parts[:n], parts[n:]
+        if any(x in SKIP_DIRS for x in lit):
+            return
+        base = self.root.joinpath(*lit)
+        if not rest:                                          # no wildcard: the path itself, when it is there
+            if base.exists() and (not dirs_only or base.is_dir()):
+                yield base
+            return
+        if not base.is_dir():
+            return
+        depth = None if "**" in rest else len(rest)
+        if not rest or all(x == "**" for x in rest):
+            yield base                                        # "**" includes the folder itself, as pathlib does
+        # a fixed depth follows symlinked folders as pathlib's * does; ** never enters them (no loops), as in pathlib
+        for dp, dns, fns in os.walk(base, followlinks=depth is not None):
+            if self.should_stop and self.should_stop():
+                raise ToolError("stopped by the user")
+            rel = list(Path(dp).relative_to(base).parts)
+            dns[:] = [d for d in dns if d not in SKIP_DIRS]
+            names = [(d, True) for d in dns] + [(f, False) for f in fns if not dirs_only]
+            for nm, is_dir in names:
+                if self._glob_hit(rest, rel + [nm]):
+                    p = Path(dp, nm)
+                    if rest[-1] == "**" and p.is_symlink():
+                        continue                              # a final ** lists real folders only, as pathlib's
+                    if not dirs_only or is_dir or p.is_dir():
+                        yield p
+            if depth is not None and len(rel) + 1 >= depth:
+                dns[:] = []                                   # deeper names cannot match the pattern
 
     def _walk(self, base: Path):
         """H-11: files under base, never entering SKIP_DIRS, and checking the Stop flag as it walks."""
@@ -1317,7 +1398,7 @@ class Workspace:
         shows it (line, column, the line itself and a caret), so the agent fixes it in the same step instead of
         finding out when the code runs. None when the file parses or the language is not checked."""
         def where(line: int, col: int, msg: str) -> str:
-            lines = text.splitlines()
+            lines = text_lines(text)
             src = lines[line - 1] if 0 < line <= len(lines) else ""
             caret = " " * max(0, min(col, len(src) + 1) - 1) + "^"
             return f"line {line}, column {col}: {msg}\n    {src}\n    {caret}"
@@ -1847,8 +1928,10 @@ class Workspace:
                     r = self._proc(command, env, timeout_s, shell=True, cwd=cwd)
             code, out = r.returncode, _C.redact_secrets(r.stdout + ("\n" + r.stderr if r.stderr else ""))   # OSS-29
         except subprocess.TimeoutExpired as e:
-            code = 124
-            out = ((e.stdout or "") if isinstance(e.stdout, str) else "") + f"\n[timed out after {timeout_s}s]"
+            from meshpool_harness import config as _C
+            code = 124                           # OSS-29: what a command printed before its timeout is redacted too
+            out = _C.redact_secrets((e.stdout or "") if isinstance(e.stdout, str) else "") + \
+                f"\n[timed out after {timeout_s}s]"
         if not record:
             return self._cap(out or "no matches", kind), code
         asked = self.__dict__.get("asked_cmds") or ()
@@ -1903,11 +1986,15 @@ class Workspace:
             else:
                 args = [bash, "-c", fix_nul_redirect(command)]
         elif os.name == "nt":
-            args, shell = ["powershell", "-NoProfile", "-NonInteractive", "-Command", command], False
+            args, shell = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                           "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command], False
         else:
             args, shell = command, True
+        # Git Bash and PowerShell (with its OutputEncoding set) write UTF-8 on Windows, as in _run: the locale's code
+        # page (cp1252) turned every non-ASCII character of a dev server's output into mojibake
         p = subprocess.Popen(args, shell=shell, cwd=self.root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             stdin=subprocess.DEVNULL, text=True, errors="replace", **kw)
+                             stdin=subprocess.DEVNULL, text=True, errors="replace",
+                             encoding="utf-8" if os.name == "nt" else None, **kw)
         _BG_ALL.add(p)
         n = self.__dict__["_bg_n"] = self.__dict__.get("_bg_n", 0) + 1
         bid = f"bg{n}"
@@ -1929,8 +2016,9 @@ class Workspace:
                 f"Read its output with bash_output id={bid}; stop it with bash_stop id={bid}.\n" + self._bg_read(bid, entry))
 
     def _bg_read(self, bid, entry):
+        from meshpool_harness import config as _C
         with entry["lock"]:
-            new = "".join(entry["text"][entry["read"]:])
+            new = _C.redact_secrets("".join(entry["text"][entry["read"]:]))   # OSS-29, as for bash
             entry["read"] = len(entry["text"])
         rc = entry["p"].poll()
         state = "running" if rc is None else f"exited with code {rc}"
@@ -2150,6 +2238,7 @@ class Workspace:
 
         files: dict = {}                              # key -> [path object, text before or None, text after or None]
         order: list = []
+        boms: set = set()                             # files that start with a UTF-8 BOM: matched without it, kept
 
         def get(path: str):
             key, p = loc(path)
@@ -2161,6 +2250,9 @@ class Workspace:
                     before = p.read_bytes().decode("utf-8", "surrogateescape")
                 else:
                     before = None
+                if before is not None and before.startswith("\ufeff"):
+                    before = before[1:]               # else the first line never matches the patch's context
+                    boms.add(key)
                 files[key] = [p, before, before]
                 order.append(key)
             shown.setdefault(key, path)
@@ -2189,6 +2281,8 @@ class Workspace:
                 if h.move and h.move != h.path:
                     k2, f2 = get(h.move)
                     f2[2], f[2] = new, None
+                    if key in boms:
+                        boms.add(k2)
                     modified.append(h.move)
                 else:
                     f[2] = new
@@ -2201,6 +2295,9 @@ class Workspace:
             if bad and (before is None or not self._syntax_error(p, before)):
                 raise ToolError(f"apply_patch rejected: it would make {shown[key]} stop parsing. Nothing was "
                                 f"written. Fix the patch at the marked place and retry.\n{bad}")
+        def raw(key, text):
+            return (("\ufeff" if key in boms else "") + text).encode("utf-8", "surrogateescape")
+
         done: list = []                               # write, restoring everything if one write fails
         try:
             for key in order:
@@ -2212,25 +2309,25 @@ class Workspace:
                     if after is None:
                         self._cexec(["rm", "-f", key])
                     else:
-                        self._cwrite(key, after)
+                        self._cwrite(key, ("\ufeff" if key in boms else "") + after)
                 elif after is None:
                     p.unlink()
                     _drop_pyc(p)
                 else:
                     p.parent.mkdir(parents=True, exist_ok=True)
-                    p.write_bytes(after.encode("utf-8", "surrogateescape"))
+                    p.write_bytes(raw(key, after))
                     _drop_pyc(p)
         except Exception as e:  # noqa: BLE001
             for key in done:
                 p, before, after = files[key]
                 try:
                     if remote:
-                        self._cexec(["rm", "-f", key]) if before is None else self._cwrite(key, before)
+                        self._cexec(["rm", "-f", key]) if before is None else self._cwrite(key, ("\ufeff" if key in boms else "") + before)
                     elif before is None:
                         p.unlink(missing_ok=True)
                     else:
                         p.parent.mkdir(parents=True, exist_ok=True)
-                        p.write_bytes(before.encode("utf-8", "surrogateescape"))
+                        p.write_bytes(raw(key, before))
                 except Exception:  # noqa: BLE001
                     pass
             raise ToolError(f"apply_patch failed while writing ({e}); the files written so far were restored") from None

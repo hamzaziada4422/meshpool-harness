@@ -89,9 +89,25 @@ def rule_notes(middle: list) -> str:
         if m.get("role") != "assistant":
             continue
         for cid, name, args in _calls(m):
-            if name in ("edit", "write_file", "apply_patch"):
+            patch = None                              # the Codex-style tools: apply_patch, or one given to shell
+            if name == "apply_patch":
+                patch = str(args.get("input") or "")
+            elif name in ("shell", "exec_command"):
+                from meshpool_harness.core import tools as T
+                hit = T.patch_from_shell(args.get("command") if name == "shell" else args.get("cmd"))
+                patch = hit[0] if hit else None
+            if patch is not None:
+                paths = re.findall(r"^\s*\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+?)\s*$", patch, re.M)
+                files += [p for p in dict.fromkeys(paths) if p not in files]
+            elif name in ("edit", "write_file", "notebook_edit"):
                 paths = [args.get("path")] + [c.get("path") for c in args.get("changes") or [] if isinstance(c, dict)]
                 files += [p for p in paths if isinstance(p, str) and p and p not in files]
+            elif name == "shell":                     # the default code lane's command tool
+                from meshpool_harness.core import tools as T
+                mm = re.match(r"\[exit (\d+)\]", results.get(cid, ""))
+                cmds.append((T.shell_script(args.get("command"))[:140] or name, mm.group(1) if mm else "?"))
+            elif name == "update_plan":               # Codex's plan tool
+                todo = json.dumps(args.get("plan"), ensure_ascii=False)[:1500]
             elif name in ("bash", "bash_start", "run_tests", "probe"):
                 out = results.get(cid, "")
                 mm = re.match(r"\[exit (\d+)\]", out)
