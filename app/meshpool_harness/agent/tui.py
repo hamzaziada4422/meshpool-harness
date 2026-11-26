@@ -924,7 +924,7 @@ class Terminal:
                 row = row[idx:] if idx else row
                 ccol = 2 + R.vlen(ctext[idx:])
             if not buf and i == 0:
-                lines.append(lead + st.dim(f'Try "{s["hint"]}"'))
+                lines.append(lead + (st.dim(f'Try "{s["hint"]}"') if C.tips_on() else ""))     # a tip: Settings, Show tips
             else:
                 lines.append(lead + R.clip(row, avail, ""))
         lines.append(self.rule_line())

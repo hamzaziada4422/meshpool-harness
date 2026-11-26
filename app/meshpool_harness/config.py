@@ -135,7 +135,9 @@ FIELDS = [
     ("MH_SANDBOX_NETWORK", "Network for sandboxed commands", "", "Empty or 1 = commands may use the network. 0 = no network inside the sandbox."),
     ("MH_SHELL_ENV_ALLOW", "Secrets the agent's commands may see", "", "Optional. Comma-separated variable names (for example OPENAI_API_KEY) kept in the "
      "environment of the agent's commands. Everything named like a key, token, secret, password or credential is removed otherwise."),
-    ("MH_LOOK_REVIEW", "Look at web pages it makes", "1", "1 (default): before it says a web page, document, deck, "
+    ("MH_TIPS", "Show tips", "1", "1 (default): meshpool now and then suggests a feature (a tip card in the app, a "
+     "suggested prompt in the terminal). 0: no tips, in the app and in the terminal."),
+    ("MH_LOOK_REVIEW", "Look at web pages it makes", "1","1 (default): before it says a web page, document, deck, "
      "sheet or chart is done, meshpool renders it (a headless browser at desktop and phone width, or LibreOffice), "
      "measures what is wrong and has the model check it against the request and fix it, at most twice. 0: off."),
     ("MH_AUTO_CHECK", "Check after edits", "off", "off, lint, test or both: after a Code chat edits files, run the project's linter and/or the tests "
@@ -352,6 +354,18 @@ MODE_ALIASES = {"ask": "ask", "manual": "ask", "supervised": "ask", "default": "
                 "auto-accept": "edits", "edit": "edits",
                 "auto": "auto", "full": "auto", "full access": "auto", "full-access": "auto", "full_access": "auto",
                 "fullaccess": "auto", "bypass": "auto"}
+
+
+def tips_on() -> bool:
+    """"Show tips" (Settings, MH_TIPS): on unless it is 0. The app and the terminal both read this one setting; an
+    environment value for this process wins."""
+    v = os.environ.get("MH_TIPS")
+    if v is None:
+        try:
+            v = read().get("MH_TIPS")
+        except OSError:
+            v = None
+    return str(v if v is not None else "1").strip().lower() not in ("0", "off", "false", "no")
 
 
 def normalize_mode(v, default: str | None = "ask") -> str | None:

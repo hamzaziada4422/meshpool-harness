@@ -2642,7 +2642,7 @@ function panelPreview(body) {
 /* ================================== session panel + GitHub sessions ================================== */
 const isMgd = p => !!S.projects.find(x => x.path === p)?.managed;
 const spDur = fmtDur;
-const spOpen = k => { const o = store("sp_open") || {}; return o[k] !== false; };
+const spOpen = k => { const o = store("sp_open") || {}; return k === "conn" ? o[k] === true : o[k] !== false; };   // the connector list starts folded
 const spTok = n => n >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M" : n >= 1e3 ? Math.round(n / 1e3) + "K" : String(n);
 // ---- the plan: the agent's checklist. In the Session panel, patched by row; in the chat only one quiet line (the status slot).
 function planData() {
@@ -2670,8 +2670,8 @@ function planUpdate() {
 }
 function planSoon() { if (S.plT) return; S.plT = setTimeout(() => { S.plT = null; if ($("#spPlanList") || S.panel !== "session") planUpdate(); else sessionSoon(); }, 120); }
 function sessionSoon() { if (S.panel !== "session" || S.seT) return; S.seT = setTimeout(() => { S.seT = null; if (S.panel === "session" && S.spLast && S.cur) spDraw(S.cur.id, curRoot(), S.spLast); }, 300); }
-function spSec(k, title, count, inner) {
-  return `<details class="spsec" data-k="${k}" ${spOpen(k) ? "open" : ""}><summary><span class="chev">${ICON.chev}</span><b>${title}</b>${count ? `<span class="spc">${count}</span>` : ""}</summary><div class="spbody">${inner}</div></details>`;
+function spSec(k, title, count, inner, tip) {
+  return `<details class="spsec" data-k="${k}" ${spOpen(k) ? "open" : ""}><summary${tip ? ` title="${esc(tip)}"` : ""}><span class="chev">${ICON.chev}</span><b>${title}</b>${count ? `<span class="spc">${count}</span>` : ""}</summary><div class="spbody">${inner}</div></details>`;
 }
 function spHTML(d, pr) {
   const env = d.environment, rp = d.repo, br = d.branch, cx = d.context, cn = d.connectors, bg = d.background, tr = d.tree;
@@ -2709,12 +2709,12 @@ function spHTML(d, pr) {
   const mcpBad = /Failed|did not start/.test(mn);
   const planHTML = pd ? spSec("plan", "Plan", `${pd.items.filter(x => x.status === "completed").length}/${pd.items.length}`, `<ol class="stepl plan" id="spPlanList">${planRows(pd).map(r => `<li class="${r.st}" data-st="${r.st}" data-k="${r.key}">${planIcon(r.st, r.st === "current")}<span>${esc(r.text)}</span></li>`).join("")}</ol>`) : "";
   const au = cur?.auto, agentHTML = cur?.using ? spSec("agent", "Agent", "", `<div class="sprow">${ICON.cpu}<span><b>${esc(String(cur.using).replace(/^Using /, ""))}</b><small>${au ? `Picked by Auto${au.category ? " for " + esc(String(au.category)) : ""}.${au.reason ? " " + esc(au.reason) : ""}` : "Chosen by you."}</small></span></div>`) : "";
-  const routeHTML = agentHTML + (cur?.route ? spSec("route", "Working as", "", `<div class="sprow">${ICON.cpu}<span><b>${esc(cur.route.label)}</b>${cur.route.why ? `<small>${esc(cur.route.why)}</small>` : ""}</span><button class="linkbtn" id="spRoute">Change</button></div>`) : "");
+  const routeHTML = agentHTML + (cur?.route ? spSec("route", "Kind of task", "", `<div class="sprow">${ICON.cpu}<span><b>${esc(cur.route.label.replace(/ · /g, ", "))}</b>${cur.route.why ? `<small>${esc(cur.route.why)}</small>` : ""}</span><button class="linkbtn" id="spRoute">Change</button></div>`, "What meshpool took your request to be (for example tests, in Python). It picks its way of working from this. Change it if it guessed wrong.") : "");
   const reviewHTML = rc ? spSec("review", "Review", "", `<div class="rcbody md">${md(rc.text || "")}</div>`) : "";
   const mcpHTML = mn ? `<div class="pnote spmini ${mcpBad ? "bad" : ""}">${esc(mn.replace(/^MCP: ?/, ""))}</div>` : "";
   return `<div class="spw"><div class="spbtns">${buttons.map(([k, ic, lb]) => `<button class="btn" data-go="${k}">${ic}${lb}</button>`).join("")}</div>
     ${planHTML}${spSec("env", chat ? "Where it works" : "Environment", "", envHTML)}${chat ? "" : routeHTML}${chat ? "" : spSec("ctx", "Context", `${cx.percent}%`, ctxHTML)}
-    ${chat ? "" : spSec("conn", `Connectors${mcpBad ? ` <span class="cidot bad" title="A connector did not start"></span>` : ""}`, cn.used.length ? `${cn.used.length} used` : "", (cRows ? `<ul class="spl">${cRows}</ul>` : `<div class="pnote spmini">No connectors are enabled for this session.</div>`) + mcpHTML)}${reviewHTML}
+    ${chat ? "" : spSec("conn", `Connectors (${cn.servers.length})${mcpBad ? ` <span class="cidot bad" title="A connector did not start"></span>` : ""}`, cn.used.length ? `${cn.used.length} used` : "", (cRows ? `<ul class="spl">${cRows}</ul>` : `<div class="pnote spmini">No connectors are enabled for this session.</div>`) + mcpHTML)}${reviewHTML}
     ${spSec("out", chat ? "Files and outputs" : "Artifacts", outs.length || "", outHTML)}${own || chat ? "" : spSec("chg", "Changes", pr?.pr ? `#${pr.pr.number}` : tr.files || "", chg)}
     ${spSec("bg", "Background tasks", bg.running.length || "", bgHTML)}
     <div class="viewer" id="viewer" hidden></div></div>`;

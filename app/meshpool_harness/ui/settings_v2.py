@@ -69,6 +69,7 @@ CAPS = [
     {"id": "subtasks", "name": "Sub-tasks", "desc": "Split big jobs into parts that run at the same time.", "kind": "env", "env": "MH_SUBAGENTS"},
     {"id": "look", "name": "Look at web pages it makes", "desc": "Before it says a web page, document or chart is done, meshpool opens it, checks it against your request and fixes what is wrong.", "kind": "env", "env": "MH_LOOK_REVIEW"},
     {"id": "grader", "name": "Independent check on big tasks", "desc": "A separate reviewer checks big jobs before meshpool tells you they are done.", "kind": "env", "env": "MH_GRADER"},
+    {"id": "tips", "name": "Show tips", "desc": "Now and then meshpool suggests a feature you may not know. Off hides every tip, in the app and in the terminal.", "kind": "env", "env": "MH_TIPS"},
     {"id": "plan_first", "name": "Plan first", "desc": "New chats start with a plan and wait for your OK.", "kind": "profile", "advanced": True},
     {"id": "computer", "name": "Computer use", "desc": "Let meshpool see your screen and use the mouse and keyboard.", "kind": "server", "server": "computer-use", "advanced": True},
 ]

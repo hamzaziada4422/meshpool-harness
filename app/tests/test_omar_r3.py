@@ -181,6 +181,36 @@ def test_5_permission_mode_help_shows_both_names():
     assert "ask (Ask" in flat and "edits (Accept edits)" in flat and "auto (Full access)" in flat and "plan" in flat, flat
 
 
+# --------------------------------------------------------------------------------------------------- 6: Show tips
+def test_6_show_tips_is_a_setting_on_by_default_and_the_terminal_follows_it(monkeypatch, tmp_path):
+    from meshpool_harness import config as C
+    from meshpool_harness.ui import settings_v2 as SV2
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from testkit import cli_v2_shots as S
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path))
+    monkeypatch.setenv("MH_TIPS", "1")                               # restored when the test ends
+    assert C.tips_on() is True
+    row = next(f for f in SV2.capabilities() if f["id"] == "tips")
+    assert row["name"] == "Show tips" and row["on"] is True
+    assert 'Try "' in S.startup_scene()[2].text()                    # a tip in the terminal
+    SV2.set_capability("tips", False)                               # the switch in Settings
+    try:
+        assert C.tips_on() is False
+        assert 'Try "' not in S.startup_scene()[2].text()
+        assert next(f for f in SV2.capabilities() if f["id"] == "tips")["on"] is False
+    finally:
+        SV2.set_capability("tips", True)
+    assert C.tips_on() is True and 'Try "' in S.startup_scene()[2].text()
+
+
+def test_6_the_environment_wins_for_one_process(monkeypatch):
+    from meshpool_harness import config as C
+    monkeypatch.setenv("MH_TIPS", "0")
+    assert C.tips_on() is False
+    monkeypatch.setenv("MH_TIPS", "1")
+    assert C.tips_on() is True
+
+
 # ----------------------------------------------------------------------------------- 2: the verification line
 def _project(root):
     (root / "calc.py").write_text("def add(a, b):\n    return a - b\n")

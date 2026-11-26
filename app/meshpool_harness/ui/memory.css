@@ -106,6 +106,7 @@
 .nudge010{position:relative;margin:0 auto 4px;width:min(640px,100%);display:flex;align-items:center;gap:8px;padding:8px 8px 8px 16px;border:1px solid var(--line);background:var(--surface);border-radius:var(--r-l);box-shadow:var(--shadow);font-size:var(--fs-s);z-index:20;animation:nudgein var(--t-menu) var(--ease)}
 .nudge010 .n-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)}
 .nudge010 .n-t b{color:var(--ink);font-weight:500}.nudge010 .n-b{color:var(--ink-3)}
+.nudge010 .n-never{flex:none;white-space:nowrap;font-size:12px;color:var(--ink-3);padding:0 4px}
 .nudge010 .btn.sm{height:28px;padding:0 12px;border-radius:var(--r-m);flex:none;min-height:0}
 @keyframes nudgein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion:reduce){.nudge010{animation:none}}
