@@ -102,3 +102,40 @@ def test_4_a_stash_round_trip_after_a_passing_test_run_keeps_the_receipt_verifie
     r = a.receipt()
     assert "not verified" not in r, r
     assert "passed" in r or "ran" in r
+
+
+# ---------------------------------------------------------------------------------------- 5: the shared slot cap
+def test_5_a_local_endpoint_takes_six_calls_and_the_setting_still_wins(monkeypatch):
+    from meshpool_harness.core import gateway as GW
+    assert GW.provider_cap("http://localhost:11434/v1") == 6
+    assert GW.provider_cap("http://127.0.0.1:8080/v1") == 6
+    assert GW.provider_cap("https://llm.meshpool.ai/v1") == 16
+    assert GW.wait_line(2, 6) == "Waiting: other meshpool chats are using the model right now (2 of 6)."
+    monkeypatch.setitem(GW._CFG, "v", "3")
+    monkeypatch.setitem(GW._CFG, "t", 1e18)                 # the cached setting is fresh
+    assert GW.health("http://localhost:11434/v1", "k-omar5").gate.limit == 3
+
+
+def test_5_the_shared_wait_names_how_many_of_how_many_without_the_setting_name(tmp_path, monkeypatch):
+    import threading
+    import time
+    from meshpool_harness.core import gateway as GW
+    monkeypatch.setenv("MH_SLOTS_DIR", str(tmp_path / "slots"))
+    monkeypatch.setitem(GW._CFG, "v", "2")
+    monkeypatch.setitem(GW._CFG, "t", 1e18)
+    h = GW.health("http://localhost:11999/v1", "k-omar5b")
+    a = h.acquire(lambda: None)
+    other = GW._Slots(h.gate.name).take(2, lambda: None, lambda: None)   # another process holds slot 1
+    seen = []
+    t = threading.Thread(target=lambda: seen.append(h.acquire(lambda: None, events.append)))
+    events = []
+    # the in-process gate has room (1 of 2), the shared folder does not: slot 0 is ours, slot 1 is held elsewhere
+    t.start()
+    time.sleep(0.8)
+    texts = [e["text"] for e in events if e["type"] == "status"]
+    GW._Slots.give(other)
+    t.join(5)
+    assert texts and all("MH_MAX_INFLIGHT" not in x and x.startswith("Waiting: other meshpool chats") for x in texts)
+    for x in seen:
+        h.release(True, x)
+    h.release(True, a)

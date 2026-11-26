@@ -101,7 +101,7 @@ def test_limit_follows_the_provider(env):
         assert GW.health(f"https://{host}/v1", "k").gate.limit == 32, host
     for base in ("http://localhost:11434/v1", "http://127.0.0.1:8080/v1", "http://[::1]:8080/v1",
                  "http://0.0.0.0:1/v1"):
-        assert GW.health(base, "k").gate.limit == 2, base
+        assert GW.health(base, "k").gate.limit == 6, base
     assert GW.health("https://models.example.org/v1", "k").gate.limit == 8
 
 
@@ -178,7 +178,8 @@ def test_a_waiting_call_says_so_and_the_snapshot_shows_it(env, monkeypatch):
                      "degraded": False, "down_models": []}]
     assert KEY not in json.dumps(snap)
     assert {"type": "gate", "state": "waiting", "inflight": 1, "limit": 1} in events
-    assert any(e["type"] == "status" for e in events)
+    assert [e["text"] for e in events if e["type"] == "status"] == [
+        "Waiting: other meshpool chats are using the model right now (1 of 1)."]
     h.release(True, first)
     t.join(5)
     gate_events = [e for e in events if e["type"] == "gate"]
@@ -194,7 +195,7 @@ def test_a_long_wait_without_a_listener_writes_one_line_to_stderr(env, monkeypat
     threading.Timer(2.6, lambda: h.release(True, first)).start()
     second = h.acquire(lambda: None)
     h.release(True, second)
-    assert capsys.readouterr().err.count("waiting for a free model-call slot") == 1
+    assert capsys.readouterr().err.count("Waiting: other meshpool chats are using the model right now (1 of 1).") == 1
 
 
 # ---------- M28-02: engine and helper calls go through the gate ---------------------------------------------------
