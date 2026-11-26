@@ -14,11 +14,6 @@ const SET_NAV = [
    ["company", "Company and brand", "stack", ["company"]], ["about", "About and updates", "help", ["about"]]],
 ];
 const SET_GROUPS = SET_NAV.flat().map(([k, lb, , subs]) => [k, lb, subs]);       // kept for company.js and old callers
-// Words people search for that are not in a page's name (persona runs, 0.0.18: "approval", "ask before" and "folder"
-// found nothing, and Permissions was a tab inside Privacy).
-const SET_WORDS = {permissions: "approvals approve approval ask asking ask before prompts questions allow deny rules folders folder access sandbox commands run without asking full access never ask auto approve",
-  privacy: "data delete export history incognito", models: "model provider endpoint key api", notify: "alerts sounds",
-  personal: "memory instructions custom style", plugins: "connectors mcp tools skills office excel word powerpoint add-in", caps: "features web search browser computer"};
 const SET_NAMES = {profile: "Profile", appearance: "Appearance", notify: "Notifications", suggest: "Suggestions", caps: "Features", personal: "Instructions and memory", styles: "Styles", web: "Web search",
   connectors: "Directory", skills: "Skills", plugins: "Plugins", mcp: "Custom tools", general: "Connection", models: "Models", harnesses: "Agents",
   usage: "Usage", billing: "Plan and billing", permissions: "Permissions", data: "Your data", import: "Import chats",
@@ -28,13 +23,32 @@ const SECTIONS = Object.entries(SET_NAMES);
 // What each page holds, in the words people search with: Search matched page names only, so "folder", "approval" or
 // "ask before" found nothing and "ask" found Scheduled tasks (UX audit 0.0.18). A query matches when each of its words
 // starts a word of a page's name or keywords.
-const SET_WORDS = {permissions: "permission permissions folder folders allow ask before approval approvals approve rules deny access sandbox",
-  data: "data export delete history privacy retention", general: "api key keys connection endpoint base url provider", models: "model models favorite default",
-  harnesses: "agent agents codex pi hermes sign in login", notify: "notification notifications sound alert", appearance: "theme dark light font text size density language",
-  caps: "feature features capability memory plan first", personal: "instructions memory about me", styles: "style styles writing tone", import: "import chatgpt export zip",
-  connectors: "connector connectors github gmail drive", skills: "skill skills", plugins: "plugin plugins marketplace", mcp: "mcp tools server servers", office: "office word excel powerpoint add-in",
-  terminal: "terminal shell command", advanced: "advanced options", scheduled: "schedule scheduled task tasks routine", about: "about update updates version",
-  usage: "usage cost spend tokens", billing: "billing plan budget", web: "web search browse internet", suggest: "suggestion suggestions next steps", profile: "profile name account"};
+const SET_WORDS = {permissions: "permission permissions folder folders allow ask before approval approvals approve rules deny access sandbox asking prompts questions commands run without full never auto",
+  data: "data export delete history privacy retention",
+  general: "api key keys connection endpoint base url provider",
+  models: "model models favorite default provider endpoint key api",
+  harnesses: "agent agents codex pi hermes sign in login",
+  notify: "notification notifications sound alert alerts sounds",
+  appearance: "theme dark light font text size density language",
+  caps: "feature features capability memory plan first web search browser computer",
+  personal: "instructions memory about me custom style",
+  styles: "style styles writing tone",
+  import: "import chatgpt export zip",
+  connectors: "connector connectors github gmail drive",
+  skills: "skill skills",
+  plugins: "plugin plugins marketplace connectors mcp tools skills office excel word powerpoint add-in",
+  mcp: "mcp tools server servers",
+  office: "office word excel powerpoint add-in",
+  terminal: "terminal shell command",
+  advanced: "advanced options",
+  scheduled: "schedule scheduled task tasks routine",
+  about: "about update updates version",
+  usage: "usage cost spend tokens",
+  billing: "billing plan budget",
+  web: "web search browse internet",
+  suggest: "suggestion suggestions next steps",
+  profile: "profile name account",
+  privacy: "data delete export history incognito"};
 const setWords = k => (setName(k) + " " + (SET_WORDS[k] || "")).toLowerCase();
 const setMatch = (hay, q) => q.split(/\s+/).filter(Boolean).every(w => (" " + hay).includes(" " + w));
 const setName = k => SET_NAMES[k] || (SECTIONS.find(x => x[0] === k) || [])[1] || k;

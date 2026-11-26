@@ -1165,9 +1165,11 @@ pre.live{max-height:180px;overflow:auto;opacity:.85}
 
 /* Settings > Permissions: the new-rule field is as tall as its Allow and Deny buttons and fills the row */
 .rulerow{display:flex;align-items:stretch;gap:6px}
-#ruleIn{flex:1;min-width:0;border:1px solid var(--line-3);border-radius:var(--r-m);padding:0 10px;background:var(--surface);color:var(--ink);font:inherit;font-family:var(--mono);font-size:var(--fs-s)}
-#ruleIn:focus{outline:none;border-color:var(--focus);box-shadow:0 0 0 3px var(--pool-soft)}
+#ruleText{border:1px solid var(--line-3);border-radius:var(--r-m);padding:0 10px;background:var(--surface);color:var(--ink);font:inherit;font-family:var(--mono);font-size:var(--fs-s)}
+#ruleText:focus{outline:none;border-color:var(--focus);box-shadow:0 0 0 3px var(--pool-soft)}
 
 /* a long wait on the model: one quiet line at the end of the chat, with Stop (workTick in app.js) */
 .note.waitnote{display:flex;align-items:center;gap:8px;color:var(--ink-2)}
 .note.waitnote .linkbtn{margin-left:4px}
+/* the new-rule row on the Permissions page: the rule field takes the room, the kind menu and Add stay their own size */
+#ruleText{flex:3 1 240px;min-width:0}#ruleList,#ruleAdd{flex:0 0 auto}

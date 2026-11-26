@@ -735,11 +735,9 @@ def test_an_unknown_cost_is_not_written_under_every_reply(page):
 def test_the_rule_field_lines_up_with_its_buttons(page):
     """UX-32: in Settings > Permissions the new-rule field was an unstyled box shorter than its Allow and Deny buttons
     and only as wide as its placeholder. It is as tall as the buttons now and fills the row."""
-    page.evaluate("() => openSettings('privacy')")
-    page.wait_for_timeout(600)
-    page.evaluate("() => { const t = [...document.querySelectorAll('button, [role=tab]')].find(b => b.textContent.trim() === 'Permissions'); t && t.click(); }")
-    page.wait_for_selector("#ruleIn", timeout=10000)
-    got = page.evaluate("""() => { const r = e => document.querySelector(e).getBoundingClientRect(); const i = r('#ruleIn'), a = r('#ruleAllow'), row = document.querySelector('#ruleIn').parentElement.getBoundingClientRect();
+    page.evaluate("() => openSettings('permissions')")              # its own page since the approvals work (18d6de94)
+    page.wait_for_selector("#ruleText", timeout=10000)
+    got = page.evaluate("""() => { const r = e => document.querySelector(e).getBoundingClientRect(); const i = r('#ruleText'), a = r('#ruleAdd'), row = document.querySelector('#ruleText').parentElement.getBoundingClientRect();
         return {ih: Math.round(i.height), ah: Math.round(a.height), dt: Math.abs(Math.round(i.top - a.top)), share: i.width / row.width}; }""")
     assert abs(got["ih"] - got["ah"]) <= 1 and got["dt"] <= 1, got
     assert got["share"] > 0.5, got
@@ -751,10 +749,8 @@ def test_the_permissions_tab_draws_without_an_error_and_add_a_folder_works(page)
     """UX-33: drawing Settings > Permissions ended in a TypeError (a stray second drawRules call was given an element,
     not the rules), so the code after it never ran: "Add a folder" had no click handler and a second, empty rules box
     was added. It draws cleanly now, with one rules box and a working button."""
-    page.evaluate("() => openSettings('privacy')")
-    page.wait_for_timeout(600)
-    page.evaluate("() => { const t = [...document.querySelectorAll('button, [role=tab]')].find(b => b.textContent.trim() === 'Permissions'); t && t.click(); }")
-    page.wait_for_selector("#ruleIn", timeout=10000)
+    page.evaluate("() => openSettings('permissions')")              # its own page since the approvals work (18d6de94)
+    page.wait_for_selector("#ruleText", timeout=10000)
     page.wait_for_timeout(400)
     got = page.evaluate("() => ({boxes: document.querySelectorAll('#rulesBox').length, add: typeof (document.querySelector('#addP') || {}).onclick})")
     assert got == {"boxes": 1, "add": "function"}, got
@@ -846,8 +842,8 @@ def test_a_long_wait_on_the_model_says_so_in_the_chat_with_stop(page):
 
 
 # ---------------------------------------------------------------------------------------------------- UX-38
-@pytest.mark.parametrize("q,group,page_", [("folder", "privacy", "permissions"), ("approval", "privacy", "permissions"),
-                                           ("permission", "privacy", "permissions"), ("ask before", "privacy", "permissions")])
+@pytest.mark.parametrize("q,group,page_", [("folder", "permissions", "permissions"), ("approval", "permissions", "permissions"),
+                                           ("permission", "permissions", "permissions"), ("ask before", "permissions", "permissions")])
 def test_settings_search_finds_what_a_page_holds(page, q, group, page_):
     """UX-38: Settings search matched page names only: "folder", "approval" and "permission" found nothing, and "ask"
     found "Scheduled tasks" (t-ask-s). Each page now carries its own words, a query matches word starts, and Enter
