@@ -210,6 +210,18 @@ def test_review_carries_two_images_when_the_model_takes_images(proj, tmp_path, m
     assert "sideways" in text_of(rv[0])                                 # findings as text in every case
 
 
+def test_second_round_replaces_the_first_rounds_pictures(proj, tmp_path, monkeypatch):
+    monkeypatch.setattr(L, "render_web", fake_render([[OVER]], _shots(tmp_path)))
+    Model(monkeypatch, [write("index.html", BUGGY), "Made it.", overwrite("index.html", BUGGY + "<!-- 1 -->\n"),
+                        "Tried.", overwrite("index.html", BUGGY + "<!-- 2 -->\n", "w3"), "Tried again."])
+    a, _ = agent(proj)
+    a.send(ASK)
+    assert len(reviews(a)) == 2
+    imgs = [p for m in a.messages if isinstance(m.get("content"), list) for p in m["content"]
+            if p.get("type") == "image_url"]
+    assert len(imgs) == 2                                               # the request stays small
+
+
 def test_review_is_text_only_when_the_model_cannot_take_images(proj, tmp_path, monkeypatch):
     monkeypatch.setattr(L, "render_web", fake_render([[OVER, CONSOLE], []], _shots(tmp_path)))
     Model(monkeypatch, [write("index.html", BUGGY), "Made it.", overwrite("index.html", FIXED), "Fixed."])

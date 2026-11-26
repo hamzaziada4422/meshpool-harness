@@ -626,6 +626,9 @@ def gate(agent, g: dict, final: str, *, render_web_fn=None, render_doc_fn=None) 
                 else:
                     msg["content"][0]["text"] = head + msg["content"][0]["text"]
             st["rounds"] += 1
+            if isinstance(msg["content"], list):            # only this look's pictures stay in the conversation
+                from meshpool_harness.agent.core import _drop_images
+                _drop_images(agent.messages, keep=0)
             agent.messages.append(msg)
             return True, final
         st["done"] = True
