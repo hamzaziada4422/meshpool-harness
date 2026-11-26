@@ -187,3 +187,86 @@ def test_of06_footnotes_are_read(tmp_path):
         z.writestr("word/footnotes.xml", notes)
     out = _read(tmp_path / "a.docx")
     assert "## Footnotes" in out and "[^1] Source: annual report, page 4." in out
+
+
+# ---------- OF-07: CSV files from Excel on Windows (Windows-1252, UTF-16) read as garbage ----------------------------
+
+def test_of07_windows_1252_semicolon_csv_reads_its_accents_and_euro_sign(tmp_path):
+    f = tmp_path / "win.csv"
+    f.write_bytes("Name;Price\nCaf\xe9 cr\xe8me;5€\n“Quoted”;7\n".encode("cp1252"))
+    out = _read(f)
+    assert "| Café crème | 5€ |" in out and "“Quoted”" in out and "�" not in out
+
+
+def test_of07_utf16_csv_from_excel_reads_as_text(tmp_path):
+    f = tmp_path / "u16.csv"
+    f.write_bytes("Name\tPrice\nCaf\xe9\t5\n".encode("utf-16"))
+    out = _read(f)
+    assert "| Café | 5 |" in out and "\x00" not in out
+
+
+def test_of07_a_cut_utf8_file_does_not_switch_to_another_encoding():
+    raw = ("é" * 10).encode("utf-8")[:-1]                  # the read stopped inside the last character
+    assert docread.decode_text(raw, cut=True) == "é" * 9
+
+
+def test_of07_preview_table_reads_windows_1252_and_utf16(tmp_path):
+    from meshpool_harness.ui import previews as PV
+    f = tmp_path / "win.csv"
+    f.write_bytes("Name;Price\nCaf\xe9;5€\n".encode("cp1252"))
+    assert PV._csv_sheet(f)[0]["rows"][1] == ["Café", "5€"]
+    f.write_bytes("Name,Price\nCaf\xe9,5\n".encode("utf-16"))
+    assert PV._csv_sheet(f)[0]["rows"][1] == ["Café", "5"]
+
+
+# ---------- OF-10: view_output drew a semicolon CSV as one column, showed the BOM, and read the whole file ----------
+
+def test_of10_view_table_splits_semicolons_and_drops_the_bom(tmp_path):
+    from meshpool_harness import view as V
+    f = tmp_path / "eu.csv"
+    f.write_bytes("﻿Region;Revenue\nNorth;1,5\n".encode("utf-8"))
+    html = V._table_html(f)
+    assert "<th>Region</th><th>Revenue</th>" in html and "﻿" not in html
+    assert "<td>North</td><td>1,5</td>" in html
+
+
+def test_of10_view_table_reads_only_the_start_of_a_big_file(tmp_path, monkeypatch):
+    import builtins
+    import io as _io
+    from meshpool_harness import view as V
+    f = tmp_path / "big.csv"
+    f.write_bytes(b"a,b\n" + b"1,2\n" * 1_000_000)          # 4 MB
+    read = []
+    real_open = _io.open
+
+    class Spy:
+        def __init__(self, fh):
+            self.fh = fh
+
+        def __getattr__(self, k):
+            return getattr(self.fh, k)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self.fh.close()
+
+        def __iter__(self):
+            for line in self.fh:
+                read.append(len(line))
+                yield line
+
+        def read(self, n=-1):
+            data = self.fh.read(n)
+            read.append(len(data))
+            return data
+
+    def spy_open(file, *a, **k):
+        fh = real_open(file, *a, **k)
+        return Spy(fh) if str(file) == str(f) else fh
+    monkeypatch.setattr(_io, "open", spy_open)
+    monkeypatch.setattr(builtins, "open", spy_open)
+    html = V._table_html(f)
+    assert html.count("<tr>") == 200
+    assert 0 < sum(read) <= 2_000_001

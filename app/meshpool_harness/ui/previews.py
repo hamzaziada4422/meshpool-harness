@@ -263,17 +263,11 @@ def _xlsx_sheets(p: Path) -> list[dict]:
 
 
 def _csv_sheet(p: Path) -> list[dict]:
-    raw = p.read_bytes()[:SHEET_MAX_BYTES]
-    try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = raw.decode("latin-1")
-    delim = "\t" if p.suffix.lower() == ".tsv" else ","
-    if p.suffix.lower() == ".csv":
-        try:
-            delim = csv.Sniffer().sniff(text[:8192], delimiters=",;\t|").delimiter
-        except csv.Error:
-            pass
+    from meshpool_harness.docread import decode_text, sniff_delimiter
+    with open(p, "rb") as fh:
+        raw = fh.read(SHEET_MAX_BYTES)
+    text = decode_text(raw, cut=len(raw) >= SHEET_MAX_BYTES)   # UTF-16 from Excel, Windows-1252 euro signs and quotes
+    delim = "\t" if p.suffix.lower() == ".tsv" else sniff_delimiter(text)
     try:                                          # a cell over 128 KB must not fail the whole preview
         csv.field_size_limit(max(csv.field_size_limit(), min(len(text) + 1, 2 ** 31 - 1)))
     except (OverflowError, ValueError):

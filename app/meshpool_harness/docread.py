@@ -526,17 +526,43 @@ def _xls(p: Path, sheet: str | None = None, rows: int = 200) -> str:
     return "\n".join(out)
 
 
+def decode_text(raw: bytes, cut: bool = False) -> str:
+    """Bytes of a text file (CSV, TSV) as text, whatever program wrote it: a BOM names the encoding (Excel's
+    "Unicode text" is UTF-16), else UTF-8, else UTF-16 without a BOM, else Windows-1252 (Excel on Windows: euro sign,
+    curly quotes, accents). cut: raw is only the start of the file, so a character split at the end is dropped."""
+    for bom, enc in ((b"\xef\xbb\xbf", "utf-8"), (b"\xff\xfe\x00\x00", "utf-32-le"), (b"\x00\x00\xfe\xff", "utf-32-be"),
+                     (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be")):
+        if raw.startswith(bom):
+            body = raw[len(bom):]
+            if cut and enc.startswith("utf-16"):
+                body = body[:len(body) - len(body) % 2]
+            return body.decode(enc, errors="replace")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        if cut and e.start >= len(raw) - 3 and e.reason == "unexpected end of data":
+            return raw[:e.start].decode("utf-8", errors="replace")
+    head = raw[:4000]
+    if len(head) >= 4 and head[1::2].count(0) > len(head) // 4 and head[0::2].count(0) < len(head) // 20:
+        return raw[:len(raw) - len(raw) % 2].decode("utf-16-le", errors="replace")
+    return raw.decode("cp1252", errors="replace")
+
+
+def sniff_delimiter(text: str, default: str = ",") -> str:
+    """The delimiter of a CSV sample (comma, semicolon, tab or bar), else default."""
+    if not text.strip():
+        return default
+    try:
+        return csv.Sniffer().sniff(text[:8000], delimiters=",;\t|").delimiter
+    except csv.Error:                              # one column, or no consistent delimiter
+        return default
+
+
 def _csv(p: Path, rows: int = 300) -> str:
+    size = p.stat().st_size
     with open(p, "rb") as fh:                      # only the start of a big file, never all of it
-        raw = fh.read(5_000_000).decode("utf-8-sig", errors="replace")
-    delim = ","
-    if p.suffix.lower() == ".tsv":
-        delim = "\t"
-    elif raw.strip():
-        try:
-            delim = csv.Sniffer().sniff(raw[:4000], delimiters=",;\t|").delimiter
-        except csv.Error:                          # one column, or no consistent delimiter
-            delim = ","
+        raw = decode_text(fh.read(5_000_000), cut=size > 5_000_000)
+    delim = "\t" if p.suffix.lower() == ".tsv" else sniff_delimiter(raw)
     csv.field_size_limit(min(sys.maxsize, 2**31 - 1))     # a huge cell must not fail the whole file
     data = list(csv.reader(io.StringIO(raw), delimiter=delim))
     cut = p.stat().st_size > 5_000_000
