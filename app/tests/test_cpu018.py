@@ -328,3 +328,46 @@ def test_cpu09_picker_asks_git_once_for_a_burst_of_keys(picker_repo):
     subprocess.run([GIT, "add", "fresh.py"], cwd=root / "pkg", check=True)   # the index changed: asked again at once
     assert any(h["path"] == "pkg/fresh.py" for h in FA.search(str(root), "fresh")["results"])
     assert len(runs) == 2
+
+
+# ---------------------------------------------------------------------------------------------------- CPU-10
+def test_cpu10_a_shell_command_walks_the_project_twice_not_four_times(tmp_path, monkeypatch):
+    from meshpool_harness.agent import core
+    from meshpool_harness.agent.core import Agent
+    from meshpool_harness.hrouter import profiles as PROF
+    from meshpool_harness.hrouter.route import Route
+    monkeypatch.setattr(core, "SESSIONS", tmp_path / "_sessions")
+    monkeypatch.setenv("MESHPOOL_API_KEY", "k")
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("MH_PROFILES_DEFAULTS", "none")
+    monkeypatch.setenv("MH_SANDBOX", "off")
+    for var in ("MH_ENGINE_STYLE", "MH_HARNESS_PROFILE", "MH_PROFILE", "MH_ALLOW", "MH_DENY", "MH_STEP_MAX_TOKENS"):
+        monkeypatch.delenv(var, raising=False)
+    root = tmp_path / "proj"
+    root.mkdir()
+    for i in range(50):
+        (root / f"f{i}.txt").write_text("x")
+    a = Agent(str(root), mode="auto", approve=None, emit=lambda e: None)
+    a.set_route(Route(spec="code.debug", family="code", sub="debug", base="code", profile="c171",
+                      settings=PROF.settings("c171")), "fix it")
+    walks = [0]
+    real = Agent._tree_sig
+
+    def counting(self):
+        walks[0] += 1
+        return real(self)
+    monkeypatch.setattr(Agent, "_tree_sig", counting)
+    edits = []
+
+    def call(cmd, cid):
+        c = {"id": cid, "type": "function", "function": {"name": "exec_command", "arguments": json.dumps({"cmd": cmd})}}
+        out = a._repeat_guard(c, {})
+        edits.append(a.ws.edits)
+        return out
+    e0 = a.ws.edits
+    call("echo hi > made.txt", "c1")                   # writes a file: an edit for the loop guards
+    call("ls", "c2")                                   # writes nothing
+    call("cat made.txt", "c3")
+    assert (root / "made.txt").read_text().strip() == "hi"
+    assert edits == [e0 + 1, e0 + 1, e0 + 1]
+    assert walks[0] == 6, f"{walks[0]} walks of the project for 3 commands"
