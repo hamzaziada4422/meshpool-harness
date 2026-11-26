@@ -627,6 +627,12 @@ class Handler(BaseHTTPRequestHandler):
                 p = FA.safe(q.get("root", [""])[0], q.get("path", [""])[0])[1]
             except (ValueError, OSError):
                 return self._send(404, {"error": "not found"})
+            if q.get("dl", [""])[0] == "1":         # Download: the browser saves the file; nothing is opened or run
+                if not p.is_file() or p.stat().st_size > 200_000_000:
+                    return self._send(404, {"error": "not found"})
+                return self._send(200, p.read_bytes(), "application/octet-stream",
+                                  {"Content-Disposition": _disposition("attachment", p.name),
+                                   "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox"})
             if not p.is_file() or p.stat().st_size > 60_000_000:
                 return self._send(404, {"error": "not found"})
             ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
@@ -1248,7 +1254,8 @@ class Handler(BaseHTTPRequestHandler):
                     if not path:
                         return self._send(200, {"projects": W.projects(), "picked": ""})
                     W.add_project(path)
-                    return self._send(200, {"projects": W.projects(), "picked": str(Path(path).resolve())})
+                    return self._send(200, {"projects": W.projects(), "picked": str(Path(path).resolve()),
+                                            **_as_project(b, path)})
                 if act == "dirs":                     # the in-app folder browser: the folders inside one folder
                     here = Path(b.get("path") or Path.home()).expanduser()
                     try:
@@ -1265,7 +1272,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {"projects": W.projects(), "picked": home})
                 if act == "add":
                     added = W.add_project(b.get("path", ""), b.get("name", ""))
-                    return self._send(200, {"projects": W.projects(), "picked": added["path"]})
+                    return self._send(200, {"projects": W.projects(), "picked": added["path"],
+                                            **_as_project(b, added["path"])})
                 elif act == "remove":
                     W.remove_project(b.get("path", ""))
                 elif act == "rename":
@@ -1743,3 +1751,13 @@ def _start_office() -> str:
 def _default_project() -> Path:
     from meshpool_harness.ui.desktop import default_project
     return default_project()
+
+
+def _as_project(body: dict, path: str) -> dict:
+    """{"pid": ...} when the request asks for the folder as a project ("project": true: onboarding's "Folders I
+    choose" and the sidebar's "Add a folder"): the folder then shows in the sidebar and the project picker, and new
+    chats in it work in the folder itself. {} otherwise."""
+    if not body.get("project"):
+        return {}
+    from meshpool_harness import project_store as PS
+    return {"pid": PS.for_folder(path, body.get("name", ""))["id"]}

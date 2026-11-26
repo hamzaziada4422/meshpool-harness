@@ -23,6 +23,7 @@ function edCtx(e, root, path, isDir) {
   e.preventDefault(); e.stopPropagation();
   const items = [
     {label: isDir ? "Open folder" : "Open in Meshpool", icon: isDir ? ICON.folderopen : ICON.files, fn: () => isDir ? openFolderInApp(root, path) : openPreview(root, path)},
+    ...(isDir ? [] : [{label: "Download", icon: ICON.dl, fn: () => pvDownload(root, path)}]),
     {label: "Copy path", icon: ICON.copy, fn: () => { try { navigator.clipboard.writeText(root.replace(/[\\/]$/, "") + (path ? "/" + path : "")); toast("Path copied", 2000); } catch (err) { toast("Could not copy the path."); } }},
     {sep: true},
     {label: edRevealLabel(), icon: ICON.ext, fn: () => edReveal(root, path)},

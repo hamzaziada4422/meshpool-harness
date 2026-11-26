@@ -166,7 +166,12 @@ def _made(j: dict) -> list[Path]:
     out: Path = j["out"]
     res = j.get("result") or {}
     arts = [Path(a) if Path(a).is_absolute() else out / a for s in res.get("steps") or [] for a in s.get("artifacts") or []]
-    return sorted({a.resolve() for a in arts if a.is_file()}) or [
+    have = {a.resolve() for a in arts if a.is_file()}
+    saved = j.get("saved_as")
+    if saved and Path(saved).is_file():           # the file was moved to the name the user asked for (save_as)
+        have.add(Path(saved).resolve())
+        return sorted(have)
+    return sorted(have) or [
         p for p in sorted(out.rglob("*"))
         if p.is_file() and not any(x.startswith(".") for x in p.relative_to(out).parts)
         and not (p.parent == out and p.name in j.get("inputs", set())) and p.suffix not in (".py", ".run", ".log")]

@@ -147,6 +147,37 @@ def _redact(text: str) -> str:
     return redact(tool_card(text))
 
 
+def undo_message(r: dict) -> tuple[str, str]:
+    """(the line the chat shows after Undo, the details behind it). The line names the files Undo restored or removed
+    and every changed file it could not put back; the folder holding copies of what Undo replaced is only in the
+    details (WF-07: a full checkpoints path filled the chat; WF-C: "Files are back to how they were" while a file
+    outside the chat's folder still had the agent's change)."""
+    def names(xs, n=4):
+        xs = [Path(str(x)).name or str(x) for x in xs]
+        return ", ".join(xs[:n]) + (f" and {len(xs) - n} more" if len(xs) > n else "")
+
+    def count(xs, word):
+        return f"{word} {len(xs)} file{'' if len(xs) == 1 else 's'} ({names(xs)})"
+    restored, deleted, kept, outside = (list(r.get(k) or []) for k in ("restored", "deleted", "kept", "outside"))
+    done = [s for s in (count(restored, "Restored") if restored else "",
+                        count(deleted, "removed" if restored else "Removed") if deleted else "") if s]
+    msg = "Undone. " + (" and ".join(done) + "." if done else "No files in this chat's folder had changed.")
+    if kept:
+        msg += f" Not restored: {names(kept)} (changed since, or not saved before; see details)."
+    if outside:
+        msg += f" Not restored, because Undo only covers this chat's folder: {names(outside)}."
+    det = []
+    if r.get("notes"):                       # why each file was kept: changed later, never stored, a link...
+        det += [str(n) for n in r["notes"]]
+    elif kept:
+        det.append("Kept as they are, because they changed after the agent's edit: " + ", ".join(kept))
+    if outside:
+        det.append("Changed outside this chat's folder, not restored: " + ", ".join(outside))
+    if r.get("backup"):
+        det.append(f"Copies of the files Undo replaced are in {r['backup']}")
+    return msg, "\n".join(det)
+
+
 def events_from_messages(messages: list) -> list:
     """Rebuild a transcript from saved messages (for sessions reopened after the app restarted)."""
     evs, outputs = [], {m.get("tool_call_id"): m.get("content", "") for m in messages if m.get("role") == "tool"}
@@ -1152,14 +1183,22 @@ class Session:
         from meshpool_harness.ui import workbench as W
         if not self.workdir:
             raise ValueError("This chat has no folder to save files in.")
-        saved = []
+        saved, notes = [], []
         for f in files:
             f = f if isinstance(f, dict) else {}
             try:
                 data = base64.b64decode(f.get("data", "") or "")
             except (ValueError, TypeError):
                 raise ValueError(f"Couldn't read {f.get('name') or 'the file'}.")
-            saved.append(W.attach_to(Path(self.workdir), f.get("name", ""), data)["path"])
+            # a file that already lives in this folder (same name, same bytes) is used where it is, not copied again
+            r = W.attach_to(Path(self.workdir), f.get("name", ""), data, reuse=True)
+            saved.append(r["path"])
+            name = Path(str(f.get("name") or "file")).name
+            if r.get("reused"):
+                notes.append({"name": name, "path": r["path"], "reused": True})
+            else:
+                notes.append({"name": name, "path": r["path"], "copy": True})
+        self._attached = notes                       # the app says where each one is (session_action "attached")
         where = "this chat's folder" if PS.is_scratch(self.workdir) else "the project folder"
         return text.rstrip() + f"\n\nAttached files (in {where}): {', '.join(saved)}"
 
@@ -2105,22 +2144,9 @@ class Session:
                 OUT.mark(self.id, "undo", n)
         except Exception:
             pass
-        def _n(k, word):
-            n = len(r.get(k) or [])
-            return f"{n} file{'' if n == 1 else 's'} {word}"
-        parts = [s for s in (_n("restored", "restored") if r.get("restored") else "",
-                             _n("deleted", "removed") if r.get("deleted") else "") if s]
-        msg = "Undone. " + ("Files are back to how they were: " + ", ".join(parts) if parts else
-                            "No files had changed")
-        if r.get("notes"):                       # why each file was kept: changed later, never stored, a link...
-            msg += ". " + " ".join(r["notes"][:5]).rstrip(".") + (" ..." if len(r["notes"]) > 5 else "")
-        elif r.get("kept"):
-            names = ", ".join(r["kept"][:5]) + (" ..." if len(r["kept"]) > 5 else "")
-            msg += f". Kept as they are, because you changed them afterwards: {names}"
-        msg += "."
-        if r.get("backup"):
-            msg += f" Copies of the files Undo replaced are in {r['backup']}."
-        self.emit({"type": "status", "text": msg})
+        msg, detail = undo_message(r)
+        self.emit({"type": "status", "text": msg, **({"detail": detail} if detail else {}),
+                   "undo_files": {"deleted": list(r.get("deleted") or []), "restored": list(r.get("restored") or [])}})
         return r
 
     def rewind(self, event_index: int, files: bool = True) -> dict:
@@ -2132,13 +2158,11 @@ class Session:
             r = CR.rewind(self.id, CR.message_for_event(self, int(event_index)), files=bool(files), session=self,
                           held=True)
             if r.get("undo"):
-                msg = "Rewound. " + ("Files are back to how they were." if (r["undo"].get("restored") or
-                                                                             r["undo"].get("deleted")) else "")
-                if r["undo"].get("notes"):
-                    msg += " " + " ".join(r["undo"]["notes"][:5])
-                if r["undo"].get("backup"):
-                    msg += f" Copies of the files Undo replaced are in {r['undo']['backup']}."
-                self.emit({"type": "status", "text": msg.strip()})
+                msg, detail = undo_message(r["undo"])
+                u = r["undo"]
+                self.emit({"type": "status", "text": "Rewound. " + msg[len("Undone. "):],
+                           **({"detail": detail} if detail else {}),
+                           "undo_files": {"deleted": list(u.get("deleted") or []), "restored": list(u.get("restored") or [])}})
             return r
         finally:
             self._end_turn(token, notice=False)
@@ -2626,9 +2650,10 @@ def session_action(sid: str, act: str, b: dict) -> dict:
     s = get(sid)
     since = int(b.get("since", 10 ** 9))
     if act == "send":
+        s._attached = []
         r = s.send(b.get("text", ""), images=b.get("images") or None, interrupt=bool(b.get("interrupt")),
                    files=b.get("files") or None)
-        return dict(s.view(since), sent=r)
+        return dict(s.view(since), sent=r, attached=list(getattr(s, "_attached", None) or []))
     if act == "take_back":                          # a message sent while the agent worked, back to the box
         return dict(s.view(since), taken=s.take_back())
     if act == "stop":
@@ -2659,17 +2684,20 @@ def session_action(sid: str, act: str, b: dict) -> dict:
     elif act == "effort":
         s.set_effort(b.get("effort", ""))
     elif act == "revert":
-        turn = int(b.get("turn", 0))
+        turn, undone = int(b.get("turn", 0)), None
         if str(b.get("what") or "both") == "chat":   # the conversation only: the files stay as they are
             pos = s._turn_cut(turn)
             if pos is None:
                 raise ValueError("That reply cannot be taken back without its files.")
             s.rewind(pos, files=False)
         else:
-            s.revert(turn)
+            u = s.revert(turn)
+            undone = {"deleted": list(u.get("deleted") or []), "restored": list(u.get("restored") or [])}
         if not b.get("keep_versions"):               # Undo or Edit: the earlier answers belonged to that message
             vs = {k: v for k, v in (read_meta(s.id).get("versions") or {}).items() if k.isdigit() and int(k) < turn}
             write_meta(s.id, versions=vs)
+        if undone is not None:                         # the app closes or refreshes a preview of these files
+            return dict(s.view(since), undone=undone)
     else:
         raise ValueError("Unknown chat action.")
     return s.view(since)
@@ -2706,6 +2734,17 @@ def _project_of(meta: dict, workdir: str, legacy: dict | None = None) -> str:
     return legacy.get(workdir or "", "")
 
 
+def _listed_project(meta: dict, workdir: str, legacy: dict, kind: str | None = None) -> str:
+    """The project a chat is listed under. A Code session whose folder is a project's linked folder is listed under
+    that project even when it was started outside it (Code mode, a folder pick): Lina's data question in a project
+    became a Code session that was no longer under the project. Listing only: the chat's own project, its
+    instructions and memory, stay as stored. A chat taken out of its project (project_unbound) stays out."""
+    pid = _project_of(meta, workdir, legacy)
+    if pid or meta.get("project_unbound") or (meta.get("kind") or kind) != "code" or not workdir:
+        return pid
+    return (legacy or {}).get(workdir) or ""          # both paths are stored resolved: no disk access per row
+
+
 _ROWS: dict = {}                    # session.json path -> (mtime, size, row): imported histories can be thousands
 
 
@@ -2725,7 +2764,7 @@ def _decorate(r: dict, m: dict, legacy: dict, live_pids: set) -> dict:
     r["unread"] = bool(m.get("unread")) and r.get("state") not in ("working", "waiting")
     r["scheduled"] = bool(m.get("scheduled"))
     r["pr"] = m.get("pr") or None                 # the pull request last seen for this session (the row's icon and card)
-    r["project_id"] = _project_of(m, r.get("workdir") or "", legacy)
+    r["project_id"] = _listed_project(m, r.get("workdir") or "", legacy, r.get("kind"))
     if r["project_id"] and r["project_id"] not in live_pids:
         r["project_id"] = ""
     r["_m"] = m                                   # kept for the cached rows: projects are re-resolved on every call
@@ -2794,7 +2833,7 @@ def listing() -> list:
         if sid not in DELETED:
             r = dict(r)
             m = r.pop("_m")
-            pid = _project_of(m, r.get("workdir") or "", legacy)
+            pid = _listed_project(m, r.get("workdir") or "", legacy, r.get("kind"))
             r["project_id"] = pid if pid in live_pids else ""
             rows[sid] = r
     with LOCK:

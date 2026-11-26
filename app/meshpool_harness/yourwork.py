@@ -24,7 +24,11 @@ _STOP = set("""a an the and or of to for in on with my me i is it this that be p
 about from into at as are was were will would should could have has had not no yes new just also more most some any all
 your our their its then than them they we us one two three file files chat chats work need want help create write give
 show tell let using used looks look like add changes change against over under between after before across
-draft outline explain check compare estimate review plan rewrite analyze analyse summarize summarise numbers""".split())
+draft outline explain check compare estimate review plan rewrite analyze analyse summarize summarise numbers
+user users wanted wants asked asks requested request requests needed needs number assistant meshpool agent model
+provided gave made built created wrote produced received tried started finished done thing things something
+there here which who whom whose when where while also very much many lot lots way ways today yesterday""".split())
+# a stored chat summary reads "The user wanted a number of ...": its filler is not a topic (WF-05)
 _SPEC_LABELS = {"docs.slides": "Slides", "docs.sheets": "Spreadsheets", "docs.word": "Documents", "docs": "Documents",
                 "code": "Code", "data": "Data analysis", "research": "Research", "debug": "Debugging",
                 "build": "Building", "write": "Writing", "browse": "Browsing", "lead": "Lead generation",
@@ -44,9 +48,11 @@ def _A():
 
 def _words(text: str) -> set:
     out = set()
-    for w in re.findall(r"[a-z][a-z0-9]+", (text or "").lower()):
+    for w in re.findall(r"(?<![a-z0-9])[a-z]+(?![a-z0-9])", (text or "").lower()):   # words only: no "user2", no ids
         if len(w) > 2 and w not in _STOP:
-            out.add(w[:-1] if len(w) > 4 and w.endswith("s") else w)
+            w = w[:-1] if len(w) > 4 and w.endswith("s") else w
+            if w not in _STOP:
+                out.add(w)
     return out
 
 
@@ -213,7 +219,7 @@ def _topics(chats: list[dict]) -> tuple[list[dict], dict]:
         w = _words(line) | _words(c["title"])
         docs[c["id"]] = w
         df.update(w)
-    floor = 2 if len(chats) >= 4 else 1
+    floor = 2                                               # a word in one chat only is not a topic you worked on
     out, used = [], set()
     for term, n in df.most_common(40):
         if n < floor or term in used:

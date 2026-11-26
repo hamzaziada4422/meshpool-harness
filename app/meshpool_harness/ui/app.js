@@ -473,7 +473,9 @@ function startRename(id) {
 }
 async function renameThread(id) { startRename(id); }
 
-function browseFolder(start) {
+// opts.noHome: "Folders I choose" in onboarding. The whole home folder is a separate choice there, so it is never the
+// button's default: the button names the folder the person clicked or opened, and waits for one.
+function browseFolder(start, opts = {}) {
   return new Promise(resolve => {
     const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
     sc.innerHTML = `<div class="dlg fb" role="dialog" aria-modal="true" aria-label="Choose a folder"><h3>Choose a folder</h3>
@@ -482,9 +484,17 @@ function browseFolder(start) {
       <ul class="fblist" id="fbList" role="listbox" tabindex="0"></ul>
       <div class="row"><span class="fbsel" id="fbSel"></span><button class="btn" data-a="0">Cancel</button><button class="btn primary" data-a="1">Use this folder</button></div></div>`;
     document.body.appendChild(sc);
-    let cur = "", home = "", act = -1;
+    let cur = "", home = "", act = -1, chosen = "";
     const done = v => { sc.remove(); document.removeEventListener("keydown", key, true); if (v) store("fb_last", v); resolve(v); };
     const items = () => $$("#fbList [data-p]", sc);
+    // The folder the button uses: one clicked in the list, else the folder shown. Arrow keys only move the highlight.
+    const target = () => chosen || cur;
+    const label = () => {
+      const t = target(), isHome = t === home, nm = isHome ? "your whole home folder" : (t.split(/[\\/]/).filter(Boolean).pop() || t);
+      const b = $("[data-a='1']", sc), off = !!opts.noHome && isHome;
+      $("#fbSel", sc).textContent = off ? "Click a folder to choose it" : `Selected: ${nm}`;
+      b.disabled = off; b.textContent = off ? "Choose a folder" : isHome ? "Use the whole home folder" : `Use ${nm}`;
+    };
     const mark = n => { const it = items(); if (!it.length) return; act = Math.max(0, Math.min(it.length - 1, n)); it.forEach((b, k) => b.classList.toggle("act", k === act)); it[act].scrollIntoView({block: "nearest"}); };
     const key = e => {
       if (e.key === "Escape") { e.stopPropagation(); done(""); return; }
@@ -500,7 +510,7 @@ function browseFolder(start) {
     const go = async path => {
       try {
         const r = await post("/api/projects", {action: "dirs", path});
-        cur = r.path; home = r.home; act = -1;
+        cur = r.path; home = r.home; act = -1; chosen = "";
         const sep = r.path.includes("\\") ? "\\" : "/";
         const parts = r.path.split(/[\\/]/).filter(Boolean);
         let acc = r.path.startsWith("/") ? "" : "";
@@ -513,14 +523,12 @@ function browseFolder(start) {
         $("#fbIn", sc).value = "";
         $("#fbList", sc).innerHTML = (r.parent ? `<li><button data-p="${esc(r.parent)}" data-up="1">${ICON.chev}<span>Up one level</span></button></li>` : "") +
           (r.dirs.length ? r.dirs.map(d => `<li><button data-p="${esc(r.path.replace(/[\\/]$/, "") + sep + d)}">${ICON.dir}<span>${esc(d)}</span></button></li>`).join("") : `<li class="pnote">No folders inside.</li>`);
-        items().forEach((b, k) => { b.onclick = () => mark(k); b.ondblclick = () => go(b.dataset.p); });
-        const name = r.path === r.home ? "your whole home folder" : (parts[parts.length - 1] || r.path);
-        $("#fbSel", sc).textContent = `Selected: ${name}`;
-        $("[data-a='1']", sc).textContent = r.path === r.home ? "Use the whole home folder" : `Use ${name}`;
+        items().forEach((b, k) => { b.onclick = () => { mark(k); chosen = b.dataset.up ? "" : b.dataset.p; label(); }; b.ondblclick = () => go(b.dataset.p); });
+        label();
         $("#fbList", sc).focus();
       } catch (e) { toast(e.message); }
     };
-    $$("[data-a]", sc).forEach(b => b.onclick = () => done(b.dataset.a === "1" ? cur : ""));
+    $$("[data-a]", sc).forEach(b => b.onclick = () => done(b.dataset.a === "1" ? target() : ""));
     sc.addEventListener("mousedown", e => { if (e.target === sc) done(""); });
     go(start || store("fb_last") || "");
   });
@@ -602,6 +610,15 @@ function renderAttach() {
   });
   $$("#attachRow button").forEach(b => b.onclick = () => { S.attachments.splice(+b.dataset.i, 1); renderAttach(); });
 }
+// Where each attached file went: one that already lives in the chat's folder is used where it is; any other is a copy,
+// and the note names the copy and the folder it is in.
+function attachNote(list, cur) {
+  if (!list || !list.length) return;
+  const v = cur?.view || {}, where = v.scratch ? "this chat's own folder" : projName(v.workdir || "");
+  const said = list.map(a => a.reused ? `${a.name} is already in ${where} (${a.path}), so it was used there.`
+    : `A copy of ${a.name} was saved in ${where} as ${a.path}. Your original is unchanged.`);
+  toast(said.join(" "), 7000);
+}
 async function stopNow() {
   if (!S.cur || S.stopping) return;
   S.stopping = true; renderBar();
@@ -632,11 +649,12 @@ async function sendNow(interrupt) {
   // Doherty threshold: answer the press at once, before the server does
   const sb = $("#sendBtn"); if (sb) { sb.classList.remove("go"); void sb.offsetWidth; sb.classList.add("go"); }
   S.sendHold = Date.now() + 2500; setWorking("Sending"); scrollConv(true);
-  let created = null; const draft0 = {project: S.draft.project, pid: S.draft.pid};
+  let created = null; const draft0 = {project: S.draft.project, pid: S.draft.pid, incognito: !!S.draft.incognito};
   try {
     if (!S.cur) {
       const v = created = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode || defaultMode(), plan: S.draft.plan, style: styleId(), task: text, incognito: !!S.draft.incognito, memory_exclude: S.draft.exclude || [], ...(S.draft.effort ? {effort: S.draft.effort} : {}), ...(S.mode === "code" && S.draft.worktree ? {worktree: true} : {})});
       S.draft.style = ""; S.draft.incognito = false; S.draft.worktree = false; S.draft.exclude = []; S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
+      if (!draft0.incognito) rememberWhere(draft0);      // the next new chat starts where this one did
       openThread(v.id, true);
     }
     const cur = S.cur;                              // before any wait: the user may open another chat meanwhile
@@ -647,6 +665,7 @@ async function sendNow(interrupt) {
     if (interrupt) { S.stopping = true; renderBar(); }
     if (S.pendingGoal) { const g = S.pendingGoal; S.pendingGoal = null; await setGoal(g, cur); }
     const r = await post(`/api/agent/${cur.id}/send`, {text, images, files, since: 1e9, interrupt: !!interrupt});
+    attachNote(r.attached, cur);
     if (interrupt && !wasStopping) S.stopping = false;
     if (S.cur !== cur) { setTimeout(loadThreads, 500); return; }        // the user moved on: the sent chat keeps running
     if (!interrupt && (r.sent?.after_stop || wasStopping)) toast("Sent. It runs as soon as the current request stops.");
@@ -738,7 +757,7 @@ function sendCmd(prompt) { const inp = $("#input"); inp.value = prompt; sendNow(
 async function suggestNow() {
   const box = $("#sugg"); if (!box) return;
   const text = $("#input").value.trim();
-  if (text.length < 12 || /^[\/$]/.test(text)) { box.hidden = true; return; }
+  if (text.length < 12 || /^[\/$]/.test(text) || text === S.suggSkip) { box.hidden = true; return; }   // suggSkip: text the app put back
   let r; try { r = await post("/api/suggest", {text, harness: cfg().harness, kind: curMode(), new: !S.cur}); } catch (e) { return; }
   if ($("#input").value.trim() !== text) return;                 // typed on meanwhile: the next pause asks again
   S.suggOff = S.suggOff || new Set();
@@ -977,11 +996,12 @@ function restoreDraft() {
 // folder. With {pid}: a chat in that project (its page, with the message box at the bottom).
 function newThread(opt) {
   if (opt && typeof opt === "object" && opt.pid) return openProject(opt.pid, {focus: true});
+  const where = opt === undefined && typeof lastWhere === "function" ? lastWhere() : {project: "", pid: ""};   // the last folder or project used
   clearColHandlers(); window.navPush?.("new:");
   leaveChat(S.cur);
   S.view = "chat"; S.pjId = "";
-  S.draft.project = typeof opt === "string" ? opt : "";
-  S.draft.pid = ""; S.draft.incognito = false; S.draft.exclude = [];
+  S.draft.project = typeof opt === "string" ? opt : where.project;
+  S.draft.pid = where.pid; S.draft.incognito = false; S.draft.exclude = [];
   { const i = $("#input"); if (i && !(opt && typeof opt === "object")) { i.value = ""; i.style.height = "auto"; } }
   S.cur = null; S.attachments = []; renderAttach(); setWorking(null); $("#col").classList.remove("loading");
   S.draft.harness = modeHarness(); S.draft.mode = "";
@@ -1294,7 +1314,7 @@ function workTick(cur) {
   const g = cur.group; if (g && g.isConnected && !g.dataset.done && g._t0) { const el = $(".gel", g), s = Math.round((Date.now() - g._t0) / 1000) + "s"; if (el && el.textContent !== s) el.textContent = s; }
   const waiting = cur.view?.state === "waiting";   // the server says what it waits on; a stale card in the column must not hide Working
   const pd = cur.working ? planData() : null;
-  if (cur.working && !waiting) setWorking(pd ? planLine(pd) : cur.live ? "Writing" : String(cur.activity || "Working").split(" ").slice(0, 3).join(" ").replace(/[:,]$/, ""), Math.round((Date.now() - (cur.since || Date.now())) / 1000));
+  if (cur.working && !waiting) setWorking(cur.jobStage && !cur.live ? cur.jobStage : pd ? planLine(pd) : cur.live ? "Writing" : String(cur.activity || "Working").split(" ").slice(0, 3).join(" ").replace(/[:,]$/, ""), Math.round((Date.now() - (cur.since || Date.now())) / 1000));
   else if (cur.view?.state !== "starting" && Date.now() > (S.sendHold || 0)) setWorking(null);
 }
 // ---- scrolling: follow the end while the reader is at the end; never pull them back once they scroll up
@@ -1522,6 +1542,7 @@ function applyEvRaw(ev) {
       pre.scrollTop = pre.scrollHeight;
       break; }
     case "tool_end": {
+      cur.jobStage = "";                                // the engine job (if any) has answered
       if (ev.output) for (const m of String(ev.output).matchAll(OUT_RX)) (cur.tpaths ||= []).push(relPath(m[1]));   // this turn's files, for the cards under the reply
       const d = cur.tools[ev.id] || document.getElementById("tool-" + ev.id); if (!d) break;
       d.dataset.done = "1"; $("pre.live", d)?.remove(); if (d.dataset.autoOpen) { d.open = false; delete d.dataset.autoOpen; }
@@ -1588,6 +1609,7 @@ function applyEvRaw(ev) {
       cur.activity = "Sub-agents working";
       break; }
     case "context": if (cur.view) cur.view.context = {used: ev.used, size: ev.size}; break;
+    case "job_stage": cur.jobStage = String(ev.text || "").slice(0, 90); break;   // a long engine job's stage: the working line
     case "review": { closeGroup(); window.reviewCard010?.(ev, add); break; }   // the independent check (chat010.js)
     case "receipt": { closeGroup(); const t = String(ev.text || ""), first = t.split("\n").map(x => x.replace(/^[#*\s-]+|[*]+/g, "").trim()).find(Boolean) || "Reviewed";
       add(`<details><summary>${ICON.check2}<span>${esc(clip(first.replace(/:$/, ""), 80))}</span></summary><div class="rcbody">${md(t)}</div></details>`, "note receipt"); sessionSoon(); break; }   // details: here when opened, and in the Session panel
@@ -1603,7 +1625,7 @@ function applyEvRaw(ev) {
       if (ev.route) { cur.route = {label: String(ev.text || "").replace(/^(Harness|Working as): /, "").replace(/ \(.*$/, "").replace(/\.$/, ""), why: ""}; sessionSoon(); break; }
       if (/^Starting MCP|^MCP:|^MCP did not start|^No MCP servers/.test(ev.text || "")) { cur.mcpNote = ev.text; sessionSoon(); break; }
       if (/ is ready\. ?/.test(ev.text || "") && !cur.turn) break;
-      { const nn = add(esc(ev.text), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); } break; }
+      { const nn = add(esc(ev.text) + (ev.detail ? ` <details class="notedet"><summary>Details</summary><div>${esc(ev.detail).replace(/\n/g, "<br>")}</div></details>` : ""), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); } break; }
     case "gate": {                                      // all model slots busy: say so while it waits, drop the line once it runs
       if (cur.gateEl && !cur.gateEl.isConnected) cur.gateEl = null;
       if (ev.state === "waiting") {
@@ -1621,10 +1643,12 @@ function applyEvRaw(ev) {
       break; }
     case "checkpoint": {
       const t = (ev.turns || [])[0];
-      if (t && cur.lastFoot && t.changed && t.changed.length && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; safe(() => pvTurnCards(cur, cur.lastFoot, t.n)); cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }
+      // the count is of the user's files: an engine's build and check files (qa.json, slides.json...) are not counted
+      const nf = t && t.changed ? (t.changed.filter(c => !pvBuildFile(c.path)).length || t.changed.length) : 0;
+      if (t && cur.lastFoot && nf && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; safe(() => pvTurnCards(cur, cur.lastFoot, t.n)); cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${nf} file${nf === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }
       break; }
     case "turn_end": {
-      cur.gateEl?.remove(); cur.gateEl = null;
+      cur.gateEl?.remove(); cur.gateEl = null; cur.jobStage = "";
       settleSteps("");
       closeGroup();
       if (ev.synthetic) break;                  // a turn that never ran (or one cut short by a restart): no footer, no Build this plan
@@ -1771,12 +1795,18 @@ function userText(mu) {
   const c = b.cloneNode(true); c.querySelectorAll(".att, .tag").forEach(x => x.remove());
   return (c.textContent || "").trim();
 }
-function fillInput(text) {
+// opts.back: Undo or Rewind put the message back. It is a draft: the box is not focused (one Enter must not send the
+// undone request again), and a note says so.
+function fillInput(text, opts = {}) {
   const inp = $("#input"); if (!inp || !text) return;
   const draft = inp.value;
   if (!draft.trim()) inp.value = text;
   else if (draft.trim() !== String(text).trim()) inp.value = draft.replace(/\s+$/, "") + "\n\n" + text;
-  inp.dispatchEvent(new Event("input")); inp.focus();
+  S.suggSkip = inp.value.trim();        // put back by Undo or Rewind, not typed: no "Use $skill" chips for it
+  inp.dispatchEvent(new Event("input"));
+  if (!opts.back) { inp.focus(); return; }
+  if (document.activeElement === inp) inp.blur();
+  toast("Your message is back in the box as a draft. Edit it, then send it again if you want to.", 6000);
 }
 async function undoTurn(n) {
   if (!await ask({title: "Undo this reply?", text: "Files Meshpool changed go back to how they were before it, and the conversation goes back to that point. Replies after it are undone too.", ok: "Undo changes", danger: true})) return;
@@ -1784,8 +1814,14 @@ async function undoTurn(n) {
   const ue = threadLog().find(e => e.type === "user" && (t.message_index != null && e.mi === t.message_index)) ||
     threadLog().find(e => e.type === "user" && t.event_index != null && e.i === t.event_index);
   const asked = ue?.text || "";
-  try { await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); if (asked) fillInput(asked); renderBranch(true); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel(); }
+  try { const root = curRoot(); const r = await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); if (asked) fillInput(asked, {back: true}); renderBranch(true); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel(); afterUndo(root, r.undone); }
   catch (e) { toast(e.message); }
+}
+// After Undo or Rewind: a preview of a file Undo removed closes, one of a file it put back shows the restored version.
+function afterUndo(root, u) {
+  if (!u || typeof PVX === "undefined" || !PVX.open || PVX.root !== root || !PVX.path) return;
+  if ((u.deleted || []).includes(PVX.path)) { const nm = PVX.path.split("/").pop(); closePreview(true); toast(`${nm} was removed by Undo, so its preview closed.`, 4000); }
+  else if ((u.restored || []).includes(PVX.path)) openPreview(root, PVX.path);
 }
 
 // "Rewind to here" / "Fork from here" under one of your messages (the server finds the message from the event number).
@@ -1803,8 +1839,9 @@ async function rewindFork(kind, el) {
     if (!a) return;
     const r = await post(`/api/agent/${cur.id}/rewind`, {event_index: ei, files: a.checked, since: 1e9});
     if (r.forked) { await loadThreads(); openThread(r.forked); toast("This agent cannot go back in place, so the conversation up to there is a new chat.", 5000); return; }
-    if (r.text) fillInput(r.text);
+    if (r.text) fillInput(r.text, {back: true});
     renderBranch(true); clearTimeout(cur.pollT); resetChat(cur); poll(); if (S.panel === "diff") renderPanel();
+    afterUndo(cur.view?.workdir || curRoot(), r.undo);
   } catch (e) { toast(e.message); }
 }
 
@@ -1878,9 +1915,11 @@ function outputFiles() {
   const seen = new Map(), rel = relPath;
   for (const t of S.cur?.view?.turns || []) for (const c of t.changed || []) if (c.status !== "deleted") seen.set(c.path, {path: c.path, turn: t.n});
   for (const e of threadLog()) if (e.type === "tool_end" && e.output) for (const m of String(e.output).matchAll(OUT_RX)) { const r = rel(m[1]); if (!r.startsWith("/") && !/^[A-Za-z]:/.test(r)) seen.set(r, {path: r}); }
-  return [...seen.values()];
+  return [...seen.values()].filter(o => !pvBuildFile(o.path));      // the user's files, not an engine's build files
 }
 function fileIcon(p) { return ICON.files; }
+// The chat's folder as people know it: a chat with its own folder is named after the chat, not its id ("dab817694f87").
+function rootLabel() { const v = S.cur?.view; return v && v.scratch ? `${clip(v.title || "This chat", 36)} (this chat's own folder)` : projName(curRoot()); }
 // The Progress tab is built once and then patched by key, so a step finishing changes one row, not the whole panel.
 function reconcile(parent, items, keyOf, make, update) {
   const have = new Map([...parent.children].map(el => [el.dataset.k, el]));
@@ -1927,7 +1966,7 @@ function panelProgress(body) {
     <section><h4>Progress <span id="pgState"></span></h4><div id="pgSteps"></div></section>
     <section><h4>Files made</h4><div id="pgFiles"></div></section>
     <section><h4>Context</h4><ul class="ctxl">
-      <li>${ICON.dir}<span><b>${esc(projName(curRoot()))}</b><small title="${esc(curRoot())}">${esc(shortPath(curRoot()))}</small></span><button class="linkbtn" id="cwOpen" aria-label="Browse the project's files">Browse files</button></li>
+      <li>${ICON.dir}<span><b>${esc(rootLabel())}</b><small title="${esc(curRoot())}">${esc(shortPath(curRoot()))}</small></span><button class="linkbtn" id="cwOpen" aria-label="Browse the project's files">Browse files</button></li>
       <li>${ICON.cpu}<span><b id="pgHarness"></b><small id="pgModel"></small></span></li>
       <li>${ICON.plug}<span><b>Connectors</b><small id="cwConn">Loading...</small></span><button class="linkbtn" id="cwConnMgr">Manage</button></li>
       ${skills.length ? `<li>${ICON.skill}<span><b>Skills</b><small>${esc(skills.join(", "))}</small></span></li>` : ""}
@@ -1941,10 +1980,13 @@ function panelProgress(body) {
 }
 function panelOutputs(body) {
   const outs = S.cur ? outputFiles() : [];
-  body.innerHTML = `<div class="pbar"><span class="chip">${ICON.dir}${esc(projName(curRoot()))}</span><span style="flex:1"></span><button class="btn" id="oOpen" aria-label="Show every file in the folder">Browse files</button></div>
+  const own = !!S.cur?.view?.scratch;
+  body.innerHTML = `<div class="pbar"><span class="chip" title="${esc(curRoot())}">${ICON.dir}${esc(rootLabel())}</span><span style="flex:1"></span><button class="btn" id="oOpen" aria-label="Show every file in the folder">Browse files</button></div>
+    ${own && outs.length ? `<div class="pnote" id="oCopyNote">These files are in this chat's own folder. A file you attached is a copy here: your original is unchanged. Use Download to keep one.</div>` : ""}
     ${outs.length ? `<ul class="outs" style="padding:10px">${outs.map(o => `<li><button data-open="${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button></li>`).join("")}</ul>` : `<div class="pnote">Files this chat makes or changes show here. Click one to preview it.</div>`}
     <div style="border-top:1px solid var(--line-2);flex:1;min-height:160px;display:flex;flex-direction:column"><div class="pnote" style="padding:8px 12px 0">All files in the folder</div><div style="flex:1;overflow:auto" id="tree"></div></div></div>`;
-  $("#oOpen").onclick = () => $("#tree")?.scrollIntoView({block: "start", behavior: "smooth"});
+  // the folder in the in-app file list (the viewer pane): the list below was already on screen, so scrolling to it did nothing
+  $("#oOpen").onclick = () => { if (curRoot()) edFolderPane(curRoot(), ""); };
   $$("[data-open]", body).forEach(b => b.onclick = () => openPreview(curRoot(), b.dataset.open));
   fsTree($("#tree"), curRoot(), {open: S.fsOpen?.root === curRoot() ? S.fsOpen.path : ""}); S.fsOpen = null;
 }
@@ -2992,7 +3034,12 @@ function permStep(host) {
     $$("[data-scope]", card).forEach(y => y.setAttribute("aria-checked", y === x));
     const res = $("#oScope", card);
     try {
-      if (x.dataset.scope === "pick") { await pickProject(); res.className = S.projects.length ? "res ok" : "res"; res.textContent = S.projects.length ? `Added ${S.projects.map(x => x.name || projName(x.path)).join(", ")}. Add more any time from the sidebar.` : "No folder added yet."; }
+      if (x.dataset.scope === "pick") {     // the folder becomes a project: in the sidebar, the picker, and new chats work in it
+        const r = await pickProject({project: true, noHome: true}), p = r?.pid && S.pj.find(q => q.id === r.pid);
+        if (p) { newThread(); }
+        const mine = S.pj.filter(q => q.link?.type === "folder" && q.pinned);
+        res.className = mine.length ? "res ok" : "res"; res.textContent = mine.length ? `Added ${mine.map(q => q.name).join(", ")}. New chats work in ${p ? p.name : mine[0].name}. Add more any time with Add a folder in the sidebar.` : "No folder added yet.";
+      }
       else if (x.dataset.scope === "home") { const r = await post("/api/projects", {action: "home"}); S.projects = r.projects; renderSide(); newThread(r.picked); res.className = "res ok"; res.textContent = "Meshpool can work anywhere in your home folder. It asks before deleting files, using the internet or installing anything."; }
       else { res.className = "res"; res.textContent = "Each chat keeps its files in its own folder; open it from the chat's Files panel. Add your own folders any time from the sidebar."; }
       if (mac && x.dataset.scope !== "later") draw({id: "folders"});

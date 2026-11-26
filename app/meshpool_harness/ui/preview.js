@@ -27,12 +27,13 @@ function pvEnsure() {
   el.setAttribute("aria-label", "Preview");
   el.innerHTML = `<div class="pv-bar"><button class="iconbtn pv-back" id="pvBack" aria-label="Back to the folder" title="Back to the folder" hidden>${ICON.chev}</button><span class="pv-ic">${ICON.files}</span><b class="pv-name" id="pvName"></b><span class="pv-type" id="pvType"></span><span class="sp"></span>
     <span class="pv-seg" id="pvSeg" role="group" aria-label="View" hidden><button data-v="view" aria-pressed="true">Preview</button><button data-v="code" aria-pressed="false">Code</button></span>
-    <button class="btn" id="pvAlt" hidden></button><button class="iconbtn" id="pvMore" aria-label="More actions for this file" title="More actions">${ICON.more}</button><button class="iconbtn" id="pvClose" aria-label="Close preview" title="Close (Esc)">${ICON.x}</button></div>
+    <button class="btn" id="pvAlt" hidden></button><button class="iconbtn" id="pvDl" aria-label="Download this file" title="Download" hidden>${ICON.dl}</button><button class="iconbtn" id="pvMore" aria-label="More actions for this file" title="More actions">${ICON.more}</button><button class="iconbtn" id="pvClose" aria-label="Close preview" title="Close (Esc)">${ICON.x}</button></div>
     <div class="pv-tabs" id="pvTabs" role="tablist" hidden></div>
     <div class="pv-stage" id="pvStage"></div>
     <div class="pv-strip" id="pvStrip" hidden><button class="iconbtn" id="pvPrev" aria-label="Previous page">${ICON.chev}</button><div class="pv-thumbs" id="pvThumbs"></div><button class="iconbtn" id="pvNext" aria-label="Next page">${ICON.chev}</button><span class="pv-count" id="pvCount" aria-live="polite"></span></div>`;
   $("#app").appendChild(el);
   $("#pvClose").onclick = () => closePreview();
+  $("#pvDl").onclick = () => { if (PVX.root && PVX.path) pvDownload(PVX.root, PVX.path); };
   $("#pvPrev").onclick = () => pvGo(PVX.page - 1);
   $("#pvNext").onclick = () => pvGo(PVX.page + 1);
   $$("#pvSeg button").forEach(b => b.onclick = () => { if (PVX.m?.kind === "editor") return edMode(b.dataset.v === "code" ? "src" : "view"); PVX.code = b.dataset.v === "code"; pvBody(); });
@@ -41,7 +42,8 @@ function pvEnsure() {
   $("#pvMore").onclick = e => {
     if (!PVX.root || (PVX.m?.kind !== "folder" && !PVX.path)) return;
     const root = PVX.root, path = PVX.path;
-    ctxMenu(e, [{label: "Copy path", icon: ICON.copy, fn: () => { try { navigator.clipboard.writeText(root.replace(/[\\/]$/, "") + (path ? "/" + path : "")); toast("Path copied", 2000); } catch (err) { toast("Could not copy the path."); } }},
+    ctxMenu(e, [...(PVX.m?.kind !== "folder" && path ? [{label: "Download", icon: ICON.dl, fn: () => pvDownload(root, path)}] : []),
+      {label: "Copy path", icon: ICON.copy, fn: () => { try { navigator.clipboard.writeText(root.replace(/[\\/]$/, "") + (path ? "/" + path : "")); toast("Path copied", 2000); } catch (err) { toast("Could not copy the path."); } }},
       {sep: true}, {label: edRevealLabel(), icon: ICON.ext, fn: () => edReveal(root, path)}]);
   };
   el.addEventListener("keydown", e => {
@@ -52,6 +54,13 @@ function pvEnsure() {
     else if (k === "Home") { e.preventDefault(); pvGo(0); } else if (k === "End") { e.preventDefault(); pvGo(1e9); }
   });
   return el;
+}
+// Download: the browser's own download of the file, through the app's checked file route (/raw with dl=1, which sends
+// it as an attachment). Nothing else is opened or started.
+function pvDownload(root, path) {
+  const a = document.createElement("a");
+  a.href = `/raw?t=${encodeURIComponent(MP.token)}&${pvQuery(root, path)}&dl=1`; a.download = String(path).split("/").pop();
+  a.rel = "noopener"; a.hidden = true; document.body.appendChild(a); a.click(); a.remove();
 }
 function pvFree() { PVX.urls.forEach(u => { try { URL.revokeObjectURL(u); } catch (e) {} }); PVX.urls = []; }
 function pvShell(name, type, altLabel) {
@@ -64,6 +73,7 @@ function pvShell(name, type, altLabel) {
   el.hidden = false; app.classList.add("pvopen");
   if (typeof fitPanel === "function") fitPanel();
   $("#pvName").textContent = name; $("#pvName").title = PVX.path || name; $("#pvType").textContent = type;
+  $("#pvDl").hidden = !PVX.root || !PVX.path || type === "Folder";
   const ob = $("#pvAlt"); ob.hidden = !altLabel; ob.textContent = altLabel || "";
   $("#pvSeg").hidden = true; $("#pvTabs").hidden = true; $("#pvStrip").hidden = true;
   if (typeof renderTop === "function") renderTop();
@@ -288,11 +298,16 @@ const PV_CARD_RX = /\.(pptx?|pptm|ppsx|odp|docx?|odt|rtf|xlsx?|xlsm|ods|csv|tsv|
 const PV_THUMB_RX = /\.(pptx?|pptm|ppsx|odp|docx?|odt|rtf|pdf)$/i;
 // One card per file for the turn, newest version (the thumbnail carries the file's modified time). Idempotent: called again
 // when the turn's file list arrives (checkpoint), it fills the same row.
+// A file an engine keeps for its build and checks (qa.json, slides.json, deck.provenance.json...), not the user's
+// deliverable: left out of the cards and the "files changed" count (server side: workbench.is_build_file).
+const pvBuildFile = p => { p = String(p || "").replace(/\\/g, "/"); return /\.provenance\.json$/i.test(p) || /(^|\/)Meshpool outputs\/(.+\/)?[^/]+\.(json|jsonl|log|run|py)$/i.test(p); };
 function pvTurnCards(cur, foot, turn) {
   if (!foot || !cur) return;
   const root = typeof curRoot === "function" ? curRoot() : "";
-  const seen = new Set();
-  const add = p => { p = String(p || "").replace(/\\/g, "/"); if (p && PV_CARD_RX.test(p) && !p.startsWith("/") && !/^[A-Za-z]:/.test(p) && !p.split("/").some(x => x.startsWith("."))) seen.add(p); };
+  const seen = new Set(), base = String(root).replace(/\\/g, "/").replace(/\/+$/, "") + "/";
+  const add = p => { p = String(p || "").replace(/\\/g, "/");
+    if (base.length > 1 && p.startsWith(base)) p = p.slice(base.length);   // a full path inside the chat's folder is a file of this chat
+    if (p && PV_CARD_RX.test(p) && !pvBuildFile(p) && !p.startsWith("/") && !/^[A-Za-z]:/.test(p) && !p.split("/").some(x => x.startsWith("."))) seen.add(p); };
   (cur.tpaths || []).forEach(add);
   const t = (cur.view?.turns || []).find(x => x.n === (turn ?? cur.turn));
   for (const c of t?.changed || []) if (c.status !== "deleted") add(c.path);
@@ -303,15 +318,29 @@ function pvTurnCards(cur, foot, turn) {
   if (row && row.dataset.k === shown.join("|")) return;
   if (!row) { row = document.createElement("div"); row.className = "pvcards"; foot.after(row); }
   row.dataset.k = shown.join("|");
-  row.innerHTML = shown.map(p => { const ty = pvType(p), thumb = PV_THUMB_RX.test(p), img = /\.(png|jpe?g|gif|webp|svg)$/i.test(p);
-    return `<button class="pvcard" data-pv="${esc(p)}" title="${esc(p)}"><span class="pvth${thumb ? " wait" : ""}">${img ? `<img alt="" loading="lazy" src="/raw?t=${encodeURIComponent(MP.token)}&${pvQuery(root, p)}">` : `<span class="pvi">${ICON.files}</span>`}</span><span class="pvcm"><b>${esc(p.split("/").pop())}</b><small>${esc(ty.label)}${ty.ext ? " · ." + esc(ty.ext) : ""}</small></span></button>`; }).join("")
+  // In a chat with its own folder, every file is in that folder, and a file you attached is a copy of yours there:
+  // the card says so, so "I fixed Budget.xlsx" is not read as a change to your own file. Download gets it back.
+  const own = !!cur.view?.scratch, att = pvAttached(cur);
+  row.innerHTML = shown.map(p => { const ty = pvType(p), thumb = PV_THUMB_RX.test(p), img = /\.(png|jpe?g|gif|webp|svg)$/i.test(p), nm = p.split("/").pop();
+    const where = own ? (att.has(p) || att.has(nm) ? "Copy of your file, in this chat" : "In this chat") : "";
+    return `<span class="pvwrap"><button class="pvcard" data-pv="${esc(p)}" title="${esc(p)}"><span class="pvth${thumb ? " wait" : ""}">${img ? `<img alt="" loading="lazy" src="/raw?t=${encodeURIComponent(MP.token)}&${pvQuery(root, p)}">` : `<span class="pvi">${ICON.files}</span>`}</span><span class="pvcm"><b>${esc(nm)}</b><small>${esc(ty.label)}${ty.ext ? " · ." + esc(ty.ext) : ""}</small>${where ? `<small class="pvwhere">${esc(where)}</small>` : ""}</span></button><button class="iconbtn pvdl" data-pvdl="${esc(p)}" aria-label="Download ${esc(nm)}" data-tip="Download" data-tip-pos="above">${ICON.dl}</button></span>`; }).join("")
     + (paths.length > shown.length ? `<span class="pvmore">+${paths.length - shown.length} more under Artifacts</span>` : "");
   $$(".pvcard", row).forEach(b => {
     b.onclick = () => openPreview(root, b.dataset.pv);
     if (PV_THUMB_RX.test(b.dataset.pv)) pvThumb(root, b.dataset.pv, $(".pvth", b));
   });
+  $$("[data-pvdl]", row).forEach(b => b.onclick = e => { e.stopPropagation(); pvDownload(root, b.dataset.pvdl); });
+}
+// The files the person attached in this chat (the server adds "Attached files (in ...): a, b" to the message).
+function pvAttached(cur) {
+  const out = new Set();
+  for (const e of cur?.log || []) if (e.type === "user") for (const m of String(e.text || "").matchAll(/Attached files \(in [^)]*\): ([^\n]+)/g)) m[1].split(", ").forEach(x => out.add(x.trim()));
+  return out;
 }
 async function pvThumb(root, path, box) {
+  // A chat is rebuilt off-screen and swapped in whole (Undo, a reload, switching chats): wait a moment for the card to
+  // be on the page instead of giving up at once, which left every card without its thumbnail after Undo.
+  for (let w = 0; w < 50 && !box.isConnected; w++) await new Promise(r => setTimeout(r, 100));
   for (let i = 0; i < 90 && box.isConnected; i++) {
     let m; try { m = await api(`/api/preview?${pvQuery(root, path)}`); } catch (e) { box.classList.remove("wait"); return; }
     if (m.state === "ready" && m.pages) {

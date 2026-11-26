@@ -52,7 +52,7 @@ T = {"title": 25, "sub": 18, "note": 9, "src": 9, "tag": 9, "label": 12, "body":
      "head": 14, "num": 20}
 DENSE = {"cell": 10, "lead": 10, "head": 14, "num": 20, "label": 10}            # challenge matrix (page 8)
 ARGUMENT = {"intro": 14, "bullet": 12, "callout": 12, "exhibit": 16, "unit": 12}  # exhibit + argument (page 3)
-FIRM = "Meshpool"
+FIRM = ""                   # a user's deck never carries the product name: the footer is empty unless a brand sets one
 BRAND = {"firm": None, "footer": None, "logo": None, "footer_right": None}   # the company look for this render (engines/forge/brand.py)
 _BASE = {"T": dict(T), "DENSE": dict(DENSE), "ARGUMENT": dict(ARGUMENT)}
 DENSITY = {"mode": "balanced", "bump": 1}       # deck density (engines/forge/density.py); set by render()
@@ -866,7 +866,8 @@ def _footer(ctx, s, sl, n):
         right = snap(right - lw - 0.1)
         label = f"{n}"
     else:
-        label = f"{n}" if BRAND.get("footer_right") else f"{_firm_label(s)}      {n}"
+        firm = "" if BRAND.get("footer_right") else _firm_label(s)
+        label = f"{firm}      {n}" if firm else f"{n}"
     x = RIGHT
     for k, tag in enumerate(reversed(getattr(ctx, "stamps", None) or [])):   # the deck's stamp, on every content
         tw = 0.12 + _need_w(tag, T["tag"], True)                               # slide, above the title glyphs

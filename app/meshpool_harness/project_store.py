@@ -202,6 +202,25 @@ def create(name: str, description: str = "", instructions: str = "", link=None, 
         return detail(pid)
 
 
+def for_folder(path: str, name: str = "") -> dict:
+    """The project linked to this folder, made (and pinned, so it shows in the sidebar) when there is none. A folder
+    picked in onboarding or with the sidebar's "Add a folder" becomes a project: new chats in it work in the folder
+    itself, not in a private chat folder."""
+    link = _clean_link({"type": "folder", "path": path})
+    with _LOCK:
+        try:
+            dirs = [p for p in root().iterdir() if p.is_dir() and ID_RX.fullmatch(p.name)]
+        except OSError:
+            dirs = []
+        for d in dirs:
+            m = _meta(d)
+            got = m.get("link")
+            if m.get("id") == d.name and isinstance(got, dict) and got.get("path") == link["path"]:
+                return detail(d.name)
+        made = create(name or Path(link["path"]).name or link["path"], link=link)
+        return update(made["id"], pinned=True)
+
+
 def detail(pid: str) -> dict:
     d = _exists(pid)
     m = _meta(d)
