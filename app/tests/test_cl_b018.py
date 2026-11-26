@@ -182,6 +182,25 @@ def test_key_relay_answers_odd_requests_with_400(relay, headers, body):
     assert c.getresponse().status == 400
 
 
+def test_tui_box_does_not_read_the_key_and_sign_in_on_every_key(monkeypatch):
+    import io
+
+    from meshpool_harness import providers as PV
+    from meshpool_harness.agent import tui as TUI
+    calls = []
+    monkeypatch.setattr(PV, "key", lambda: calls.append("key") or "")
+    monkeypatch.setattr(PV, "ready", lambda p: calls.append(p) or False)
+    monkeypatch.delenv("MH_PROVIDER", raising=False)
+    now = [100.0]
+    t = TUI.Terminal(out=io.StringIO(), width=80, interactive=False, clock=lambda: now[0])
+    for _ in range(50):                                            # fifty keys typed within a second
+        assert ("err", "Not logged in") in t.status_items()
+    assert len(calls) == 2                                         # one look at the key, one at the sign-in
+    now[0] += 6
+    t.status_items()
+    assert len(calls) == 4                                         # looked at again a few seconds later
+
+
 def test_chatgpt_relay_answers_a_json_list_with_400(tmp_path, monkeypatch):
     import http.client
     from meshpool_harness.core import chatgpt_relay as CR
