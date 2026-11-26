@@ -178,6 +178,17 @@ def days_left(cert: Path) -> int | None:
     return 30
 
 
+def _pair_loads(cert: Path, key: Path) -> bool:
+    """The certificate and its key load together, as the HTTPS listener loads them. A crash between make_certs' writes
+    or a damaged file leaves a pair that does not."""
+    import ssl
+    try:
+        ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(str(cert), str(key))
+        return True
+    except (OSError, ssl.SSLError, ValueError):
+        return False
+
+
 def _own() -> bool:
     return (folder() / "localhost.crt").is_file() and (folder() / "localhost.key").is_file()
 
@@ -436,14 +447,16 @@ def install(apps: list[str] | None = None, confirm=lambda cmd: False) -> list[st
     apps = [a for a in (apps or list(APPS)) if a in APPS]
     out = []
     left = days_left(folder() / "localhost.crt") if _own() else None
-    if _own() and left is not None and left < 30:       # renew before it runs out (its authority's key is gone)
+    broken = _own() and not _pair_loads(folder() / "localhost.crt", folder() / "localhost.key")
+    if _own() and (broken or (left is not None and left < 30)):   # renew (its authority's key is gone)
         old = untrust_command()
         if old and trusted():
             _run(old)
         (folder() / "trusted").unlink(missing_ok=True)
         for n in ("ca.crt", "localhost.crt", "localhost.key"):
             (folder() / n).unlink(missing_ok=True)
-        out.append("The certificate was about to expire, so meshpool makes a new one.")
+        out.append("The certificate could not be loaded, so meshpool makes a new one." if broken else
+                   "The certificate was about to expire, so meshpool makes a new one.")
     if cert_paths() is None:
         made = make_certs()
         out.append(f"Made a certificate for localhost: {made['cert']}")

@@ -201,6 +201,43 @@ def test_office_install_from_settings_serves_the_new_certificate(httpd, monkeypa
             srv.server_close()
 
 
+# ---------------------------------------------------------------------------------------------------- SV-07
+@pytest.mark.parametrize("damage", ["mismatched key", "garbled certificate"])
+def test_office_install_replaces_a_certificate_the_listener_cannot_load(httpd, monkeypatch, damage):
+    """SV-07: make_certs writes three files one after another, so a crash between them (or a damaged file) leaves a
+    certificate and key that do not load. The listener then stays off ("its certificate did not load"), but Install
+    only renewed a certificate near its expiry date: it said "Using the certificate at ..." and kept the broken one
+    for good. Install now makes a new certificate when the saved pair cannot be loaded."""
+    pytest.importorskip("cryptography")
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from meshpool_harness import office as OF
+    monkeypatch.setenv("MH_OFFICE_PORT", str(_free_port()))
+    monkeypatch.delenv("MH_OFFICE", raising=False)
+    monkeypatch.setattr(S, "OFFICE_HTTPD", [])
+    OF.make_certs()
+    if damage == "mismatched key":
+        other = ec.generate_private_key(ec.SECP256R1()).private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        (OF.folder() / "localhost.key").write_bytes(other)
+    else:
+        crt = (OF.folder() / "localhost.crt").read_text()
+        (OF.folder() / "localhost.crt").write_text(crt[: len(crt) // 2])
+    (OF.folder() / "manifest.xml").write_text("<x/>")
+    try:
+        assert S._start_office() == ""                       # the damaged pair does not load: the panel is off
+        st, out = _post(httpd, "/api/office", {"action": "install"})
+        assert st == 200, out
+        got = json.loads(out)
+        assert got["running"] is True, got["lines"]
+        served = _served_cert(OF.port())
+        assert served and "BEGIN CERTIFICATE" in served
+    finally:
+        for srv in list(S.OFFICE_HTTPD):
+            srv.shutdown()
+            srv.server_close()
+
+
 def _serve_quietly(monkeypatch, tmp_path, desktop: bool):
     """Run the real serve() on a free port with its background helpers stubbed; returns (port, stop)."""
     from meshpool_harness import autoupdate as AU
