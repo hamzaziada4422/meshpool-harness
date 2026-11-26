@@ -392,3 +392,36 @@ def test_of11_a_huge_html_file_is_read_only_in_part(tmp_path, monkeypatch):
     out = docread.extract(f)
     assert out.startswith("row") and "only the first" in out
     assert got and sum(got) <= 100_001
+
+
+# ---------- OF-12: convert_document shared the user's LibreOffice profile and left soffice running on a timeout -----
+
+def _alive(pid: int) -> bool:
+    try:
+        with open(f"/proc/{pid}/stat") as fh:
+            return fh.read().split(")")[-1].split()[0] != "Z"
+    except OSError:
+        return False
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="uses /proc and a shell script as a fake soffice")
+def test_of12_convert_uses_its_own_profile_and_a_timeout_ends_the_whole_tree(tmp_path, monkeypatch):
+    import time
+    fake = tmp_path / "bin" / "soffice"
+    fake.parent.mkdir()
+    fake.write_text('#!/bin/sh\necho "$@" > "$OF_ARGS"\nsleep 30 &\necho $! > "$OF_CHILD"\nsleep 6\n')
+    fake.chmod(0o755)
+    monkeypatch.setattr(O, "_soffice", lambda: str(fake))
+    monkeypatch.setattr(O, "CONVERT_TIMEOUT", 1, raising=False)
+    monkeypatch.setenv("OF_ARGS", str(tmp_path / "args.txt"))
+    monkeypatch.setenv("OF_CHILD", str(tmp_path / "child.txt"))
+    Document().save(str(tmp_path / "a.docx"))
+    t0 = time.time()
+    msg, err = O.convert_document("a.docx", "pdf")
+    assert err and "took longer than 1 seconds" in msg and time.time() - t0 < 5
+    assert "-env:UserInstallation=file://" in (tmp_path / "args.txt").read_text()
+    child = int((tmp_path / "child.txt").read_text())
+    end = time.time() + 3
+    while _alive(child) and time.time() < end:
+        time.sleep(0.05)
+    assert not _alive(child), "the process soffice started was left running"

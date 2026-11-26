@@ -924,6 +924,26 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
     return f"Saved the PDF: {path}", False
 
 
+CONVERT_TIMEOUT = 300                         # seconds for one convert_document run
+
+
+def _run_soffice(cmd: list, timeout: float) -> subprocess.CompletedProcess:
+    """Run LibreOffice in its own process group (a console-less new group on Windows), so a timeout ends soffice and
+    the soffice.bin it starts, not only the launcher (which left soffice.bin holding the pipes open). Raises
+    TimeoutExpired once the whole tree is gone."""
+    kw = {"creationflags": 0x08000000 | 0x00000200} if os.name == "nt" else {"start_new_session": True}
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace", **kw)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        from meshpool_harness.agent.mcp import kill_tree
+        kill_tree(proc)
+        proc.kill()
+        proc.communicate()
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
 def _soffice() -> str | None:
     from meshpool_harness import office_runtime      # the copy bundled in the app (never the system's)
     return office_runtime.find_soffice()
@@ -956,15 +976,20 @@ def convert_document(path: str, to: str = "pdf", output: str | None = None):
         return (f"Converting Office files needs Meshpool's LibreOffice, which is not available: "
                 f"{office_runtime.missing_reason()}. Or build the file directly with make_pdf, make_document, "
                 "make_deck or make_spreadsheet."), True
-    kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
+    # A throwaway profile: LibreOffice already open on this computer (or a second conversion at the same time) holds
+    # the default profile's lock, and the headless run then hands the job over and makes nothing.
     import shutil
     import tempfile
-    with tempfile.TemporaryDirectory() as tmp:          # convert aside, then save under a free name: a conversion
-        r = subprocess.run([exe, "--headless", *infilter, "--convert-to", to, "--outdir", tmp, str(src)],   # never replaces a file
-                           capture_output=True, text=True, timeout=300, **kw)
+    with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory(prefix="mh_lo_") as profile:
+        try:
+            r = _run_soffice([exe, f"-env:UserInstallation={Path(profile).as_uri()}", "--headless", *infilter,
+                              "--convert-to", to, "--outdir", tmp, str(src)], CONVERT_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            return (f"Converting {src.name} took longer than {CONVERT_TIMEOUT} seconds and was stopped. The file may be "
+                    "very large or damaged."), True
         made = Path(tmp) / (src.stem + "." + to)
         if r.returncode != 0 or not made.exists():
-            return f"LibreOffice could not convert {src.name}: {(r.stderr or r.stdout)[-500:]}", True
+            return f"LibreOffice could not convert {src.name}: {(r.stderr or r.stdout or '')[-500:]}", True
         dst = _dest(output, made.name, "." + to, bool(output))
         shutil.move(str(made), str(dst))
     return f"Saved: {dst}", False
