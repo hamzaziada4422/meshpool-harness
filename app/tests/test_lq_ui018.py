@@ -60,6 +60,7 @@ def test_lq05_an_insight_card_whose_id_has_a_quote_still_shows_once(page):  # no
     made querySelector throw, so the card never showed and the event handler stopped there."""
     page.route(re.compile(r".*/api/insights/act$"), lambda route, request: route.fulfill(json={"ok": True}))
     card = {"id": 'ins_a"b] c\\d', "type": "tip", "title": "Try the quote card", "body": "b"}
+    page.evaluate("() => openThread('t-lq05', true)")        # a tip is never drawn on a fresh page: it needs an open chat
     got = page.evaluate("""c => { const out = [];
         for (let i = 0; i < 2; i++) { try { insightCard010(Object.assign({}, c)); out.push('ok'); } catch (e) { out.push(String(e)); } }
         return out; }""", card)
