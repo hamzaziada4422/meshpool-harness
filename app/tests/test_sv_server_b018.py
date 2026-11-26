@@ -48,6 +48,30 @@ def _post(port: int, path: str, body: dict | bytes, token: str | None = None, ti
     return r.status, out
 
 
+def _session_post(port: int, cookie: str | None, page: str | None, origin: str | None = "own"):
+    """POST /session as the boot page sends it. origin "own" is meshpool's own origin; None sends no Origin."""
+    headers = {"Content-Type": "application/json"}
+    if cookie:
+        headers["Cookie"] = cookie
+    if origin:
+        headers["Origin"] = f"http://127.0.0.1:{port}" if origin == "own" else origin
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    c.request("POST", "/session", body=json.dumps({} if page is None else {"page": page}).encode(), headers=headers)
+    r = c.getresponse()
+    out = r.read()
+    c.close()
+    return r.status, out
+
+
+def _session(port: int, cookie: str, page: str) -> str:
+    """The one-time address POST /session hands the boot page."""
+    st, out = _session_post(port, cookie, page)
+    assert st == 200, out
+    url = json.loads(out)["url"]
+    assert url.startswith("/?k=")
+    return url
+
+
 # ---------------------------------------------------------------------------------------------------- SV-01
 def test_files_route_refuses_a_run_id_that_leaves_the_runs_folder(httpd, tmp_path, monkeypatch):
     """SV-01: /files/<run>/<path> joined the run id onto the runs folder unchecked, so a run id of ".." (sent as %2e%2e)
@@ -380,7 +404,10 @@ def test_the_address_handed_to_a_browser_or_window_works_once(httpd, monkeypatch
     time.sleep(0.05)
     st, body, _ = _get(httpd, path)                       # the same address later, from history or ps: refused
     assert st == 403 and S.TOKEN.encode() not in body
-    st, body, _ = _get(httpd, path, {"Cookie": cookie})   # the window that opened it reloads with its cookie
+    st, body, _ = _get(httpd, path, {"Cookie": cookie})   # the window that opened it reloads with its cookie: SV-13
+    assert st == 200 and S.TOKEN.encode() not in body     # gives it the boot page, which trades cookie and PAGE
+    url = _session(httpd, cookie, S.PAGE)
+    st, body, _ = _get(httpd, url)
     assert st == 200 and S.TOKEN.encode() in body
     st, body, _ = _get(httpd, f"/?k={S.LAUNCH_KEY}")      # the link printed in the terminal still opens the app
     assert st == 200
@@ -477,3 +504,131 @@ def test_browser_mode_still_prints_the_link_that_opens_the_app(monkeypatch, tmp_
         assert st == 200 and S.TOKEN.encode() in body
     finally:
         stop()
+
+
+# ---------------------------------------------------------------------------------------------------- SV-13
+def _window_cookie(port: int, monkeypatch) -> str:
+    """The session cookie the app's own window holds: it loaded the one-time address the app opened it with."""
+    monkeypatch.delenv("MH_UI_OPEN_PAGE", raising=False)
+    st, body, r = _get(port, S.open_url(port).split(f":{port}", 1)[1])
+    assert st == 200 and S.TOKEN.encode() in body and S.PAGE.encode() in body
+    return r.getheader("Set-Cookie").split(";")[0]
+
+
+def test_the_session_cookie_alone_does_not_get_the_token(httpd, monkeypatch):
+    """SV-13: cookies are not scoped by port, so any other server on 127.0.0.1 the user opens in the same browser (a
+    dev server the agent started) receives mp_s. It could send GET / to meshpool's port with that cookie and read the
+    API token from the page. The cookie alone now gets a boot page without the token, and POST /session gives a
+    one-time address only for the cookie together with PAGE, which only the meshpool page holds (in localStorage,
+    scoped to meshpool's own origin and port)."""
+    cookie = _window_cookie(httpd, monkeypatch)
+    other = f"http://127.0.0.1:{_free_port()}"            # the origin of the dev server that received the cookie
+    for headers in ({"Cookie": cookie}, {"Cookie": cookie, "Origin": other, "Referer": other + "/"},
+                    {"Cookie": cookie, "Sec-Fetch-Site": "same-origin", "Origin": f"http://127.0.0.1:{httpd}"}):
+        for path in ("/", "/index.html", "/?k=", "/?k=" + cookie.split("=", 1)[1]):
+            st, body, _ = _get(httpd, path, headers)
+            assert S.TOKEN.encode() not in body and S.PAGE.encode() not in body, (path, headers)
+    for page, origin in ((None, other), (None, "own"), ("", "own"), ("guess", "own"), ("guess", None), ("p\u00e4ge", "own"),
+                         (S.SESSION, "own"), (cookie, "own")):
+        st, out = _session_post(httpd, cookie, page, origin)
+        assert st == 403 and b"/?k=" not in out, (page, origin)
+
+
+def test_session_needs_both_the_cookie_and_the_page_secret(httpd, monkeypatch):
+    """SV-13: PAGE without the cookie, or with a forged one, or sent from another origin, buys nothing either."""
+    cookie = _window_cookie(httpd, monkeypatch)
+    for c, origin in ((None, "own"), ("mp_s=forged", "own"), (cookie, "http://127.0.0.1:3000"),
+                      (cookie, "http://localhost:3000"), (cookie, "https://example.com")):
+        st, out = _session_post(httpd, c, S.PAGE, origin)
+        assert st == 403 and b"/?k=" not in out, (c, origin)
+    c = http.client.HTTPConnection("127.0.0.1", httpd, timeout=10)     # a form post: not application/json
+    c.request("POST", "/session", body=b"page=" + S.PAGE.encode(),
+              headers={"Content-Type": "application/x-www-form-urlencoded", "Cookie": cookie})
+    r = c.getresponse()
+    assert r.status == 403 and b"/?k=" not in r.read()
+    c.close()
+
+
+def test_the_window_reloads_with_its_cookie_and_page_secret(httpd, monkeypatch):
+    """SV-13 (the window keeps working): a reload sends the cookie and gets the boot page; the boot page sends the
+    cookie with PAGE and gets a one-time address that opens the full page. Each address works once."""
+    cookie = _window_cookie(httpd, monkeypatch)
+    st, body, _ = _get(httpd, "/", {"Cookie": cookie})
+    assert st == 200 and b"/session" in body and b"mp_page" in body
+    url = _session(httpd, cookie, S.PAGE)
+    assert _session(httpd, cookie, S.PAGE) != url          # a new key each time
+    st, body, _ = _get(httpd, url, {"Cookie": cookie})
+    assert st == 200 and S.TOKEN.encode() in body
+    monkeypatch.setattr(S, "ONCE_GRACE_S", 0)
+    time.sleep(0.05)
+    st, body, _ = _get(httpd, url)                         # the address from history later: used up
+    assert st == 403 and S.TOKEN.encode() not in body
+
+
+def test_testkit_token_still_reads_the_token(httpd, monkeypatch):
+    """SV-13: testkit/ui_token.py loads the page with the launch key, which still carries the token."""
+    import importlib.util
+    monkeypatch.delenv("MH_UI_OPEN_PAGE", raising=False)
+    path = Path(__file__).resolve().parents[2] / "testkit" / "ui_token.py"
+    spec = importlib.util.spec_from_file_location("ui_token_sv13", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setenv("MESHPOOL_UI_URL", S.app_url(httpd))
+    assert mod.token(f"http://127.0.0.1:{httpd}", wait=0) == S.TOKEN
+
+
+def test_a_dev_server_in_the_same_browser_cannot_take_the_token(httpd, monkeypatch, tmp_path):
+    """SV-13 end to end in Chromium: the meshpool page and a dev server on another port are open in one browser. The
+    dev server records the cookies it is sent (mp_s among them) and replays them to meshpool: no token. The meshpool
+    tab itself still gets its token back after a reload."""
+    pw = pytest.importorskip("playwright.sync_api")
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    real = (Path(S.__file__).parent / "index.html").read_text(encoding="utf-8")
+    boot = next(line for line in real.splitlines() if "window.MP = " in line)   # the real page's own token script
+    (tmp_path / "index.html").write_text("<!doctype html><title>meshpool</title>" + boot +
+                                         "<p id=ok>page</p>", encoding="utf-8")
+    monkeypatch.setattr(S, "HERE", tmp_path)
+    seen = []
+
+    class Dev(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            seen.append(self.headers.get("Cookie") or "")
+            body = b"<title>dev</title><p>dev server</p>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    dev = ThreadingHTTPServer(("127.0.0.1", 0), Dev)
+    threading.Thread(target=dev.serve_forever, daemon=True).start()
+    monkeypatch.delenv("MH_UI_OPEN_PAGE", raising=False)
+    try:
+        with pw.sync_playwright() as p:
+            try:
+                browser = p.chromium.launch()
+            except Exception as e:  # noqa: BLE001
+                pytest.skip(f"no Chromium here: {e}")
+            ctx = browser.new_context()
+            app = ctx.new_page()
+            app.goto(S.open_url(httpd))
+            assert app.evaluate("window.MP.token") == S.TOKEN
+            other = ctx.new_page()
+            other.goto(f"http://127.0.0.1:{dev.server_address[1]}/")
+            assert other.evaluate("(() => { try { return localStorage.getItem('mp_page'); } catch (e) { return null; } })()") is None
+            stolen = next(c for c in seen if "mp_s=" in c)          # the browser did hand the dev server mp_s
+            _, body, _ = _get(httpd, "/", {"Cookie": stolen})
+            assert S.TOKEN.encode() not in body
+            for origin in ("own", f"http://127.0.0.1:{dev.server_address[1]}", None):
+                assert _session_post(httpd, stolen, None, origin)[0] == 403
+            app.reload()                                                # the window itself: boot page, then the app
+            app.wait_for_selector("#ok", timeout=10000)
+            assert app.evaluate("window.MP.token") == S.TOKEN
+            assert "k=" in app.url
+            browser.close()
+    finally:
+        dev.shutdown()
+        dev.server_close()

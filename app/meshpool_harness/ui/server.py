@@ -56,6 +56,11 @@ OFFICE_CHATS: set = set()      # the chats the Office panel started: the only on
 # http://127.0.0.1:8765/` handed the token to anything on the machine). The key lives in this process's memory only.
 LAUNCH_KEY = secrets.token_urlsafe(24)
 SESSION = secrets.token_urlsafe(24)
+# Cookies are not scoped by port, so every other server on 127.0.0.1 the user opens in the same browser (a dev server
+# the agent started) receives mp_s and could replay it. The cookie alone therefore opens only a page without the token
+# (BOOT_PAGE). That page reads PAGE from localStorage, which is scoped to this origin with its port, and trades cookie
+# and PAGE together at POST /session for a one-time address. The full page hands PAGE to the window that opened it.
+PAGE = secrets.token_urlsafe(24)
 
 
 def app_url(port: int) -> str:
@@ -72,15 +77,31 @@ _ONCE_LOCK = threading.Lock()
 ONCE_GRACE_S = 20
 
 
-def open_url(port: int) -> str:
-    """A one-time address for the app's own window or browser tab."""
+def _once_key() -> str:
     key = secrets.token_urlsafe(24)
     with _ONCE_LOCK:
         if len(_ONCE) > 50:          # never used ones from long ago: no window is still on its way
             for k in [k for k, t in _ONCE.items() if t is not None][:25]:
                 _ONCE.pop(k, None)
         _ONCE[key] = None
-    return f"http://127.0.0.1:{int(port)}/?k={key}"
+    return key
+
+
+def open_url(port: int) -> str:
+    """A one-time address for the app's own window or browser tab."""
+    return f"http://127.0.0.1:{int(port)}/?k={_once_key()}"
+
+
+# What a reload with only the session cookie gets: no token. Its script sends the cookie with PAGE (kept by the full
+# page in this origin's localStorage) to POST /session and goes on to the one-time address it gets back.
+BOOT_PAGE = (b"<!doctype html><meta charset=utf-8><title>meshpool</title><body style=\"font:15px -apple-system,Segoe UI,"
+             b"sans-serif;color:#0B131F\"><p id=m>Opening meshpool...</p><script>(async () => {"
+             b"let page = \"\"; try { page = localStorage.getItem(\"mp_page\") || \"\"; } catch (e) {}"
+             b"try { if (page) { const r = await fetch(\"/session\", {method: \"POST\", cache: \"no-store\", "
+             b"headers: {\"Content-Type\": \"application/json\"}, body: JSON.stringify({page})});"
+             b"if (r.ok) { const d = await r.json(); location.replace(d.url + location.hash); return; } } } catch (e) {}"
+             b"document.getElementById(\"m\").textContent = \"Open meshpool from its app icon, or with the link the app "
+             b"printed when it started.\"; })();</script>")
 
 
 def _key_ok(key: str) -> bool:
@@ -518,12 +539,16 @@ class Handler(BaseHTTPRequestHandler):
         if u.path in ("/", "/index.html"):
             key = parse_qs(u.query).get("k", [""])[0]
             keyed = _key_ok(key)
-            if not (keyed or self._session_ok() or os.environ.get("MH_UI_OPEN_PAGE") == "1"):
+            if not keyed and os.environ.get("MH_UI_OPEN_PAGE") != "1" and self._session_ok():
+                return self._send(200, BOOT_PAGE, "text/html; charset=utf-8",
+                                  {"Content-Security-Policy": "frame-ancestors 'none'"})
+            if not (keyed or os.environ.get("MH_UI_OPEN_PAGE") == "1"):
                 return self._send(403, b"<!doctype html><meta charset=utf-8><title>Meshpool</title><p>Open Meshpool "
                                        b"from its app icon, or with the link the app printed when it started.</p>",
                                   "text/html; charset=utf-8", {"Content-Security-Policy": "frame-ancestors 'none'"})
             html = (HERE / "index.html").read_text(encoding="utf-8").replace("__MESHPOOL_TOKEN__", TOKEN) \
-                .replace("__MESHPOOL_DESKTOP__", "true" if DESKTOP else "false").replace("__MESHPOOL_VER__", UI_VER)
+                .replace("__MESHPOOL_DESKTOP__", "true" if DESKTOP else "false").replace("__MESHPOOL_VER__", UI_VER) \
+                .replace("__MESHPOOL_PAGE__", PAGE)
             extra = {"Content-Security-Policy": "frame-ancestors 'none'", "Cache-Control": "no-store"}
             if keyed:
                 extra["Set-Cookie"] = f"mp_s={SESSION}; HttpOnly; SameSite=Strict; Path=/"
@@ -832,6 +857,15 @@ class Handler(BaseHTTPRequestHandler):
                 webbrowser.open(open_url(HTTPD[0].server_address[1]))   # (the second launch never learns the key)
                 shown = True
             return self._send(200, {"ok": True, "native": shown})
+        if u.path == "/session":               # BOOT_PAGE: the session cookie and PAGE together buy a one-time address
+            try:
+                page = self._json().get("page") if self._json_type() else None
+            except ValueError:
+                page = None
+            if not (isinstance(page, str) and page and secrets.compare_digest(page.encode(), PAGE.encode())
+                    and self._session_ok() and self._origin_ok()):
+                return self._send(403, {"error": "forbidden"})
+            return self._send(200, {"url": f"/?k={_once_key()}"})
         if self.headers.get("X-Meshpool-Token") != TOKEN:
             return self._send(403, {"error": "forbidden"})
         if u.path.startswith("/api/company"):        # Settings > Company, the company look for decks
