@@ -826,6 +826,64 @@ def _user_steps_text(script: str) -> str:
     return " ; ".join(out)
 
 
+_READ_PROGS = {"cat", "head", "tail", "less", "more", "wc", "file", "ls", "grep", "rg", "pdftotext", "pdfinfo", "unzip",
+               "zipinfo", "xxd", "strings", "stat", "tree", "jq", "sort", "uniq", "cut", "cp", "mkdir", "cd", "echo",
+               "true", "sed", "awk", "tr", "column", "xmllint", "find", "du"}
+
+
+def _only_reads(s: str) -> list | None:
+    """The user's files a chain only reads ([] when it names none), or None when any step may change something outside
+    a temporary folder. Copying or unpacking into a temporary folder (cp x /tmp/..., cd /tmp/... && unzip -o x) is
+    reading (persona Maya, round 4: "Run 5 steps: cat, cp, unzip?" for looking at her price list)."""
+    vals = dict(re.findall(r"(?:^|[;&|\n]\s*|\s)([A-Za-z_]\w*)=([^\s;&|$`]+)", s))
+    t = re.sub(r"\$\{?([A-Za-z_]\w*)\}?", lambda m: vals.get(m.group(1), m.group(0)), s)
+    if re.search(r"\$\(|`|<\(|>\(|\$", t):
+        return None                                       # something left that expands: not judged here
+    temp = lambda x: bool(_SCRATCH_PATH.match(x.strip("'\""))) or x.strip("'\"") in ("/dev/null", "-")   # noqa: E731
+    here_tmp, names = False, []
+    for seg in PR._segments(t):
+        w = PR._tokens(seg)
+        if w is None:
+            return None
+        while w and re.match(r"^[A-Za-z_]\w*=", w[0]):
+            w = w[1:]
+        if not w:
+            continue
+        prog, rest = os.path.basename(w[0]), w[1:]
+        if prog not in _READ_PROGS:
+            return None
+        red = re.search(r"(?<![0-9&])>>?\s*([^\s;&|<>]+)", PR._OKREDIR.sub(" ", seg))
+        if red and not (temp(red.group(1)) or here_tmp):
+            return None                                   # writes a file of the user's
+        pos = [a for a in rest if not a.startswith("-")]
+        if prog == "cd":
+            here_tmp = bool(pos) and temp(pos[0])
+            continue
+        if prog == "mkdir" and not all(temp(a) for a in pos):
+            return None
+        if prog == "cp" and (len(pos) < 2 or not temp(pos[-1])):
+            return None
+        if prog == "unzip" and not ("-l" in rest or "-p" in rest or "-Z" in rest or here_tmp or
+                                    ("-d" in rest and rest.index("-d") + 1 < len(rest) and temp(rest[rest.index("-d") + 1]))):
+            return None
+        if prog == "sed" and any(a.startswith("-i") or a.startswith("--in-place") for a in rest):
+            return None
+        if prog == "find" and any(a in ("-delete", "-exec", "-execdir", "-ok", "-fprint") for a in rest):
+            return None
+        if prog == "pdftotext" and len(pos) > 1 and not temp(pos[1]):
+            return None
+        if prog == "awk" and re.search(r"system|>|\|", " ".join(rest)):
+            return None
+        if prog in ("cd", "mkdir", "echo", "true"):
+            continue
+        src = pos[:-1] if prog == "cp" else pos
+        for a in src:
+            a = a.strip("'\"")
+            if not temp(a) and not here_tmp and re.search(r"\.\w{2,5}$", a):
+                names.append(os.path.basename(a))
+    return list(dict.fromkeys(names))
+
+
 def _plain_command_title(script: str) -> str:
     """What a command does, in words a person can judge, for the approval card (persona runs, 0.0.18: every card was
     a raw `D=/tmp/...; python3 -I -c "..."` line nobody could judge). The command itself stays below the title.
@@ -884,6 +942,10 @@ def _plain_command_title(script: str) -> str:
         if locks and gone:
             return "Delete " + ", ".join(gone) + " and the Office lock file for " + ", ".join(locks[:2]) + "?"
         return ("Delete " + ", ".join(gone) + "?") if gone else f"Delete files?{more}"
+    reads = _only_reads(s) if len(steps) > 1 else None
+    if reads is not None:
+        return ("Read " + " and ".join([", ".join(reads[:-1]), reads[-1]] if len(reads) > 1 else reads) + "?") \
+            if reads else "Look at files in this folder?"
     lang = next((_PROGRAMS[p] for p in progs if p in _PROGRAMS), "")
     if lang:
         return f"Run a {lang} step{on}?" if not more else f"Run a {lang} step{on}{more}?"
@@ -4544,7 +4606,7 @@ class Agent:
                             final = done
                             break
                     from meshpool_harness.core import textcalls as _TCM
-                    if _TCM.malformed_reply(final):
+                    if not getattr(self, "reports_to_agent", False) and _TCM.malformed_reply(final):
                         # Priya, round 3: the answer was a raw shell command, a link, a machine path and "30000".
                         # Not an answer: it goes from the chat, the model is asked once for words, then the turn ends
                         # on what it made.

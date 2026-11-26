@@ -432,7 +432,11 @@ def test_a_dropped_file_is_kept_with_the_chat_and_one_in_the_folder_is_used_wher
     assert "meshpool keeps them" not in user["text"]                         # the note is for the model only
     from meshpool_harness.agent import office_mcp_server as O
     monkeypatch.setattr(O, "_project", lambda: proj)
+    monkeypatch.setenv("MH_CHAT_ID", s.id)                                   # the office tools serve this chat
     assert O._readable(kept)                                                 # the office tools may read it
+    monkeypatch.setenv("MH_CHAT_ID", "another-chat")
+    assert not O._readable(kept)                                             # never another chat's upload
+    monkeypatch.setenv("MH_CHAT_ID", s.id)
     assert s.agent._outside_path(str(kept)) == ""                            # so may the agent, without asking
     turn = s.cp.turns()[-1]
     r = s.cp.revert_to_before(turn["n"])                                     # Undo leaves both alone
