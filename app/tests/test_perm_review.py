@@ -199,8 +199,14 @@ def test_office_reads_outside_the_project_ask(tmp_path):
     assert a._permit("mcp__meshpool_office__read_document", {"path": "/etc/passwd"})[0] is False
     assert a._permit("mcp__meshpool_office__read_document", {"path": "C:secret.docx"})[0] is False
     assert len(asked) == 3 and all("outside the project" in x["title"] for x in asked)
-    assert a._permit("office_task", {"engine": "docs", "request": "x", "files": ["report.docx"]}) == (True, "")
     assert a._permit("mcp__meshpool_office__read_document", {"path": "report.docx"}) == (True, "")
+    # 0.0.19: office_task writes a file, so it follows the rule for edits in the folder: with no sandbox and no yes
+    # for the folder yet (or "Before every command and change") it asks, about the new file, not about a read
+    # outside; Accept edits makes it without a question
+    assert a._permit("office_task", {"engine": "docs", "request": "x", "files": ["report.docx"]})[0] is False
+    assert "outside" not in asked[-1]["title"]
+    a.mode = "edits"
+    assert a._permit("office_task", {"engine": "docs", "request": "x", "files": ["report.docx"]}) == (True, "")
 
 
 # 12 ------------------------------------------------------------------------------------------------------------

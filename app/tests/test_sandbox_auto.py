@@ -184,9 +184,14 @@ def test_office_tool_cards_name_the_action_and_the_file(tmp_path, monkeypatch):
     proj = _home_project(tmp_path, monkeypatch)
     a, asked = _agent(proj, True, monkeypatch)
     monkeypatch.setattr(core.Agent, "_mcp_destructive", lambda self, n: False)
-    a._permit("mcp__meshpool-office__edit_office_file",
-              {"path": str(proj / "decks" / "ViDA deck.pptx"), "ops": [{"op": "replace_text", "find": "a", "replace": "b"}]})
-    assert asked and asked[-1]["title"] == "Change ViDA deck.pptx?"
+    call = {"path": str(proj / "decks" / "ViDA deck.pptx"),
+            "operations": [{"op": "replace_text", "find": "a", "replace": "b"}]}
+    # 0.0.19: an undoable change to a file in the folder needs no question, as for a shell edit there ...
+    assert a._permit("mcp__meshpool-office__edit_office_file", call)[0] and asked == []
+    # ... and where it asks ("Before every command and change"), the card names the action and the file
+    monkeypatch.setenv("MH_SANDBOX_AUTO", "0")
+    a._permit("mcp__meshpool-office__edit_office_file", call)
+    assert asked and asked[-1]["title"] == "Change ViDA deck.pptx: replace “a” with “b”?"
 
 
 def test_always_in_this_folder_is_not_offered_in_a_chat_with_no_folder():
