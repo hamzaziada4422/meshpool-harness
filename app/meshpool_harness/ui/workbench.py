@@ -1530,6 +1530,14 @@ def model_window(model: str) -> tuple[int, str]:
                 return int(row["context"]), "endpoint"
             except (TypeError, ValueError):
                 pass
+    # OM-10: the same source as the chat's "context 200k (assumed)" line (core/context.py), never a second rule of
+    # thumb: the panel said 128K while the chat said 200k. Only what the endpoint already reported: no network call.
+    try:
+        from meshpool_harness.core import context as CTX
+        n, src = CTX.window_info(model, probe_endpoint="cache")
+        return n, ("estimate" if src in ("default", "table", "profile") else src)
+    except Exception:  # noqa: BLE001 - a panel never fails on this
+        pass
     for rx, n in _WINDOWS:
         if re.search(rx, bare, re.I):
             return n, "estimate"

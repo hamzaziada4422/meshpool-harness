@@ -464,3 +464,36 @@ def test_om03_undo_of_a_turn_removes_the_copy_of_a_file_dropped_into_it(home, pr
     (proj / "sample (2).csv").write_text("edited by hand\n")
     r = s.revert(s.cp.turns()[-1]["n"])
     assert (proj / "sample (2).csv").read_text() == "edited by hand\n" and "sample (2).csv" in r["kept"]
+
+
+# ---------------------------------------------------------------------------------------------------- OM-07
+def test_om07_search_finds_a_code_chat_by_the_words_of_its_messages(home, proj, monkeypatch):
+    """OM-07 (not a bug): "dedupe" did not find his chat about dedupe.py. Search reads message text (PF-07, through the
+    store's cached raw text, no transcript scan per key). His dedupe message was in the turn he had undone just before,
+    and Undo takes a turn out of the chat, so nothing in it said "dedupe" any more."""
+    from meshpool_harness.ui import hub as HUB
+    script(monkeypatch, "storage.py loads and saves the ledger.", "Added the docstring to find_duplicates.")
+    v = chats.create({"workdir": str(proj), "no_mcp": True, "kind": "code"})
+    s = chats.get(v["id"])
+    s.send("explain what ledgerly/storage.py does")
+    _idle(s)
+    s.send("add a one-line docstring to find_duplicates in ledgerly/dedupe.py")
+    _idle(s)
+    assert [h["id"] for h in A.search("dedupe")] == [v["id"]]
+    found = [i["id"] for g in HUB.search("dedupe")["groups"] for i in g["items"]]
+    assert v["id"] in found
+    s.revert(s.cp.turns()[-1]["n"])                                       # what he did before searching
+    assert A.search("dedupe") == [] and [h["id"] for h in A.search("storage")] == [v["id"]]
+
+
+# ---------------------------------------------------------------------------------------------------- OM-10
+@pytest.mark.parametrize("model", ["mock-err200", "deepseek-v4.1-flash", "claude-sonnet", "mystery-7b"])
+def test_om10_the_panel_names_the_context_size_the_chat_names(home, model):
+    """OM-10: the chat said "context 200k (assumed)" and the panel "of 128K tokens" for the same model. The panel
+    now reads the window from the same place as the chat's line (core/context.py), without asking the endpoint."""
+    from meshpool_harness.core import context as CTX
+    from meshpool_harness.ui import workbench as W
+    size, src = W.model_window(model)
+    assert size == CTX.window(model), (model, size)
+    k = f"{size / 1000:,.0f}k" if size >= 10_000 else f"{size:,}"
+    assert CTX.describe(model).startswith(f"context {k} ")
