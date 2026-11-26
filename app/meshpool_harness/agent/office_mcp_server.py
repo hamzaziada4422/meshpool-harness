@@ -192,7 +192,9 @@ def make_deck(request: str, files: list | None = None, audience: str | None = No
 
 def add_slides(deck: str, request: str, slides: int = 1, files: list | None = None):
     """New slides for a deck the user already has, built by the slides engine in that deck's look and added after
-    its slides, in a copy saved next to it ("<name> (updated).pptx"). The original deck is never changed."""
+    its slides, saved into that deck in place (the chat's Undo keeps the earlier version). A copy "<name>
+    (updated).pptx" is made only when the deck is open in another app or the request asks for one (engines/forge/
+    engine.py deck_target). Daniel, round 2: "update the same deck" left a second deck beside the first."""
     n = max(1, min(int(slides or 1), 12))
     return _engine("slides", f"[add to deck: {deck}] {request} ({n} slide{'s' if n != 1 else ''})",
                    [deck] + [f for f in files or [] if f != deck])
@@ -437,8 +439,20 @@ def _drop_title_heading(markdown: str, title: str | None) -> str:
     return markdown
 
 
+def _chat_brief() -> str:
+    """The request of this chat's latest deck job: a memo written after the deck follows the same brand."""
+    try:
+        mine = [j for j in OJ.JOBS.values() if j.get("scope", "") == _scope() and j.get("engine") == "slides"
+                and j.get("request")]
+        return str(max(mine, key=lambda j: j.get("started") or 0)["request"]) if mine else ""
+    except Exception:  # noqa: BLE001 - no job record: no brand from it
+        return ""
+
+
 def make_document(markdown: str, filename: str = "document.docx", title: str | None = None, _clarity: bool = True,
-                  _named: bool | None = None, paper: str | None = None):
+                  _named: bool | None = None, paper: str | None = None, brand: str | None = None):
+    """brand: the colours, fonts and footer the user asked for, in their words ("navy #14304F, amber #E8A33D,
+    Georgia headings, footer 'Ridgeway Advisory | Confidential'"); without it, this chat's deck request is read."""
     from docx import Document
     from docx.shared import Mm, Pt
     markdown, title = _clean_md(markdown), _clean(title) or None
@@ -456,8 +470,14 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
         from engines.forge import docstyle as DS
     except Exception:  # noqa: BLE001 - engines not shipped: plain python-docx defaults
         DS = None
-    if DS:
+    spec, footer = {}, None
+    if DS and brand == "":                                 # a conversion: the text as written, Word's own look
         DS.style(doc)
+    elif DS:
+        spec = DS.brand_for(brand if brand is not None else _chat_brief())   # requested.py's brand parsing
+        markdown, label = DS.footer_lines(markdown, spec.get("footer"))      # "Confidential" is a footer, not a
+        footer = spec.get("footer") or label                                 # heading (Daniel, round 2)
+        DS.apply_brand(doc, spec)
     if title:
         doc.add_heading(title, level=0)
     clarity_note = ""
@@ -545,7 +565,7 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
             _runs(doc.add_paragraph(), s)
         i += 1
     if DS:
-        DS.finish(doc, title=title or DS.first_heading(markdown))
+        DS.finish(doc, title=title or DS.first_heading(markdown), footer=footer)
     path = _dest(filename, "document.docx", ".docx", _named)
     doc.save(path)
     return f"Saved the Word document: {path}.{clarity_note}", False
@@ -1269,8 +1289,8 @@ def convert_document(path: str, to: str = "pdf", output: str | None = None):
         if to == "pdf":                                                # no clarity rewrite
             return make_pdf(text, output, _named=True) if output else make_pdf(text, src.stem + ".pdf", _named=False)
         if output:
-            return make_document(text, output, _clarity=False, _named=True)
-        return make_document(text, src.stem + ".docx", _clarity=False, _named=False)
+            return make_document(text, output, _clarity=False, _named=True, brand="")
+        return make_document(text, src.stem + ".docx", _clarity=False, _named=False, brand="")
     infilter: list[str] = []
     if src.suffix.lower() == ".pdf":
         # LibreOffice opens a PDF in Draw, which has no Word export ("no export filter"). Opened as a text document
@@ -1378,8 +1398,9 @@ PAPER = {"type": "string", "enum": ["A4", "Letter"], "description": "Only when t
 # Descriptions stay short: they ride in every request. Option lists (themes, icon sets, edit operations) are in the
 # BRIEF NEEDED answer, in an error message or in find_icon list_sets, which the model reaches only when it needs them.
 TOOLS = {
-    "add_slides": (add_slides, "Add slides to an existing .pptx in its own look; saves '<name> (updated).pptx' and "
-                   "never changes the original. Never hand-write slides with python-pptx. 2 to 5 minutes.",
+    "add_slides": (add_slides, "Add slides to an existing .pptx in its own look; saves them into that deck (Undo "
+                   "keeps the earlier version). Put 'save as a copy' in the request for '<name> (updated).pptx' "
+                   "instead. Never hand-write slides with python-pptx. 2 to 5 minutes.",
                    {"deck": S, "request": S, "slides": {"type": "integer", "description": "1-12"},
                     "files": FILES}, ["deck", "request"]),
     "make_deck": (make_deck, "Build a finished .pptx with the slides engine (storyline, charts, checks). If the brief "
@@ -1396,8 +1417,11 @@ TOOLS = {
                          {"request": S, "files": FILES, "save_as": {"type": "string", "description": "The file name the user asked for, e.g. deck.pptx"}}, ["request"]),
     "analyze_data": (analyze_data, "Analyze CSV or Excel data into charts, tables and a summary.",
                      {"request": S, "files": FILES}, ["request", "files"]),
-    "make_document": (make_document, "Save Markdown as a .docx. Saved as `filename` in the project folder.",
-                      {"markdown": S, "filename": S, "title": S, "paper": PAPER}, ["markdown"]),
+    "make_document": (make_document, "Save Markdown as a .docx. Saved as `filename` in the project folder. `brand`: "
+                      "the colours, fonts and footer the user asked for, in their words (e.g. \"navy #14304F, "
+                      "Georgia headings, footer 'Firm | Confidential'\"); the footer goes in the page footer, not "
+                      "the text.",
+                      {"markdown": S, "filename": S, "title": S, "paper": PAPER, "brand": S}, ["markdown"]),
     "read_document": (read_document, "Read a PDF, Word, PowerPoint, Excel, CSV, Power BI, OpenDocument, notebook, "
                       "email, HTML or image file as text (OCR for scans). `sheet`, `pages` (\"1-3,7\"), `language`, "
                       "`ocr` (auto, always, never) are optional.",

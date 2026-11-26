@@ -185,8 +185,9 @@ def insert_position(task: str) -> int | None:
 def add_to_deck(task: str, deck: str, *, workdir: str, task_id: str, client=None, files: list[str] | None = None,
                 model: str | None = None, density: str | None = None) -> dict:
     """Slides added to a deck the user already has: forge builds them in that deck's look (its master and theme
-    when it is 16:9, else its colours and fonts), then they are appended to a copy of the deck. The original is never
-    changed; the copy is saved next to it as "<name> (updated).pptx"."""
+    when it is 16:9, else its colours and fonts), then they are added to the deck itself, in place (Undo keeps the
+    earlier version). A copy "<name> (updated).pptx" is made only when the deck is open in another app or the request
+    asks for one ("save as", "keep the original"): see deck_target."""
     from engines.forge.brief import slide_count
     from engines.forge.build import build
     from engines.forge.merge import append
@@ -204,23 +205,55 @@ def add_to_deck(task: str, deck: str, *, workdir: str, task_id: str, client=None
     # the job works on a copy in "Meshpool outputs/<job>/": save next to the user's own deck when it is there
     orig = src.parent.parent.parent / src.name
     home = orig.parent if src.parent.parent.name == "Meshpool outputs" and orig.is_file() else src.parent
-    out = home / f"{src.stem} (updated){src.suffix}"
-    i = 2
-    while out.exists():
-        out = home / f"{src.stem} (updated {i}){src.suffix}"
-        i += 1
+    out, why = deck_target(home / src.name, task)
     at = insert_position(task)
-    if at:                                                # "after slide 4", "before slide 7", "as slide 3"
-        from engines.forge.merge import insert
-        added = insert(str(src), res["pptx"], str(out), at)
-    else:
-        added = append(str(src), res["pptx"], str(out))
+    part = out.with_name(f".{out.stem}.{os.getpid()}.part{out.suffix}")   # written whole, then moved into place:
+    try:                                                  # a failed merge never leaves the user's deck half-written
+        if at:                                            # "after slide 4", "before slide 7", "as slide 3"
+            from engines.forge.merge import insert
+            added = insert(str(src), res["pptx"], str(part), at)
+        else:
+            added = append(str(src), res["pptx"], str(part))
+        os.replace(part, out)
+    finally:
+        if part.exists():
+            part.unlink()
     left = sum(len(v) for v in (res.get("unresolved") or {}).values())
+    saved = (f" and saved it as {out.name} (the same deck, changed in place; Undo puts the earlier version back)"
+             if why == "in_place" else
+             f" and saved it as {out.name}: {src.name} is open in another app (its lock file is next to it), so it "
+             "was not changed" if why == "locked" else f" and saved it as {out.name}, as asked; {src.name} is unchanged")
     return {"ok": out.exists(), "artifacts": [str(out)], "evidence": [], "turns": res.get("calls"), "reason": None,
             "answer": (f"Added {added} slide{'s' if added != 1 else ''} to {src.name}"
-                       + (f" at slide {at}" if at else "") + f" and saved it as {out.name} "
-                       f"(the original is unchanged). They follow the deck's look and were checked after rendering"
+                       + (f" at slide {at}" if at else "") + saved +
+                       ". They follow the deck's look and were checked after rendering"
                        + (f"; {left} items are still flagged by the checks (listed in qa.json)." if left else "."))}
+
+
+_SAVE_AS = re.compile(r"(?i)\bsave (?:it |this |the deck |the result )?as\b|\bas a (?:new |separate )?(?:copy|file|"
+                      r"version)\b|\b(?:new|separate) (?:copy|file|version)\b|\bkeep the original\b|"
+                      r"\b(?:don'?t|do not|never) (?:change|overwrite|touch) the original\b|\bleave the original\b")
+
+
+def _locked(p: Path) -> bool:
+    """Open in PowerPoint (~$name, or ~$ and the name less one or two letters) or LibreOffice (.~lock.name#)."""
+    n = p.name
+    return any((p.parent / x).exists() for x in ("~$" + n, "~$" + n[1:], "~$" + n[2:], f".~lock.{n}#"))
+
+
+def deck_target(deck: Path, task: str = "") -> tuple[Path, str]:
+    """Where slides added to a deck are saved: the deck itself, changed in place (the chat's Undo checkpoint keeps
+    the earlier version), unless the deck is open in another app (its lock file is next to it) or the request asks
+    for a copy ("save as", "keep the original"). Daniel, round 2: "update the same deck" made "Deck (updated).pptx"
+    beside the original and took more prompts to merge the two. Returns (path, "in_place" | "locked" | "save_as")."""
+    why = "locked" if _locked(deck) else "save_as" if _SAVE_AS.search(task or "") else "in_place"
+    if why == "in_place":
+        return deck, why
+    out, i = deck.with_name(f"{deck.stem} (updated){deck.suffix}"), 2
+    while out.exists():
+        out = deck.with_name(f"{deck.stem} (updated {i}){deck.suffix}")
+        i += 1
+    return out, why
 
 
 def panel_sentence(panel: dict | None) -> str:

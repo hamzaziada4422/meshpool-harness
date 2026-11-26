@@ -443,7 +443,7 @@ Research budget: when the request or its files already hold sourced research, us
 mark as a gap; otherwise prefer a few authoritative sources (filings, the company's releases) over many pages, and \
 stop researching once each number you need has a source. To change text, cells, comments or tracked changes in a Word, Excel or PowerPoint file the user already has, call edit_office_file (it keeps their formatting; never rewrite the file's XML by hand). Never build a deck or a workbook yourself with python-pptx or openpyxl when make_deck, make_spreadsheet or \
 office_task can make it: the engines carry the design system and the checks. To add or change slides in a deck the \
-user already has, use add_slides (it builds them in that deck's look and keeps the original): never write slides \
+user already has, use add_slides (it builds them in that deck's look and saves them into it; Undo keeps the earlier version): never write slides \
 with python-pptx code. If an engine call returns a job id, \
 wait for it with office_job_status. If its result has a problem, call it again with the specific fix in the request \
 (e.g. "exactly 10 slides; merge the two risk slides"). Run check_deck on every .pptx, check_workbook on every .xlsx \
@@ -1393,7 +1393,9 @@ _ACT_VERB = (r"(?:check|read|run|re-?run|open|look|inspect|verify|confirm|review
              r"replace|copy|rename|delete|remove|add|build|re-?build|make|create|write|save|convert|render|search|find|"
              r"list|install|fetch|download|compare|apply|generate|draft|export|scan|load|try|retry|set|clean|tighten|"
              r"use|go|do|put|insert|append|merge|split|resize|format|style|draw|count|measure|compute|calculate|"
-             r"re-?check|recheck|finish|start|begin|continue|swap|restore|upload|send)")
+             r"re-?check|recheck|finish|start|begin|continue|swap|restore|upload|send|patch|implement|rewrite|correct|"
+             r"adjust|modify|revise|refactor|rework|tweak|handle|commit|stage|revert|rebase|stash|reset|trim|sort|"
+             r"dedupe|normali[sz]e|bump|pin|wire|thread|extend|introduce)")
 _ACT_PROMISE = re.compile(r"\b(?:I'll|I will|I'm going to|I am going to|let me|next,? I(?:'ll| will)|now I(?:'ll| will))"
                           r"\s+(?:(?:now|first|then|quickly|also|just|next|go ahead and|go and|start by)\s+){0,2}"
                           + _ACT_VERB + r"\b", re.I)
@@ -1416,6 +1418,19 @@ def _announces_action(final: str) -> bool:
         if _ACT_PROMISE.search(sent):
             return True
     return False
+
+
+_CALL_JUNK = re.compile(r"<\s*(?:antml:)?(?:invoke|function_calls|tool_calls?)\b|<function=|<\|python_tag\||<｜DSML｜|\[TOOL_CALLS\]|"
+                        r"\{\s*\"(?:name|tool_calls?|tool|function)\"\s*:", re.I)
+
+
+def _prose_before_call(text: str) -> str:
+    """The words of a reply before a tool call that was written as text and could not be read (an unknown tool name, a
+    call cut off in the middle). "I'll patch both." followed by `<invoke name="placeholder">` ended the turn with no
+    nudge, because the junk was the last paragraph and the promise was not."""
+    t = str(text or "")
+    m = _CALL_JUNK.search(t)
+    return t[:m.start()].rstrip() if m and t[:m.start()].strip() else t
 
 
 ACT_NUDGE = "[Meshpool] You said you would do that. Do it now with the tools, or say why you can't."
@@ -1753,6 +1768,21 @@ _STASH_PUSH = re.compile(_GIT_PRE + r"stash(?:\s+(?:push|save)\b.*|(?:\s+-[-\w]+
 _STASH_BACK = re.compile(_GIT_PRE + r"stash\s+(?:pop|apply)\b")
 
 
+_HIST_MOVE = re.compile(_GIT_PRE + r"(?:reset|rebase|revert|stash\s+drop|branch\s+(?:-\w*[dD]\w*|--delete)\b|"
+                        r"commit\b.*--amend|checkout\s+(?!-[^-]|--\s)(?!.*\s--\s)[^-\s])")
+
+
+def _history_key(cmds) -> str:
+    """A normal form of a shell command that moves git history (reset, rebase, checkout of a ref, revert, commit
+    --amend, branch -D, stash drop), else "". Two calls with the same key are the same history move."""
+    for cmd in cmds or []:
+        for seg in PR._segments(str(cmd or "")):
+            seg = re.sub(r"^cd\s+(\"[^\"]*\"|'[^']*'|\S+)\s*&&\s*", "", seg).strip()
+            if _HIST_MOVE.match(seg):
+                return " && ".join(" ".join(str(x).split()) for x in cmds)
+    return ""
+
+
 def _leaves_tree_as_it_was(cmd: str) -> bool:
     """A command whose only effect on the files is a round trip, or none: git status, diff and log, a test run, and
     a `git stash` that its own `git stash pop` puts back. It is not an edit, so a passing test run before it is still
@@ -1770,13 +1800,65 @@ def _leaves_tree_as_it_was(cmd: str) -> bool:
     return pushes == backs
 
 
-def _check_line(cmd: str, shown: str, code: int) -> str:
+_NO_MATCH_CMD = re.compile(r"^\s*(?:cd\s+\S+\s*&&\s*)?(?:git\s+(?:-\w+\s+\S+\s+)*grep|rg|grep|egrep|fgrep|ag|ack|fd|find)\b")
+
+
+def _no_match(cmd: str, code: int, tail: str = "") -> bool:
+    """grep, rg and the like exit 1 with no output when nothing matched: that is an answer, not a failed check."""
+    segs = PR._segments(str(cmd or ""))
+    return (code == 1 and bool(segs) and all(_NO_MATCH_CMD.match(x) for x in segs)
+            and not str(tail or "").strip())
+
+
+def _test_summary(cmd: str, tail: str) -> str:
+    """"pytest, 14 passed" (or "pytest, 2 failed, 14 passed") for a test run, from the runner's own summary line;
+    "" when the command is no test run or printed no counts."""
+    m = _TEST_RUN.search(cmd or "")
+    if not m:
+        return ""
+    word = re.sub(r"\s+", " ", m.group(1).lower())
+    runner = word if word in ("pytest", "py.test", "unittest", "go test", "cargo test", "jest", "vitest", "mocha",
+                              "rspec", "phpunit", "npm test", "yarn test", "pnpm test", "dotnet test") else "tests"
+    low = str(tail or "")
+    nums = [f"{n} {w}" for w in ("failed", "errors", "passed", "skipped")
+            for n in re.findall(r"\b(\d+) " + w + r"\b", low)[-1:]]
+    ok = re.search(r"(?m)^Ran (\d+) tests?\b", low)
+    if not nums and ok and re.search(r"(?m)^OK\b", low):
+        nums = [f"{ok.group(1)} passed"]
+    return ", ".join([runner] + nums) if nums else ""
+
+
+def _tests_after_own_edit(cmd) -> bool:
+    """One combined step that writes files and then runs a test (a patch or a heredoc script, then pytest): the test
+    ran after the change, though the step as a whole changed the tree."""
+    wrote = False
+    for seg in PR._segments(str(cmd or "")):
+        seg = re.sub(r"^cd\s+(\"[^\"]*\"|'[^']*'|\S+)\s*&&\s*", "", seg).strip()
+        if _TEST_RUN.search(seg) and not T.read_only(seg):
+            if wrote:
+                return True
+        elif not (_GIT_LOOK.match(seg) or T.read_only(seg)):
+            wrote = True
+    return False
+
+
+def _check_line(cmd: str, shown: str, code: int, tail: str = "") -> str:
     """The receipt's verdict on the last command after the last change: never "passed" when the exit status could
-    not show a failure (a check piped into another command without pipefail)."""
+    not show a failure (a check piped into another command without pipefail), "no match" for a search that found
+    nothing, and the name of the test run when one verified the change ("Verified: pytest, 14 passed")."""
+    if _no_match(cmd, code, tail):
+        return f"`{shown}` found no match (exit 1 is how a search says so)"
+    summ = _test_summary(cmd, tail)
+    bad = bool(re.search(r"\b[1-9]\d* (?:failed|errors?)\b", summ))
     if code != 0:
-        return f"`{shown}` FAILED (exit {code})"
+        return f"`{shown}` FAILED (exit {code})" + (f": {summ}" if summ else "")
+    if bad:
+        return f"Not verified: {summ}"
+    if summ:                                    # the runner's own summary line shows it passed, pipe or not
+        return f"Verified: {summ}"
     if _piped_check_hides_status(cmd):
-        return (f"`{shown}` ran (exit status is the last command's in the pipe; failures before it are not visible)")
+        return (f"`{shown}` ran (exit status is the last command's in the pipe; failures before it are not visible)"
+                + (f": {summ}" if summ else ""))
     if _TEST_RUN.search(cmd or "") and re.search(r"\|\|\s*(?:true\b|:(?=\s|;|$)|exit\s+0\b)", cmd or ""):
         return f"`{shown}` ran (its exit status is ignored by `|| true`, so a failure would not show)"
     return f"`{shown}` passed"
@@ -2976,8 +3058,8 @@ def _office_card(name: str, args: dict, root) -> tuple[str, list]:
         return "Make a PDF" + (f", {base(args.get('filename'))}" if args.get("filename") else ""), [new_file]
     if tool == "add_slides":
         deck = base(args.get("deck"))
-        return f"Add slides to {deck or 'a deck'}", [f"It saves a copy, {os.path.splitext(deck)[0]} (updated).pptx; "
-                                                    f"{deck or 'the deck'} stays as it is."]
+        return f"Add slides to {deck or 'a deck'}", [f"It saves them into {deck or 'the deck'}; Undo puts the earlier "
+                                                    "version back."]
     if tool == "analyze_data":
         return "Analyse " + (", ".join(files[:3]) if files else "data") + " into charts and a summary", [new_file]
     if tool == "office_task" or name == "office_task":
@@ -4267,7 +4349,7 @@ class Agent:
                             final = done
                             break
                     if (E2E and not self.plan and not cx and g.get("promise_n", 0) < 2 and not g.get("act_nudged")
-                            and _stopped_early(final) and self._tool_msgs_since(g["msg0"])):
+                            and _stopped_early(_prose_before_call(final)) and self._tool_msgs_since(g["msg0"])):
                         g["promise_n"] = g.get("promise_n", 0) + 1   # E2E-AUTONOMY: a promise or a permission question
                         g["push_at"] = len(self.messages)
                         self.messages.append({"role": "user", "content": (     # mid-task is not a finished turn
@@ -4277,7 +4359,7 @@ class Agent:
                             "say so plainly, without promising more.")})
                         continue
                     if (not self.plan and not tools_off and not self._pace_wrapped and not pushed
-                            and _announces_action(final) and self._tools_offered()):
+                            and _announces_action(_prose_before_call(final)) and self._tools_offered()):
                         # the same in every wire style (Codex too) and before any tool ran: "I'll check the folder
                         # and read the current deck..." after a malformed call ended the turn (Daniel, 0.0.18)
                         g["act_nudged"] = len(self.messages)   # once per turn
@@ -4735,7 +4817,7 @@ class Agent:
     _LOOP_EXACT = 3      # the same call, with no file changed since, is refused from its 3rd run
     _LOOP_SHAPE = 5      # the same call with only numbers changed (od -c | sed -n '8,9p', '9,10p', ...): from the 5th
 
-    _REFUSED = ("[Meshpool] Not run", "[Meshpool] Shell checks stopped")
+    _REFUSED = ("[Meshpool] Not run", "[Meshpool] Shell checks stopped", "Skipped: this is the same command")
     _FAILED = re.compile(r"(?:ERROR: |\[exit [1-9]\d*\]"
                          r"|Chunk ID: \w+\nWall time: [^\n]*\nProcess exited with code (?!0\n))")   # exec_command
 
@@ -4757,7 +4839,23 @@ class Agent:
                 g["rseq"] = g.get("rseq", 0) + 1          # a refusal like the others: the refused-streak guard counts it
                 return (f"[Meshpool] Not run: {short} already ran {cap} times for this request. Fix what it reported "
                         "and answer, or answer now if it found nothing to fix.")
+        hist = ""
+        try:
+            fa = json.loads((c.get("function") or {}).get("arguments") or "{}")
+            hist = _history_key(PR.commands_of(name, fa if isinstance(fa, dict) else {}))
+        except (ValueError, TypeError):
+            pass
+        last_hist = g.pop("hist_last", None)             # only the call right before this one counts
+        if hist and last_hist == (hist, getattr(self.ws, "edits", 0)):
+            # the model sent the same `git reset --mixed HEAD~1` twice in one reply: both ran, and a commit was lost
+            g["rseq"] = g.get("rseq", 0) + 1
+            g["hist_last"] = last_hist
+            return ("Skipped: this is the same command you just ran. It already moved git history, and running it "
+                    "again would move it a second time. Check `git log` and `git status`, then run something "
+                    "different if you still need to.")
         out = self._guarded_tool_inner(c, g, cut)
+        if hist and not str(out).lstrip().startswith(("ERROR", "Denied", "Not allowed", "Blocked")):
+            g["hist_last"] = (hist, getattr(self.ws, "edits", 0))
         # consecutive refused calls (a model re-sending a call the guards just refused); any call that runs resets it
         refused = str(out).startswith(self._REFUSED)
         if not refused:
@@ -4910,12 +5008,21 @@ class Agent:
         if nm in ("shell", "exec_command", "bash", "bash_many") and os.environ.get("MH_REPEAT_SHELL", "1") != "0" \
                 and not self._POLL.search(str(f.get("arguments", ""))):
             # the same command three times in a row with no file changed between them, whatever it printed, or a
-            # pair of commands taking turns (git stash, git stash pop, five times: Omar's run): the fourth is refused
+            # pair of commands taking turns (git stash, git stash pop, five times: Omar's run): the fourth is refused.
+            # For other commands, "no file changed" also covers a change made outside the edit tools (a script that
+            # writes, a fixed input): the three runs must each have left the tree as it is now. A git
+            # command that moves state (stash, pop, checkout) changes the tree itself, so it counts by edits only.
+            gitcmd = bool(re.search(r"(?:^|[\s\"';&|(])git\s", str(f.get("arguments", ""))))
+            sig0 = None if gitcmd else self._tree_sig()
+            g["_sig0"] = (id(c), sig0)
             tail = [r for r in runs if r[2] == edits]
             ks = [r[0] for r in tail]
+            n3 = len(ks) >= 3 and ks[-1] == ks[-2] == ks[-3] == key
+            if n3 and sig0 is not None:
+                n3 = all(len(r) <= 5 or r[5] is None or r[5] == sig0 for r in tail[-3:])
             bg = self.ws.__dict__.get("_bg") or {}
             if not any(e["p"].poll() is None for e in list(bg.values())) and (
-                    (len(ks) >= 3 and ks[-1] == ks[-2] == ks[-3] == key) or
+                    n3 or
                     (len(ks) >= 5 and ks[-1] != key and ks[-2] == ks[-4] == key and ks[-1] == ks[-3] == ks[-5])):
                 g["refused"] = g.get("refused", 0) + 1
                 return ("[Meshpool] Not run: you are repeating yourself. This command (or this pair of commands) "
@@ -4934,7 +5041,8 @@ class Agent:
                     "blocking you.")
         sh = (nm in ("shell", "exec_command", "bash", "bash_many") and os.environ.get("MH_REPEAT_SHELL", "1") != "0"
               and not self._POLL.search(str(f.get("arguments", ""))))     # a poll of a job or service may repeat
-        sig = self._tree_sig() if sh else None
+        pre = g.pop("_sig0", None)
+        sig = (pre[1] if pre and pre[0] == id(c) else self._tree_sig()) if sh else None
         if sh and sig is not None:
             bg = self.ws.__dict__.get("_bg") or {}
             # killed with no project file changed since: a changed input or fixed code may well run now
@@ -5432,11 +5540,12 @@ class Agent:
         more = f" and {len(rel) - 12} more" if len(rel) > 12 else ""
         after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits and c.get("kind") != "read"]
         if after:
-            last = after[-1]
+            real = [c for c in after if not _no_match(c["cmd"], c["code"], c.get("tail", ""))]
+            last = (real or after)[-1]          # a search that found nothing is not the check
             # the command, not the `cd <long project path> &&` the model put in front of it
             cmd = re.sub(r"^\s*cd\s+(\"[^\"]*\"|'[^']*'|\S+)\s*&&\s*", "", last["cmd"]).strip() or last["cmd"]
             cmd = cmd.splitlines()[0][:80]
-            check = _check_line(last["cmd"], cmd, last["code"])
+            check = _check_line(last["cmd"], cmd, last["code"], last.get("tail", ""))
             check += f" ({len(after)} command{'s' if len(after) > 1 else ''} after the last change)"
         else:
             check = "nothing was run after the last change, so it is not verified"
@@ -7408,12 +7517,16 @@ class Agent:
             elif name == "exec_command":               # Codex 0.171 (profile c171): its result format, as Codex sends it
                 pre = getattr(self, "_sig_pre", None)  # the repeat guard's fingerprint of this same call
                 before = pre[1] if pre and pre[0] == id(c) else self._tree_sig()
+                n_edits = self.ws.edits
                 out = self.ws.exec_command(**args)
                 ok = T.exec_exit_code(out) == 0
                 after = self._tree_sig() if before is not None else None
                 self._sig_post = (id(c), after)
-                if before is not None and after != before and not _leaves_tree_as_it_was(args.get("cmd")):
+                if before is not None and after != before and not _leaves_tree_as_it_was(args.get("cmd")) \
+                        and self.ws.edits == n_edits:      # a patch in the same step already counted its edit
                     self.ws.edits += 1                 # a heredoc write is an edit: the loop guards see the progress
+                    if _tests_after_own_edit(args.get("cmd")) and self.ws.commands:
+                        self.ws.commands[-1]["after_edit"] = self.ws.edits    # it tested what it had just written
             else:
                 out = getattr(self.ws, name)(**args)
                 route = getattr(self, "route", None)

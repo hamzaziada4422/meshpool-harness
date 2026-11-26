@@ -437,3 +437,7 @@ def test_the_evidence_points_to_its_so_what(tmp_path):
     shapes = {sh.name: sh for sh in prs.slides[0].shapes}
     ptr, call = shapes["ov_FlowPointer"], next(v for k, v in shapes.items() if k.startswith("Callout"))
     assert ptr.top < call.top and ptr.left < call.left + call.width
+    # Daniel, round 2: a chevron squeezed into a 0.25 in gap, touching the exhibit above and "So what" below, read as
+    # a stray mark. The stack now leaves the pointer 0.12 in of air on each side, and the checks hold it.
+    from engines.forge.visual_check import check
+    assert not [f for f in check(str(tmp_path / "deck.pptx")) if f["rule"] == "P31" and f["status"] == "fail"]

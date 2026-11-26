@@ -924,7 +924,7 @@ class Terminal:
                 row = row[idx:] if idx else row
                 ccol = 2 + R.vlen(ctext[idx:])
             if not buf and i == 0:
-                lines.append(lead + st.dim(f'Try "{s["hint"]}"'))
+                lines.append(lead + (st.dim(f'Try "{s["hint"]}"') if C.tips_on() else ""))     # a tip: Settings, Show tips
             else:
                 lines.append(lead + R.clip(row, avail, ""))
         lines.append(self.rule_line())
@@ -2023,7 +2023,7 @@ def _resume_access(term, s, mode: str | None, model: str | None) -> None:
         s.set_model(model)
 
 
-_MODE_NAMES = {"ask": "ask before changes", "edits": "accept edits", "auto": "full access"}
+_MODE_NAMES = {"ask": "Ask", "edits": "Accept edits", "auto": "Full access"}       # config.MODE_INFO's names
 
 
 def _resume_target(wd: str, session: str | None) -> str | None:

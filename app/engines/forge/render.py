@@ -786,6 +786,58 @@ def _clauses(t: str) -> list[str]:
     return [c for c in out if c.strip()]
 
 
+_WORK_WORDS = re.compile(r"(?i),?\s*\b(?:(?:taken |drawn )?(?:from|in|per|according to|see|via)\s+)?(?:the\s+)?"
+                         r"(?:project\s+|internal\s+|our\s+|deck\s+)?(?:fact ?base|facts? (?:list|sheet|file|ids?)|"
+                         r"dossier|story ?line|story ?board|research notes|provenance(?: map)?)\b")
+_WORK_IDS = re.compile(r"\s*[(\[]?\b(?:[FCWO]\d{1,3}|S\d{1,3}[CO]\d{1,3})\b(?:\s*(?:,|;|/|and)\s*"
+                       r"(?:[FCWO]\d{1,3}|S\d{1,3}[CO]\d{1,3}))*[)\]]?")
+
+
+def main_source(slides, brief: str = "") -> str:
+    """The deck's own source, named as the report names itself: the clause the slides' source lines use most (with a
+    name and a year), else the attached files' names."""
+    from collections import Counter
+    seen = Counter()
+    for s in slides or []:
+        src = s.get("source") if isinstance(s, dict) else None
+        t = src.get("text") if isinstance(src, dict) else src if isinstance(src, str) else ""
+        for c in re.split(r";", re.sub(r"(?i)^\s*sources?\s*:\s*", "", str(t or ""))):
+            c = re.sub(r"\s*\(.*$", "", c).strip(" .,'\"")
+            if c and not _WORK_WORDS.search(c) and not _WORK_IDS.search(c) and re.search(r"\b(?:19|20)\d\d\b", c) \
+                    and re.search(r"\b[A-Z][a-z]+\b.*\b[A-Z][a-z]+", c):
+                seen[c] += 1
+    if seen:
+        return max(seen.items(), key=lambda kv: (kv[1], len(re.findall(r"\b[A-Z][a-z]+", kv[0]))))[0]
+    files = re.findall(r"(?m)^--- (.+?) ---$", str(brief or ""))
+    return ", ".join(dict.fromkeys(files)) if files else ""
+
+
+def plain_sources(slides, brief: str = "") -> int:
+    """Source lines name the real source, never the working files: "success rates from the project fact base"
+    (Daniel, round 2) reads "success rates from <the report>". Fact and calc ids go too. Returns lines changed."""
+    main = main_source(slides, brief)
+    changed = 0
+    for s in slides or []:
+        src = s.get("source") if isinstance(s, dict) else None
+        if not isinstance(src, dict) or not isinstance(src.get("text"), str):
+            continue
+        t = src["text"]
+        if not (_WORK_WORDS.search(t) or _WORK_IDS.search(t)):
+            continue
+        out = []
+        for c in t.split(";"):
+            if _WORK_WORDS.search(c) or _WORK_IDS.search(c):
+                c2 = _WORK_IDS.sub("", _WORK_WORDS.sub("", c)).strip(" ,.:")
+                if not c2 and len(t.split(";")) > 1:          # a clause that only pointed at the working files
+                    continue
+                c = (f"{c2} from {main}" if c2 else main) if main else c2
+            if c.strip():
+                out.append(c.strip())
+        src["text"] = "; ".join(dict.fromkeys(out))
+        changed += 1
+    return changed
+
+
 def source_blocks(t: str, sw: float) -> list[dict]:
     """The source line as it is drawn: one line (BCG); else one line a point smaller; else two lines; else as many
     whole clauses as fit in two lines, never cut inside a name or a parenthesis and never ending "and others" (a
@@ -1739,9 +1791,11 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         dh = min(dh, h * 0.28)
         ph -= dh
         ml.find(qn("c:h")).set("val", str(round(ph / h, 4)))
+    lift = T["label"] * 1.2 / 72 + 0.03 + 0.15            # an arrow ends this far above a bar: over its value label
+    # with air between (Daniel, round 2: the "12 months faster" bracket's head sat 0.08 in over the "31" and touched it)
     if delta and ph > 0.5:                                # a short plot needs room in inches above the tallest
-        M = max(M, top / (1 - min(0.6, (0.8 if ph >= 1.8 else 0.7) / ph)))   # label for the arrow and its pill (a
-        va.maximum_scale = M                              # scale was not enough on a 2 in chart)
+        M = max(M, top / (1 - min(0.6, (lift + 0.6 if ph >= 1.8 else lift + 0.45) / ph)))   # label for the arrow
+        va.maximum_scale = M                              # and its pill (a scale was not enough on a 2 in chart)
     band = pw / k
     cx = lambda j: px + band * (j + 0.5)                  # noqa: E731
     yv = lambda v: py + ph * (1 - v / M)                  # noqa: E731
@@ -1764,10 +1818,10 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         n_years = k - 1
         g = (vals[-1] / vals[0]) ** (1 / n_years) - 1
         lab = f"CAGR {'+' if g >= 0 else ''}{g * 100:.1f}%"
-        ya = yv(top) - 0.5
+        ya = yv(top) - max(0.5, lift + 0.2)
         x0, x1 = cx(0), cx(k - 1)
-        for i_, (a_, b_) in enumerate((((x0, yv(vals[0]) - 0.36), (x0, ya)), ((x0, ya), (x1, ya)),
-                                       ((x1, ya), (x1, yv(vals[-1]) - 0.4)))):      # stops above the value label
+        for i_, (a_, b_) in enumerate((((x0, yv(vals[0]) - lift), (x0, ya)), ((x0, ya), (x1, ya)),
+                                       ((x1, ya), (x1, yv(vals[-1]) - lift)))):     # stops above the value label
             if i_ == 2:                                   # a flat chevron for its head, not a default triangle
                 b_ = head_chevron(sl, a_[0], a_[1], b_[0], b_[1], TC.TEXT_2, name="ov_Head_Cagr")
             ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(a_[0]), Inches(a_[1]), Inches(b_[0]),
@@ -1798,9 +1852,10 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
             segs = []                                     # pill over the bar it lands on
             mx, my = cx(j1), max(py + 0.17, yv(vals[j1]) - 0.62)
         elif abs(j1 - j0) >= 1:                           # an elbow above the bars' labels (the think-cell
-            ya = max(py + 0.45, yv(max(between)) - 0.5)   # think-cell difference arrow), the pill on its top run
-            segs = [((cx(j0), yv(vals[j0]) - 0.34), (cx(j0), ya)), ((cx(j0), ya), (cx(j1), ya)),
-                    ((cx(j1), ya), (cx(j1), yv(vals[j1]) - 0.34))]
+            ya = max(py + 0.45, yv(max(between)) - lift - 0.2)   # difference arrow), the pill on its top run
+            ya = min(ya, yv(max(vals[j0], vals[j1])) - lift - 0.12)   # and the head clear of the label it points at
+            segs = [((cx(j0), yv(vals[j0]) - lift), (cx(j0), ya)), ((cx(j0), ya), (cx(j1), ya)),
+                    ((cx(j1), ya), (cx(j1), yv(vals[j1]) - lift))]
             mx, my = (cx(j0) + cx(j1)) / 2, ya - 0.2         # the pill sits on top of the run, not across it
         else:
             segs = [(a_, b_)]
@@ -1864,7 +1919,10 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
             ln.line.width = Pt(1.25)
             ln.line.dash_style = 4
         t_dec = 0 if float(target).is_integer() else min(dec or 1, len(f"{target}".split(".")[-1]))
-        lab = "Target " + fmt_value(target, unit, t_dec)   # the target as stated ("2%", not "2.0%": the text says
+        lab = re.sub(r"\*\*", "", str(c.get("target_label") or "")).strip()[:40] or \
+            "Target " + fmt_value(target, unit, t_dec)     # the plan's own words for the line ("All-plant average
+        # 47%"): a "Target 47%" label over an average read as a goal the report never set (Daniel, round 2)
+        # the target as stated ("2%", not "2.0%": the text says
         # 2% and the figure check flagged the two precisions until the line was dropped)
         lw_ = _need_w(lab, T["label"], True) + 0.1
         bw_half = band / (1 + (c.get("_gap") if c.get("_gap") is not None else 1.5)) / 2
@@ -2872,7 +2930,8 @@ def a_cover(ctx, s, sl, n):
     x, w = LEFT, (colx24(14) if secs else colx24(15 if mets else 17)) - LEFT   # the title keeps the left
     from .common import font_file, wrap_lines
     f = _font("head", True)
-    size = next((z for z in ((44, 40, 36, 32, 28) if COVER_DARK else (36, 32, 28))
+    size = next((z for z in ((52, 48, 44, 40, 36, 32, 28) if COVER_DARK and secs else
+                             (44, 40, 36, 32, 28) if COVER_DARK else (36, 32, 28))
                  if wrap_lines(clean(s["title"]), w - 0.2, z, f, 0.97) <= 3), 28)
     lines = wrap_lines(clean(s["title"]), w - 0.2, size, f, 0.97)
     tw_ = w                                                # a last line of one word: narrow the box until the lines
@@ -2889,6 +2948,11 @@ def a_cover(ctx, s, sl, n):
     th = lines * _pitch(size, 1.05) / 72 + 0.3
     ty = (4.25 if COVER_DARK else 3.35) - th              # title block ends on a fixed line, whatever its length; on the
                                                            # dark cover the block sits at the optical middle of the page
+    sub_z = 16                                             # the deck's own sizes: a new one moved others (P4)
+    if secs:                                               # a two-column cover spreads over its field: the title block
+        sub_h = (0.15 + _need([{"text": clean(s.get("subtitle")), "size": sub_z}], w)) if s.get("subtitle") else 0
+        ty = max(0.95, COVER_MID - (th + sub_h) / 2)       # centred on the field, the sections list down its height
+        # (Daniel, round 2: both columns held the middle half of the navy page, the top quarter empty)
     logo = BRAND.get("logo")                               # full-bleed navy: the title owns the page, no empty white;
     dark = COVER_DARK and not (logo and Path(logo).exists())   # a company logo drawn for white paper keeps the white cover
     ink, soft = (TC.BACKGROUND_1, TC.BACKGROUND_2) if dark else (TC.TEXT_1, TC.TEXT_2)
@@ -2928,25 +2992,25 @@ def a_cover(ctx, s, sl, n):
                 for p in ph.text_frame.paragraphs:
                     p.alignment = PP_ALIGN.LEFT
                     for r in p.runs:
-                        _set_font(r, 16, soft)
+                        _set_font(r, sub_z, soft)
             else:
                 ph._element.getparent().remove(ph._element)
     if secs:                                               # the story's sections down the right: what the deck
         sx = colx24(16)                                    # answers, in order; the 01, 02 marks on every later page
         sw = RIGHT - sx                                    # refer back to them
-        rh = min(0.78, 4.2 / len(secs))
-        blk_top = ty - 0.32                                # centred on the title block (bar to subtitle), not hung
-        blk_bot = ty + th + (0.15 + _need([{"text": sub, "size": 16}], w) if sub else 0)   # from the title's foot
-        sy = max(0.6, (blk_top + blk_bot) / 2 - rh * len(secs) / 2)
+        rh = min(1.15, COVER_SPAN / len(secs))             # the list runs down the field, not a short stack in its
+        sy = max(0.6, COVER_MID - rh * len(secs) / 2)      # middle; centred where the title block is
         for k, sec in enumerate(secs):
             yy = sy + k * rh
             _write(_box(sl, sx, yy, 0.62, rh, f"ov_CoverSecNo{k + 1}", MSO_ANCHOR.MIDDLE),
                    [{"text": f"{k + 1:02d}", "size": 20, "bold": True, "heading": True, "numbers": False,
                      "color": TC.ACCENT_1 if not dark else TC.ACCENT_2}])
             _write(_box(sl, sx + 0.7, yy, sw - 0.7, rh, f"ov_CoverSec{k + 1}", MSO_ANCHOR.MIDDLE),
-                   [{"text": clean(sec["title"]), "size": 15, "numbers": False, "color": ink}])
+                   [{"text": clean(sec["title"]), "size": 16, "numbers": False, "color": ink}])
             if k < len(secs) - 1:
                 _rule(sl, sx, yy + rh, sw, TC.ACCENT_1 if dark else TC.ACCENT_5, 0.5, f"ov_CoverSecRule{k + 1}")
+        for nm, yy in (("ov_CoverSecRuleTop", sy), ("ov_CoverSecRuleEnd", sy + rh * len(secs))):   # the list framed
+            _rule(sl, sx, yy, sw, TC.ACCENT_1 if dark else TC.ACCENT_5, 0.5, nm)                   # top to foot
     if mets:                                               # the cover's empty right half carries the decision's size
         mx = colx24(16) + 0.2
         mw, top, bot = RIGHT - mx, 1.55, 6.25
@@ -3005,19 +3069,28 @@ def a_closing(ctx, s, sl, n):
         _as_columns(ctx, s, sl, n, items, "process")
         return
     has_when = any(st.get("owner") or st.get("timing") for st in steps)
-    # a column is drawn only when some step fills it: an empty "What it involves" column under its heading read as
-    # unfinished (Daniel, 0.0.19: the density pass had moved every detail to the notes)
-    has_what = any(str(st.get("detail") or "").strip() or st.get("milestones") for st in steps)
+    # a column is drawn only when every step fills it: an empty "What it involves" column under its heading read as
+    # unfinished (Daniel, 0.0.19: the density pass had moved every detail to the notes), and so did rows 3 and 4 left
+    # blank under it while rows 1 and 2 had text (Daniel, round 2). Details some steps lack go under their action.
+    what = [bool(str(st.get("detail") or "").strip() or st.get("milestones")) for st in steps]
+    has_what = bool(what) and all(what)
+    under = any(what) and not has_what
     nx = LEFT
     ax, aw = span24(1, 7) if has_what else (span24(1, 18) if has_when else span24(1, 23))
     dx, dw = (span24(8, 18) if has_when else span24(8, 23))
     wx, ww = span24(19, 23)
     y0 = TITLE_RULE_Y + 0.06
+    who_ = any(st.get("owner") for st in steps)
+    when_ = any(st.get("timing") for st in steps)
+    when_head = "Owner and timing" if who_ and when_ else "Owner" if who_ else "Timing"
     heads = [(ax, aw, s.get("columns", ["Action"])[0] if s.get("columns") else "Next step")] + \
-        ([(dx, dw, "What it involves")] if has_what else []) + ([(wx, ww, "Owner and timing")] if has_when else [])
+        ([(dx, dw, "What it involves")] if has_what else []) + ([(wx, ww, when_head)] if has_when else [])
+    hz = T["head"]                                           # every head on one line: "Owner and timing" wrapped
+    while hz > 11 and any(_need_w(t, hz, True) > w - 0.04 for x, w, t in heads):   # up into the section number
+        hz -= 1                                              # "04" (Daniel, round 2)
     for x, w, t in heads:
         _write(_box(sl, x, y0, w, 0.3, f"role_subtitle_Head{len(t)}", MSO_ANCHOR.BOTTOM),
-               [{"text": t, "size": T["head"], "bold": True, "numbers": False}])
+               [{"text": t, "size": hz, "bold": True, "numbers": False}])
     _rule(sl, LEFT, y0 + 0.36, RIGHT - LEFT, TC.ACCENT_1, 0.75, "HeadRule")
     top, bottom = y0 + 0.46, FOOT_RULE_Y - 0.1
     notes = s.get("footnotes") or []
@@ -3032,7 +3105,13 @@ def a_closing(ctx, s, sl, n):
         d = [{"text": st.get("detail", ""), "size": size, "prov": st.get("prov")}] if st.get("detail") else []
         d += [{"text": m if isinstance(m, str) else _txt(m), "size": size - 1, "bullet": True, "space_before": 3,
                "prov": st.get("prov")} for m in (st.get("milestones") or [])[:3]]
-        wh = [{"text": " · ".join(v for v in (st.get("owner"), st.get("timing")) if v), "size": size,
+        if under:                                             # no column of details: the step's own lines go
+            a += [dict(b_, space_before=b_.get("space_before", 3), size=b_["size"] - (0 if b_.get("bullet") else 1))
+                  for b_ in d]                                # under its action
+            d = []
+        # a step the sources give no owner for says so, never a cell left blank or a name made up (Daniel, round 2)
+        wh = [{"text": " · ".join(v for v in (st.get("owner"), st.get("timing")) if v) or
+               ("Owner to confirm" if who_ else "To confirm"), "size": size,
                "numbers": False, "color": TC.TEXT_2}] if has_when else []
         return a, d, wh
     size = T["body"] + (2 if len(steps) <= 3 else 0)          # few steps: larger type before larger gaps
@@ -4452,6 +4531,9 @@ def _register_layout_archetype():
 
 FRAME_TOP = os.environ.get("FORGE_FRAME", "white") == "lines"   # default: a white top (no hairline across it)
 COVER_DARK = os.environ.get("FORGE_COVER", "dark") == "dark"      # "light": the white cover
+NOTES = {"words": None}              # the most words a slide's speaker notes keep (render's notes_words)
+COVER_MID, COVER_SPAN = 3.45, 4.9    # a two-column cover: the middle of its field (above the date rule) and the height
+                                     # its sections list may run to
 NUMBER_ACCENT = os.environ.get("FORGE_NUMBER_ACCENT", "0") == "1"   # legacy: every number in accent blue
 RTL_FONT = "Arial"           # the complex-script face: ships Arabic glyphs on Windows and macOS
 DIRECTIONAL = {"homePlate", "chevron", "rightArrow", "leftArrow", "notchedRightArrow", "stripedRightArrow",
@@ -4518,7 +4600,7 @@ def apply_rtl(prs) -> int:
 
 def render(slides: list[dict], out_path: str, template: str | None = None, fix_labels: bool = True,
            carry: bool = True, theme=None, density: str | None = None, brand: dict | None = None,
-           icon_set: str | None = None) -> dict:
+           icon_set: str | None = None, notes_words: int | None = None) -> dict:
     """Render, then (when LibreOffice is available) re-render up to 3 times moving only chart labels that collide.
     carry=False (a fixed slide count): content longer than its slide is never continued on an extra slide; what
     does not fit goes to the speaker notes and is reported, so the content model can cut or merge it.
@@ -4542,6 +4624,7 @@ def render(slides: list[dict], out_path: str, template: str | None = None, fix_l
     BRAND.update({"firm": None, "footer": None, "logo": None, "footer_right": None, "footer_every": None,
                   **{k: v for k, v in (brand or {}).items() if k in BRAND}})
     DENSITY["deck"] = set_density(density)
+    NOTES["words"] = notes_words or NT.WORDS               # speaker notes: about 40 to 120 words unless asked for more
     spec = theme_spec(theme)
     FRAME["band"] = spec.get("frame") == "band"
     FACE["head"], FACE["body"] = spec["fonts"]["major"], spec["fonts"]["minor"]
@@ -4891,6 +4974,9 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
                                                                                           # drawn on the slide cite
         global BODY_B
         body_b0 = BODY_B
+        if src_.get("text") and s.get("footnotes"):         # a note that only repeats the source line goes: slide 7
+            from .visual_check import same_source            # printed the source twice (Daniel, round 2)
+            s["footnotes"] = [t for t in s["footnotes"] if not same_source(footnote_text(t), str(src_["text"]))]
         notes_ = [t for t in s.get("footnotes") or [] if footnote_text(t)] if arch not in DIVIDERS else []
         if notes_:                                         # notes taller than the band the body leaves them (three
             BODY_B = min(BODY_B, FOOT_RULE_Y - 0.08 - _notes_h(notes_))   # notes, one per line): the body ends
@@ -4927,7 +5013,7 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
             NT.moved(s, ["; ".join(_txt(r.get("label")) if isinstance(r, dict) else ", ".join(map(str, r))
                                for r in left)])
         if s.get("notes"):                                  # the one writer of a slide's notes: presenter prose only
-            NT.write(sl, s["notes"])
+            NT.write(sl, s["notes"], NOTES["words"])
         remarks += [f"slide {n}: {m}" for m in NT.qa_of(s)]   # the renderer's remarks: for the record, not the notes
         if ctx.carry and carry:
             queue.insert(0, ctx.carry)

@@ -187,9 +187,50 @@ def clean(text, punctuate: bool = True) -> str:
         return re.sub(r"(?im)^\s*\[QA\].*$", "", str(text)).strip()
 
 
-def write(slide, text) -> None:
-    """Set a python-pptx slide's speaker notes to the cleaned text (nothing is written when nothing is left)."""
-    t = clean(text)
+WORDS = 120          # speaker notes run about 40 to 120 words a slide unless the request asks for more (Daniel, round
+# 2: slide 6's notes ran to 253 words, more than a presenter reads aloud for one page)
+
+
+def limit_for(request: str) -> int:
+    """The most words a slide's notes keep: WORDS, or what the request asks for ("detailed speaker notes", "notes of
+    about 200 words", "full script")."""
+    t = str(request or "")
+    m = re.search(r"(?i)\b(\d{2,4})(?:\s*(?:-|to)\s*(\d{2,4}))?[- ]words?\b[^.\n]{0,40}\bnotes\b|\bnotes\b[^.\n]{0,40}?"
+                  r"\b(\d{2,4})(?:\s*(?:-|to)\s*(\d{2,4}))?[- ]words?\b", t)
+    if m:
+        nums = [int(x) for x in m.groups() if x]
+        return max(40, max(nums))
+    if re.search(r"(?i)\b(?:detailed|full|long|longer|extensive|verbatim|word[- ]for[- ]word)\s+(?:speaker\s+|presenter\s+)?"
+                 r"(?:notes|script)\b|\bfull script\b", t):
+        return 300
+    return WORDS
+
+
+def trim(text: str, words: int | None = WORDS) -> str:
+    """Whole sentences, in order, up to `words` words (the first sentence always stays)."""
+    if not words or len(str(text or "").split()) <= words:
+        return text
+    out, n = [], 0
+    for line in str(text).split("\n"):
+        keep = []
+        for sent in _SPLIT.split(line.strip()):
+            w = len(sent.split())
+            if out or keep:
+                if n + w > words:
+                    break
+            keep.append(sent)
+            n += w
+        if keep:
+            out.append(" ".join(keep))
+        if n >= words or len(keep) < len(_SPLIT.split(line.strip())):
+            break
+    return "\n".join(out).strip()
+
+
+def write(slide, text, words: int | None = WORDS) -> None:
+    """Set a python-pptx slide's speaker notes to the cleaned text, whole sentences up to `words` words (nothing is
+    written when nothing is left)."""
+    t = trim(clean(text), words)
     if t or slide.has_notes_slide:
         slide.notes_slide.notes_text_frame.text = t
 

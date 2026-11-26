@@ -48,6 +48,65 @@ def style(doc, heading_font: str | None = None, font: str | None = None, color: 
         pf.keep_with_next = True
 
 
+def brand_for(text: str) -> dict:
+    """The brand items a request spells out (requested.py): {"colors": {"primary", "accent"}, "fonts": {"major",
+    "minor"}, "footer", "confidential"}. Daniel, round 2: the memo kept Word's blue title rule (4F81BD), set
+    "Confidential" as a heading and left the footer blank, while the deck from the same brief was navy, amber and
+    Georgia with "Ridgeway Advisory | Confidential" on every page."""
+    from .requested import parse
+    return parse(text or "")
+
+
+_CONF = re.compile(r"(?i)^(?:[^|]{1,60}\|\s*)?(?:strictly\s+|private\s+and\s+)?confidential(?:\s*\|[^|]{1,40})?$")
+
+
+def _plain_line(line: str) -> str:
+    t = re.sub(r"^\s*(?:#{1,6}\s+|>\s*)", "", line or "")
+    return re.sub(r"\*\*|__|\*|_", "", t).strip().rstrip(":").strip()
+
+
+def footer_lines(md: str, footer: str | None = None) -> tuple[str, str | None]:
+    """A line that is only the footer text or a confidentiality label ("Ridgeway Advisory | Confidential") is taken
+    out of the body: it belongs in the page footer, not in a heading. Returns (markdown, the label found)."""
+    out, found = [], None
+    want = re.sub(r"\s+", " ", (footer or "").lower()).strip()
+    for ln in (md or "").split("\n"):
+        p = _plain_line(ln)
+        low = re.sub(r"\s+", " ", p.lower())
+        if p and len(p.split()) <= 8 and ((want and low == want) or _CONF.match(p)):
+            found = found or p
+            continue
+        out.append(ln)
+    return "\n".join(out), found
+
+
+def apply_brand(doc, spec: dict) -> None:
+    """Heading and title colours, the title's rule, and the fonts the request names."""
+    from docx.oxml.ns import qn
+    c = (spec or {}).get("colors") or {}
+    f = (spec or {}).get("fonts") or {}
+    primary = c.get("primary")
+    style(doc, heading_font=f.get("major"), font=f.get("minor"), color=primary)
+    if not primary:
+        return
+    try:                                                   # Word's Title style draws a blue rule (4F81BD) under it
+        st = doc.styles["Title"]
+        ppr = st.element.get_or_add_pPr()
+        bdr = ppr.find(qn("w:pBdr"))
+        if bdr is None:
+            bdr = ppr.makeelement(qn("w:pBdr"), {})
+            ppr.append(bdr)
+        bottom = bdr.find(qn("w:bottom"))
+        if bottom is None:
+            bottom = bdr.makeelement(qn("w:bottom"), {qn("w:val"): "single", qn("w:sz"): "8", qn("w:space"): "4"})
+            bdr.append(bottom)
+        bottom.set(qn("w:color"), primary.upper())
+        for k in ("w:themeColor", "w:themeShade", "w:themeTint"):
+            bottom.attrib.pop(qn(k), None)
+    except KeyError:
+        pass
+
+
 def bold_heading(line: str) -> str | None:
     """'**Recommendation**' or '**Next steps:**' alone on its line: the heading it stands for."""
     m = re.fullmatch(r"\*\*([^*]{2,80}?)\*\*\s*:?", line.strip())
@@ -94,7 +153,11 @@ def finish(doc, title: str | None = None, footer: str | None = None, author: str
     set_core(doc.core_properties, title=title, who=author)
     if footer:
         from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.shared import Pt
         for sec in doc.sections:
+            sec.footer.is_linked_to_previous = False
             p = sec.footer.paragraphs[0] if sec.footer.paragraphs else sec.footer.add_paragraph()
             p.text = footer
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for r in p.runs:
+                r.font.size = Pt(9)

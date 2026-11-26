@@ -529,7 +529,11 @@ MODE_NAMES = {"ask": "ask", "edits": "accept edits", "auto": "full access"}
 
 
 def mode_hint(st: Style, mode: str, agents: int = 0) -> str:
-    seg = {"ask": "ask before changes", "edits": "⏵⏵ accept edits on", "auto": "⏵⏵ full access on"}.get(mode, mode)
+    from meshpool_harness import config as C
+    if mode in C.MODE_INFO:                  # the web app's words (config.MODE_INFO), one line each
+        seg = ("" if mode == "ask" else "⏵⏵ ") + f"{C.MODE_INFO[mode][0]}: {C.MODE_FOOTER[mode]}"
+    else:
+        seg = mode
     s = " " + st.amber(seg) + st.dim(" (shift+tab to cycle)")
     if agents:
         s += st.dim(f" · {agents} background agent{'s' if agents != 1 else ''}")
