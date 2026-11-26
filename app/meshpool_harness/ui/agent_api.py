@@ -3391,7 +3391,7 @@ def prune_old_chats(days: float | None = None, now: float | None = None) -> list
                 gone.append(sid)
             except Exception:  # noqa: BLE001
                 continue
-    try:                                              # the look's pictures of chats that are gone, untouched as long
+    try:                                              # and the look's pictures of chats that are gone, as old
         from meshpool_harness.agent import look as LK
         LK.prune(cutoff, keep=[d.name for d in SESSIONS.iterdir() if d.is_dir()])
     except Exception:  # noqa: BLE001
