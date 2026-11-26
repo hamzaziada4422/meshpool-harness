@@ -2309,10 +2309,29 @@ class Agent:
             own = str(asked or "").split(CAP.SEP)[0]
             if self.office_engines or engines_wanted(own) or wants_revisions(own):
                 return False
+            if self._office_panel_chat(own):
+                return False
             return bool(getattr(self, "office_on", False) or re.search(r"\.(docx?|xlsx?|pptx?|pdf)\b", own, re.I)
                         or CAP.needs(own))
         except Exception:  # noqa: BLE001
             return False
+
+    _PANEL = "using the meshpool panel"   # office/taskpane.js buildMessage: the first message of an Office panel chat
+
+    def _office_panel_chat(self, own: str = "") -> bool:
+        """A chat the Office add-in panel started (its first message says so). It answers about the selection in
+        Excel, Word or PowerPoint, in the chat, and may ask the user (the panel shows ask_user questions). Codex
+        0.171's request has neither the Work prompt for that nor ask_user, so these chats keep the Work route: "I am
+        in Excel" made every panel message an office job and the panel's questions stopped working (0.0.17)."""
+        if self._PANEL in own:
+            return True
+        for m in self.messages:
+            if m.get("role") == "user":
+                c = m.get("content")
+                t = c if isinstance(c, str) else " ".join(str(x.get("text", "")) for x in c or [] if isinstance(x, dict))
+                if self._PANEL in t:
+                    return True
+        return False
 
     def _office_direct(self) -> bool:
         """MH_OFFICE_DIRECT=1 in a lean Work chat: office jobs on existing files are done by hand; the engine tools are
@@ -2564,10 +2583,14 @@ class Agent:
         if self._codex():
             if self._c171():
                 return ["exec_command"]
+            # an Office panel chat: the user is in Excel, Word or PowerPoint and the panel shows ask_user questions;
+            # the lean Work route had no ask_user since 0.0.16, so the panel's questions never came. Before
+            # office_task, which is appended later, so the list only grows at its end.
+            ask = ["ask_user"] if self.profile == "work" and self._office_panel_chat() else []
             if self._office_direct():                  # office_task only once a message asked for a deck or model
-                return list(T.CODEX_TOOLS) + [n for n in LEAN_WORK_TOOLS if n != "office_task"] + \
+                return list(T.CODEX_TOOLS) + [n for n in LEAN_WORK_TOOLS if n != "office_task"] + ask + \
                     (["office_task"] if self.office_engines else [])
-            return list(T.CODEX_TOOLS) + (LEAN_WORK_TOOLS if self.profile == "work" else [])
+            return list(T.CODEX_TOOLS) + (LEAN_WORK_TOOLS if self.profile == "work" else []) + ask
         names = PLAN_TOOLS if self.plan else (WORK_TOOLS if self.profile == "work" else BUILTIN)
         extra = []
         route = getattr(self, "route", None)
