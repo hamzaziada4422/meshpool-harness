@@ -5,7 +5,7 @@
 .mem-sub{color:var(--ink-3);font-size:var(--fs-s);margin:0 0 8px}
 .mem-portrait{border:1px solid var(--line);background:var(--surface);border-radius:var(--r-l);padding:20px}
 .mem-portrait h2,.mem-tray h2,.mem-conf h2{font:600 var(--fs-m)/1.3 var(--body);margin:0 0 8px;color:var(--ink)}
-.mem-portrait p{margin:0 0 8px;font-size:15px;line-height:1.65;color:var(--ink)}
+.mem-portrait p{margin:0 0 8px;font-size:var(--fs-l);line-height:1.6;color:var(--ink)}
 .mem-portrait small{color:var(--ink-3)}
 .mem-sent{border:0;background:none;padding:2px;margin:0;font:inherit;color:inherit;text-align:left;border-radius:4px;cursor:pointer}
 .mem-sent:hover,.mem-sent.on{background:color-mix(in srgb,var(--pool) 16%,transparent)}
@@ -34,7 +34,7 @@
 .mem-row:hover,.mem-row:focus-visible,.mem-row:focus-within{background:var(--hover)}
 .mem-row:focus-visible{border-color:var(--pool)}
 .mem-row.hl{background:color-mix(in srgb,var(--pool) 14%,transparent);border-color:color-mix(in srgb,var(--pool) 50%,transparent)}
-.mem-row.noticed .mem-text{font-style:italic}
+.mem-row.noticed .mem-text{color:var(--ink-2)}
 .mem-row.arch{opacity:.6}
 .mem-main{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
 .mem-text{color:var(--ink);font-size:var(--fs-m);line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text}
@@ -82,7 +82,7 @@
 
 /* after a turn */
 .after010{display:flex;flex-direction:column;gap:8px;margin:4px 0 8px;padding-left:2px}
-.rcpt010{color:var(--ink-3);font-size:var(--fs-xs)}
+.rcpt010{color:var(--ink-3);font:12px/16px var(--mono);font-variant-numeric:tabular-nums}
 .chkline summary{list-style:none;display:inline-flex;gap:8px;align-items:center;color:var(--ink-3);font-size:var(--fs-xs);cursor:pointer}
 .chkline summary svg{width:16px;height:16px;color:var(--ink-3)}
 .chkline ul{margin:4px 0 0 20px;padding:0;color:var(--ink-3);font-size:var(--fs-xs)}

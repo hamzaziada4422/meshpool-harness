@@ -23,7 +23,7 @@
 .mw .mw-sub{color:var(--ink-3);font-size:var(--fs-s);margin:0 0 16px}
 .mw-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:28px}
 .mw-stat{border:1px solid var(--line);border-radius:var(--r-l);padding:16px 16px;background:var(--bg)}
-.mw-stat b{display:block;font:700 28px/1.1 var(--display);letter-spacing:-.02em}
+.mw-stat b{display:block;font:500 var(--fs-2xl)/1.1 var(--display);letter-spacing:0;font-variant-numeric:tabular-nums}
 .mw-stat span{color:var(--ink-3);font-size:var(--fs-s)}
 .mw-sec{margin:0 0 32px}
 .mw-cols{display:grid;grid-template-columns:1fr 1fr;gap:28px}
@@ -31,7 +31,7 @@
 .mw-bar i{display:block;height:10px;border-radius:5px;background:var(--pool);min-width:4px}
 .mw-bar em{font-style:normal;color:var(--ink-3);text-align:right;font-size:var(--fs-s)}
 .mw-chips{display:flex;flex-wrap:wrap;gap:8px}
-.mw-chip{border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:var(--fs-s);background:var(--bg);color:var(--ink-2)}
+.mw-chip{border:1px solid var(--line);border-radius:var(--r-m);padding:4px 12px;font-size:var(--fs-s);background:var(--bg);color:var(--ink-2)}
 .mw-chip b{color:var(--ink);font-weight:600;margin-left:4px}
 .mw-hours{display:flex;align-items:flex-end;gap:4px;height:64px}
 .mw-hours span{flex:1;background:var(--pool-soft);border-radius:3px 3px 0 0;min-height:2px}

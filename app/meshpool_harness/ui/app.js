@@ -263,7 +263,7 @@ async function officePairs() {
   const many = list.length > 1;
   sc.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="Connect an Office panel"><h3>Connect ${many ? "Office panels" : "the Office panel"}?</h3>
     <p>${many ? "More than one request is waiting. Allow only the one whose code your meshpool panel in Office shows, and deny the rest." : "Allow it only if the meshpool panel in Office shows this same code. If you did not just open the panel, deny it."} A connected panel can start Work chats and answer their approvals.</p>
-    ${list.map(x => `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span><b style="font:600 18px/1 ui-monospace,Consolas,monospace;letter-spacing:1px">${esc(x.code)}</b> <span style="color:var(--ink-2)">${esc(x.host)}</span></span><span style="display:flex;gap:8px"><button class="btn" data-c="${esc(x.code)}" data-a="deny">Deny</button><button class="btn primary" data-c="${esc(x.code)}" data-a="allow">Allow</button></span></div>`).join("")}
+    ${list.map(x => `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span><b style="font:500 20px/1 var(--mono);letter-spacing:.08em">${esc(x.code)}</b> <span style="color:var(--ink-2)">${esc(x.host)}</span></span><span style="display:flex;gap:8px"><button class="btn" data-c="${esc(x.code)}" data-a="deny">Deny</button><button class="btn primary" data-c="${esc(x.code)}" data-a="allow">Allow</button></span></div>`).join("")}
     <div class="row"><button class="btn" data-a="later">Decide later</button></div></div>`;
   document.body.appendChild(sc);
   $$("[data-a]", sc).forEach(b => b.onclick = async () => {

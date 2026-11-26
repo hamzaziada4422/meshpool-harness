@@ -20,7 +20,7 @@
 .side-head .iconbtn{color:var(--ink-2)}
 .wm{display:flex;align-items:center;gap:8px;min-width:0;flex:1;padding-left:2px}
 .wm img{height:20px;width:auto;display:block}
-.wmode{font:700 18px/1 var(--display);letter-spacing:-.01em;color:var(--ink)}
+.wmode{font:500 16px/1 var(--display);letter-spacing:0;color:var(--ink)}
 .wmode:empty{display:none}
 .modesw{display:inline-flex;gap:2px;padding:2px;border-radius:var(--r-m);background:transparent;flex:none}
 .modesw button{position:relative;width:32px;height:32px;border:0;border-radius:var(--r-s);background:none;color:var(--ink-3);display:grid;place-items:center;transition:background-color var(--t-hover) ease,color var(--t-hover) ease}
@@ -111,7 +111,7 @@
 /* ---------- home ---------- */
 .conv{background:var(--bg)}
 .hero{min-height:100%;display:flex;flex-direction:column;justify-content:center;align-items:center;max-width:var(--colw,656px);margin:0 auto;padding:24px 0 8%;text-align:center}
-.hero h1{font:700 32px/1.15 var(--display);letter-spacing:-.02em;margin:0 0 20px;display:flex;align-items:center;gap:12px;justify-content:center}
+.hero h1{font:500 var(--fs-2xl)/1.15 var(--display);letter-spacing:0;margin:0 0 20px;display:flex;align-items:center;gap:12px;justify-content:center}
 .hero h1 .mlogo-mark{flex:none}
 .hero p.sub{color:var(--ink-2);margin:0 0 16px}
 .setupcard{display:flex;align-items:center;gap:12px;width:100%;margin-top:16px;padding:16px;border:1px solid var(--line);border-radius:var(--r-l);background:var(--side);text-align:left}
@@ -121,7 +121,7 @@
 .starters button{border:1px solid var(--line);background:none;border-radius:999px;padding:8px 12px;color:var(--ink-2);font-size:var(--fs-s);transition:background-color var(--t-hover) ease,color var(--t-hover) ease}
 .starters button:hover{background:var(--hover);color:var(--ink);transform:none;box-shadow:none}
 .hero.code .chome{display:flex;flex-direction:column;align-items:center;gap:12px;max-width:100%}
-.hero.code h1{margin:0;font-size:26px}
+.hero.code h1{margin:0;font-size:var(--fs-2xl)}
 .waitcard{display:flex;flex-direction:column;border:1px solid var(--line);background:var(--side);border-radius:var(--r-l);padding:8px;min-width:320px;max-width:100%}
 .wrow{display:flex;gap:8px;align-items:baseline;border:0;background:none;padding:8px 12px;border-radius:var(--r-m);text-align:left;color:var(--ink);font-size:var(--fs-m);cursor:pointer}
 .wrow:hover{background:var(--hover)}.wrow .wl{color:var(--warn);font-weight:500}.wrow .wt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46ch}
@@ -243,7 +243,7 @@
 /* ---------- gallery pages ---------- */
 .gal{max-width:960px;margin:0 auto;padding:36px 32px 48px}
 .gh{display:flex;align-items:center;gap:8px;margin-bottom:16px}
-.gh h1{font:700 28px/1.15 var(--display);letter-spacing:-.02em;margin:0;flex:1}
+.gh h1{font:500 var(--fs-2xl)/1.15 var(--display);letter-spacing:0;margin:0;flex:1}
 .gbar{display:flex;align-items:center;gap:8px;margin-bottom:16px;min-height:36px}.gbar .sp{flex:1}
 .gtabs{display:flex;gap:4px}
 .gtabs button{border:0;background:none;border-radius:var(--r-m);padding:4px 12px;color:var(--ink-2);font-size:var(--fs-m);transition:background-color var(--t-hover) ease}
@@ -271,7 +271,7 @@
 .mk:hover .mkt{background:var(--hover);color:var(--ink-2)}
 .ggrid{display:grid;gap:12px}.ggrid.c1{grid-template-columns:1fr}.ggrid.c2{grid-template-columns:repeat(2,minmax(0,1fr))}.ggrid.c3{grid-template-columns:repeat(3,minmax(0,1fr))}
 @media (max-width:900px){.ggrid.c3{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (max-width:640px){.ggrid.c3,.ggrid.c2{grid-template-columns:1fr}.gal{padding:24px 16px 40px}.gh h1{font-size:24px}.gsearch{max-width:none;flex:1;width:auto}.gtabs.pills{margin-left:0;flex:none}}
+@media (max-width:640px){.ggrid.c3,.ggrid.c2{grid-template-columns:1fr}.gal{padding:24px 16px 40px}.gh h1{font-size:var(--fs-xl)}.gsearch{max-width:none;flex:1;width:auto}.gtabs.pills{margin-left:0;flex:none}}
 .gcard{position:relative;display:flex;align-items:flex-start;gap:12px;padding:16px 20px;border:1px solid var(--line);border-radius:var(--r-l);background:var(--bg);cursor:pointer;min-height:84px;transition:background-color var(--t-hover) ease,border-color var(--t-hover) ease}
 .gcard:hover{background:var(--side);border-color:var(--line-3)}
 .gcard .gico{width:32px;height:32px;border-radius:var(--r-m);background:var(--hover);display:grid;place-items:center;color:var(--ink-2);flex:none}
@@ -388,7 +388,7 @@
 .gdots{display:inline-flex;gap:4px}.gdots i{width:4px;height:4px;border-radius:50%;background:var(--ink-3);animation:mp-dots 1.2s ease-in-out infinite}
 .gdots i:nth-child(2){animation-delay:.15s}.gdots i:nth-child(3){animation-delay:.3s}
 @keyframes mp-dots{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-2px)}}
-.gel{color:var(--ink-3);font-variant-numeric:tabular-nums;font-size:var(--fs-xs)}
+.gel{color:var(--ink-3);font-variant-numeric:tabular-nums;font-size:var(--fs-xs);font-family:var(--mono)}
 .work[data-done] .gdots{display:none}
 .panel .ptabs{gap:0}.ptabs .pstrip{display:flex;gap:2px;min-width:0;overflow-x:auto;scrollbar-width:none}.ptabs .pstrip::-webkit-scrollbar{display:none}.ptabs #pclose{flex:none;margin-left:auto}
 .ptabs .sp{flex:0 0 0}.ptabs button[aria-selected="true"]{background:var(--sel);color:var(--ink)}
@@ -403,7 +403,8 @@
 /* "Auto" and the full model name stay while the side panel is open (a 580 px column at 1280 px); they give way only
    on a column under 520 px */
 @container main (max-width:520px){.sel.mdl em{display:none}.sel>span{max-width:90px}.sel .lbl{max-width:96px}}
-.gh h1{font-size:24px}
+.gh h1{font-size:var(--fs-2xl)}
+@media (max-width:640px){.gh h1{font-size:var(--fs-xl)}}
 @media (max-width:760px){.app.sideopen .side{width:min(300px,88vw)}.side-in{width:100%}}
 .srch-tabs{overflow-x:auto;scrollbar-width:none}.srch-tabs button{flex:none}
 .gbar{min-width:0}.gtabs{min-width:0;overflow-x:auto;scrollbar-width:none}.gtabs button{flex:none;white-space:nowrap}
