@@ -440,3 +440,65 @@ def test_the_folder_picker_shows_the_last_three_parts_with_an_ellipsis(app, page
     assert short[0] != "…" or len(short) == 4, short
     page.keyboard.press("Escape")
     assert page.errors == [], page.errors
+
+
+# ------------------------------------------------------------------------------------------------------ item 11, 12
+def _wide_page(app, pw, width, height=800):
+    from tests.test_ux018 import _open
+    return _open(app, pw, width=width, height=height)
+
+
+@pytest.mark.parametrize("width", [1280, 1366, 1440, 1600])
+def test_preview_and_progress_fold_the_sidebar_by_the_same_rule(app, width):
+    """Opening a preview folded the sidebar and slid the chat about 460 px, while Progress kept it at the same width, and
+    "New" shrank to a small "+". Both fold the sidebar only when the chat would go under 640 px, and "New chat" stays a
+    labelled button in the top bar while it is folded."""
+    with sync_api.sync_playwright() as pw:
+        pg = _wide_page(app, pw, width)
+        try:
+            _chat(pg, app["work"], None, "layout")
+            pg.wait_for_function("() => S.cur && S.cur.view && S.cur.view.workdir")
+            pg.evaluate("() => { S.cur.view.code_mode = false; S.cur.view.kind = 'cowork'; renderTop(); }")
+            pg.evaluate("() => togglePanel('progress', true)")
+            pg.wait_for_selector("#panel:not([hidden])")
+            pg.wait_for_timeout(450)
+            prog = pg.evaluate("""() => ({fold: document.querySelector('#app').classList.contains('autoside'),
+                chat: document.querySelector('#main').getBoundingClientRect().width})""")
+            pg.evaluate("() => togglePanel('progress', false)")
+            pg.wait_for_timeout(300)
+            pg.evaluate("() => openPreviewCode('html', '<p>hello</p>')")
+            pg.wait_for_selector("#pvp:not([hidden])")
+            pg.wait_for_timeout(450)
+            prev = pg.evaluate("""() => ({fold: document.querySelector('#app').classList.contains('autoside'),
+                chat: document.querySelector('#main').getBoundingClientRect().width})""")
+            assert prog["fold"] == prev["fold"], (width, prog, prev)
+            assert prog["chat"] >= 640 - 1 and prev["chat"] >= 640 - 1, (width, prog, prev)
+            if prev["fold"]:
+                new = pg.evaluate("""() => { const b = document.querySelector('#topNew'), r = b.getBoundingClientRect();
+                    return {text: b.innerText.trim(), w: r.width}; }""")
+                assert new["text"] == "New chat" and new["w"] > 60, (width, new)
+            assert pg.errors == [], pg.errors
+        finally:
+            pg.browser_.close()
+
+
+def test_one_click_on_progress_shows_it_while_a_preview_is_open(app):
+    """At 1024x700 with a preview open, the first click on Progress only marked the button: the panel was open in the
+    page's state but hidden under the preview."""
+    with sync_api.sync_playwright() as pw:
+        pg = _wide_page(app, pw, 1024, 700)
+        try:
+            _chat(pg, app["work"], None, "progress click")
+            pg.wait_for_function("() => S.cur && S.cur.view && S.cur.view.workdir")
+            pg.evaluate("() => { S.cur.view.code_mode = false; S.cur.view.kind = 'cowork'; S.panel = null; renderPanel(); renderTop(); }")
+            pg.evaluate("() => openPreviewCode('html', '<p>hello</p>')")
+            pg.wait_for_selector("#pvp:not([hidden])")
+            pg.wait_for_selector("#panelBtn")
+            assert pg.get_attribute("#panelBtn", "aria-pressed") == "false"
+            pg.click("#panelBtn")
+            pg.wait_for_function("() => { const p = document.querySelector('#panel'); return p && !p.hidden && p.getBoundingClientRect().width > 100; }", timeout=5000)
+            got = pg.evaluate("() => ({pv: PVX.open, pressed: document.querySelector('#panelBtn').getAttribute('aria-pressed'), shown: getComputedStyle(document.querySelector('#panel')).display})")
+            assert got == {"pv": False, "pressed": "true", "shown": "flex"}, got
+            assert pg.errors == [], pg.errors
+        finally:
+            pg.browser_.close()

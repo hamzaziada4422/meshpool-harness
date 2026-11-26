@@ -553,12 +553,12 @@ function renderTop() {
   const pj = pid && S.pj.find(p => p.id === pid);
   const folderChat = !onProject && !onPage && !!root && (v ? !v.scratch && !pj : !!S.draft.project);
   const title = onProject ? (pj?.name || "Project") : v ? (v.title || "New chat") : "";
-  const open = !!S.panel && !$("#panel")?.hidden;
+  const open = !!S.panel && !$("#panel")?.hidden && !(typeof PVX !== "undefined" && PVX.open);      // under an open preview the panel is not shown
   const a = $("#app"); a.classList.toggle("pageview", onPage); a.classList.toggle("homeview", !v && !onProject && !onPage);
   $("#topbar").classList.toggle("newt", !v);
   const topHTML = `
     ${hidden ? `<button class="tbtn showside" id="showSide" data-tip="Show sidebar" data-kbd="${MOD}B" data-tip-pos="below" aria-label="Show sidebar">${ICON.side}<i class="ndot" ${attention() ? "" : "hidden"}></i></button>` : ""}
-    ${hidden && (v || onProject || onPage) ? `<button class="tbtn topnew" id="topNew" data-tip="New chat" data-kbd="${MOD}N" data-tip-pos="below" aria-label="New chat">${ICON.plus}</button>` : ""}
+    ${hidden && (v || onProject || onPage) ? `<button class="tbtn topnew" id="topNew" data-tip="New chat" data-kbd="${MOD}N" data-tip-pos="below" aria-label="New chat">${ICON.plus}<span>New chat</span></button>` : ""}
     ${pj && !onProject && v ? `<button class="chip" id="pjChip" data-tip="Open project" data-tip-pos="below">${ICON.stack}<span class="cl">${esc(pj.name)}</span></button><span class="crumb" aria-hidden="true">/</span>` : ""}
     ${!v && !onProject && !onPage && S.mode === "code" ? `<span class="toplabel">New session</span>` : ""}
     ${v || onProject ? `<span class="title" id="ttl" data-id="${esc(v?.id || "")}" ${v ? `role="button" tabindex="0" aria-haspopup="menu" data-tip="Chat options" data-tip-pos="below"` : ""}>${esc(title)}</span>${v ? `<button class="tbtn ttlchev" id="ttlChev" aria-label="Chat options" aria-haspopup="menu">${ICON.chev}</button>` : ""}` : ""}

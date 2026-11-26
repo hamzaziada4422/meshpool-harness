@@ -2242,6 +2242,10 @@ function flipLayout(change) {
   } finally { flipBusy = false; }
 }
 function togglePanel(name, force) {
+  // The preview and the side panel take the same place (app.css .app.pvopen>.panel hides the panel). Asking for the panel
+  // while a file is open closes the file's preview: the first click used to mark the button and show nothing, because the
+  // panel was open in the state but hidden under the preview. (A file with unsaved edits asks first, as it does on Close.)
+  if (typeof PVX !== "undefined" && PVX.open && !(S.panel === name && force === false)) { force = true; closePreview(true); }
   if (!panelSet().includes(name)) name = panelSet()[0];
   if (S.panel === name && !force && curMode() === "cowork") store("cw_panel_closed", true);
   if (force) store("cw_panel_closed", false);
@@ -2263,7 +2267,7 @@ function chatRoomWithSide() {
   const vw = innerWidth, side = 288, pv = typeof PVX !== "undefined" && PVX.open;
   let w = 0;
   if (vw > 980) {
-    if (pv) w = Math.max(360, Math.min(Math.min(920, Math.max(480, vw * 0.46)), vw - side - 560));
+    if (pv) w = Math.max(360, Math.min(Math.min(920, Math.max(480, vw * 0.46)), vw - side - CHAT_ROOM_MIN));     // the same 640px the chat keeps beside Progress
     else { const pw = Number(store("pw")) || 460; w = vw < 1440 ? Math.min(pw, Math.max(340, vw * 0.32)) : pw; }
   }
   return vw - side - w;

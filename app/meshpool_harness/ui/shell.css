@@ -103,6 +103,7 @@
 .devbtn{position:relative;padding:4px 8px}
 .gdot{width:7px;height:7px;border-radius:50%;background:var(--add);display:inline-block}
 .devbtn .gdot{position:absolute;top:3px;right:2px;box-shadow:0 0 0 2px var(--bg)}
+.topnew{padding:0 12px}.topbar .topnew span{display:inline}       /* "New chat" stays a labelled button while the sidebar is folded */
 .stepbtn{color:var(--ink-2);padding:0 12px}   /* looks pressed only while its panel is open */
 .stepbtn[aria-pressed="true"]{background:var(--sel)}
 #panelBtn svg{transform:none}
