@@ -93,6 +93,13 @@ def plan(messages, tools):
         if step == 0:
             return _write(names, f"goal{n}.txt", f"part {n}\n")
         return ("text", f"Wrote goal{n}.txt.\nGOAL: DONE" if n >= 3 else f"Wrote goal{n}.txt.\nGOAL: CONTINUE with part {n + 1}")
+    if "raise all prices by 10%" in u:                     # Undo of an office edit (Maya's Flowers): set_range in place
+        ed = next((n for n in names if n.endswith("edit_office_file")), "mcp__meshpool-office__edit_office_file")
+        if step == 0:
+            prices = [69, 42, 48, 150, 65, 38, 55, 72, 88, 135, 28, 59]
+            return ("tool", ed, {"path": "Bouquet Price List.xlsx", "in_place": True, "operations": [
+                {"op": "set_range", "sheet": "Inputs", "start": "C4", "values": [[round(p * 1.1, 2)] for p in prices]}]})
+        return ("text", "All 12 prices in Bouquet Price List.xlsx are 10% higher.")
     mf = __import__("re").search(r"make the file (\S+)", u)
     if mf:                                                 # Undo and rewind tests: one file per message
         if step == 0:

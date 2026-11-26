@@ -165,16 +165,28 @@ def undo_message(r: dict) -> tuple[str, str]:
     if not done and r.get("conversation") is False and not kept and not outside:
         # OM-08: nothing left the conversation and no file changed: "Undone." said something happened that did not
         return "Nothing to undo: that turn changed no files and is no longer in the conversation.", ""
-    msg = "Undone. " + (" and ".join(done) + "." if done else "No files in this chat's folder had changed.")
+    from meshpool_harness.checkpoints import CHANGED_AFTER
+    notes = [str(n) for n in r.get("notes") or []]
+    why = {p: next((n[len(p) + 2:] for n in notes if n.startswith(f"{p}: ")), "") for p in kept}
+    # Maya's Flowers: "No files in this chat's folder had changed. Not restored: Bouquet Price List.xlsx" said two
+    # things that cannot both be true. A file the turn changed but Undo kept is named as kept, never as unchanged.
+    if done:
+        msg = "Undone. " + " and ".join(done) + "."
+    elif kept or outside:
+        msg = "Undone. No files were put back."
+    else:
+        msg = "Undone. No files in this chat's folder had changed."
     if kept:
-        msg += f" Not restored: {names(kept)} (changed since, or not saved before; see details)."
+        one = len(kept) == 1
+        if all(not w or w == CHANGED_AFTER for w in why.values()):
+            msg += (f" Kept as {'it is' if one else 'they are'}: {names(kept)}, because {'it' if one else 'they'} "
+                    "changed after the agent's edit.")
+        else:
+            msg += f" Kept as {'it is' if one else 'they are'}: {names(kept)} (see details for why)."
     if outside:
         msg += f" Not restored, because Undo only covers this chat's folder: {names(outside)}."
-    det = []
-    if r.get("notes"):                       # why each file was kept: changed later, never stored, a link...
-        det += [str(n) for n in r["notes"]]
-    elif kept:
-        det.append("Kept as they are, because they changed after the agent's edit: " + ", ".join(kept))
+    det = list(notes)                        # why each file was kept: changed later, never stored, a link...
+    det += [f"{p}: {CHANGED_AFTER}" for p in kept if not why[p]]
     if outside:
         det.append("Changed outside this chat's folder, not restored: " + ", ".join(outside))
     if r.get("backup"):

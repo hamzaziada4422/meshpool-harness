@@ -72,6 +72,7 @@ BACKUPS_KEEP = 20
 FOREIGN_KEEP = 5000
 FOREIGN_AGE = 24 * 3600
 AMBIGUOUS_NOTE = "another chat was working in this folder at the same time, so it was left as is"
+CHANGED_AFTER = "it changed after the agent's edit (by you or another app), so it was left as is"
 
 
 class MissingObject(OSError):
@@ -940,24 +941,9 @@ class Checkpoints:
             return
         args = args if isinstance(args, dict) else {}
         if name in WRITE_TOOLS or name == "apply_patch":
-            rels = self._targets(name, args)
             self._note_outside(t, name, args)
-            rules = _ignore_rules(self.root)
-
-            def val(r, durable=False):
-                try:
-                    return self._value_of(r, rules, durable=durable)
-                except Exception:
-                    return "!unreadable"
-            pre = {r: val(r, True) for r in rels if r not in (t.get("pre") or {})}
-            missing = {d for r in rels for d in self._missing_parents(r)}     # folders the write may make
-            try:
+            with self._journal_paths(t, self._targets(name, args)):
                 yield
-            finally:
-                post = {r: val(r) for r in rels}
-                made = {d for d in missing if (self.root / d).is_dir() and not (self.root / d).is_symlink()}
-                self._book(t, pre, post, made=made)
-                self._flush()
             return
         w = self._begin_window()
         try:
@@ -966,6 +952,46 @@ class Checkpoints:
             self._book(t, *self._end_window(w))
             self._flush()
             self._save_cache()
+
+    @contextlib.contextmanager
+    def _journal_paths(self, t: dict, rels: list):
+        """Book the writes to `rels` made inside this block to turn `t`: the value before (unless the turn already
+        has one for that path) and the value after."""
+        rules = _ignore_rules(self.root)
+
+        def val(r, durable=False):
+            try:
+                return self._value_of(r, rules, durable=durable)
+            except Exception:
+                return "!unreadable"
+        pre = {r: val(r, True) for r in rels if r not in (t.get("pre") or {})}
+        missing = {d for r in rels for d in self._missing_parents(r)}     # folders the write may make
+        try:
+            yield
+        finally:
+            post = {r: val(r) for r in rels}
+            made = {d for d in missing if (self.root / d).is_dir() and not (self.root / d).is_symlink()}
+            self._book(t, pre, post, made=made)
+            self._flush()
+
+    @contextlib.contextmanager
+    def own_write(self, paths):
+        """Wrap a write Meshpool itself makes to files in the folder during a turn, outside any tool call: the
+        formula results written into a workbook at the end of a turn (xl_values.fill), a recalculation saved back.
+        It is booked to the open turn like a tool's write, so Undo puts back what the file held before the turn and
+        never takes Meshpool's own write for a change the user made. Scan mode needs nothing: the turn's closing scan
+        books it. A no-op when no turn is open."""
+        t = self._open_turn() if self.mode == "journal" else None
+        rels = []
+        for p in ([paths] if isinstance(paths, (str, os.PathLike)) else list(paths or [])):
+            r = _rel_in_root(self.root, p)
+            if r and r not in rels:
+                rels.append(r)
+        if t is None or not rels:
+            yield
+            return
+        with self._journal_paths(t, rels):
+            yield
 
     def _note_outside(self, t: dict, name: str, args: dict) -> None:
         """A write to a file outside this folder: Undo cannot put it back, so the turn keeps its path and Undo names it
@@ -1159,7 +1185,7 @@ class Checkpoints:
                 elif cur is not None and not _stored(cur):      # can't tell what it holds now
                     keep(path, "its current contents aren't tracked (ignored, over 2 MB or a link), so it was left as is")
                 elif not _same(cur, left):                      # changed after the agent: not ours to undo
-                    keep(path)
+                    keep(path, CHANGED_AFTER)
                 elif tgt is not None and not _stored(tgt):      # its earlier state was never stored
                     keep(path, "its earlier version wasn't saved (ignored or over 2 MB), so it was left as is")
                 elif tgt is not None:
