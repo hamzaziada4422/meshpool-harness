@@ -306,12 +306,34 @@ def read(root_s: str, rel: str) -> dict:
     return base | {"kind": "text", "eol": eol, "readonly": False, "text": text.replace("\r\n", "\n")}
 
 
+_SHAS: dict = {}                    # file -> (stamp, sha): the open editor asks every 4 s whether the file changed
+
+
+def _file_sha(p: Path) -> str:
+    """sha256 of the file, kept while its stamp (modified time, size, inode, change time) is unchanged. A file
+    changed in the last two seconds is hashed again each time: a second write in the same clock tick could leave its
+    stamp the same."""
+    from meshpool_harness import fsio
+    stamp = fsio.file_stamp(p)
+    hit = _SHAS.get(str(p))
+    if stamp is not None and hit and hit[0] == stamp:
+        return hit[1]
+    t0 = time.time()
+    sha = _sha(p.read_bytes())
+    old = (t0 - fsio.RACY_S) * 1e9
+    if stamp is not None and fsio.file_stamp(p) == stamp and stamp[0] < old and stamp[3] < old:
+        if len(_SHAS) > 256:
+            _SHAS.clear()
+        _SHAS[str(p)] = (stamp, sha)
+    return sha
+
+
 def stat(root_s: str, rel: str) -> dict:
     root, p = safe(root_s, rel)
     if not p.is_file():
         return {"gone": True}
     st = p.stat()
-    sha = _sha(p.read_bytes()) if st.st_size <= MAX_TEXT else ""
+    sha = _file_sha(p) if st.st_size <= MAX_TEXT else ""
     return {"gone": False, "mtime_ns": st.st_mtime_ns, "size": st.st_size, "sha": sha}
 
 

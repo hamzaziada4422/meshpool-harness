@@ -236,3 +236,28 @@ def test_cpu06_pdf_preview_opens_the_pdf_once_per_new_page(home, tmp_path, monke
     assert opened[0] == 8, f"{opened[0] - 8} PDF opens to show 8 cached pages"
     with pytest.raises(ValueError):
         P.page_png(str(root), "r.pdf", 8, 300)
+
+
+# ---------------------------------------------------------------------------------------------------- CPU-07
+def test_cpu07_open_editor_does_not_hash_the_file_every_four_seconds(home, tmp_path, monkeypatch):
+    from meshpool_harness.ui import files_api as FA
+    from meshpool_harness.ui import workbench as W
+    root = tmp_path / "proj"
+    root.mkdir()
+    monkeypatch.setattr(W, "known_roots", lambda: [root])
+    f = root / "big.py"
+    f.write_bytes(b"x = 1\n" * 300_000)                # 1.8 MB: each check read and hashed all of it
+    _age(f)
+    first = FA.read(str(root), "big.py")
+    box = count_opens(monkeypatch, lambda p: p.endswith("big.py"))
+    for _ in range(15):                                # one minute of an open editor
+        assert FA.stat(str(root), "big.py")["sha"] == first["sha"]
+    assert box["n"] <= 1, f"the open file was read {box['n']} times in 15 checks"
+    f.write_bytes(b"x = 2\n" * 300_000)                # same size: the change is still noticed
+    os.utime(f, (OLD + 60, OLD + 60))
+    assert FA.stat(str(root), "big.py")["sha"] != first["sha"]
+    monkeypatch.setattr(fsio, "RACY_S", 2.0)
+    f.write_bytes(b"x = 3\n" * 300_000)                # changed just now: hashed again each time, since a second
+    a = FA.stat(str(root), "big.py")["sha"]            # write in the same clock tick keeps the same stamp
+    f.write_bytes(b"x = 4\n" * 300_000)
+    assert FA.stat(str(root), "big.py")["sha"] != a
