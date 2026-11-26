@@ -152,3 +152,28 @@ def test_a_saved_file_card_says_where_the_file_goes(cmd, where, said, monkeypatc
     monkeypatch.setenv("HOME", os.path.expanduser("~"))
     v = approval_view("bash", "Run this command?", cmd)
     assert v["file"]["where"] == where and said in v["sum"], v
+
+
+# ------------------------------------------------------------------ persona Maya, round 4: reading is "Read ..."
+@pytest.mark.parametrize("cmd,want", [
+    ("D=/tmp/mp-x; mkdir -p $D; cp 'price list.xlsx' $D/p.xlsx; cd $D && unzip -o p.xlsx && cat xl/sharedStrings.xml",
+     "Read price list.xlsx?"),
+    ("cat page.html | head -50; cp 'price list.xlsx' /tmp/x.xlsx; unzip -l /tmp/x.xlsx", "Read page.html and price list.xlsx?"),
+])
+def test_a_chain_that_only_reads_says_read(cmd, want):
+    from meshpool_harness.agent.core import _plain_command_title
+    assert _plain_command_title(cmd) == want
+
+
+@pytest.mark.parametrize("cmd", ["cp notes.md backup.md; cat notes.md", "unzip -o deck.pptx; cat ppt/slides/slide1.xml",
+                                 "cat a.txt > b.txt; ls", "ls; chmod 777 x", "cat x.csv | sed -i s/a/b/ y.csv",
+                                 "find . -name '*.csv' -delete; ls"])
+def test_a_chain_that_writes_the_users_files_is_never_read(cmd):
+    from meshpool_harness.agent.core import _plain_command_title
+    assert not _plain_command_title(cmd).startswith(("Read", "Look at")), cmd
+
+
+def test_the_page_never_shows_the_title_twice():
+    js = (Path(__file__).resolve().parents[1] / "meshpool_harness" / "ui" / "app.js").read_text(encoding="utf-8")
+    pa = js[js.index("function plainApproval("):][:900]
+    assert "never the title twice" in pa and 'String(ev.title || "")' in pa
