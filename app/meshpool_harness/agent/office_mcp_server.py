@@ -69,7 +69,8 @@ def _readable(p: Path) -> bool:
     try:
         q = p.resolve()
         from meshpool_harness import config as C
-        ok = [_project().resolve(), (C.runs_dir() / "_uploads").resolve()]
+        chat = getattr(_CALL, "chat", None) or os.environ.get("MH_CHAT_ID")      # only this chat's attached files
+        ok = [_project().resolve(), *C.upload_roots(chat)]
     except Exception:  # noqa: BLE001
         return False
     return any(q == r or r in q.parents for r in ok)

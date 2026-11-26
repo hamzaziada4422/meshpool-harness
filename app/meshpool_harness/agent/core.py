@@ -3195,16 +3195,52 @@ def approval_view(kind: str, title: str, detail: str) -> dict:
     if "<<" in d:
         head, bodies = _strip_heredocs(d)
         w = re.search(r"(?:\bcat|\btee(?:\s+-a)?)\s*(?:>>?\s*)?(?P<f>[^\s<>|;&]+)\s*<<|\bcat\s*>>?\s*(?P<g>[^\s<>|;&]+)\s*<<", head)
-        name = os.path.basename((w.group("f") or w.group("g") or "").strip("'\"")) if w else ""
-        if name and bodies:
+        tgt = (w.group("f") or w.group("g") or "").strip("'\"") if w else ""
+        name = os.path.basename(tgt)
+        ran = bool(name) and bool(re.search(r"(?:python[\d.]*|node|Rscript|ruby|perl|bash|sh)\s+\S*" + re.escape(name), head))
+        # release review, 0.0.18: the plain line names the file only when writing it (and setting up for it, and
+        # running it) is ALL the command does: "Save notes.txt" over a trailing `rm -rf ~/Documents && curl ...`
+        # left the rest to the folded Details. And it says where the file goes when that is not this folder.
+        if name and bodies and _only_writes(head, name) and not re.match(r"(?:this deletes|run this destructive)",
+                                                                          line, re.I):
             text = bodies[0].rstrip()
             lines = text.split("\n")
             if len(lines) > 40 or len(text) > 3000:
                 text = "\n".join(lines[:40])[:3000].rstrip() + "\n..."
-            ran = bool(re.search(r"(?:python[\d.]*|node|Rscript|ruby|perl|bash|sh)\s+\S*" + re.escape(name), head))
-            out["file"] = {"name": name, "text": text, "run": ran}
-            out["sum"] = f"Save {name}" + (" and run it" if ran else "")
+            where, shown = _write_place(head, tgt)
+            out["file"] = {"name": name, "text": text, "run": ran, "where": where, "path": shown}
+            out["sum"] = f"Save {name}" + {"in": "", "temp": " in a temporary folder",
+                                            "outside": f" outside this folder ({shown})"}[where] + \
+                (" and run it" if ran else "")
     return out
+
+
+def _only_writes(head: str, name: str) -> bool:
+    """Every step of a heredoc script (bodies taken out) only writes `name`, sets up for it (cd, mkdir, VAR=...,
+    ls, echo) or runs it."""
+    for seg in PR._segments(head):
+        w = seg.split()
+        while w and re.match(r"^[A-Za-z_]\w*=\S*$", w[0]):
+            w = w[1:]
+        if not w or "<<" in seg or w[0] in ("cd", "mkdir", "ls", "echo", "true", "export", "set"):
+            continue
+        if re.match(r"(?:python[\d.]*|node|Rscript|ruby|perl|bash|sh)$", os.path.basename(w[0])) and \
+                any(os.path.basename(x.strip("'\"")) == name for x in w[1:]):
+            continue
+        return False
+    return True
+
+
+def _write_place(head: str, tgt: str) -> tuple:
+    """Where a heredoc writes: ("in", name) in this folder, ("temp", path) a temporary folder, ("outside", path)."""
+    vals = dict(re.findall(r"(?:^|[;&|\n]\s*|\s)([A-Za-z_]\w*)=([^\s;&|$`]+)", head))
+    t = re.sub(r"\$\{?([A-Za-z_]\w*)\}?", lambda m: vals.get(m.group(1), m.group(0)), tgt).strip("'\"")
+    if _SCRATCH_PATH.match(t) or t.startswith(("$TMPDIR", "${TMPDIR")):
+        return "temp", ""                                 # a scratch path never reaches the card
+    if t.startswith(("/", "~", "$", "\\")) or re.match(r"[A-Za-z]:[\\/]", t) or ".." in t.replace("\\", "/").split("/"):
+        home = os.path.expanduser("~")
+        return "outside", ("~" + t[len(home):] if home and t.startswith(home + os.sep) else t)
+    return "in", t
 
 
 class Agent:
@@ -7125,7 +7161,7 @@ class Agent:
             return f"Read {p[:80]} (outside the project)?"
         # the project, folders the user added (/add-dir), this chat's own tool output and the files the user
         # attached; never other chats' histories
-        ok = [self.ws.root, *getattr(self.ws, "extra_roots", []), self.dir.resolve(), (C.runs_dir() / "_uploads").resolve()]
+        ok = [self.ws.root, *getattr(self.ws, "extra_roots", []), self.dir.resolve(), *C.upload_roots(self.id)]
         return "" if any(q == r or r in q.parents for r in ok) else f"Read {str(q)[:120]} (outside the project)?"
 
     # A new deck or workbook written in code instead of through the engines (python-pptx, openpyxl, xlsxwriter,
@@ -7298,6 +7334,10 @@ class Agent:
                 self._edit_unasked(name, args):
             return True, ""                    # auto-accept edits: file changes in the folder go through
         if self.mode == "edits" and not risky and self._git_local_ok(name, args):
+            if self._sandboxed():              # release review: local git needs no network, and hides no secrets
+                script = (T.shell_script(args.get("command")) if name == "shell"
+                          else str(args.get("cmd") if name == "exec_command" else args.get("command") or ""))
+                self.ws.__dict__.setdefault("sbx_offline", set()).add(script.strip())
             return True, ""                    # local git writes in the project repo (add, commit, stash...)
         if office_w and not risky and not orisk and not destr and (
                 self.mode == "edits" or self.mode == "ask" and self._work_without_asking()):
