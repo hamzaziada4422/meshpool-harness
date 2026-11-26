@@ -528,11 +528,27 @@ def _open_in(p: Path) -> tuple[str, str]:
     return "", ""
 
 
-def edit_office_file(path: str, operations: list, output: str | None = None, in_place: bool = False):
+def _in_project(p: Path) -> bool:
+    try:
+        root = _project().resolve()
+        q = p.resolve()
+    except (OSError, ValueError):
+        return False
+    return q == root or root in q.parents
+
+
+def edit_office_file(path: str, operations: list, output: str | None = None, in_place: bool | None = None):
     """Change an existing .docx, .xlsx or .pptx without rebuilding it: styles, formulas and layout stay. Works without
-    LibreOffice. By default the result is a copy '<name> (edited).<ext>'; in_place=true changes the file itself."""
+    LibreOffice. A file in the project folder is changed itself (the chat's Undo puts it back), unless in_place=false
+    or `output` asks for a copy. A copy '<name> (edited).<ext>' is made instead when another app has the file open
+    (its lock file is next to it), when openpyxl would drop parts of the workbook, or for a file outside the project
+    folder, which Undo does not cover. Maya's Flowers: the model left in_place out, the approval card said "Change
+    Bouquet Price List.xlsx?", and a stray "(edited)" copy appeared while the file the user asked about stayed as it
+    was."""
     import shutil
     p = _resolve(path)
+    if in_place is None:
+        in_place = not output and _in_project(p)
     if not p.exists():
         return f"File not found: {p}", True
     ext = p.suffix.lower()
@@ -1221,7 +1237,8 @@ TOOLS = {
                       "`ocr` (auto, always, never) are optional.",
                       {"path": S, "sheet": S, "pages": S, "language": S, "ocr": S}, ["path"]),
     "edit_office_file": (edit_office_file, "Change an existing .docx, .xlsx or .pptx; formatting and formulas stay. "
-                         "Saves '<name> (edited)' unless in_place=true. operations: [{op,...}]. Word: replace_text, "
+                         "Edits the file; in_place=false saves a copy. operations: [{op,...}]. "
+                         "Word: replace_text, "
                          "tracked_replace{find,replace}, tracked_delete, tracked_insert_after, add_comment. Excel: "
                          "set_cell{sheet,cell,value; =formula}, set_range{start,values}, clear_cell, add_row, "
                          "delete_rows{row,count}, add_sheet, delete_sheet, freeze_panes.",

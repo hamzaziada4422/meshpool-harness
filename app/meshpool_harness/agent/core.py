@@ -10,6 +10,7 @@ Front ends (terminal, web app) talk to it through two callbacks:
 """
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import copy
 import datetime
@@ -52,6 +53,9 @@ DEFAULT_MODEL = "deepseek-v4.1-flash"
 
 READ_ONLY = {"bash_output", "bash_stop", "read_file", "grep", "glob", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
              "ask_user", "diagnostics", "find_skill", "update_plan", "mcp_find_tools"}
+# Run without asking, yet they write files into the chat's folder: the turn's checkpoint books them (office_task's
+# engine saves the finished deck or workbook there), so Undo of the turn takes those files back.
+WRITES_FILES = {"office_task"}
 # MCP tools that change nothing: the only ones plan mode runs (SAFE_MCP, which skips the approval prompt, also has
 # tools that save or schedule things).
 PLAN_MCP = {"mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mcp__meshpool_web__web_research",
@@ -2129,17 +2133,20 @@ def _recalc_formulas(path, tmp: str, forms: dict | None = None, timeout: float =
         return None
 
 
-def _cache_formula_values(root, since: float) -> int:
+def _cache_formula_values(root, since: float, cp=None) -> int:
     """Workbooks written or changed this turn whose formulas have no stored result (openpyxl writes none) get the
     results written in, calculated once by the kept LibreOffice: Quick Look, phones and mail show numbers, not blanks.
-    Formulas and formatting stay as they are. Never stops a turn."""
+    Formulas and formatting stay as they are. Never stops a turn. `cp`, the chat's checkpoints: each rewrite is booked
+    to the open turn, so Undo of the turn puts the file back as it was before the turn (the persona run: the rewrite
+    came after the edit was booked, and Undo kept the file as "changed since")."""
     n = 0
     try:
         from meshpool_harness import xl_values
         for f in _recent_office(root, since, ".xlsx")[:6]:
             if f.name.startswith("~$"):
                 continue
-            n += xl_values.fill(f)
+            with (cp.own_write(f) if cp is not None else contextlib.nullcontext()):
+                n += xl_values.fill(f)
     except Exception:  # noqa: BLE001
         pass
     return n
@@ -3453,7 +3460,7 @@ class Agent:
                             self.messages.append({"role": "user", "content": "[Meshpool] " + rep})
                             continue
                     if os.environ.get("MH_CACHE_FORMULAS", "1") != "0":     # any route that wrote a workbook; a no-op when none needs it
-                        _cache_formula_values(self.root, g.get("t0", 0))
+                        _cache_formula_values(self.root, g.get("t0", 0), getattr(self, "checkpoint", None))
                     if self._office_direct() and not g.get("office_check_nudged") \
                             and os.environ.get("MH_OFFICE_FINISH_CHECK", "1") != "0":
                         # SpreadsheetBench (38f57ffb), sb-374-31: the agent's own assert failed, it printed the rows
@@ -6316,7 +6323,7 @@ class Agent:
                    "diff": _rd(self._diff(name, args)) if name in ("edit", "write_file", "apply_patch") and not bad else ""})
         ok, denied = True, False
         cp = getattr(self, "checkpoint", None)          # the chat's checkpoints (journal mode); sub-agents have none
-        cp_ctx = cp.tool(name, args, read_only=name in READ_ONLY or self._inspection(
+        cp_ctx = cp.tool(name, args, read_only=name in READ_ONLY - WRITES_FILES or self._inspection(
             name, raw if isinstance(raw, str) else json.dumps(raw))) if cp else None
         cp_on = False                                    # opened only once the call may run: never across an approval wait
         try:
@@ -6458,6 +6465,8 @@ class Agent:
                 if name == "bash_start" and ok and not denied:
                     cp.window_open()                    # the background process may still change files
         out = clean(str(out))
+        if cp_on and ok and not denied and "Call office_job_status with this id" in out:
+            cp.window_open()                            # the engine goes on building: its files land later this turn
         out += self._lookup_note(name, args)
         m = re.match(r"\[exit (\d+)\]", out)
         step = {"tool": name, "s": round(time.time() - t0, 2), "ok": ok and not (m and m.group(1) != "0"),

@@ -65,8 +65,8 @@ def test_second_edit_does_not_overwrite_first_edited_copy(tmp_path, monkeypatch)
     d = docx.Document()
     d.add_paragraph("hello world")
     d.save(str(tmp_path / "r.docx"))
-    O.edit_office_file("r.docx", [{"op": "replace_text", "find": "hello", "replace": "bye"}])
-    O.edit_office_file("r.docx", [{"op": "replace_text", "find": "world", "replace": "all"}])
+    O.edit_office_file("r.docx", [{"op": "replace_text", "find": "hello", "replace": "bye"}], in_place=False)
+    O.edit_office_file("r.docx", [{"op": "replace_text", "find": "world", "replace": "all"}], in_place=False)
     assert (tmp_path / "r (edited).docx").exists() and (tmp_path / "r (edited) (2).docx").exists()
 
 

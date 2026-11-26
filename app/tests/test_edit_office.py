@@ -20,7 +20,7 @@ def test_word_text_comment_and_append_keep_formatting(tmp_path):
     msg, err = O.edit_office_file("a.docx", [{"op": "replace_text", "find": "100 EGP", "replace": "120 EGP"},
                                              {"op": "add_comment", "find": "Total", "text": "Check VAT"},
                                              {"op": "append_paragraph", "text": "Thanks"},
-                                             {"op": "replace_text", "find": "nothing here", "replace": "x"}])
+                                             {"op": "replace_text", "find": "nothing here", "replace": "x"}], in_place=False)
     assert not err and "a (edited).docx" in msg and "text not found" in msg
     out = Document(str(tmp_path / "a (edited).docx"))
     assert out.paragraphs[0].text == "Total due: 120 EGP" and out.paragraphs[0].runs[0].bold
@@ -44,7 +44,7 @@ def test_powerpoint_text_and_notes(tmp_path):
     sl = prs.slides.add_slide(prs.slide_layouts[5])
     sl.shapes.title.text = "Q3 results"
     prs.save(str(tmp_path / "c.pptx"))
-    msg, err = O.edit_office_file("c.pptx", [{"op": "replace_text", "find": "Q3", "replace": "Q4"}, {"op": "set_notes", "slide": 1, "text": "Say hello"}])
+    msg, err = O.edit_office_file("c.pptx", [{"op": "replace_text", "find": "Q3", "replace": "Q4"}, {"op": "set_notes", "slide": 1, "text": "Say hello"}], in_place=False)
     out = Presentation(str(tmp_path / "c (edited).pptx"))
     assert out.slides[0].shapes.title.text == "Q4 results" and out.slides[0].notes_slide.notes_text_frame.text == "Say hello"
 
@@ -61,7 +61,7 @@ def test_word_tracked_changes_are_real_revisions(tmp_path):
     d.save(str(tmp_path / "t.docx"))
     msg, err = O.edit_office_file("t.docx", [{"op": "tracked_replace", "find": "100 EGP", "replace": "120 EGP", "author": "Lawyer"},
                                              {"op": "tracked_delete", "find": " and renews yearly"},
-                                             {"op": "tracked_insert_after", "find": "per month", "text": " (excluding VAT)"}])
+                                             {"op": "tracked_insert_after", "find": "per month", "text": " (excluding VAT)"}], in_place=False)
     assert not err and "Not done" not in msg
     xml = Document(str(tmp_path / "t (edited).docx")).element.xml
     assert xml.count("<w:del ") == 2 and xml.count("<w:ins ") == 2 and 'w:author="Lawyer"' in xml

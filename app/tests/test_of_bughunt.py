@@ -36,7 +36,7 @@ def test_of01_replace_after_a_hyperlink_changes_the_matched_text(tmp_path):
     p._p.append(parse_xml(f'<w:hyperlink {nsdecls("w")}><w:r><w:t>the website</w:t></w:r></w:hyperlink>'))
     p.add_run(" for the price of 100 dollars.")
     d.save(str(tmp_path / "a.docx"))
-    msg, err = O.edit_office_file("a.docx", [{"op": "replace_text", "find": "100", "replace": "200"}])
+    msg, err = O.edit_office_file("a.docx", [{"op": "replace_text", "find": "100", "replace": "200"}], in_place=False)
     assert not err, msg
     assert Document(str(tmp_path / "a (edited).docx")).paragraphs[0].text == "See the website for the price of 200 dollars."
 
@@ -53,7 +53,7 @@ def test_of02_linked_header_and_merged_cell_are_replaced_once(tmp_path):
     t.cell(0, 0).text = "Total"
     d.save(str(tmp_path / "a.docx"))
     msg, err = O.edit_office_file("a.docx", [{"op": "replace_text", "find": "Draft", "replace": "Draft v2"},
-                                             {"op": "replace_text", "find": "Total", "replace": "Total due"}])
+                                             {"op": "replace_text", "find": "Total", "replace": "Total due"}], in_place=False)
     assert not err, msg
     assert "'Draft': 1 place(s)" in msg and "'Total': 1 place(s)" in msg
     out = Document(str(tmp_path / "a (edited).docx"))
@@ -65,7 +65,7 @@ def test_of02_edit_adds_no_header_part_to_a_document_without_one(tmp_path):
     d = Document()
     d.add_paragraph("Hello")
     d.save(str(tmp_path / "a.docx"))
-    O.edit_office_file("a.docx", [{"op": "replace_text", "find": "Hello", "replace": "Hi"}])
+    O.edit_office_file("a.docx", [{"op": "replace_text", "find": "Hello", "replace": "Hi"}], in_place=False)
     names = zipfile.ZipFile(tmp_path / "a (edited).docx").namelist()
     assert not [n for n in names if "header" in n or "footer" in n]
 
@@ -103,7 +103,7 @@ def test_of16_pptx_replace_reaches_tables_and_groups(tmp_path):
     grp = s.shapes.add_group_shape()
     grp.shapes.add_textbox(Inches(1), Inches(3), Inches(3), Inches(1)).text_frame.text = "FY23 outlook"
     prs.save(str(tmp_path / "d.pptx"))
-    msg, err = O.edit_office_file("d.pptx", [{"op": "replace_text", "find": "FY23", "replace": "FY24"}])
+    msg, err = O.edit_office_file("d.pptx", [{"op": "replace_text", "find": "FY23", "replace": "FY24"}], in_place=False)
     assert not err, msg
     out = Presentation(str(tmp_path / "d (edited).pptx")).slides[0]
     texts = []
@@ -125,7 +125,7 @@ def test_of16_pptx_replace_after_a_line_break_keeps_offsets(tmp_path):
     tf.paragraphs[0].add_line_break()
     tf.paragraphs[0].add_run().text = "costs 100 now"
     prs.save(str(tmp_path / "d.pptx"))
-    msg, err = O.edit_office_file("d.pptx", [{"op": "replace_text", "find": "100", "replace": "250"}])
+    msg, err = O.edit_office_file("d.pptx", [{"op": "replace_text", "find": "100", "replace": "250"}], in_place=False)
     assert not err, msg
     tf = Presentation(str(tmp_path / "d (edited).pptx")).slides[0].shapes[0].text_frame
     assert [r.text for r in tf.paragraphs[0].runs] == ["Line one", "costs 250 now"]
