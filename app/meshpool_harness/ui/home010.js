@@ -36,7 +36,6 @@ async function fresh010(my) {
 async function away010(my) {
   let a; try { a = await api("/api/away"); } catch (e) { return; }
   if (my !== hero010Token || !$(".hero")) return;
-  for (const c of (a.cards || []).slice(0, 1)) insightCard010(c);          // at most one nudge on the home screen
   if (!(a.runs || []).length) return;
   const el = document.createElement("section"); el.className = "away010"; el.setAttribute("aria-label", "While you were away");
   el.innerHTML = `<div class="a-h"><b>While you were away</b><button class="linkbtn" id="awayOk">Got it</button></div>

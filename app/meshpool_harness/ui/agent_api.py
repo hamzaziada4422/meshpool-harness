@@ -361,6 +361,42 @@ def _paths_to_names(t: str) -> str:
     return re.sub(r"(?<!\S)[^\s]*[/\\][^\s]*", one, t)
 
 
+_DELIVERABLE = (".pptx", ".xlsx", ".docx", ".pdf", ".html", ".csv", ".md")
+
+
+def deliverable_title(path: str) -> str:
+    """A file's name as a chat title: "Ridgeway_PdM_Client_Deck.pptx" reads "Ridgeway PdM Client Deck"."""
+    stem = Path(str(path).replace("\\", "/")).stem
+    return re.sub(r"\s+", " ", re.sub(r"[_\-]+", " ", stem)).strip()[:80]
+
+
+def retitle_from_work(sid: str, root: Path, made: list) -> str:
+    """Title a chat after the work: once a turn makes a file, the chat is named for the newest deliverable, not for the
+    first sentence the user typed. Never over a name the user gave (rename), never from a message ("go ahead", a retry):
+    only a file's name is used. Returns the new title, or "" when nothing changed."""
+    try:
+        meta = read_meta(sid)
+        if meta.get("renamed") or (meta.get("title") and not meta.get("auto_title")):
+            return ""
+        best, mt = "", -1.0
+        for o in made or []:
+            p = str(o.get("path") or "")
+            if p.lower().endswith(_DELIVERABLE):
+                try:
+                    t = (root / p).stat().st_mtime
+                except OSError:
+                    continue
+                if t >= mt:
+                    best, mt = p, t
+        title = deliverable_title(best) if best else ""
+        if title and title != meta.get("title"):
+            write_meta(sid, title=title, auto_title=True)
+            return title
+    except Exception:  # noqa: BLE001 - a title is never worth breaking the turn
+        pass
+    return ""
+
+
 def nice_title(text: str) -> str:
     """A short thread title from the first message: the first sentence, without greetings, skill names, links,
     or the hidden notes Meshpool adds, capitalised and cut at a word under 48 characters. A path is never cut: it
@@ -1516,9 +1552,11 @@ class Session:
                 root = Path(self.workdir).resolve()
                 with self.lock:
                     evs = list(self.events[ev0:])
-                for o in W.outputs_from(evs, [], root):
+                made = W.outputs_from(evs, [], root)
+                for o in made:
                     if o["path"].lower().endswith((".pptx", ".xlsx", ".docx")):
                         AR.register(str(root / o["path"]), self.id, incognito=self.incognito)
+                retitle_from_work(self.id, root, made)
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -3063,7 +3101,7 @@ def thread_action(sid: str, body: dict) -> dict:
     if not exists(sid):
         raise KeyError("That chat no longer exists. Refresh the list.")
     if act == "rename":
-        write_meta(sid, title=(body.get("title") or "").strip()[:120])
+        write_meta(sid, title=(body.get("title") or "").strip()[:120], renamed=True)    # the user's own name is never replaced
     elif act in ("pin", "unpin"):
         write_meta(sid, pinned=act == "pin")
     elif act in ("archive", "unarchive"):

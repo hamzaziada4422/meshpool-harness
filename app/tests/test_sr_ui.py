@@ -103,7 +103,7 @@ def test_model_service_down_is_one_line_and_the_status_says_so(page):  # noqa: F
     got = page.evaluate("""() => { applyEv({type: 'user', text: 'a nice winter flower?', i: 0});
         for (let n = 1; n <= 3; n++) applyEv({type: 'status', down: true, attempt: n, i: n,
             text: `The model endpoint isn't answering (nothing answered at that address). Checking again in ${n * 10} s, attempt ${n + 1}, for up to 30 min. Press Stop to end.`});
-        const notes = [...document.querySelectorAll('#col .note')].filter(x => /isn't answering/.test(x.textContent));
+        const notes = [...document.querySelectorAll('#col .note')].filter(x => /not answering/.test(x.textContent));
         const last = notes[0]?.textContent;
         S.cur.working = true; S.cur.since = Date.now(); S.cur.view = Object.assign(S.cur.view || {}, {state: 'working'}); workTick(S.cur);
         const status = document.querySelector('#working .wt')?.textContent;
@@ -111,8 +111,8 @@ def test_model_service_down_is_one_line_and_the_status_says_so(page):  # noqa: F
         workTick(S.cur);
         return {n: notes.length, last, status, after: document.querySelector('#working .wt')?.textContent,
                 back: [...document.querySelectorAll('#col .note')].filter(x => /answering again/.test(x.textContent)).length,
-                down: [...document.querySelectorAll('#col .note')].filter(x => /isn't answering/.test(x.textContent)).length}; }""")
-    assert got["n"] == 1 and "attempt 4" in got["last"], got
+                down: [...document.querySelectorAll('#col .note')].filter(x => /not answering/.test(x.textContent)).length}; }""")
+    assert got["n"] == 1 and "Trying again in 30 s" in got["last"] and "attempt" not in got["last"], got   # plain words since the persona pass (test_ui_persona019)
     assert got["status"] == "Waiting for the model service", got
     assert got["after"] != "Waiting for the model service" and got["back"] == 1 and got["down"] == 0, got   # the same line
     assert page.errors == [], page.errors

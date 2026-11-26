@@ -64,7 +64,9 @@ function linkFiles(html) {
   let inA = 0;
   return html.split(/(<[^>]*>)/).map((part, i) => {
     if (i % 2) { if (/^<a[\s>]/i.test(part)) inA++; else if (/^<\/a>/i.test(part)) inA = Math.max(0, inA - 1); return part; }
-    return inA ? part : part.replace(rx, link);
+    if (inA) return part;
+    // a file in some other temporary folder: its name, and a click opens it from there
+    return part.replace(rx, link).replace(TEMP_PATH_RX, (m, a, b) => { const name = a || b; if (!/\.\w{1,6}$/.test(name)) return m; const dir = m.slice(0, m.length - name.length).replace(/[\\/]+$/, ""); return `<button class="flink" data-open="${name}" data-root="${dir}" title="Preview ${name}">${ICON.files}${name}</button>`; });
   }).join("");
 }
 // Windows: PowerShell, Command Prompt or Git Bash for commands you type; Mac and Linux: your login shell.
@@ -3430,7 +3432,7 @@ function permStep(host) {
   window._permVis = () => { if (!document.hidden && $("#onbPerm")) draw(); };
   document.addEventListener("visibilitychange", window._permVis);
   $("#oDone", card).onclick = () => setupStep(o, card);
-  if (!S.projects.length) { const later = $("[data-scope=later]", card); later.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Add your own folders any time from the sidebar."; }
+  if (!S.projects.length) { const pick = $("[data-scope=pick]", card); pick.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Click Folders I choose to pick a folder now. You can add more any time from the sidebar."; }   // "Folders I choose" is the one already picked: one click opens the folder list
   draw();
 }
 
@@ -3595,7 +3597,7 @@ async function restartApp(bootBefore) {
     else { const i = $("#input"); i.value = text; i.focus(); i.dispatchEvent(new Event("input")); toast("Edit it and send to ask again.", 3500); }
   });
   document.addEventListener("click", e => { const b = e.target.closest(".flink, .outs [data-open]"); if (!b || !b.classList.contains("flink")) return;
-    openPreview(curRoot(), b.dataset.open); });
+    openPreview(b.dataset.root || curRoot(), b.dataset.open); });
   // New items in an open thread ease in; a thread being opened shows at once (no wave of animations).
   new MutationObserver(ms => { if (!S.cur?.ready) return; for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1 && n.id !== "working" && !n.classList.contains("hist")) n.classList.add("enter"); })
     .observe($("#col"), {childList: true});

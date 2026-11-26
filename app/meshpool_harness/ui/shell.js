@@ -422,7 +422,7 @@ function goPage(name) {
 }
 
 /* ================================== search dialog ================================== */
-const SRCH_TABS = [["all", "All"], ["artifacts", "Artifacts"], ["sessions", "Sessions"], ["code", "Code"], ["projects", "Projects"], ["scheduled", "Scheduled"]];
+const SRCH_TABS = [["all", "All"], ["artifacts", "Artifacts"], ["sessions", "Chats"], ["code", "Code"], ["projects", "Projects"], ["scheduled", "Scheduled"]];
 function closeSearch() { const s = $("#srch"); if (!s) return; s.remove(); document.removeEventListener("keydown", s._key, true); }
 function srchIcon(it) {
   const ic = {chat: ICON.chat, code: ICON.codebr, project: ICON.stack, artifact: ICON.cube, scheduled: ICON.clock, action: it.id === "new_session" ? ICON.codebr : it.id === "settings" ? ICON.gear : ICON.plus}[it.kind] || ICON.chat;
@@ -433,7 +433,7 @@ function openSearch(tab = "all", q0 = "") {
   const sc = document.createElement("div"); sc.className = "scrim srch-scrim"; sc.id = "srch";
   sc.innerHTML = `<div class="srch" role="dialog" aria-modal="true" aria-label="Search">
     <div class="srch-top"><input id="srchIn" placeholder="Search" aria-label="Search" autocomplete="off" spellcheck="false" value="${esc(q0)}"><span class="spin" id="srchSpin" hidden></span><button class="iconbtn" id="srchX" aria-label="Close search">${ICON.x}</button></div>
-    <div class="srch-tabs" role="tablist">${SRCH_TABS.map(([k, l]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${l}</button>`).join("")}</div>
+    <div class="srch-tabs" role="tablist">${SRCH_TABS.filter(([k]) => k !== "code" || (S.threads || []).some(isCodeThread) || tab === "code").map(([k, l]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${l}</button>`).join("")}</div>
     <div class="srch-list" id="srchList" role="listbox"></div>
     <div class="srch-keys"><span>Close <kbd>Esc</kbd></span><span>Change type <kbd>←</kbd><kbd>→</kbd></span><span>Open <kbd>↵</kbd></span><span>Actions <kbd>${isMac ? "⌥" : "Alt+"}↵</kbd></span><span class="sp"></span><span>Compose <kbd>Tab</kbd></span></div></div>`;
   document.body.appendChild(sc);
@@ -621,8 +621,8 @@ function devPop(e) {
   const a = S.acct || {}, v = S.cur?.view || {}, root = curRoot();
   const own = !!v.scratch;
   ctxMenu({type: "click", currentTarget: e.currentTarget}, [
-    {head: `<b>${esc(a.device?.name || "This computer")}</b><span class="conn"><i class="gdot"></i>Connected</span><small>${own ? "This chat works in its own private folder on this computer." : `meshpool can read and change files in ${esc(shortPath(root))} on this computer.`}</small>`, html: true},
-    {label: own ? "Browse the chat's folder" : "Open in meshpool editor", icon: ICON.folderopen, fn: () => root && openFolderInApp(root, "")},
+    {head: `<b>This computer</b><small>${own ? "This chat works in its own private folder on this computer." : `meshpool can read and change files in ${esc(shortPath(root))} on this computer.`}</small>`, html: true},
+    {label: own ? "See the chat's files" : "See the files in this folder", icon: ICON.folderopen, fn: () => root && openFolderInApp(root, "")},
   ], {cls: "devmenu"});
 }
 // What the chat says, as Markdown: copied, or saved as a file.

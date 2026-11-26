@@ -325,8 +325,13 @@ function pvFitCols(wrap, t, cols) {
     }
     let cg = t.querySelector("colgroup");
     if (!cg) { cg = document.createElement("colgroup"); t.prepend(cg); }
-    cg.replaceChildren(...[rn, ...nat.map(w => Math.min(w, cap))].map(w => { const c = document.createElement("col"); c.style.width = Math.ceil(w) + "px"; return c; }));
-    const total = Math.ceil(rn) + nat.reduce((a, w) => a + Math.ceil(Math.min(w, cap)), 0);
+    // whole pixels, rounded up, can add up to a pixel or two more than the pane: that was a horizontal scrollbar on a sheet that
+    // fits. The widest columns give the extra pixels back (never below 72) so the sheet is never wider than its pane.
+    const ws = [rn, ...nat.map(w => Math.min(w, cap))].map(Math.ceil);
+    let over = ws.reduce((a, w) => a + w, 0) - (wrap.clientWidth - 1);
+    while (over > 0 && ws.slice(1).some(w => w > 72)) { const k = ws.indexOf(Math.max(...ws.slice(1)), 1); ws[k]--; over--; }
+    cg.replaceChildren(...ws.map(w => { const c = document.createElement("col"); c.style.width = w + "px"; return c; }));
+    const total = ws.reduce((a, w) => a + w, 0);
     t.style.tableLayout = "fixed"; t.style.width = total + "px";
   };
   fit();
