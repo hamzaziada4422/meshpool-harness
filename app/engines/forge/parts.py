@@ -27,6 +27,7 @@ from pptx.util import Inches, Pt
 from . import render as R
 
 GAP = 0.25                     # between regions
+POINTER_GAP = 0.5              # between evidence and the so-what under it: the pointer and its air
 FLOOR = 10                     # smallest body size a part may shrink to (the dense-archetype floor)
 
 LAYOUTS = {"full": 1, "halves": 2, "halves_v": 2, "thirds": 3, "quarters": 4, "main_side": 2, "side_main": 2,
@@ -1225,10 +1226,16 @@ def _compose_one(parts, lay, look, top, bottom):
                 hs[j] += add                               # the callout keeps its own height and sits at the foot
                 left -= add                                # (stretched, it became a tall navy box around one line)
             push = left
+        room = 0.0                                         # a so-what under its evidence: room for the pointer
+        if len(slots) > 1 and parts[slots[-1]].get("type") == "callout" and \
+                parts[slots[-2]].get("type") in EVIDENCE_PARTS and gap + push < POINTER_GAP:
+            prev = slots[-2]                               # between them, with air (Daniel, round 2: one squeezed
+            room = min(POINTER_GAP - gap - push, max(0.0, hs[prev] - ms[prev][0]))   # into 0.25 in read as stray)
+            hs[prev] -= room
         y = top
         for j in slots:
             if j == slots[-1]:
-                y += push
+                y += push + room
             out.append((j, (x, y, w, hs[j]), dict(parts[j], _bump=bumps[j]) if bumps[j] else parts[j]))
             y += hs[j] + gap
         empty += max(0.0, H - (y - gap - top)) * w
