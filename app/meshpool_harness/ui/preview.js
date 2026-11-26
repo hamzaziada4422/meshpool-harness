@@ -14,6 +14,19 @@ const PV_GROUPS = [
   [/^(png|jpe?g|gif|webp|svg|bmp)$/, "Image", null],
 ];
 const pvExt = p => (String(p).match(/\.([^./\\]+)$/) || [, ""])[1].toLowerCase();
+// The icon of a kind of file (a spreadsheet looks like a sheet, a deck like a screen), not one page for everything.
+function pvIcon(ext) {
+  return /^html?$/.test(ext) ? ICON.globe : PV_GROUPS[2][0].test(ext) ? ICON.fsheet : PV_GROUPS[1][0].test(ext) ? ICON.fdoc
+    : PV_GROUPS[0][0].test(ext) ? ICON.fdeck : PV_GROUPS[6][0].test(ext) ? ICON.fimg : ICON.files;
+}
+// A long name is kept in two lines and ends in an ellipsis, with the end of the name and its extension still showing:
+// "Quarterly bouquet price list for the sp…List.xlsx".
+function pvShortName(nm, max = 40) {
+  if (nm.length <= max) return nm;
+  const m = nm.match(/^(.*?)(\.[^.]{1,5})?$/), stem = m[1], ext = m[2] || "";
+  const tail = Math.min(8, Math.max(0, stem.length - 4)), head = max - ext.length - tail - 1;
+  return stem.slice(0, Math.max(8, head)).trimEnd() + "\u2026" + stem.slice(stem.length - tail) + ext;
+}
 function pvType(path) {
   const ext = pvExt(path), g = PV_GROUPS.find(x => x[0].test(ext));
   return {label: g ? g[1] : (ext ? ext.toUpperCase() : "File"), ext};
@@ -397,7 +410,7 @@ function pvTurnCards(cur, foot, turn) {
   const own = !!cur.view?.scratch, att = pvAttached(cur);
   row.innerHTML = shown.map(p => { const ty = pvType(p), thumb = PV_THUMB_RX.test(p), img = /\.(png|jpe?g|gif|webp|svg)$/i.test(p), nm = p.split("/").pop();
     const where = own ? (att.has(p) || att.has(nm) ? "Copy of your file, in this chat" : "In this chat") : "";
-    return `<span class="pvwrap"><button class="pvcard" data-pv="${esc(p)}" title="${esc(p)}"><span class="pvth${thumb ? " wait" : ""}">${img ? `<img alt="" loading="lazy" src="/raw?t=${encodeURIComponent(MP.token)}&${pvQuery(root, p)}">` : `<span class="pvi ${ty.ext && /^html?$/.test(ty.ext) ? "html" : ""}">${/^html?$/.test(ty.ext) ? ICON.globe : ICON.files}</span>`}</span><span class="pvcm"><b>${esc(nm)}</b><small>${esc(ty.label)}${ty.ext ? " · ." + esc(ty.ext) : ""}</small>${where ? `<small class="pvwhere">${esc(where)}</small>` : ""}</span></button><button class="iconbtn pvdl" data-pvdl="${esc(p)}" aria-label="Download ${esc(nm)}" data-tip="Download" data-tip-pos="above">${ICON.dl}</button></span>`; }).join("")
+    return `<span class="pvwrap"><button class="pvcard" data-pv="${esc(p)}" title="${esc(p)}"><span class="pvth${thumb ? " wait" : ""}">${img ? `<img alt="" loading="lazy" src="/raw?t=${encodeURIComponent(MP.token)}&${pvQuery(root, p)}">` : `<span class="pvi ${ty.ext && /^html?$/.test(ty.ext) ? "html" : ""}">${pvIcon(ty.ext)}</span>`}</span><span class="pvcm"><b title="${esc(nm)}">${esc(pvShortName(nm))}</b><small>${esc(ty.label)}${ty.ext ? " · ." + esc(ty.ext) : ""}</small>${where ? `<small class="pvwhere">${esc(where)}</small>` : ""}</span></button><button class="iconbtn pvdl" data-pvdl="${esc(p)}" aria-label="Download ${esc(nm)}" data-tip="Download" data-tip-pos="above">${ICON.dl}</button></span>`; }).join("")
     + (paths.length > shown.length ? `<span class="pvmore">+${paths.length - shown.length} more under Artifacts</span>` : "");
   $$(".pvcard", row).forEach(b => {
     // opening is delegated (the click listener below), so a card whose handlers were lost in a rebuild still opens

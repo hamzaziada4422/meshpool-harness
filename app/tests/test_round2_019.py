@@ -248,3 +248,31 @@ def test_an_open_spreadsheet_preview_refreshes_after_an_edit_and_keeps_its_place
         top: document.querySelector('.pv-sheet').scrollTop})""")
     assert got["tab"] == 1 and abs(got["top"] - before) <= 2, (got, before)
     assert page.errors == [], page.errors
+
+
+# ------------------------------------------------------------------------------------------------------ item 5
+def test_file_cards_show_the_name_in_two_lines_with_the_extension_and_a_type_icon(app, page):
+    """"Bouquet Price Li..." with one generic icon. A name may take two lines, ends in an ellipsis only when it is longer
+    than that, keeps its extension, and each type of file has its own icon."""
+    names = ["Bouquet Price List.xlsx", "Spring wedding flowers proposal for the Hargreaves family and guests.docx",
+             "pitch.pptx", "open-house.html", "photo.png", "notes.pdf"]
+    for n in names:
+        (Path(app["work"]) / n).write_bytes(b"x")
+    _chat(page, app["work"], None, "cards")
+    _fake_chat(page, page.evaluate("() => S.cur.id"))
+    _root(page, app["work"])
+    page.evaluate("""n => { applyEv({type: 'user', text: 'make files', i: 0});
+        const foot = document.createElement('div'); $('#col').appendChild(foot); S.cur.tpaths = n; pvTurnCards(S.cur, foot, 0); }""", names)
+    page.wait_for_selector(".pvcard")
+    got = page.evaluate("""() => [...document.querySelectorAll('.pvcard')].map(c => { const b = c.querySelector('b'), r = document.createRange(); r.selectNodeContents(b);
+        const lh = parseFloat(getComputedStyle(b).lineHeight) || 18;
+        return {text: b.textContent, icon: (c.querySelector('.pvi svg') || {innerHTML: 'img'}).innerHTML, lines: Math.round(r.getBoundingClientRect().height / lh), clipped: b.scrollHeight > b.clientHeight + 1,
+                title: b.title}; })""")
+    by = {g["title"]: g for g in got}
+    first = by["Bouquet Price List.xlsx"]
+    assert first["text"] == "Bouquet Price List.xlsx" and not first["clipped"], first
+    long = by[names[1]]
+    assert long["text"].endswith(".docx") and "…" in long["text"] and not long["clipped"] and long["lines"] <= 2, long
+    icons = [by[n]["icon"] for n in ("Bouquet Price List.xlsx", names[1], "pitch.pptx", "open-house.html", "photo.png", "notes.pdf")]
+    assert len(set(icons[:4])) == 4, "sheet, doc, deck and web page each have their own icon"
+    assert page.errors == [], page.errors
