@@ -100,8 +100,44 @@ def extract(path: str | Path, max_chars: int = MAX, sheet: str | None = None, pa
     return out
 
 
+OOXML = {".docx", ".docm", ".dotx", ".pptx", ".pptm", ".ppsx", ".potx", ".xlsx", ".xlsm", ".xltx"}
+
+
+def ole_kind(p: Path) -> str:
+    """For a file with an Office 2007+ name that is not a zip package: "encrypted" when it is a password-protected
+    Office file (an OLE container with an EncryptedPackage stream), "ole" for an old binary Office file saved under a
+    new name, else ""."""
+    try:
+        with open(p, "rb") as fh:
+            if fh.read(8) != b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+                return ""
+        try:
+            import olefile
+            with olefile.OleFileIO(str(p)) as ole:
+                return "encrypted" if ole.exists("EncryptedPackage") or ole.exists("EncryptionInfo") else "ole"
+        except Exception:  # noqa: BLE001  no olefile, or a damaged container: the signature is enough to say so
+            return "encrypted"
+    except OSError:
+        return ""
+
+
+def _protected(p: Path) -> str | None:
+    """A plain sentence for a password-protected or misnamed Office file (the parsers said "Package not found")."""
+    kind = ole_kind(p) if p.suffix.lower() in OOXML else ""
+    if kind == "encrypted":
+        return (f"{p.name} is password-protected (encrypted), so its text cannot be read. Ask the user to remove the "
+                "password (in Office: File, Info, Protect) and save it again, or to share a copy without one.")
+    if kind == "ole":
+        return (f"{p.name} is an old binary Office file saved with a {p.suffix} name. Open it in Office and save it as "
+                f"{p.suffix}, or convert it with LibreOffice, then read that.")
+    return None
+
+
 def _extract(p: Path, max_chars: int, sheet, pages, lang: str, ocr: str) -> str:
     ext = p.suffix.lower()
+    locked = _protected(p)
+    if locked:
+        return locked
     fn = {".pdf": _pdf, ".docx": _docx, ".docm": _docx, ".pptx": _pptx, ".pptm": _pptx, ".xlsx": _xlsx,
           ".xlsm": _xlsx, ".xls": _xls, ".csv": _csv, ".tsv": _csv, ".pbix": _pbix, ".pbit": _pbix,
           ".odt": _odf, ".ods": _odf, ".odp": _odf, ".rtf": _rtf, ".ipynb": _ipynb, ".eml": _eml,

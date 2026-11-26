@@ -20,7 +20,7 @@ from meshpool_harness.agent import office_mcp_server as O
 def _project(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHPOOL_PROJECT", str(tmp_path))
     monkeypatch.setenv("MH_DOC_CACHE", "0")
-    monkeypatch.setenv("MH_HOME", str(tmp_path / ".home"))
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / ".home"))
 
 
 def _read(p: Path, **kw) -> str:
@@ -289,3 +289,53 @@ def test_of08_rtf_from_textedit_and_word_reads_clean_text(tmp_path):
     out = _read(tmp_path / "w.rtf")
     assert "Price € 5link" in out and "A | B |" in out
     assert "Times" not in out and "Word" not in out and "Secret" not in out and "HYPERLINK" not in out
+
+
+# ---------- OF-09: a password-protected Office file read as "Package not found" and previewed as "damaged" ----------
+
+def _cfb(streams=("EncryptionInfo", "EncryptedPackage")) -> bytes:
+    """A minimal OLE compound file with empty streams of these names: the shape of an encrypted .docx/.xlsx/.pptx."""
+    import struct
+    FREE, END, FATSECT, NOSTREAM = 0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD, 0xFFFFFFFF
+    head = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\0" * 16 + struct.pack(
+        "<HHHHH6xIIIIIIIII", 0x3E, 3, 0xFFFE, 9, 6, 0, 1, 1, 0, 4096, END, 0, END, 0)
+    head += struct.pack("<I", 0) + struct.pack("<I", FREE) * 108
+    fat = struct.pack("<II", FATSECT, END) + struct.pack("<I", FREE) * 126
+
+    def entry(name, typ, child=NOSTREAM, right=NOSTREAM):
+        n = (name + "\0").encode("utf-16-le")
+        return (n.ljust(64, b"\0") + struct.pack("<HBBIII", len(n), typ, 1, NOSTREAM, right, child)
+                + b"\0" * 36 + struct.pack("<III", END, 0, 0))
+    ents = [entry("Root Entry", 5, child=1)]
+    for i, s in enumerate(streams):
+        ents.append(entry(s, 2, right=(i + 2) if i + 1 < len(streams) else NOSTREAM))
+    while len(ents) % 4:
+        ents.append(b"\0" * 128)
+    return head + fat + b"".join(ents)
+
+
+@pytest.mark.parametrize("name", ["contract.docx", "model.xlsx", "deck.pptx"])
+def test_of09_password_protected_office_file_says_so(tmp_path, name):
+    f = tmp_path / name
+    f.write_bytes(_cfb())
+    out = _read(f)
+    assert out.startswith(f"{name} is password-protected") and "Package" not in out and str(tmp_path) not in out
+
+
+def test_of09_old_binary_file_with_a_new_name_says_so(tmp_path):
+    f = tmp_path / "old.docx"
+    f.write_bytes(_cfb(("WordDocument", "1Table")))
+    assert "old binary Office file saved with a .docx name" in _read(f)
+
+
+def test_of09_preview_of_a_password_protected_file_does_not_say_damaged(tmp_path, monkeypatch):
+    from meshpool_harness.ui import previews as PV
+    from meshpool_harness.ui import workbench as W
+    root = tmp_path / "proj"
+    root.mkdir()
+    monkeypatch.setattr(W, "known_roots", lambda: [root])
+    for name in ("a.docx", "b.xlsx"):
+        (root / name).write_bytes(_cfb())
+        with pytest.raises(ValueError) as e:
+            PV.meta(str(root), name)
+        assert "password-protected" in str(e.value) and "damaged" not in str(e.value)
