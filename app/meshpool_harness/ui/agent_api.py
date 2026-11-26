@@ -981,9 +981,10 @@ class Session:
         offer = False
         if t == "assistant" and ev.get("text") and self._no_folder_chat():
             from meshpool_harness import nofolder as NF          # "run this in a session that has a shell": a plain
-            offer = NF.wants_folder(ev["text"])                  # offer and an "Add a folder" button instead
+            made = self._turn_made_file()                         # offer and an "Add a folder" button instead,
+            offer = NF.wants_folder(ev["text"], made)             # unless this turn made a file
             if offer:
-                ev = dict(ev, text=NF.plain(ev["text"]))
+                ev = dict(ev, text=NF.plain(ev["text"], made))
         if t == "assistant" and "/" in str(ev.get("text") or ""):
             ev = self._no_dead_links(ev)
         if t == "turn_end":
@@ -1047,6 +1048,22 @@ class Session:
             return bool(getattr(self, "workdir", "")) and PS.is_scratch(self.workdir)
         except Exception:  # noqa: BLE001
             return False
+
+    def _turn_made_file(self) -> bool:
+        """True when a step of this turn that writes files (make_*, write, edit, save...) worked."""
+        try:
+            with self.lock:
+                evs = list(self.events)
+            start = max((i for i, e in enumerate(evs) if e.get("type") == "user" and not e.get("steer")), default=0)
+            makers = set()
+            for e in evs[start:]:
+                if e.get("type") == "tool_start" and _MAKER.search(str(e.get("name") or "").split("__")[-1]):
+                    makers.add(e.get("id"))
+                elif e.get("type") == "tool_end" and e.get("id") in makers and e.get("ok"):
+                    return True
+        except Exception:  # noqa: BLE001
+            pass
+        return False
 
     def _mark_retried_steps(self):
         """Before a turn_end: the failed steps of this turn that a later step redid (the same file worked on and the
