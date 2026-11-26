@@ -1773,9 +1773,14 @@ function fitPanel() {
   const want = (!!S.panel || (typeof PVX !== "undefined" && PVX.open)) && innerWidth < 1180 && innerWidth > 760 && !S.keepSide;   // only where both cannot fit
   if ($("#app").classList.contains("autoside") !== want) { $("#app").classList.toggle("autoside", want); renderTop(); }
 }
+// Each drawing of the side panel gets a number. A tab that loads its data (Git and CI, Changes) checks it after the
+// wait: when another tab or chat was drawn meanwhile, its late answer is dropped instead of drawn over that tab.
+const panelGen = body => (body._gen || 0);
+const panelStale = (body, gen) => !body.isConnected || panelGen(body) !== gen;
 function renderPanel() {
   const p = $("#panel");
   clearTimeout(S.spT);
+  { const pb = $("#pbody"); if (pb) pb._gen = panelGen(pb) + 1; }
   if (S.panel && !panelSet().includes(S.panel)) { S.panel = panelSet()[0]; store("panel", S.panel); }
   fitPanel(); if (S.panel !== "browser") brwStop();
   if (!S.panel) { p.hidden = true; return; }
@@ -1898,15 +1903,17 @@ async function panelDiff(body) {
   $("#dref").onclick = renderPanel;
   $("#dsplit").onclick = () => { store("diffSplit", store("diffSplit") === "1" ? "0" : "1"); renderPanel(); };
   $("#dundo")?.addEventListener("click", () => undoTurn(+sel));
+  const gen = panelGen(body);
   try {
     const d = await api(`/api/agent/${S.cur.id}/diff${sel ? "?turn=" + sel : ""}`);
+    if (panelStale(body, gen)) return;
     if (!d.files.length) { $("#dbody").innerHTML = `<div class="pnote">${esc(d.note || S.cur.view?.checkpoints_note || (sel ? "This reply didn't change any files." : "This chat hasn't changed any files yet. Other changes in this folder are under Git and CI."))}</div>`; return; }
     const add = d.files.reduce((a, f) => a + (f.add || 0), 0), del = d.files.reduce((a, f) => a + (f.del || 0), 0);
     $("#dbody").innerHTML = `<div class="pnote" style="padding:8px 12px">${d.files.length} file${d.files.length === 1 ? "" : "s"} · <span style="color:var(--add)">+${add}</span> <span style="color:var(--del)">−${del}</span></div>
       <ul class="flist">${d.files.map((f, i) => `<li data-i="${i}"><span class="badge ${f.status}">${f.status[0].toUpperCase()}</span><span class="p">${esc(String(f.path).replace(/^"|"$/g, ""))}</span><span class="a">+${f.add || 0}</span><span class="r">−${f.del || 0}</span></li>`).join("")}</ul>
       ${store("diffSplit") === "1" ? `<div class="sbs-wrap" id="patch">${splitHTML(d.patch)}</div>` : `<pre class="patch" id="patch">${patchHTML(d.patch)}</pre>`}`;
     $$("#dbody .flist li").forEach(li => li.onclick = () => { const f = d.files[+li.dataset.i]; const el = $(`#patch [data-file="${CSS.escape(f.path)}"]`); el?.scrollIntoView({block: "start"}); });
-  } catch (e) { $("#dbody").innerHTML = `<div class="pnote">${esc(e.message)}</div>`; }
+  } catch (e) { if (!panelStale(body, gen)) $("#dbody").innerHTML = `<div class="pnote">${esc(e.message)}</div>`; }
 }
 /* The same patch with old and new next to each other: removed lines on the left, added on the right, paired in
    order within each run of changes; unchanged lines on both sides. */
@@ -2000,7 +2007,9 @@ function panelTerm(body) {
 async function panelGit(body) {
   const root = curRoot(); if (!root) { body.innerHTML = `<div class="pnote">Choose a project folder first.</div>`; return; }
   body.innerHTML = `<div class="pnote">Loading...</div>`;
-  let g; try { g = await api("/api/git?root=" + encodeURIComponent(root)); } catch (e) { body.innerHTML = `<div class="pnote">${esc(e.message)}</div>`; return; }
+  const gen = panelGen(body);
+  let g; try { g = await api("/api/git?root=" + encodeURIComponent(root)); } catch (e) { if (!panelStale(body, gen)) body.innerHTML = `<div class="pnote">${esc(e.message)}</div>`; return; }
+  if (panelStale(body, gen)) return;
   if (!g.git) { body.innerHTML = `<div class="pnote">Git is not installed on this computer.${isMac ? " Open Terminal and run <code>xcode-select --install</code>, then come back." : ""}</div>`; return; }
   if (!g.repo) { body.innerHTML = `<div class="gitbox"><div class="stat">This folder is not a Git repository.</div><div class="row"><button class="btn primary" id="ginit">Start a Git repository here</button></div></div>`; $("#ginit").onclick = () => gitAct({action: "init"}); return; }
   body.innerHTML = `<div class="gitbox">
