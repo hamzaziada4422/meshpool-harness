@@ -298,8 +298,8 @@ def test_the_word_file_check_says_nothing_about_repair_or_schemas(tmp_path, monk
 
 
 def test_the_checked_line_says_what_was_checked_in_plain_words(tmp_path, monkeypatch):
-    """"Checked: Office file structure, 20 workbook rules (4 did not pass)" is now "Checked the workbook: 16 of 20
-    checks passed. Checked the file opens and reads correctly." The failing ones are named in a details list."""
+    """"Checked: Office file structure, 20 workbook rules (4 did not pass)" is now "Checked the totals and formulas,
+    and that the file opens cleanly." (rescore: no counts in the line). The failing ones are named in a details list."""
     monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path))
     monkeypatch.delenv("MH_CHECK_RUN", raising=False)
     from meshpool_harness import checks as K
@@ -310,7 +310,7 @@ def test_the_checked_line_says_what_was_checked_in_plain_words(tmp_path, monkeyp
                 names={"X16": "Lengths are typed in, not linked", "X17": "No checks sheet"})
     sm = K.summary("priya")
     K.end("priya")
-    assert sm["line"] == ("Checked the workbook: 16 of 20 checks passed. Checked the file opens and reads correctly."), sm["line"]
+    assert sm["line"] == "Checked the totals and formulas, and that the file opens cleanly.", sm["line"]
     assert "rules" not in sm["line"] and "did not pass" not in sm["line"]
     assert sm["failed"] == 4 and any("Lengths are typed in" in d for d in sm["details"]), sm
     assert all("workbook rules" not in i["label"] for i in sm["items"]), sm["items"]
@@ -319,7 +319,7 @@ def test_the_checked_line_says_what_was_checked_in_plain_words(tmp_path, monkeyp
                                                               "4 checks on the workbook did not pass"], ev
     K.begin("all")
     K.rules_ran("deck_rules", "design rules", {"P1": "pass", "P2": "pass"}, "a.pptx")
-    assert K.summary("all")["line"] == "Checked the deck: all 2 checks passed."
+    assert K.summary("all")["line"] == "Checked the slide layout and text."
 
 
 # ---------------------------------------------------------------------------------------------------- item 6

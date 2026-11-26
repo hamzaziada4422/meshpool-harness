@@ -355,7 +355,11 @@ function pvTurnCards(cur, foot, turn) {
   const t = (cur.view?.turns || []).find(x => x.n === (turn ?? cur.turn));
   for (const c of t?.changed || []) if (c.status !== "deleted") add(c.path);
   const paths = [...seen];
-  let row = foot.nextElementSibling; if (!row?.classList.contains("pvcards")) row = null;
+  // The turn's row, wherever it is under its footer: the receipt line and the chips (.after010) go in right after the
+  // footer, so the row drawn at turn end was no longer next to it when the checkpoint came, and a second row was
+  // added (Sara: the PDF card twice). One turn, one row.
+  let row = null;
+  for (let n = foot.nextElementSibling; n && !n.classList.contains("turnfoot"); n = n.nextElementSibling) if (n.classList.contains("pvcards")) { row = n; break; }
   if (!paths.length || !root) { row?.remove(); return; }
   const shown = paths.slice(0, 6);
   if (row && row.dataset.k === shown.join("|")) return;

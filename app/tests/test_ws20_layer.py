@@ -258,16 +258,18 @@ def test_make_pdf_writes_the_named_file_in_the_project_folder(home, tmp_path):
     assert (proj / "out" / "q3.pdf").is_file()
 
 
-def test_unnamed_files_and_paths_outside_the_project_keep_the_outputs_folder(home, tmp_path):
+def test_unnamed_files_and_paths_outside_the_project_go_to_the_top_of_the_folder(home, tmp_path):
+    """Rescore: no "Meshpool outputs" folder of meshpool's own in the user's folder."""
     proj = tmp_path / "proj"
     OM.make_pdf("# a")
-    assert (proj / "Meshpool outputs" / "document.pdf").is_file()
+    assert (proj / "document.pdf").is_file()
     OM.make_document("# a", "document.docx")                           # the tool's own default name: not "named"
-    assert (proj / "Meshpool outputs" / "document.docx").is_file()
+    assert (proj / "document.docx").is_file()
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     OM.make_pdf("# a", str(elsewhere / "x.pdf"))
-    assert not (elsewhere / "x.pdf").exists() and (proj / "Meshpool outputs" / "x.pdf").is_file()
+    assert not (elsewhere / "x.pdf").exists() and (proj / "x.pdf").is_file()
+    assert not (proj / "Meshpool outputs").exists()
 
 
 def test_make_document_and_convert_name_their_output(home, tmp_path):
@@ -277,8 +279,8 @@ def test_make_document_and_convert_name_their_output(home, tmp_path):
     (proj / "notes.md").write_text("# N\n\nhello")
     OM.convert_document("notes.md", "pdf", output="notes-final.pdf")
     assert (proj / "notes-final.pdf").is_file()
-    OM.convert_document("notes.md", "pdf")                             # no name: the outputs folder, as before
-    assert (proj / "Meshpool outputs" / "notes.pdf").is_file()
+    OM.convert_document("notes.md", "pdf")                             # no name: beside it, under its own name
+    assert (proj / "notes.pdf").is_file() and not (proj / "Meshpool outputs").exists()
 
 
 # ---- Codex: a request to change a file gets the six file tools, not sixteen ----------------------------------------

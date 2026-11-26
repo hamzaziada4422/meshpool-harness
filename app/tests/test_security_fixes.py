@@ -115,7 +115,7 @@ def test_documents_survive_control_characters_long_names_and_other_scripts(tmp_p
     assert not bad, out
     out, bad = O.make_pdf("# Привет\n\n1. first\n2. second", "ع" * 200 + ".pdf")
     assert not bad, out
-    made = list(tmp_path.rglob("*.pdf"))   # a named file lands where asked (ws20), else in Meshpool outputs
+    made = list(tmp_path.rglob("*.pdf"))   # a named file lands where asked (ws20), else at the top of the folder
     assert made and len(made[0].name.encode()) <= 160
     reg, _ = O._pdf_font("Привет")
     assert reg != "Helvetica" or not any(__import__("pathlib").Path(p).exists() for p in
@@ -132,11 +132,11 @@ def test_conversions_never_replace_a_file(tmp_path, monkeypatch):
     for d in ("a", "b"):
         (tmp_path / d).mkdir()
         O.make_document(f"Version {d}", f"../{d}/report.docx")
-    docs = sorted((tmp_path / "Meshpool outputs").glob("report*.docx"))
+    docs = sorted(tmp_path.glob("report*.docx"))                   # outside the folder: its top, never replaced
     assert len(docs) == 2
     O.convert_document(str(docs[0]), "pdf")
     O.convert_document(str(docs[1]), "pdf")
-    assert len(list((tmp_path / "Meshpool outputs").glob("report*.pdf"))) == 2
+    assert len(list(tmp_path.glob("report*.pdf"))) == 2
 
 
 def test_office_jobs_get_their_own_folder_and_report_only_their_files(tmp_path):

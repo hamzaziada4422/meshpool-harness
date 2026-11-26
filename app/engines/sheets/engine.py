@@ -35,7 +35,9 @@ How you work:
 
 Workbook rules:
 - Raw data copied from an input file goes in as typed values in input style, never as formulas like =34; literal
-  dates, years and rates go in labelled input cells that formulas reference.
+  dates, years and rates go in labelled input cells that formulas reference. A large input (thousands of rows):
+  read it with pandas in one step and write it with B.table(ws, df) in one pass, never cell by cell; summarise it
+  with SUMIF / COUNTIF / AVERAGEIF formulas over its columns.
 - Structure (banker style): wb = B.banker_workbook(title, purpose, author, date) gives Cover -> Inputs -> Calc ->
   Outputs -> Checks with colored tabs and a linked tab map. Put middle tabs in that order; add tabs only when needed
   (e.g. Historicals/Model/DCF/Valuation inputs, or Comps/Precedents), passing middle=(...). Use B.section(ws, row, "Revenue build")
@@ -203,7 +205,9 @@ Do NOT read, grep or list Meshpool's engine or library source (those reads are r
 How you work:
 1. Inspect the input with one short script: sheet names, the header row, a few rows, row counts.
 2. Write ONE Python script with openpyxl (pandas to compute, if it helps) that loads the source, makes the change and
-   saves the result under the name the request gives (else "<source name> (edited).xlsx"). Run it.
+   saves the result under the name the request gives (else "<source name> (edited).xlsx"). Run it. Read a large
+   input with pandas in one step and write rows in one pass (ws.append, or B.table(ws, df) from
+   engines.sheets.builder), never cell by cell: 50,000 rows must take seconds.
 3. Run the checker: python -m engines.sheets.check <file.xlsx>. Fix what it reports and rerun until it prints PASS.
 4. Finish with a short answer (what changed and where) and list the .xlsx in artifacts.
 
@@ -216,9 +220,94 @@ Keep the source's structure unless the request asks otherwise:
   values."""
 
 
+TABLE_SYSTEM = f"""You build a simple Excel workbook: a list, a table or a simple summary, as asked.
+
+Work only in the current folder, which is your output folder: write every file there and run every command from there.
+Do NOT read, grep or list Meshpool's engine or library source (those reads are refused).
+
+How you work:
+1. Read any attached input with pandas in one step (pd.read_csv / pd.read_excel), never row by row.
+2. Write ONE Python script (build_workbook.py) and run it:
+     import sys; sys.path.insert(0, r"{ROOT}")
+     from engines.sheets import builder as B
+     wb = B.table_workbook("Price list")          # one sheet, named for what it holds; the file opens on it
+     B.table(wb.active, rows, columns=["Bouquet", "Size", "Price ($)"], formats={{"Price ($)": "usd2"}},
+             total={{"Price ($)": "sum"}})        # rows: a DataFrame or a list of row lists; total is optional
+     wb.save("bouquet_price_list.xlsx")
+   B.table writes the whole table in one step (50,000 rows take seconds): never write data cell by cell.
+3. Run the checker: python -m engines.sheets.check <file.xlsx>. Fix what it reports and rerun until it prints PASS.
+4. Finish with a short answer (what is in the file) and list the .xlsx in artifacts.
+
+The structure fits the request:
+- One sheet, with the header in row 1 and the data right under it. No Cover, Inputs, Calc, Outputs, Checks, notes or
+  legend tabs, no title rows above the header, no formula legend.
+- Exactly the columns the request asks for, in its order. No extra columns (no ranges, sources or notes columns).
+- At most one totals row under the data, when a total makes sense or is asked for, as live formulas (SUM, AVERAGE).
+  A value worked out from other cells is a live formula; the data itself is typed values.
+- Labels in plain words with units ("Price ($)", "Area (m²)"). Use a currency only when the request or the input
+  gives one.
+- A second sheet only when the request asks for one (a separate data sheet, a summary next to the data)."""
+
+
+_BANKER_TABS = re.compile(r"^(?:cover|inputs?|calc(?:ulations?)?|outputs?|checks?|legend|notes)$", re.I)
+
+
+def table_issues(path: str, request: str = "") -> list[dict]:
+    """A list, table or simple summary is one sheet with the data first: no model tabs, the header in row 1, and the
+    file opens on the data sheet. A second sheet only when the request asks for one."""
+    from openpyxl import load_workbook
+    wb = load_workbook(path)
+    issues = []
+    extra = [n for n in wb.sheetnames if _BANKER_TABS.match(n.strip())]
+    if extra and len(wb.sheetnames) > 1:
+        issues.append({"check": "table_structure", "cell": "", "detail": f"model tabs a list does not need: "
+                       f"{', '.join(extra)}. Put the data on one sheet (B.table_workbook, B.table)"})
+    elif len(wb.sheetnames) > 1 and not re.search(r"\b(?:sheets|tabs|data sheet|summary sheet|second sheet|"
+                                                  r"another sheet|separate sheet)\b", request or "", re.I):
+        issues.append({"check": "table_structure", "cell": "", "detail": f"{len(wb.sheetnames)} sheets "
+                       f"({', '.join(wb.sheetnames)}); the request asks for one. Keep only the data sheet"})
+    first = wb.worksheets[0]
+    if wb.active is not None and wb.active.title != first.title:
+        issues.append({"check": "table_structure", "cell": wb.active.title, "detail": "the file opens on "
+                       f"{wb.active.title!r}; make the data sheet the first sheet and the one it opens on "
+                       "(wb.active = 0)"})
+    got, _ = _header(first)
+    if got > 1:
+        issues.append({"check": "table_structure", "cell": f"{first.title}!A{got}", "detail": f"the header is in row "
+                       f"{got}; put it in row 1 with the data right under it (no title rows)"})
+    return issues
+
+
+def _table_check(artifacts, ws):
+    """The finish gate for a list, table or simple summary: the workbook opens and recalculates without errors and
+    has the plain structure (table_issues). No Cover, Checks, input-source or model rules: those are for models."""
+    from engines.sheets.qa import check
+    xl = [a for a in artifacts if a.endswith((".xlsx", ".xlsm"))]
+    if not xl:
+        return "ENGINE CHECK: list the produced .xlsx file in artifacts."
+    for a in xl:
+        p = a if os.path.isabs(a) else str(ws.root / a)
+        if not os.path.exists(p):
+            return f"ENGINE CHECK: artifact not found: {a}"
+        try:
+            issues = [i for i in check(p, allow_hardcoded=True)["issues"]
+                      if i["check"] not in ("no_formulas", "structure")]
+            issues += table_issues(p, os.environ.get("MH_SHEETS_REQUEST", ""))
+        except Exception as e:  # noqa: BLE001
+            return (f"ENGINE CHECK: {a} is not a valid .xlsx workbook ({type(e).__name__}: {e}). Save it with "
+                    "openpyxl (wb.save) as a real workbook, then finish again.")
+        if issues:
+            return "ENGINE CHECK: workbook check failed:\n" + "\n".join(
+                f"- {i['check']} {i['cell']}: {i['detail']}" for i in issues[:15])
+    return None
+
+
 def _job() -> tuple[str, list[str], set[str]]:
     """The job kind solve() set for this run and the checker it starts: ("derive", source files, parts the request
-    asks for) for an edit or derivation of an existing workbook, else ("build", [], set())."""
+    asks for) for an edit or derivation of an existing workbook, ("table", [], set()) for a list, table or simple
+    summary, else ("build", [], set())."""
+    if os.environ.get("MH_SHEETS_JOB") == "table":
+        return "table", [], set()
     if os.environ.get("MH_SHEETS_JOB") != "derive":
         return "build", [], set()
     return ("derive", [f for f in os.environ.get("MH_SHEETS_SOURCES", "").split(os.pathsep) if f],
@@ -362,6 +451,8 @@ def finish_check(answer, artifacts, ws, report=None):
     kind, sources, asks = _job()
     if kind == "derive":
         return _derive_check(artifacts, ws, sources, asks)
+    if kind == "table":
+        return _table_check(artifacts, ws)
     from engines.sheets.qa import check
     xl = [a for a in artifacts if a.endswith((".xlsx", ".xlsm"))]
     if not xl:
@@ -1126,17 +1217,21 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None
     ctx = {"task_id": task_id, "model": model, "profile": "deepseek", "role": "worker"}
     from engines import max_turns as _cap
     n = _cap(max_turns or int(os.environ.get("MH_SHEETS_MAX_TURNS", "50")))
-    from meshpool_harness.office_intent import asks_for, derive_job
+    from meshpool_harness.office_intent import asks_for, derive_job, table_job
     derive = derive_job(task, files, workdir)  # sort, filter, add a column ... on a workbook the user has
-    job_env = {"MH_SHEETS_JOB": "derive" if derive else "build",       # read by finish_check here and by the
+    # The plan the workbook follows: an edit keeps the source's sheets; a list, table or simple summary is one sheet
+    # with the data first; only a real model (forecast, budget with assumptions, scenarios) gets the model tabs.
+    kind = "derive" if derive else "table" if table_job(task) else "build"
+    job_env = {"MH_SHEETS_JOB": kind,         # read by finish_check here and by the
                # checker CLI, which runs in another folder: absolute paths
                "MH_SHEETS_SOURCES": os.pathsep.join(os.path.abspath(str(f)) for f in files or []) if derive else "",
-               "MH_SHEETS_ASKS": ",".join(sorted(asks_for(task))) if derive else ""}
+               "MH_SHEETS_ASKS": ",".join(sorted(asks_for(task))) if derive else "",
+               "MH_SHEETS_REQUEST": str(task).split("\n\nInput files")[0][:2000] if kind == "table" else ""}
     saved = {k: os.environ.get(k) for k in job_env}
     os.environ.update(job_env)
     try:
         return _solve(task, workdir, ws, client, model, task_id, ctx, n, derive, files, review, review_model,
-                      review_rounds)
+                      review_rounds, kind)
     finally:
         for k, v in saved.items():
             if v is None:
@@ -1146,25 +1241,27 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None
 
 
 def _solve(task, workdir, ws, client, model, task_id, ctx, n, derive, files, review, review_model,
-           review_rounds) -> dict:
+           review_rounds, kind: str = "") -> dict:
+    kind = kind or ("derive" if derive else "build")
+    simple = kind in ("derive", "table")      # no research, recipes or partner review: those are for models
     task = (f"{task}\n\nTurn budget: {n} turns (one turn = one reply with its tool calls). Save a first complete "
             f"workbook by about turn {max(2, int(0.4 * n))}, stop adding features by turn {max(2, int(0.8 * n))}, "
             f"and call finish before turn {n}; if the budget runs out first, the last saved workbook is checked and "
             "delivered as it is.")
-    if not derive:                            # research, recipes and the partner review are for models
+    if not simple:                            # research, recipes and the partner review are for models
         task += dossier_brief(task, workdir, client, model, task_id, files)
     rv = WorkbookReview(client, ws, n, model=review_model, max_rounds=review_rounds, task_id=task_id) \
-        if review_enabled(client, review) and not derive else None
+        if review_enabled(client, review) and not simple else None
     if rv:
         task += ("\n\nA bank MD and a strategy-firm senior partner review the workbook each time it passes the engine "
                  "checks; if they do not sign off, their issues come back to you to fix before you finish again.")
-    done = None if derive else _pipeline(task, ws, client, model, task_id, rv)
+    done = None if simple else _pipeline(task, ws, client, model, task_id, rv)
     if done is not None:                      # a known model shape: built in code from one call's sourced inputs
         return done
     crashed = False
     try:
         r = run(task, client=client, model=model, profile=None, ws=ws, ctx=ctx,
-                system_text=DERIVE_SYSTEM if derive else SYSTEM,
+                system_text={"derive": DERIVE_SYSTEM, "table": TABLE_SYSTEM}.get(kind, SYSTEM),
                 caps=Caps(max_turns=n), temperature=0.0, finish_check=rv.gate if rv else finish_check,
                 turn_hook=rv.hook if rv else turn_budget)
     except Exception as e:                     # noqa: BLE001 - e.g. a gateway 502 on turn 47 of a run whose

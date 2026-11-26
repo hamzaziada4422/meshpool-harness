@@ -255,10 +255,54 @@ def _details(run_id: str) -> list[str]:
     return out
 
 
+# What a kind of check looks at, in plain words for the line under the reply.
+_WHAT = {"workbook_rules": "the totals and formulas", "deck_rules": "the slide layout and text",
+         "office_structure": "that the file opens cleanly", "office_schema": "that the file opens cleanly"}
+# The failures that are a real problem in the user's file, by rule, in plain words. Every other failing rule (number
+# formats, colours, a frozen header, a checks tab, a slide's word count) stays in the details fold only: "27 of 36
+# checks passed" and "the checker flagged three things" read as failure to a non-technical user (Priya, Maya).
+_REAL = {"X0": "the file may not open cleanly in Excel", "X3": "the balance sheet does not balance",
+         "X4": "a total does not tie out", "X5": "some formulas show errors",
+         "X6": "a formula refers back to itself", "X13": "the file links to other workbooks or holds macros",
+         "X14": "a cost is added where it should be taken away",
+         "P0": "the file may not open cleanly in PowerPoint", "P1": "some slides did not draw",
+         "P5": "some text runs past the edge of its box", "P14": "a chart and its text do not agree"}
+_REAL_X12 = re.compile(r"integrity checks are FALSE|Master flag", re.I)   # the workbook's own checks fail
+
+
+def _problems(run_id: str, kinds: dict) -> list[str]:
+    """The real problems in the file, in plain words, each once."""
+    out: list[str] = []
+
+    def add(s):
+        if s not in out:
+            out.append(s)
+    for r in _rows(run_id):
+        if r.get("kind") != "detail":
+            continue
+        try:
+            d = json.loads(r.get("subject") or "{}")
+        except ValueError:
+            continue
+        for line in d.get("lines", []):
+            rule, _, msg = str(line).partition(":")
+            rule = rule.strip()
+            if rule in _REAL:
+                add(_REAL[rule])
+            elif rule == "X12" and _REAL_X12.search(msg):
+                add("some of the workbook's own checks fail")
+    for kind in ("office_structure", "office_schema"):
+        k = kinds.get(kind)
+        if k and k["badrow"] and not k["okrow"]:
+            add("the file may not open cleanly")
+    return out
+
+
 def summary(run_id: str) -> dict:
-    """{"line": "Checked the workbook: 16 of 20 checks passed. Checked the file opens and reads correctly.",
-    "items": [...], "details": [...], "failed": n}. The line says what was checked in plain words; "details" names the
-    checks that did not pass."""
+    """{"line": "Checked the totals and formulas, and that the file opens cleanly.", "items": [...], "details":
+    [...], "failed": n}. The line says what was checked in plain words and names only a real problem in the file
+    ("One thing to look at: some formulas show errors."); counts and the checks that did not pass stay in "items" and
+    "details", the details fold."""
     rows = _latest(_checked_rows(run_id))
     kinds: dict = {}
     for r in rows:                                     # same kind from several files: add their counts
@@ -272,22 +316,20 @@ def summary(run_id: str) -> dict:
         else:
             k["bad"] += int(n or 1)
             k["badrow"] = True
-    sents = []
+    what, sents = [], []
     for kind, k in sorted(kinds.items(), key=lambda kv: kv[0] not in _NOUN):      # what was checked in the file first
-        if kind in _NOUN:
-            total = k["ok"] + k["bad"]
-            noun = _NOUN[kind]
-            if not k["bad"]:
-                sents.append(f"Checked the {noun}: " + ("the 1 check passed" if total == 1 else f"all {total} checks passed"))
-            else:
-                sents.append(f"Checked the {noun}: {k['ok']} of {total} checks passed")
-        elif kind in _SAID:
-            if k["okrow"]:                            # a check that failed alone is in the items, not the line
-                sents.append("Checked " + _SAID[kind][0])
+        if kind in _WHAT:
+            if (k["okrow"] or kind in _NOUN) and _WHAT[kind] not in what:   # a structure check that failed alone
+                what.append(_WHAT[kind])                                       # is a problem below, not "checked"
         elif k["okrow"]:
             sents.append(f"Checked {_phrase(kind, k['label'], k['ok'] if k['okn'] else None)}"
                          + (f" ({k['bad']} did not hold up)" if k["bad"] else ""))
+    if what:
+        sents.insert(0, "Checked " + (what[0] if len(what) == 1 else ", ".join(what[:-1]) + ", and " + what[-1]))
     nbad = sum(k["bad"] for k in kinds.values())
+    probs = _problems(run_id, kinds) if nbad else []
+    if probs:
+        sents.append(("One thing to look at: " if len(probs) == 1 else "Things to look at: ") + "; ".join(probs))
     line = " ".join(x.rstrip(".") + "." for x in sents)
     return {"line": line, "items": [{"kind": r["kind"], "label": _row_text(r), "ok": r["ok"],
                                       "subject": r.get("subject", "")} for r in rows],
