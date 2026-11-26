@@ -448,3 +448,39 @@ def test_cpu12_a_javascript_edit_asks_node_once(tmp_path, monkeypatch):
     n = len(nodes)
     step("write_file", path="esm/m.js", content="export const a = 1;\n")
     assert len(nodes) == n + 2
+
+
+# ---------------------------------------------------------------------------------------------------- CPU-13
+def test_cpu13_session_panel_scans_each_tool_output_once(tmp_path, monkeypatch):
+    import threading
+    import types
+
+    from meshpool_harness.ui import workbench as W
+    root = tmp_path / "proj"
+    root.mkdir()
+    for n in ("a.md", "b.csv", "c.txt"):
+        (root / n).write_text("x")
+    s = types.SimpleNamespace(lock=threading.Lock(), events=[], epoch=1, cp=None)
+
+    def add(k):
+        s.events.append({"type": "tool_start", "name": "bash", "summary": "ls"})
+        s.events.append({"type": "tool_end", "ok": True, "output": f"step {k}\n" + "noise line\n" * 50
+                         + ("Wrote a.md\n" if k == 3 else "Saved b.csv\n" if k == 7 else "")})
+    scanned = [0]
+    real = W._OUT_RX
+
+    class Counting:
+        def finditer(self, text):
+            scanned[0] += 1
+            return real.finditer(text)
+    monkeypatch.setattr(W, "_OUT_RX", Counting())
+    for k in range(10):                                # ten panel refreshes while the chat runs, one step each
+        add(k)
+        W.session_outputs(s, root)
+    assert scanned[0] == 10, f"{scanned[0]} tool outputs scanned for 10 refreshes of a 10-step chat"
+    got = W.session_outputs(s, root)
+    assert got == W.outputs_from(list(s.events), [], root)
+    assert sorted(o["path"] for o in got) == ["a.md", "b.csv"]
+    s.events = [e for e in s.events if "Wrote" not in str(e.get("output"))]   # a rewind makes a new list
+    s.epoch += 1
+    assert [o["path"] for o in W.session_outputs(s, root)] == ["b.csv"]
