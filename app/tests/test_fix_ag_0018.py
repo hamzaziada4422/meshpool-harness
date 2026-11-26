@@ -343,3 +343,30 @@ def test_read_file_of_a_big_file_numbers_only_what_it_shows(tmp_path):
     assert mid.split("\n")[1:] == [f"{i:>5}  line {i} request handled status=200" for i in (20000, 20001, 20002)]
     small = ws.read_file("app.log", start=1, end=100)           # a range that fits is shown whole, as before
     assert "not shown" not in small and small.count("\n") == 100
+
+
+# AG-15: on Linux meshpool's data folder is ~/.local/share/meshpool, inside the sandbox's writable ~/.local, so a
+# sandboxed command could write meshpool.config (MH_SANDBOX=0), permissions.json or hooks.json and lift its own limits.
+def test_sandboxed_commands_cannot_write_meshpool_settings(tmp_path, monkeypatch):
+    import shutil
+    if not sys.platform.startswith("linux") or not shutil.which("bwrap"):
+        pytest.skip("bubblewrap is not installed")
+    home = tmp_path / "h"
+    data = home / ".local" / "share" / "meshpool"
+    (data / "runs" / "job").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("MESHPOOL_HOME", raising=False)
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.setenv("MH_SANDBOX", "1")
+    from meshpool_harness import config as C
+    assert C.home().resolve() == data.resolve()
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    ws = T.Workspace(str(proj), str(tmp_path / "out"))
+    out = ws.bash(f"echo MH_SANDBOX=0 >> '{data}/meshpool.config'; echo '{{}}' > '{data}/hooks.json'; "
+                  f"echo hi > ok.txt; echo x > '{home}/.local/other.txt'")
+    assert not (data / "meshpool.config").exists() and not (data / "hooks.json").exists(), out
+    assert (proj / "ok.txt").exists() and (home / ".local" / "other.txt").exists()   # the rest still works
+    job = T.Workspace(str(data / "runs" / "job"), str(tmp_path / "out2"))    # an engine's folder in the data folder
+    job.bash("echo hi > result.txt")
+    assert (data / "runs" / "job" / "result.txt").exists()
