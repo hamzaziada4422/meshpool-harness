@@ -837,11 +837,20 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                     if not 0 <= i < len(prs.slides):
                         errors.append(f"no slide {i + 1}: the deck has {len(prs.slides)}")
                         continue
-                    prs.slides[i].notes_slide.notes_text_frame.text = _notes_text(o.get("text", ""))
+                    text = _notes_text(o.get("text", ""))
+                    if not text:                             # never "notes set" over notes wiped to nothing
+                        errors.append(f"notes not set on slide {i + 1}: "
+                                      + ("the text held only [QA] check lines" if str(o.get("text") or "").strip()
+                                         else "no text was given") + "; its notes are unchanged")
+                        continue
+                    prs.slides[i].notes_slide.notes_text_frame.text = text
                     done.append(f"notes set on slide {i + 1}")
                 else:
                     errors.append(f"unknown op {op!r} (replace_text, set_notes)")
             prs.save(str(part))
+        if errors and not done:                              # nothing was done: no file is written, none is claimed
+            part.unlink(missing_ok=True)
+            return f"Did not change {p.name}: nothing was done.\nNot done: " + "; ".join(errors), True
         if out == p:
             shutil.copymode(p, part)                         # in place: the file keeps its permissions
         os.replace(part, out)
@@ -1000,15 +1009,14 @@ def _tracked(paragraphs, op: str, find: str, new: str, author: str, mine: set | 
     return False
 
 
+_QA_LINE = re.compile(r"(?im)^[ \t]*\[QA\b[^\]\n]*\].*(?:\n|$)")
+
+
 def _notes_text(text) -> str:
-    """Speaker notes as presenter prose only (engines/forge/notes.py): no check markers, ids or JSON."""
-    try:
-        if str(APP) not in sys.path:
-            sys.path.insert(0, str(APP))
-        from engines.forge.notes import clean
-        return clean(text, punctuate=False)
-    except Exception:  # noqa: BLE001 - engines not shipped: the text as given
-        return str(text or "")
+    """Speaker notes the user asked for, as they wrote them: only [QA] check lines come out. The engine's cleaner
+    (engines/forge/notes.py clean) is for notes the engine wrote; on the user's own words it dropped whole sentences
+    ("Thank the engine team." became "", and the notes were wiped while the tool said "notes set")."""
+    return _QA_LINE.sub("", str(text or "")).strip()
 
 
 def _docx_paragraphs(doc):
