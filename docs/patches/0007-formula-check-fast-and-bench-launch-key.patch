@@ -1,0 +1,169 @@
+From f70ea3cae408f80f4e866ebae9d90c41f8e588fb Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 16:06:00 +0000
+Subject: [PATCH] Formula check runs LibreOffice only for changed formulas, one
+ minute in all; the bench client uses the launch key
+
+- _formula_result_miss reads formulas with openpyxl first; LibreOffice runs only for a workbook written this turn
+  whose formulas differ from the input's, the originals only when the request says its formula is wrong, at most 3
+  outputs, under one 60 s deadline (was up to 6 conversions of 90 s each). Replayed on 228 saved SpreadsheetBench
+  runs: the same 7 failures flagged, no passing run; median 0.008 s, max 2.2 s per answer.
+- testkit/bench3: since 1e954486 the page carries the API token only with the launch key the app prints, so every
+  Meshpool app-arm run failed to start ("app server did not start", 0 calls). The client reads the key from the log.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pf4xaMqQSJYs9jXfPpQcsK
+---
+ app/meshpool_harness/agent/core.py     | 66 ++++++++++++++++++--------
+ app/tests/test_formula_result_check.py |  7 +++
+ testkit/bench3/arms.py                 | 10 ++--
+ 3 files changed, 59 insertions(+), 24 deletions(-)
+
+diff --git a/app/meshpool_harness/agent/core.py b/app/meshpool_harness/agent/core.py
+index b836aad4..c3d358ec 100644
+--- a/app/meshpool_harness/agent/core.py
++++ b/app/meshpool_harness/agent/core.py
+@@ -1349,7 +1349,25 @@ _SAYS_WRONG = (r"\b(?:incorrect|wrong|not work\w*|doesn'?t work|does not work|is
+                r"not (?:giving|returning|showing|calculating)|fix(?:ed)?|error|broken)\b")
+ 
+ 
+-def _recalc_formulas(path, tmp: str) -> dict | None:
++def _formulas(path) -> dict:
++    """{(sheet, cell): formula text} of a workbook, read without LibreOffice; {} when it cannot be read."""
++    try:
++        import openpyxl
++        wb = openpyxl.load_workbook(path)
++    except Exception:  # noqa: BLE001
++        return {}
++    forms = {}
++    for ws in wb.worksheets:
++        for row in ws.iter_rows():
++            for c in row:
++                v = c.value
++                t = getattr(v, "text", v)                  # an array formula keeps its text in .text
++                if isinstance(t, str) and t.startswith("="):
++                    forms[(ws.title, c.coordinate)] = t
++    return forms
++
++
++def _recalc_formulas(path, tmp: str, forms: dict | None = None, timeout: float = 30) -> dict | None:
+     """{(sheet, cell): (formula text, value after a LibreOffice recalculation)} for every formula cell of a workbook;
+     None when it cannot be done here (no LibreOffice, no openpyxl, a timeout)."""
+     try:
+@@ -1362,15 +1380,7 @@ def _recalc_formulas(path, tmp: str) -> dict | None:
+     if not exe:
+         return None
+     try:
+-        wb = openpyxl.load_workbook(path)
+-        forms = {}
+-        for ws in wb.worksheets:
+-            for row in ws.iter_rows():
+-                for c in row:
+-                    v = c.value
+-                    t = getattr(v, "text", v)              # an array formula keeps its text in .text
+-                    if isinstance(t, str) and t.startswith("="):
+-                        forms[(ws.title, c.coordinate)] = t
++        forms = _formulas(path) if forms is None else forms
+         if not forms or len(forms) > 5000:
+             return {} if not forms else None
+         out = Path(tmp) / Path(path).parent.name
+@@ -1378,7 +1388,7 @@ def _recalc_formulas(path, tmp: str) -> dict | None:
+         kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
+         prof = Path(tmp) / "lo-profile"                   # its own profile: never blocked by a LibreOffice already open
+         subprocess.run([exe, f"-env:UserInstallation={prof.as_uri()}", "--headless", "--calc", "--convert-to", "xlsx",
+-                        "--outdir", str(out), str(path)], capture_output=True, timeout=90, **kw)
++                        "--outdir", str(out), str(path)], capture_output=True, timeout=max(1, timeout), **kw)
+         made = out / Path(path).name
+         if not made.is_file():
+             return None
+@@ -1404,20 +1414,34 @@ def _formula_result_miss(asked: str, root, since: float) -> str:
+                   if (Path(root) / n).is_file() and (Path(root) / n).stat().st_mtime < since]
+         says_wrong = bool(re.search(_SAYS_WRONG, text, re.I))
+         errors, same = [], []
++        old_forms = {}
++        for f in inputs[:2]:
++            old_forms.update(_formulas(f))
++        changed = []                                      # read the formulas first: LibreOffice runs only for a
++        for f in outs:                                    # workbook whose formulas this turn wrote or changed
++            if f in inputs:
++                continue
++            fo = _formulas(f)
++            if any(old_forms.get(k, "").replace(" ", "") != v.replace(" ", "") for k, v in fo.items()):
++                changed.append((f, fo))
++        if not changed:
++            return ""
++        deadline = time.time() + 60                       # the whole check, however many workbooks: one minute
+         with tempfile.TemporaryDirectory() as tmp:
+             base = {}
+-            for i, f in enumerate(inputs[:2]):
+-                r = _recalc_formulas(f, str(Path(tmp) / f"in{i}"))
+-                if r:
+-                    base.update(r)
+-            for i, f in enumerate(outs):
+-                if f in inputs:
+-                    continue
+-                got = _recalc_formulas(f, str(Path(tmp) / f"out{i}"))
++            if says_wrong:                                # the originals' results matter only for "same as wrong"
++                for i, f in enumerate(inputs[:2]):
++                    r = _recalc_formulas(f, str(Path(tmp) / f"in{i}"), timeout=deadline - time.time())
++                    if r:
++                        base.update(r)
++            for i, (f, fo) in enumerate(changed[:3]):
++                if time.time() >= deadline:
++                    break
++                got = _recalc_formulas(f, str(Path(tmp) / f"out{i}"), fo, timeout=deadline - time.time())
+                 for k, (form, val) in (got or {}).items():
+-                    old = base.get(k)
+-                    if old is not None and old[0].replace(" ", "") == form.replace(" ", ""):
++                    if old_forms.get(k, "").replace(" ", "") == form.replace(" ", ""):
+                         continue                          # a formula the turn left alone is not its doing
++                    old = base.get(k)
+                     if isinstance(val, str) and val.strip() in _XL_ERRORS:
+                         errors.append(f"{f.name} {k[0]}!{k[1]} = {val.strip()}")
+                     elif says_wrong and old is not None and val is not None and val == old[1]:
+diff --git a/app/tests/test_formula_result_check.py b/app/tests/test_formula_result_check.py
+index 46ecfda9..f0768aae 100644
+--- a/app/tests/test_formula_result_check.py
++++ b/app/tests/test_formula_result_check.py
+@@ -58,3 +58,10 @@ def test_a_real_fix_passes(tmp_path):
+ 
+ def test_untouched_formulas_are_not_judged(tmp_path):
+     assert _turn(tmp_path, OLD) == ""
++
++
++def test_no_libreoffice_run_when_no_formula_changed(tmp_path, monkeypatch):
++    calls = []
++    real = C._recalc_formulas
++    monkeypatch.setattr(C, "_recalc_formulas", lambda *a, **k: calls.append(a) or real(*a, **k))
++    assert _turn(tmp_path, OLD) == "" and calls == []
+diff --git a/testkit/bench3/arms.py b/testkit/bench3/arms.py
+index 5a6e721c..45e5e14e 100644
+--- a/testkit/bench3/arms.py
++++ b/testkit/bench3/arms.py
+@@ -207,8 +207,12 @@ def run_mp_cli(*, prompt, workdir, home, base_url, model, timeout, log, mp_src="
+     return r
+ 
+ 
+-def _client(base: str):
+-    tok = re.search(r'token: "([^"]+)"', urllib.request.urlopen(base + "/", timeout=30).read().decode()).group(1)
++def _client(base: str, log=None):
++    # the page carries the API token only for the app's own window: the launch key the app prints when it starts
++    # (1e954486). Without that line yet, raise: the caller retries until the server is up.
++    key = re.search(r"/\?k=([\w-]+)", _tail(log, 20000)) if log else None
++    url = base + "/" + (f"?k={key.group(1)}" if key else "")
++    tok = re.search(r'token: "([^"]+)"', urllib.request.urlopen(url, timeout=30).read().decode()).group(1)
+ 
+     def call(path, body=None, timeout=120):
+         req = urllib.request.Request(base + path, data=None if body is None else json.dumps(body).encode(),
+@@ -268,7 +272,7 @@ def _run_mp_app(harness, kind, *, prompt, workdir, home, base_url, model, timeou
+             if p.poll() is not None:
+                 break
+             try:
+-                c = _client(base)
++                c = _client(base, log)
+                 break
+             except Exception:  # noqa: BLE001
+                 time.sleep(0.5)
+-- 
+2.43.0
+

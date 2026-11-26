@@ -1,0 +1,162 @@
+From d1d706eb970940a0e7fef64f5c225e2d7b26005e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 15:07:52 +0000
+Subject: [PATCH] Office direct: named years stay literal; a TODAY()/NOW()
+ formula the request did not ask for is caught before the answer
+
+SpreadsheetBench sb-39515 (f133d912, 6 reps): the harness tells the model today's date (2026), and 3 reps wrote
+YEAR(TODAY())-1 for "the previous year (2022)": all 3 failed; the 3 that kept 2022/2023 passed. The direct edit
+note and OFFICE_DIRECT_RULE now say to keep named years, dates and labels literal; _volatile_date_miss flags a
+workbook written this turn whose formulas call TODAY()/NOW() when the request does not ask for the current date
+(a request that names a year always counts). Replayed on all 102 office runs of f133d912: fires on exactly the 3
+failures, 0 on passing runs. tests/test_volatile_date_check.py.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: <redacted>
+---
+ app/meshpool_harness/agent/core.py    | 47 ++++++++++++++++++++++++++-
+ app/meshpool_harness/capabilities.py  |  4 ++-
+ app/tests/test_volatile_date_check.py | 44 +++++++++++++++++++++++++
+ 3 files changed, 93 insertions(+), 2 deletions(-)
+ create mode 100644 app/tests/test_volatile_date_check.py
+
+diff --git a/app/meshpool_harness/agent/core.py b/app/meshpool_harness/agent/core.py
+index 623af896..413a8c75 100644
+--- a/app/meshpool_harness/agent/core.py
++++ b/app/meshpool_harness/agent/core.py
+@@ -103,6 +103,8 @@ OFFICE_DIRECT_RULE = ("- For an office-file job (edit or derive from an existing
+                       "yourself in one Python script with python-docx, openpyxl or python-pptx, keeping the source's "
+                       "sheets, layout and styles unless asked otherwise; save it, then reopen the file to check what "
+                       "the request asks for (a formula change is checked by reading the formula text, not by recalculating; "
++                      "a year, date or label the request names stays a literal value in the formula, never TODAY(), "
++                      "NOW() or YEAR(TODAY()); "
+                       "recalculate through LibreOffice only when the request asks for computed values). When that check disagrees with the request (a failed "
+                       "assertion, the same result for different inputs, a row the rule matches still there), the file "
+                       "is wrong: fix the file, not the check, and apply the user's rule to every row it matches. "
+@@ -1230,6 +1232,48 @@ def _off_slide_miss(root, since: float) -> str:
+             "check again.")
+ 
+ 
++_NOW_WORDS = re.compile(r"\b(?:today|now|current\s+(?:date|day|month|year|time)|this\s+(?:year|month)|"
++                        r"as\s+of\s+(?:today|now)|live\s+date|dynamic)\b", re.I)
++_VOLATILE = re.compile(r"\b(?:TODAY|NOW)\s*\(", re.I)
++
++
++def _volatile_date_miss(asked: str, root, since: float) -> str:
++    """A workbook written this turn whose formulas call TODAY() or NOW() when the request never asks for the current
++    date: as a note; else "". The harness tells the model today's date, and a formula built on it drifts from the
++    years the request names. SpreadsheetBench sb-39515 (f133d912, 6 reps): 3 reps wrote YEAR(TODAY())-1 for "the
++    previous year (2022)", which is 2025 on the day of the run, and all 3 failed; the 3 that kept 2022/2023 passed."""
++    from meshpool_harness.capabilities import SEP as _SEP
++    text = str(asked or "").split(_SEP)[0]
++    if _NOW_WORDS.search(text) and not re.search(r"\b(?:19|20)\d{2}\b", text):
++        return ""                              # "today's date": asked for; a named year ("the current year (2023)") wins
++    hits = []
++    try:
++        import openpyxl
++        for f in Path(root).rglob("*.xlsx"):
++            if "Meshpool outputs" in f.parts or f.name.startswith("~$") or f.stat().st_mtime < since:
++                continue
++            wb = openpyxl.load_workbook(f, read_only=True)
++            try:
++                for ws in wb.worksheets:
++                    for row in ws.iter_rows():
++                        for c in row:
++                            v = getattr(c, "value", None)
++                            if isinstance(v, str) and v.startswith("=") and _VOLATILE.search(v):
++                                hits.append(f"{f.name}!{ws.title}!{c.coordinate}")
++                                break
++                        if hits and hits[-1].startswith(f.name + "!" + ws.title):
++                            break
++            finally:
++                wb.close()
++    except Exception:  # noqa: BLE001 - a check never breaks the answer
++        return ""
++    if not hits:
++        return ""
++    return ("The job is not done: " + ", ".join(hits[:3]) + " use TODAY() or NOW(), but the request never asks for the "
++            "current date. Put the years, dates and labels the request names into the formula as literal values "
++            "(for example 2022, not YEAR(TODAY())-1), save, and check again.")
++
++
+ def _unchanged_output_miss(asked: str, root, since: float) -> str:
+     """An edit request whose workbook output, written this turn, holds the same cell values as the input it names:
+     as a note; else "". SpreadsheetBench sb-374-31 (4 runs, 0 passes): it read "blank rows above Code" as rows blank
+@@ -2358,7 +2402,8 @@ class Agent:
+                                            ("total", lambda: _total_row_miss(ask, self.root, t0)),
+                                            ("template", lambda: _template_format_miss(ask, self.root, t0)),
+                                            ("offslide", lambda: _off_slide_miss(self.root, t0)),
+-                                           ("unchanged", lambda: _unchanged_output_miss(ask, self.root, t0))):
++                                           ("unchanged", lambda: _unchanged_output_miss(ask, self.root, t0)),
++                                           ("volatile", lambda: _volatile_date_miss(ask, self.root, t0))):
+                             if key not in done:
+                                 miss = check()
+                                 if miss:
+diff --git a/app/meshpool_harness/capabilities.py b/app/meshpool_harness/capabilities.py
+index 86db4e7d..15ca465d 100644
+--- a/app/meshpool_harness/capabilities.py
++++ b/app/meshpool_harness/capabilities.py
+@@ -123,7 +123,9 @@ EDIT_NOTE = (SEP + "[Meshpool] To change a file that exists, use edit_office_fil
+ # on 38f57ffb, sb-374-31 got EDIT_NOTE, which named tools the turn did not have.
+ EDIT_NOTE_DIRECT = (SEP + "[Meshpool] Change the existing file in place with openpyxl, python-docx or python-pptx, "
+                     "keeping its sheets, styles and formulas, and do exactly what was asked to every row or cell it "
+-                    "applies to. Check a formula change by reading the formula text; do not recalculate unless the "
++                    "applies to. Keep the years, dates and labels the request names as literal values in formulas: "
++                    "never put TODAY(), NOW() or YEAR(TODAY()) in place of a year it states. "
++                    "Check a formula change by reading the formula text; do not recalculate unless the "
+                     "request asks for computed values. For Word tracked changes or comments, use edit_office_file "
+                     "(tracked_replace, tracked_delete, tracked_insert_after, comments): it writes real revisions. "
+                     "Do not rebuild the file.")
+diff --git a/app/tests/test_volatile_date_check.py b/app/tests/test_volatile_date_check.py
+new file mode 100644
+index 00000000..9996530c
+--- /dev/null
++++ b/app/tests/test_volatile_date_check.py
+@@ -0,0 +1,44 @@
++"""Office direct: a formula that swaps a year the request names for TODAY()/NOW() is caught before the answer
++(SpreadsheetBench sb-39515, f133d912: 3 of 6 reps wrote YEAR(TODAY())-1 for "the previous year (2022)" and failed)."""
++import openpyxl
++
++from meshpool_harness import capabilities as CAP
++from meshpool_harness.agent import core as C
++
++ASK = ("The current formula only extracts the value for the current year (2023), but I need it to extract the value "
++       "for January of the previous year (2022) for all rows of that year.")
++
++
++def _book(path, formula):
++    wb = openpyxl.Workbook()
++    ws = wb.active
++    ws["A1"], ws["B1"], ws["O2"] = "Mar", 2023, formula
++    wb.save(path)
++
++
++def test_today_in_place_of_a_named_year_is_caught(tmp_path):
++    _book(tmp_path / "out.xlsx", '=INDEX($C2:$N2,MATCH(IF($B2=YEAR(TODAY())-1,"Jan",$A2),$C$1:$N$1,0))')
++    msg = C._volatile_date_miss(ASK, tmp_path, 0)
++    assert "out.xlsx" in msg and "literal" in msg
++
++
++def test_literal_years_pass(tmp_path):
++    _book(tmp_path / "out.xlsx", '=INDEX($C2:$N2,IF($B2=2022,1,MATCH($A2,$C$1:$N$1,0)))')
++    assert C._volatile_date_miss(ASK, tmp_path, 0) == ""
++
++
++def test_a_request_for_todays_date_may_use_today(tmp_path):
++    _book(tmp_path / "out.xlsx", "=TODAY()")
++    assert C._volatile_date_miss("Add a column that shows today's date next to each row", tmp_path, 0) == ""
++
++
++def test_files_older_than_the_turn_are_ignored(tmp_path):
++    _book(tmp_path / "in.xlsx", "=NOW()")
++    import os
++    os.utime(tmp_path / "in.xlsx", (1, 1))
++    assert C._volatile_date_miss(ASK, tmp_path, 10) == ""
++
++
++def test_the_notes_say_to_keep_named_years_literal():
++    assert "TODAY()" in CAP.EDIT_NOTE_DIRECT and "literal" in CAP.EDIT_NOTE_DIRECT
++    assert "TODAY()" in C.OFFICE_DIRECT_RULE
+-- 
+2.43.0
+
