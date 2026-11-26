@@ -482,7 +482,7 @@ function browseFolder(start) {
 /* ================================== composer ================================== */
 function setupComposer() {
   const inp = $("#input");
-  inp.addEventListener("input", () => { try { sessionStorage.setItem("mp_draft_" + (S.cur?.id || "new"), inp.value); } catch (e) {} });
+  inp.addEventListener("input", () => { try { sessionStorage.setItem(draftKey(), inp.value); } catch (e) {} });
   inp.addEventListener("input", () => { clearTimeout(S.suggT); S.suggT = setTimeout(suggestNow, 450); });
   inp.addEventListener("input", () => { fitInput(inp); menuFromInput(); const ib = $("#intrBtn"); if (ib && !S.stopping) ib.disabled = !inp.value.trim() && !S.attachments.length; });
   inp.addEventListener("keydown", e => {
@@ -567,7 +567,7 @@ async function stopNow() {
   wait();
 }
 async function sendNow(interrupt) {
-  try { sessionStorage.removeItem("mp_draft_" + (S.cur?.id || "new")); } catch (e) {}
+  try { sessionStorage.removeItem(draftKey()); } catch (e) {}
   const inp = $("#input"); let text = inp.value.trim(); const typed = text;
   if (!text && !S.attachments.length) return;
   S.recall = null; rememberSent(typed);
@@ -919,8 +919,12 @@ function modelPop(anchor) {
   $("#mManage").onclick = () => { closePop(); openSettings("general"); };
 }
 /* ================================== threads ================================== */
+// One key per place the box belongs to: a chat, a project's page, or the new-chat home. Saving and restoring used two
+// different rules, so a draft typed on a project's page was saved as the new-chat draft: it showed up in New chat and
+// was gone from the project.
+function draftKey() { return "mp_draft_" + (S.cur?.id || (S.view === "project" && S.pjId ? "pj_" + S.pjId : "new")); }
 function restoreDraft() {
-  let v = ""; try { v = sessionStorage.getItem("mp_draft_" + (S.cur?.id || (S.view === "project" ? "pj_" + S.pjId : "new"))) || ""; } catch (e) {}
+  let v = ""; try { v = sessionStorage.getItem(draftKey()) || ""; } catch (e) {}
   const inp = $("#input"); if (inp && v && !inp.value) { inp.value = v; inp.dispatchEvent(new Event("input")); }
 }
 // A new chat. Without an argument: a plain chat that needs no folder. With a folder path (old scripts): a chat in that
