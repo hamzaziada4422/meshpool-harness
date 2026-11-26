@@ -26,6 +26,16 @@ def _read(p: Path) -> dict:
         return {}
 
 
+def _answers(port) -> bool:
+    """Is a server listening on 127.0.0.1:port? A crash can leave a lock whose pid was reused by an unrelated process."""
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=1.0):
+            return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def claim() -> dict | None:
     """Take the lock for this process. None when it is ours; else the live server's lock ({pid, port}) that holds it."""
     p = lock_path()
@@ -46,7 +56,9 @@ def claim() -> dict | None:
                             break
                     if not _pid_alive(pid):
                         continue
-                return cur
+                if not cur.get("port") or _answers(cur["port"]):
+                    return cur
+                # the pid lives but nothing answers on its port: a crash, and the pid now belongs to something else
             try:                                              # a crash left it, or it is ours from before: take over
                 p.unlink()
             except FileNotFoundError:

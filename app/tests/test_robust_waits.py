@@ -339,3 +339,17 @@ def test_the_server_says_whether_a_model_request_is_in_flight(page, stuck):
     page.click("#waitNote [data-retry]")
     assert _until(lambda: stuck["n"]() >= 2, 60), "Try again did not send the message again"
     assert page.errors == [], page.errors
+
+
+def test_a_lock_whose_pid_was_reused_but_whose_port_is_dead_is_taken_over(tmp_path, monkeypatch):
+    """Release review: after a crash, an unrelated process can get the old pid. If the lock's port does not answer, the
+    lock is stale and taken over, instead of refusing until that process ends."""
+    import json, os, socket
+    from meshpool_harness.ui import instance as I
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path))
+    s = socket.socket(); s.bind(("127.0.0.1", 0)); dead = s.getsockname()[1]; s.close()     # a port nothing listens on
+    parent = os.getppid()                                                                   # alive, not us
+    (tmp_path / "ui.lock").write_text(json.dumps({"pid": parent, "port": dead}))
+    assert I.claim() is None
+    assert json.loads((tmp_path / "ui.lock").read_text())["pid"] == os.getpid()
+    I.release()
