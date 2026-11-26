@@ -40,7 +40,8 @@ independent persona reviewer (PR). The feature rows, UXR-01 and PR-01, count as 
 | Fixes from the review step's live check (VF) | 5 | 5 | 0 |
 | Review step polish (LP2) | 6 | 6 | 2 |
 | Independent persona reviewer (PR) | 5 | 5 | 1 |
-| all | 281 | 279 | 21 |
+| Layout jumps (JT) | 6 | 6 | 0 |
+| all | 287 | 285 | 21 |
 
 "Still open" counts what the "Found, not fixed" section lists today: two questions for the owner and nineteen known
 limits and open bugs, all open for 0.0.19. What the first pass found but left was fixed in the later pass.
@@ -500,6 +501,20 @@ shim) is not counted.
 | PR-03 | agent/lookreview.py | A reply the tolerant reader could not parse sent the whole review back to measured only. | One retry in a fresh context that shows the reviewer its own reply and asks for only the JSON object. The retry is counted in the turn's usage. Only a second failure falls back. | test_a_reply_only_the_retry_fixes_is_retried_once_in_a_fresh_context_and_counted, test_a_reply_the_retry_cannot_fix_falls_back_after_one_retry, test_a_reply_the_tolerant_parser_reads_needs_no_retry, test_a_failing_reviewer_call_falls_back_too | fixed |
 | PR-04 | agent/lookreview.py | A "look at" action that names a section by its heading ("Hours") looked for a link or button with that name, so the section was not found. | look_at finds a section by its heading first, then by the old lookup. | test_look_at_a_section_name_finds_the_section_not_the_nav_link_to_it | fixed |
 | PR-05 | agent/lookreview.py | The Checked line carried the reviewer's whole sentences, cut in the middle of a word at 90 characters, with the reason after a comma ("..., so a keyboard user cannot see where they are"). | The reviewer is asked for each problem as a short phrase. The line keeps the thing and leaves out the why, and a long phrase ends on a word. | test_problem_phrases_in_the_checked_line_are_short_and_end_on_a_word | fixed |
+
+## Layout jumps (app/tests/test_jitter018.py)
+
+Measured with a layout-shift observer in the real app after the design pass. The owner's main complaint was that the
+app felt shaky; these were the jumps left.
+
+| ID | Where | What was wrong | Fix | Test | Status |
+|---|---|---|---|---|---|
+| JT-01 | ui/app.js flipLayout, fitPanel | Opening or closing the side panel or the sidebar snapped the chat to its new width: layout shift 0.175 to 0.226 at 1280 and up to 0.33 at 1024. | The layout changes in one frame, then the chat glides from its old place by transform (200 ms, one easing, off with reduced motion). Below 1366 px the sidebar folds while the panel is open, so the chat keeps its width. Now at most 0.0043. | test_the_chat_does_not_jump (1280, 1024) and the column-width and reduced-motion tests | fixed |
+| JT-02 | ui/app.css .settle, index.html | Opening a chat shifted the layout by 0.038 to 0.050: the newest messages lost their containment while settling, and bold and code fonts swapped in late. | The settling messages keep their containment, and the two fonts are preloaded. Now 0.0025 or less. | test_opening_a_chat_shifts_the_layout_by_0_01_or_less | fixed |
+| JT-03 | ui/shell.css, shell.js | In Code mode at 1024 px the seven panel tabs wrapped to two or three rows, and the Changes select was cut ("All changes in t"). | One row that scrolls sideways, with the open tab brought into view; the select reads "All changes" and ellipsizes, with the full text as a title. | test_the_panel_tabs_are_one_row_without_cut_text, test_the_open_tab_is_brought_into_view | fixed |
+| JT-04 | ui/app.css .notedet.fold | The "First answer, before the check" fold was louder than the notes around it (ink, underlined) and its opened text was small (12 px). | A quiet note-size summary with a chevron; the opened reply reads at reply size. | test_the_review_fold_is_a_quiet_note | fixed |
+| JT-05 | ui/app.css (dark) | The dark settings dialog barely stood off its dimmed page (1.03 times as light). | The dialog uses the surface step and its side list the page colour: at least 1.1. | test_the_dark_settings_modal_stands_off_its_scrim | fixed |
+| JT-06 | ui/app.js onboarding, app.css .onb-body | Onboarding step 3's Start button sat far below the fold (y 1473 in an 800 px window). | Each step's fields scroll inside the card and the button row stays under them, never covering a field. | test_onboarding_step_3_buttons_are_reachable_without_scrolling_and_cover_no_field, test_onboarding_steps_2_and_3_are_readable_in_both_themes | fixed |
 
 ## Persona testing
 
