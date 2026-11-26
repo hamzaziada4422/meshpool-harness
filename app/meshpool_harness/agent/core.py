@@ -1799,6 +1799,52 @@ def _norm_text(t: str) -> str:
     return " ".join(t.lower().split())
 
 
+def _pptx_orphan_slides(path) -> list:
+    """Slides inside a .pptx that its slide list no longer shows: (part name, first text) for each. Removing a slide's
+    entry from presentation.xml's sldIdLst hides it, but the slide (its text, notes and pictures) stays in the file
+    until its relationship is dropped too."""
+    import zipfile
+    from xml.etree import ElementTree as ET
+    p_ns = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+    r_ns = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = set(z.namelist())
+            pres = ET.fromstring(z.read("ppt/presentation.xml"))
+            rels = ET.fromstring(z.read("ppt/_rels/presentation.xml.rels"))
+            target = {r.get("Id"): r.get("Target", "") for r in rels}
+            listed = set()
+            for sid in pres.iter(p_ns + "sldId"):
+                t = target.get(sid.get(r_ns + "id"), "")
+                listed.add("ppt/" + t.lstrip("/").removeprefix("ppt/") if not t.startswith("/") else t.lstrip("/"))
+            out = []
+            for n in sorted(names):
+                if re.fullmatch(r"ppt/slides/slide\d+\.xml", n) and n not in listed:
+                    texts = [e.text for e in ET.fromstring(z.read(n)).iter() if e.tag.endswith("}t") and e.text]
+                    out.append((n, " ".join(texts)[:60]))
+            return out
+    except Exception:  # noqa: BLE001 - not a deck we can read: no note
+        return []
+
+
+def _pptx_orphan_slides_miss(root, since: float) -> str:
+    """Decks written this turn that still carry slides their slide list no longer shows: a note, else "". Live deck
+    check for 0.0.18 (deck_reorder): asked to delete a "DRAFT - do not present" slide, Meshpool (2 of 3 runs) and
+    Codex (3 of 3) removed it from the list only; PowerPoint does not show it, but its text stays in the file the user
+    sends on."""
+    for f in _recent_office(root, since, ".pptx"):
+        if not str(f).lower().endswith(".pptx"):
+            continue
+        orphans = _pptx_orphan_slides(f)
+        if orphans:
+            shown = "; ".join(f"{n.rsplit('/', 1)[-1]}" + (f' ("{t}")' if t else "") for n, t in orphans[:3])
+            return (f"{f.name} still contains {len(orphans)} slide(s) that are no longer in its slide list: {shown}. "
+                    "PowerPoint hides them, but their text, notes and pictures are still inside the file. If they "
+                    "were meant to be deleted, also drop each one's relationship (python-pptx: "
+                    "prs.part.drop_rel(sldId.rId) before removing the sldId), save, and check the file again.")
+    return ""
+
+
 def _docx_hidden_text_miss(asked: str, root, since: float) -> str:
     """A text file the request names, whose text a Word document written this turn does not show: as a note; else "".
     Two ways it goes missing, both from OfficeBench ob-1-15-2 ("Retrieve reference text from reference.txt and add it
@@ -3286,6 +3332,14 @@ class Agent:
                         miss = _docx_hidden_text_miss(getattr(self, "_asked_text", ""), self.root, g.get("t0", 0))
                         if miss:
                             g["office_checks"].add("hidden")
+                            self.messages.append({"role": "user", "content": "[Meshpool] " + miss})
+                            continue
+                    if (getattr(self, "office_c171", False) or self._office_direct()) \
+                            and os.environ.get("MH_OFFICE_FINISH_CHECK", "1") != "0" \
+                            and "orphan" not in g.setdefault("office_checks", set()):
+                        miss = _pptx_orphan_slides_miss(self.root, g.get("t0", 0))     # deleted slides left in the file
+                        if miss:
+                            g["office_checks"].add("orphan")
                             self.messages.append({"role": "user", "content": "[Meshpool] " + miss})
                             continue
                     route = getattr(self, "route", None)
