@@ -133,13 +133,21 @@ async function openPreview(root, path) {
 // 6 to 7 slides kept "2 / 6" until it was reopened: Daniel, 0.0.19). app.js calls this with the turn's changed files.
 async function pvRefresh(root, paths) {
   if (!PVX.open || PVX.snippet || !PVX.path || PVX.root !== root || !(paths || []).includes(PVX.path)) return;
-  if (!PVX.m || PVX.m.kind !== "pages") return;
-  const id = PVX.id, keep = PVX.page || 0;
-  let m; try { m = await api(`/api/preview?${pvQuery(root, PVX.path)}`); } catch (e) { return; }
+  if (!PVX.m) return;
+  const sheet = PVX.m.kind === "sheet" || !!PVX.m.sheets;
+  if (PVX.m.kind !== "pages" && !sheet && !["html", "md"].includes(PVX.m.kind)) return;
+  const id = PVX.id, keep = PVX.page || 0, was = PVX.m.kind;
+  const sc = $(".pv-sheet"), top = sc ? sc.scrollTop : 0, left = sc ? sc.scrollLeft : 0, tab = PVX.sheet;
+  let m; try { m = await api(`/api/preview?${pvQuery(root, PVX.path)}&fresh=${Date.now()}`); } catch (e) { return; }
   if (id !== PVX.id) return;
   if (m.state === "working") { clearTimeout(PVX.poll); PVX.poll = setTimeout(() => pvRefresh(root, paths), 1000); return; }
-  if (m.kind !== "pages") return;
-  PVX.m = m; pvPages(m); pvGo(keep);
+  if (m.kind === "pages" && was === "pages") { PVX.m = m; pvPages(m); pvGo(keep); return; }
+  if (sheet && (m.kind === "sheet" || m.sheets)) {              // a spreadsheet: the same sheet tab and the same place on it (the sort and filter stay in PVX.view)
+    PVX.m = m; PVX.sheet = Math.min(tab, (m.sheets || []).length - 1); pvBody();
+    const w = $(".pv-sheet"); if (w) { w.scrollTop = top; w.scrollLeft = left; }
+    return;
+  }
+  if (m.kind === was) { PVX.m = m; pvBody(); }                  // a page or a note: drawn again
 }
 // Code from a reply (no file): html or svg, shown the same way.
 async function openPreviewCode(lang, code) {

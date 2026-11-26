@@ -204,3 +204,47 @@ def test_the_page_drops_the_look_line_that_the_merged_line_replaced(app, page):
         return [...document.querySelectorAll('#col .msg-ai')].map(x => x.textContent).join('|') + '#' + document.querySelectorAll('.chkline').length; }""")
     assert "Checked as" not in got and got.endswith("#1") and "Prices are up 10%" in got, got
     assert page.errors == [], page.errors
+
+
+# ------------------------------------------------------------------------------------------------------ item 4
+def _root(page, folder: str):
+    page.evaluate("""async w => { await post('/api/projects', {action: 'add', path: w});
+        S.cur.view = Object.assign(S.cur.view || {}, {workdir: w, kind: 'cowork'}); }""", folder)
+
+
+def _prices(path, factor):
+    from openpyxl import Workbook
+    wb = Workbook()
+    a = wb.active
+    a.title = "Bouquets"
+    a.append(["Bouquet", "Price"])
+    for i in range(1, 80):
+        a.append([f"Bouquet {i}", round(10 * i * factor, 2)])
+    b = wb.create_sheet("Notes")
+    b.append(["Note"])
+    for i in range(1, 80):
+        b.append([f"Price {i}: {round(10 * i * factor, 2)}"])
+    wb.save(path)
+
+
+def test_an_open_spreadsheet_preview_refreshes_after_an_edit_and_keeps_its_place(app, page):
+    """A spreadsheet preview kept the old prices after a 10% rise until the file card was clicked again. When a turn's
+    checkpoint names the open file the preview reads it again, on the same sheet tab and at the same scroll."""
+    path = Path(app["work"]) / "Bouquet Price List.xlsx"
+    _prices(path, 1.0)
+    _fake_chat(page, "t-pvrefresh")
+    _root(page, app["work"])
+    page.evaluate("w => openPreview(w, 'Bouquet Price List.xlsx')", app["work"])
+    page.wait_for_selector(".pv-sheet table")
+    page.click("#pvTabs [role=tab]:nth-child(2)")
+    page.wait_for_function("() => document.querySelector('.pv-sheet td') && document.querySelector('.pv-sheet').textContent.includes('Price 3:')")
+    page.evaluate("() => { document.querySelector('.pv-sheet').scrollTop = 300; }")
+    before = page.evaluate("() => document.querySelector('.pv-sheet').scrollTop")
+    assert before > 100
+    _prices(path, 1.1)                                            # the turn raised the prices by 10%
+    page.evaluate("""() => applyEv({type: "checkpoint", i: 5, turns: [{n: 1, changed: [{path: "Bouquet Price List.xlsx", status: "modified"}]}]})""")
+    page.wait_for_function("() => document.querySelector('.pv-sheet').textContent.includes('Price 3: 33')", timeout=10000)
+    got = page.evaluate("""() => ({tab: [...document.querySelectorAll('#pvTabs [role=tab]')].findIndex(b => b.getAttribute('aria-selected') === 'true'),
+        top: document.querySelector('.pv-sheet').scrollTop})""")
+    assert got["tab"] == 1 and abs(got["top"] - before) <= 2, (got, before)
+    assert page.errors == [], page.errors
