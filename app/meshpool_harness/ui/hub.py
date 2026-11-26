@@ -224,9 +224,10 @@ def search(q: str, tab: str = "all") -> dict:
             items = []
             for r in pool:
                 hit = full.get(r["id"])
-                if q in r["title"].lower() or hit or r["id"] in boost:
+                in_title = all(w in r["title"].lower() for w in q.split())     # every word, in any order
+                if in_title or hit or r["id"] in boost:
                     seen.add(r["id"])
-                    sub = (hit or {}).get("snippet", "") if q not in r["title"].lower() else ""
+                    sub = (hit or {}).get("snippet", "") if not in_title else ""
                     if not sub and SU is not None:
                         sub = SU.summary_for(r["id"])
                     items.append(_thread_item(r, sub))

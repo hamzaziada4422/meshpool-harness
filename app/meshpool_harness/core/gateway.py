@@ -290,6 +290,7 @@ class Health:
         self.down_since = 0.0
         self.prober = False
         self.last_probe = (0.0, "")
+        self.last_why = ""                          # what the last failed probe said, for the error the user reads
         self.next_probe = 0.0                       # while down: no one probes before this (shared backoff)
         self.fails = 0
         self.up_at = 0.0
@@ -395,6 +396,8 @@ class Health:
             if str(res).startswith("tls"):          # an untrusted certificate is final: no waiting (S-11)
                 raise RuntimeError(_tls_text(res))
             got = "up" if res == "ok" else "auth" if res == "auth" else "down"
+            if got == "down":
+                self.last_why = str(res or "")
         finally:
             with self.cond:
                 self.prober = False
@@ -485,6 +488,7 @@ class Health:
                     if got == "ok":
                         self._mark_up()
                     else:
+                        self.last_why = str(got or "")
                         wait = self._failed()
             finally:
                 with self.cond:
@@ -494,7 +498,8 @@ class Health:
                 emit({"type": "status", "text": "The model endpoint is answering again. Picking up where it left off."})
                 return True
             if time.time() - t0 + wait < budget_s:
-                emit({"type": "status", "text": f"The model endpoint isn't answering ({str(got)[:80]}). Checking "
+                from meshpool_harness.core import errtext as _ET
+                emit({"type": "status", "text": f"The model endpoint isn't answering ({_ET.reason(got)}). Checking "
                                                 f"again in {wait:.0f} s, for up to {max(1, int(budget_s // 60))} min. "
                                                 "Press Stop to end."})
 

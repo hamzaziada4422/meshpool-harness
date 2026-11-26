@@ -245,7 +245,9 @@ class TermFrontend:
         """The last error this run showed (an unreachable endpoint, a rejected key), for a script reading --json."""
         with self.s.lock:
             evs = list(self.s.events[getattr(self, "_ev0", 0):])
-        return next((str(e.get("text") or "") for e in reversed(evs) if e.get("type") == "error"), "")
+        from meshpool_harness.core import errtext as ET
+        return ET.for_terminal(next((str(e.get("text") or "") for e in reversed(evs) if e.get("type") == "error"), ""),
+                               self.headless)
 
     def result(self, failed: bool) -> dict:
         a = self.s.agent

@@ -511,6 +511,23 @@ def _xlsx_lost_parts(p: Path) -> list[str]:
     return found
 
 
+def _open_in(p: Path) -> tuple[str, str]:
+    """(app, lock file name) when another app has p open, else ("", ""). LibreOffice keeps ".~lock.<name>#" next to
+    the file; Word, Excel and PowerPoint keep "~$<name>" (Word drops the first one or two letters of a long name)."""
+    try:
+        lo = p.with_name(f".~lock.{p.name}#")
+        if lo.exists():
+            return "LibreOffice", lo.name
+        names = [p.name] + ([p.name[1:], p.name[2:]] if p.suffix.lower() in (".docx", ".doc") else [])
+        for n in names:
+            ms = p.with_name("~$" + n)
+            if len(n) > len(p.suffix) and ms.exists():
+                return "Microsoft Office", ms.name
+    except OSError:
+        pass
+    return "", ""
+
+
 def edit_office_file(path: str, operations: list, output: str | None = None, in_place: bool = False):
     """Change an existing .docx, .xlsx or .pptx without rebuilding it: styles, formulas and layout stay. Works without
     LibreOffice. By default the result is a copy '<name> (edited).<ext>'; in_place=true changes the file itself."""
@@ -533,6 +550,11 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
     kept_original = False
     if lost and out.resolve() == p.resolve():          # never rewrite the user's own file without those parts
         out, kept_original = _free(p.with_name(f"{p.stem} (edited){ext}")), True
+    busy, lock = _open_in(out) if out.exists() else ("", "")
+    if busy:                                           # the app holding it open would overwrite (or lose) this edit
+        busy_name = out.name
+        out = _free(out.with_name(f"{p.stem} (edited){ext}") if out.resolve() == p.resolve()
+                    else out.with_name(f"{out.stem} (copy){out.suffix}"))
     # Read from the source and write a part file next to `out`, moved into place only once it is whole: a failed
     # edit leaves no half-made copy behind, and a failed in-place save never truncates the user's file.
     part = out.with_name(f".{out.stem}.{os.getpid()}.{threading.get_ident()}.part{ext}")
@@ -670,7 +692,11 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
             pass
         return f"Could not edit {p.name}: {e}", True
     what = ", ".join(lost)
-    if kept_original:
+    if busy:
+        msg = (f"Did not change {busy_name}: it is open in {busy} (its lock file {lock} is next to it). Saved a copy "
+               f"as {out} instead, and {busy_name} is unchanged. Tell the user to close it there; if it is not open, "
+               f"the lock file was left behind and can be deleted. ")
+    elif kept_original:
         msg = (f"Did not change {p.name} in place: the edit goes through openpyxl, which would drop its {what}. "
                f"Saved a copy as {out} instead, and the original is unchanged. ")
     else:

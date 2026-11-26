@@ -127,8 +127,10 @@ def _is_reply(wire: str, data) -> bool:
 
 
 def _not_reply_msg(data) -> str:
-    err = data.get("error") if isinstance(data, dict) else None
-    txt = (err.get("message") if isinstance(err, dict) else err) if err else ""
+    """A 200 that is not a model reply: the service's own words in any common shape ({"error"}, {"detail"},
+    {"message"}), else that it did not answer like a model API."""
+    from meshpool_harness.core.errtext import _from_json
+    txt = _from_json(data) if isinstance(data, (dict, list)) else ""
     if txt:
         return str(txt)[:200]
     return "The address answered, but not like a model API."

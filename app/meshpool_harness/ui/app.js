@@ -81,14 +81,14 @@ function modelName(id) {
   const known = {deepseek: "DeepSeek", gpt: "GPT", qwen: "Qwen", glm: "GLM", kimi: "Kimi", llama: "Llama", mistral: "Mistral", grok: "Grok", openai: "OpenAI", minimax: "MiniMax"};
   return bareModel(id).split("/").pop().split(/[-_ ]+/).map(w => known[w.toLowerCase()] || (/^v?\d/.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))).join(" ").replace(/(\d) (?=\d)/g, "$1.");
 }
+// The check's own sentence (settings_api / core/endpoint.explain) already names the cause, the service's words and what
+// to do: it is shown as it is. Only a raw network error text, which says nothing to a person, is put in plain words.
 function connMsg(d) {
-  d = String(d || "");
-  if (/reject|401|403/i.test(d)) return "The endpoint didn't accept this key. Check that you copied all of it.";
+  d = String(d || "").trim();
+  if (!d) return "The connection test didn't work, and no reason came back. Check the address and the key, then try again.";
   if (/read operation timed out/i.test(d) && !/urlopen error|refused|resolve|getaddrinfo|ssl|certificate/i.test(d)) return "The endpoint took the connection but didn't answer in time: the gateway is up but isn't serving this key right now. Running tasks wait for it and carry on by themselves. Try the test again in a minute.";
-  if (/429|rate.?limit|too many|parallel/i.test(d)) return "The endpoint says this key is at its limit right now (too many requests at once). Running tasks wait and carry on. Try again in a minute.";
-  if (/HTTP 0|timed out|connection|refused|resolve|getaddrinfo/i.test(d)) return "Can't reach that address. Check the base URL and your internet connection.";
-  if (/404/.test(d)) return "That address answered, but it isn't a model endpoint. Check the base URL (it usually ends in /v1).";
-  return "The connection test didn't work: " + d.slice(0, 160);
+  if (/^HTTP 0\b|urlopen error|\[Errno|getaddrinfo|Name or service not known/i.test(d)) return "Can't reach that address. Check the base URL and your internet connection.";
+  return d.length > 400 ? d.slice(0, 399) + "…" : d;
 }
 function get0(k) { return ((S.settings?.fields || []).find(x => x.key === k) || {}).value; }
 function shortPath(p) {
@@ -171,13 +171,15 @@ async function api(path, opts = {}) {
   let r;
   try { r = await fetch(path, {...opts, headers: {"X-Meshpool-Token": MP.token, ...(opts.body ? {"Content-Type": "application/json"} : {}), ...(opts.headers || {})}}); }
   catch (e) { throw new Error("Meshpool isn't responding. If this keeps happening, quit and reopen Meshpool."); }
-  let j = null; try { j = await r.json(); } catch (e) { /* not JSON */ }
+  let j = null, unread = false; try { const t = await r.text(); if (t) j = JSON.parse(t); else unread = r.status !== 204; } catch (e) { unread = true; }   /* not JSON */
   if (j && j.inapp && r.ok && typeof showSignIn === "function") { try { showSignIn(); } catch (e) { /* the page still opened */ } }   // a sign-in page opened inside Meshpool
   if (!r.ok) {
-    if (j && j.error && r.status < 500) throw new Error(j.error);
+    if (j && typeof j.error === "string" && j.error.trim()) throw new Error(j.error);   // the server's own plain words
     if (r.status === 403) throw new Error("This page lost its connection to Meshpool. Reload the window.");
-    throw new Error("Something went wrong on Meshpool's side. Try again." + (j && j.error ? ` (${j.error})` : ""));
+    if (r.status === 404) throw new Error("meshpool does not know this request: the window may be from an older version. Reload the window.");
+    throw new Error(`meshpool's background service failed on this request and sent no explanation (status ${r.status}). Try again; if it keeps happening, quit and reopen meshpool.`);
   }
+  if (unread) throw new Error("meshpool sent an answer this window could not read. Reload the window; if it keeps happening, quit and reopen meshpool.");
   return j;
 }
 const post = (path, body) => api(path, {method: "POST", body: JSON.stringify(body || {})});
@@ -282,7 +284,7 @@ const S = {
   collapsed: new Set(store("collapsed") || []),
 };
 // What a chat may do without asking. The keys are what the server stores; the words are for people.
-const MODES = {ask: ["Ask", "Asks before it edits files or runs commands"], edits: ["Accept edits", "Edits files on its own; still asks before running commands"], auto: ["Full access", "Edits files and runs commands without asking"]};
+const MODES = {ask: ["Ask", "Works in this folder on its own (Undo keeps every change); asks before deleting, using the internet, installing or going outside the folder"], edits: ["Accept edits", "Edits files on its own; asks before deleting, using the internet, installing or going outside the folder"], auto: ["Full access", "Edits files and runs commands without asking"]};
 // Earlier spellings of the three levels still read as these three.
 const MODE_ALIAS = {manual: "ask", supervised: "ask", ask: "ask", edits: "edits", "accept edits": "edits", "accept-edits": "edits", "auto-accept edits": "edits", full: "auto", "full access": "auto", "full-access": "auto", auto: "auto"};
 function normMode(v) { return MODE_ALIAS[String(v || "").trim().toLowerCase()] || "ask"; }
@@ -2744,7 +2746,8 @@ async function renderSection(sec) {
 }
 
 /* ================================== first run ================================== */
-const onbSteps = n => `<div class="onb-steps" aria-label="Step ${n} of 3">${[1, 2, 3].map(i => `<span class="${i <= n ? "on" : ""}"></span>`).join("")}<small>Step ${n} of 3</small></div>`;
+// Three steps when the model step is shown; two when Meshpool already had a key, so a fresh start says step 1.
+const onbSteps = n => { const t = store("onbFull") ? 3 : 2, k = n - 3 + t; return `<div class="onb-steps" aria-label="Step ${k} of ${t}">${Array.from({length: t}, (_, i) => `<span class="${i < k ? "on" : ""}"></span>`).join("")}<small>Step ${k} of ${t}</small></div>`; };
 // Providers: what the models run on. Agents (harnesses) are picked separately.
 const PROVIDERS = [["meshpool", "Meshpool API key", "Recommended. Every model on one key, 20% cheaper."],
   ["custom", "Another API key", "OpenAI, OpenRouter or any OpenAI-compatible provider."],
@@ -2752,6 +2755,7 @@ const PROVIDERS = [["meshpool", "Meshpool API key", "Recommended. Every model on
 const SIGNIN = {chatgpt: {name: "ChatGPT", harness: "codex"}};
 function showOnboarding() {
   if ($("#onb")) return;
+  store("onbFull", 1);
   const o = document.createElement("div"); o.className = "onb"; o.id = "onb";
   o.innerHTML = `<div class="onb-card" id="onbKey">
     <img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
@@ -3031,7 +3035,7 @@ function permStep(host) {
         const mine = S.pj.filter(q => q.link?.type === "folder" && q.pinned);
         res.className = mine.length ? "res ok" : "res"; res.textContent = mine.length ? `Added ${mine.map(q => q.name).join(", ")}. New chats work in ${p ? p.name : mine[0].name}. Add more any time with Add a folder in the sidebar.` : "No folder added yet.";
       }
-      else if (x.dataset.scope === "home") { const r = await post("/api/projects", {action: "home"}); S.projects = r.projects; renderSide(); newThread(r.picked); res.className = "res ok"; res.textContent = "Meshpool can work anywhere in your home folder. It still asks before changing files unless you allow edits."; }
+      else if (x.dataset.scope === "home") { const r = await post("/api/projects", {action: "home"}); S.projects = r.projects; renderSide(); newThread(r.picked); res.className = "res ok"; res.textContent = "Meshpool can work anywhere in your home folder. It asks before deleting files, using the internet or installing anything."; }
       else { res.className = "res"; res.textContent = "Each chat keeps its files in its own folder; open it from the chat's Files panel. Add your own folders any time from the sidebar."; }
       if (mac && x.dataset.scope !== "later") draw({id: "folders"});
     } catch (e) { res.className = "res bad"; res.textContent = e.message; }
@@ -3052,18 +3056,18 @@ function setupStep(o, prev) {
     ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. You can skip this.</p>
     <div id="oImport"></div>
     <div id="oContext"></div>
-    <label class="switchrow" id="oLocalRow" hidden><input type="checkbox" id="oLocal" checked> <span id="oLocalTxt"></span></label>
+    <label class="switchrow" id="oLocalRow" hidden><input type="checkbox" id="oLocal"> <span id="oLocalTxt"></span></label>
     <div class="onb-go"><button class="bigbtn" id="oFinish">Start using Meshpool</button></div>`;
   importPanel($("#oImport", card)).then(() => { const b = $("#impGo", card); if (b) b.hidden = true; });
   contextPanel($("#oContext", card));
   let found = {};
-  api("/api/import-chats").then(l => { found = l; const n = Object.values(l).filter(v => v.default).reduce((a, v) => a + v.found - v.imported, 0); if (n) { $("#oLocalTxt", card).textContent = `Bring in my ${Object.values(l).filter(v => v.default).map(v => v.name).join(" and ")} chats (${n.toLocaleString()})`; $("#oLocalRow", card).hidden = false; } }).catch(() => {});
+  api("/api/import-chats").then(l => { found = l; const n = Object.values(l).filter(v => v.default).reduce((a, v) => a + v.found - v.imported, 0); if (n) { $("#oLocalTxt", card).textContent = `Copy my past chats from ${Object.values(l).filter(v => v.default).map(v => v.name).join(" and ")} into meshpool (${n.toLocaleString()} chat${n === 1 ? "" : "s"})`; $("#oLocalRow", card).hidden = false; } }).catch(() => {});
   store("onbStep", 3);
   $("#oFinish", card).onclick = async () => {
-    store("onbDone", 1); post("/api/settings", {values: {MH_ONBOARDED: "1"}}).catch(() => {});        // ticked items are imported on the way out; no extra click
+    store("onbDone", 1); store("onbFull", 0); post("/api/settings", {values: {MH_ONBOARDED: "1"}}).catch(() => {});        // ticked items are imported on the way out; no extra click
     const box = $("#oImport", card);
     const srcs = Object.entries(found).filter(([, v]) => v.default).map(([k]) => k);
-    if (srcs.length && $("#oLocal", card)?.checked && !$("#oLocalRow", card).hidden) { try { const r = await post("/api/import-chats", {sources: srcs}); if (r.imported) toast(`${r.imported.toLocaleString()} chats imported.`, 9000, {label: "Open", fn: () => openThread(r.ids[0])}); await loadThreads(); } catch (e) { /* the page can import later */ } }
+    if (srcs.length && $("#oLocal", card)?.checked && !$("#oLocalRow", card).hidden) { try { const r = await post("/api/import-chats", {sources: srcs}); if (r.imported) toast(`${r.imported.toLocaleString()} chat${r.imported === 1 ? "" : "s"} imported.`, 9000, {label: "Open", fn: () => openThread(r.ids[0])}); await loadThreads(); } catch (e) { /* the page can import later */ } }
     if (box?._import && !box.dataset.done && $$("[data-key]", box).some(x => x.checked)) { $("#oFinish", card).disabled = true; $("#oFinish", card).textContent = "Importing…"; await box._import(); }
     o.remove(); renderBar(); renderHero();
   };

@@ -314,6 +314,12 @@ _R_ROUTINE = re.compile(r"(?i)\b(every (?:day|week|month|monday|tuesday|wednesda
                         r"on mondays|on fridays|routine|usually (?:starts?|does|runs?))\b")
 _R_PREF = re.compile(r"(?i)\b(prefers?|wants?|never|always|likes?|dislikes?|hates?|loves?|default to|font|format|tone|"
                      r"style|concise|brief|detailed|bullets?|sentence case|no em dash|one message per|keep it)\b")
+# how to write: the language, the spelling and the sign-off are preferences, even when the sign-off names a role
+# ("sign emails as Daniel, Finance Director") or the readers ("emails to clients")
+_R_WRITING = re.compile(r"(?i)\b(?:writes?|writing|repl(?:y|ies)|responds?|answers?)\s+(?:in|using)\s+\w|"
+                        r"\bsign(?:s|ing)?\s+(?:off\s+)?(?:all\s+|my\s+|his\s+|her\s+|their\s+)?"
+                        r"(?:e-?mails?|letters?|messages?|replies)\b|\bsign[- ]?off\s+(?:with|as)\b|"
+                        r"\b(?:british|american|us|uk|australian|canadian)\s+(?:english|spelling)\b")
 _R_PEOPLE = re.compile(r"(?i)\b(manager|boss|colleague|coworker|teammate|client|customer|partner|wife|husband|"
                        r"spouse|sister|brother|daughter|son|friend|cto|ceo|cfo|director|reports? to|works? with|"
                        r"assistant|intern)\b")
@@ -329,7 +335,7 @@ def classify(text: str) -> str:
     if _R_ROUTINE.search(t):
         return "routines"
     if re.match(r"(?i)^(prefers|wants|never wants|always wants|likes|dislikes|never|always)\b", t.strip()) \
-            or _R_PREF.search(t):
+            or _R_PREF.search(t) or _R_WRITING.search(t):
         return "preferences"
     if _R_PEOPLE.search(t):
         return "people"

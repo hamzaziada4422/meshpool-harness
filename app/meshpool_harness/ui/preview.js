@@ -166,7 +166,7 @@ function pvBody() {
     if (m.snippet) { show(new Blob([m.text], {type: "image/svg+xml"})); return; }
     pvNote("Loading the image...", true);
     fetch(`/raw?t=${encodeURIComponent(MP.token)}&${pvQuery(PVX.root, PVX.path)}`).then(async r => {
-      if (!r.ok) throw new Error("Could not load the image.");
+      if (!r.ok) { let m = ""; try { m = (await r.json()).error || ""; } catch (e) { /* not JSON */ } throw new Error(m || "Could not load the image: meshpool could not read the file. Check that it still exists, then open it again."); }
       const b = await r.blob(); if (id !== PVX.id) return;
       st.innerHTML = ""; st.appendChild(wrap);
       show(m.ext === "svg" ? new Blob([b], {type: "image/svg+xml"}) : b);
