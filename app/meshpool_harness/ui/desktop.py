@@ -220,7 +220,7 @@ def _native_window(url: str) -> bool:
             kw["icon"] = str(ico)
             try:
                 import ctypes
-                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Meshpool.Desktop")
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(WIN_AUMID)
             except Exception:  # noqa: BLE001
                 pass
         webview.start(**kw)
@@ -687,6 +687,29 @@ def _mac_notify(title: str, body: str) -> bool:
     return True
 
 
+WIN_AUMID = "Meshpool.Desktop"          # the app window's AppUserModelID (SetCurrentProcessExplicitAppUserModelID)
+WIN_AUMID_KEY = "Software\\Classes\\AppUserModelId\\" + WIN_AUMID   # HKCU; also in installer.nsi
+_POWERSHELL_AUMID = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe"
+
+
+def _win_register_aumid() -> bool:
+    """Register Meshpool's AppUserModelID for the current user, so a toast sent with it shows as "Meshpool" with its
+    icon and has its own switch in Settings > Notifications. Toasts used to be sent with PowerShell's ID, so every
+    "Done: ..." showed as "Windows PowerShell" and clicking it opened PowerShell. An unregistered ID makes Windows drop
+    the toast without an error, so this returns False on any failure and the caller keeps PowerShell's ID then.
+    HKCU only (no admin); the installer writes the same key and the uninstaller removes it."""
+    try:
+        import winreg
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, WIN_AUMID_KEY) as k:
+            winreg.SetValueEx(k, "DisplayName", 0, winreg.REG_SZ, "Meshpool")
+            ico = C.APP.parent / "Meshpool.ico"
+            if ico.is_file():
+                winreg.SetValueEx(k, "IconUri", 0, winreg.REG_SZ, str(ico))
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def notify(title: str, body: str = "") -> None:
     """A desktop notification (best effort; never raises). macOS: only in Meshpool.app's own name (_mac_notify)."""
     title, body = (title or "Meshpool")[:120], (body or "")[:240]
@@ -694,15 +717,15 @@ def notify(title: str, body: str = "") -> None:
         if sys.platform == "darwin":
             _mac_notify(title, body)
         elif os.name == "nt":
+            sender = WIN_AUMID if _win_register_aumid() else _POWERSHELL_AUMID
             ps = ("[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null;"
                   "$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
                   "$x = $t.GetElementsByTagName('text'); $x.Item(0).AppendChild($t.CreateTextNode($env:MP_T)) > $null;"
                   "$x.Item(1).AppendChild($t.CreateTextNode($env:MP_B)) > $null;"
-                  "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("
-                  "'{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe').Show("
+                  "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:MP_ID).Show("
                   "[Windows.UI.Notifications.ToastNotification]::new($t))")
             subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-                             env=dict(os.environ, MP_T=title, MP_B=body), stdout=subprocess.DEVNULL,
+                             env=dict(os.environ, MP_T=title, MP_B=body, MP_ID=sender), stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, creationflags=0x08000000)
     except Exception:  # noqa: BLE001
         pass
