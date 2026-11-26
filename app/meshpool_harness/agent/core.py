@@ -1393,7 +1393,9 @@ _ACT_VERB = (r"(?:check|read|run|re-?run|open|look|inspect|verify|confirm|review
              r"replace|copy|rename|delete|remove|add|build|re-?build|make|create|write|save|convert|render|search|find|"
              r"list|install|fetch|download|compare|apply|generate|draft|export|scan|load|try|retry|set|clean|tighten|"
              r"use|go|do|put|insert|append|merge|split|resize|format|style|draw|count|measure|compute|calculate|"
-             r"re-?check|recheck|finish|start|begin|continue|swap|restore|upload|send)")
+             r"re-?check|recheck|finish|start|begin|continue|swap|restore|upload|send|patch|implement|rewrite|correct|"
+             r"adjust|modify|revise|refactor|rework|tweak|handle|commit|stage|revert|rebase|stash|reset|trim|sort|"
+             r"dedupe|normali[sz]e|bump|pin|wire|thread|extend|introduce)")
 _ACT_PROMISE = re.compile(r"\b(?:I'll|I will|I'm going to|I am going to|let me|next,? I(?:'ll| will)|now I(?:'ll| will))"
                           r"\s+(?:(?:now|first|then|quickly|also|just|next|go ahead and|go and|start by)\s+){0,2}"
                           + _ACT_VERB + r"\b", re.I)
@@ -1416,6 +1418,19 @@ def _announces_action(final: str) -> bool:
         if _ACT_PROMISE.search(sent):
             return True
     return False
+
+
+_CALL_JUNK = re.compile(r"<\s*(?:antml:)?(?:invoke|function_calls|tool_calls?)\b|<function=|<\|python_tag\||<｜DSML｜|\[TOOL_CALLS\]|"
+                        r"\{\s*\"(?:name|tool_calls?|tool|function)\"\s*:", re.I)
+
+
+def _prose_before_call(text: str) -> str:
+    """The words of a reply before a tool call that was written as text and could not be read (an unknown tool name, a
+    call cut off in the middle). "I'll patch both." followed by `<invoke name="placeholder">` ended the turn with no
+    nudge, because the junk was the last paragraph and the promise was not."""
+    t = str(text or "")
+    m = _CALL_JUNK.search(t)
+    return t[:m.start()].rstrip() if m and t[:m.start()].strip() else t
 
 
 ACT_NUDGE = "[Meshpool] You said you would do that. Do it now with the tools, or say why you can't."
@@ -4334,7 +4349,7 @@ class Agent:
                             final = done
                             break
                     if (E2E and not self.plan and not cx and g.get("promise_n", 0) < 2 and not g.get("act_nudged")
-                            and _stopped_early(final) and self._tool_msgs_since(g["msg0"])):
+                            and _stopped_early(_prose_before_call(final)) and self._tool_msgs_since(g["msg0"])):
                         g["promise_n"] = g.get("promise_n", 0) + 1   # E2E-AUTONOMY: a promise or a permission question
                         g["push_at"] = len(self.messages)
                         self.messages.append({"role": "user", "content": (     # mid-task is not a finished turn
@@ -4344,7 +4359,7 @@ class Agent:
                             "say so plainly, without promising more.")})
                         continue
                     if (not self.plan and not tools_off and not self._pace_wrapped and not pushed
-                            and _announces_action(final) and self._tools_offered()):
+                            and _announces_action(_prose_before_call(final)) and self._tools_offered()):
                         # the same in every wire style (Codex too) and before any tool ran: "I'll check the folder
                         # and read the current deck..." after a malformed call ended the turn (Daniel, 0.0.18)
                         g["act_nudged"] = len(self.messages)   # once per turn

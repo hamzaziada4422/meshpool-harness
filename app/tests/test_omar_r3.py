@@ -211,6 +211,42 @@ def test_6_the_environment_wins_for_one_process(monkeypatch):
     assert C.tips_on() is True
 
 
+# ------------------------------------------------------------------------- 8: a promise and a malformed call, in -p
+PROMISE = "I see both causes: parse_amount rounds half-even and top_payees sorts ascending. I'll patch both."
+MALFORMED = {
+    "plain": PROMISE,
+    "placeholder_invoke": PROMISE + "\n\n<invoke name=\"placeholder\">\n</invoke>\n\n<invoke name=\"placeholder\">\n</invoke>",
+    "unclosed_invoke": PROMISE + "\n\n<invoke name=\"exec_command\">\n<parameter name=\"cmd\">sed -i s/a/b/ x.py && python -m pytest 2>&",
+    "half_json": PROMISE + "\n\n{\"name\": \"exec_command\", \"arguments\": {\"cmd\": \"sed -i",
+}
+
+
+def test_8_the_promise_check_knows_patch_and_ignores_unreadable_call_junk():
+    assert A._announces_action("I see both causes. I'll patch both.")
+    assert A._announces_action("Found it. Now I'll rewrite parse_amount and commit.")
+    assert not A._announces_action("If you want, I'll patch both.")
+    assert A._prose_before_call(MALFORMED["placeholder_invoke"]) == PROMISE
+    assert A._prose_before_call(MALFORMED["half_json"]) == PROMISE
+    assert A._prose_before_call("Plain answer.") == "Plain answer."
+    assert A._prose_before_call('{"name": "x"}') == '{"name": "x"}'      # nothing before it: left alone
+
+
+@pytest.mark.parametrize("kind", list(MALFORMED))
+@pytest.mark.parametrize("mode", ["ask", "edits"])
+def test_8_a_promise_with_a_malformed_call_is_pushed_on_in_p_mode(tmp_path, kind, mode):
+    (tmp_path / "x.py").write_text("a = 1\n")
+    a, seen = _agent(tmp_path, [
+        {"role": "assistant", "content": MALFORMED[kind]},
+        {"role": "assistant", "content": "", "tool_calls": [_call(1, "read_file", {"path": "x.py"})]},
+        {"role": "assistant", "content": "Done: x.py is as it was."}], mode=mode)
+    a.approve = None                                           # -p: nobody can approve
+    out = a.send("fix the two failing tests")
+    assert out.strip().endswith("Done: x.py is as it was."), out
+    nudges = [m for m in a.messages if m.get("role") == "user" and A.ACT_NUDGE in str(m.get("content"))]
+    assert len(nudges) == 1, [m.get("content") for m in a.messages]
+    assert len(seen) == 3                                      # asked again after the nudge
+
+
 # ----------------------------------------------------------------------------------- 2: the verification line
 def _project(root):
     (root / "calc.py").write_text("def add(a, b):\n    return a - b\n")
