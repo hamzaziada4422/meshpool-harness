@@ -397,6 +397,7 @@ class Delegation:
 
         class Child(K.Agent):
             final_only = False
+            reports_to_agent = True      # its answer goes to the parent model (often JSON), not to the user
 
             def _tool_names(self):
                 return names + (["delegate_task"] if nested else [])
