@@ -677,7 +677,8 @@ def test_the_router_note_is_kept_out_of_the_chat_in_plain_words(page):
     assert RC.plain_reason("data words in a Code chat") == "chosen for data"
     assert RC.plain_reason("docs words (1)") == "chosen for documents"
     _fake_chat(page)
-    got = page.evaluate("""() => { applyEv({type: 'status', using: true, text: 'Using Meshpool Work', auto: {reason: 'Best benchmark quality for a data task (csv)'}, i: 0});
+    # meshpool's own agent is no longer announced (0.0.18 design pass): Auto's pick of another agent is, as here
+    got = page.evaluate("""() => { applyEv({type: 'status', using: true, text: 'Using Codex', auto: {reason: 'Best benchmark quality for a data task (csv)'}, i: 0});
         const n = document.querySelector('#col .note.using'); return [n.textContent, (n.querySelector('[title]') || {}).title || '']; }""")
     assert "benchmark" not in got[0] and "benchmark" in got[1], got
     assert page.errors == [], page.errors

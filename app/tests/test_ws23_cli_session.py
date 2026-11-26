@@ -247,7 +247,9 @@ def test_checks_and_receipt_render(proj):
     s.emit({"type": "checks_line", "text": "2 of 2 checks passed", "items": []})
     s.emit({"type": "task_receipt", "secs": 42, "cost": 0.03, "harness_name": "Meshpool Code", "model": "m1"})
     text = out.getvalue()
-    assert "Checked: 2 of 2 checks passed" in text and "42 s" in text and "$0.03" in text and "Meshpool Code" in text
+    # the receipt names the model as the composer does; meshpool's own agent is not named (0.0.18 design pass)
+    assert "Checked: 2 of 2 checks passed" in text and "42 s" in text and "$0.03" in text and "M1" in text
+    assert "Meshpool Code" not in text
 
 
 # ---------- 7. F-10, F-09, F-12 ---------------------------------------------------------------------------------------

@@ -90,7 +90,7 @@ def _fmt_secs(s: float | None) -> str:
     if s < 60:
         return f"{s} s"
     if s < 3600:
-        return f"{s // 60} min {s % 60} s"
+        return f"{s // 60} min" + (f" {s % 60} s" if s % 60 else "")
     return f"{s // 3600} h {s % 3600 // 60} min"
 
 

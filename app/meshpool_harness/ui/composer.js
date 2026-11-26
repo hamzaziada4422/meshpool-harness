@@ -130,7 +130,7 @@ function modelMenu(anchor) {
 
 /* ---------- the row under the composer ---------- */
 // The home title names the context: the project the next chat goes into, else "New chat". No greeting.
-const heroTitle = () => S.pj.find(p => p.id === S.draft.pid)?.name || "New chat";
+const heroTitle = () => (S.pj || []).find(p => p.id === S.draft?.pid)?.name || "New chat";
 function renderSel() {
   const c = cfg(), code = S.mode === "code", home = !S.cur && S.view === "chat";
   const label = c.model ? modelName(c.model) + (provOf(c.model) === "chatgpt" ? " · ChatGPT" : "") : "Model";

@@ -160,7 +160,7 @@ def test_billing_text_matches_the_provider(page):  # noqa: F811
           S.settings = Object.assign({}, s0, {provider: p, fields: [{key: 'MESHPOOL_BASE_URL', value: 'https://api.openai.com/v1'}]});
           out[p] = billingText({set: true}); }
         S.settings = s0; return out; }""")
-    assert got["meshpool"].startswith("A Meshpool key is saved"), got
+    assert got["meshpool"].startswith("A meshpool key is saved"), got   # the product name is lowercase in the UI (0.0.18)
     assert "Meshpool key is saved" not in got["custom"] and "api.openai.com" in got["custom"], got
     assert "Meshpool key is saved" not in got["chatgpt"] and "ChatGPT" in got["chatgpt"], got
     assert page.errors == [], page.errors

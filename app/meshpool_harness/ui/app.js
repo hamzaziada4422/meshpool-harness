@@ -39,7 +39,7 @@ const plainStatus = t => String(t || "").replace(/^Summarized \d+ earlier messag
 function fmtCost(x) { x = Number(x) || 0; return x > 0 && x < 0.01 ? "<$0.01" : "$" + x.toFixed(2); }
 function fmtDur(s) {
   s = Number(s); if (!(s >= 0)) return ""; if (s < 1) return "<1 s";
-  s = Math.round(s); return s < 60 ? `${s} s` : s < 3600 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${Math.floor(s / 3600)} h ${Math.floor(s % 3600 / 60)} min`;
+  s = Math.round(s); return s < 60 ? `${s} s` : s < 3600 ? `${Math.floor(s / 60)} min` + (s % 60 ? ` ${s % 60} s` : "") : `${Math.floor(s / 3600)} h ${Math.floor(s % 3600 / 60)} min`;
 }
 function ago(t) {
   if (typeof t === "string") t = isNaN(Number(t)) ? Date.parse(t) / 1000 : Number(t);   // ISO or numeric text
@@ -1353,7 +1353,7 @@ function workTick(cur) {
 function waitNote(secs) {
   let n = $("#waitNote");
   if (!secs) { n?.remove(); return; }
-  const t = fmtDur(secs);
+  const t = fmtDur(secs < 60 ? secs : secs - secs % 60);   // whole minutes once past one: the line changes once a minute
   if (!n) {
     const col = $("#col"); if (!col) return;
     n = document.createElement("div"); n.id = "waitNote"; n.className = "note waitnote"; n.setAttribute("role", "status");

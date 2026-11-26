@@ -328,7 +328,7 @@ def test_copy_has_no_greeting_and_one_cost_and_duration_format():
     assert sum(len(re.findall("20% cheaper", s)) for s in js_strings(JS["app.js"])) == 1
     assert "Key: ${" not in JS["settings2.js"]
     assert RC.fmt_cost(0.0005) == RC.fmt_cost(0.002) == "<$0.01" and RC.fmt_cost(0.42) == "$0.42"
-    assert [RC._fmt_secs(s) for s in (0.6, 42.4, 225, 3900)] == ["<1 s", "42 s", "3 min 45 s", "1 h 5 min"]
+    assert [RC._fmt_secs(s) for s in (0.6, 42.4, 225, 180, 3900)] == ["<1 s", "42 s", "3 min 45 s", "3 min", "1 h 5 min"]
     line = RC.line({"secs": 225, "cost": 0.002, "harness": "meshpool-work", "harness_name": "Meshpool Work",
                     "model": "deepseek-v4.1-flash", "reason": "docs words (1)"})
     assert line == "3 min 45 s · <$0.01 · DeepSeek V4.1 Flash, chosen for documents", line
