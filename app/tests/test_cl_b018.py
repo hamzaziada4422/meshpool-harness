@@ -239,6 +239,48 @@ def test_thai_line_is_not_cut_short():
     assert R.hard_wrap(line, 10) == [line]
 
 
+# ---- CL-11: on Windows the letter à was read as the start of an arrow key and lost --------------------------------
+class _FakeConsole:
+    """msvcrt as the Windows console gives it: getwch() pops queued characters; kbhit() is true while more wait."""
+    def __init__(self, chars):
+        self.q = list(chars)
+
+    def getwch(self):
+        return self.q.pop(0)
+
+    def kbhit(self):
+        return bool(self.q)
+
+
+def _win_keys(monkeypatch, chars):
+    import sys
+
+    from meshpool_harness.agent import tui_input as K
+    monkeypatch.setitem(sys.modules, "msvcrt", _FakeConsole(chars))
+    k = K.RawKeys(fd=0)
+    k.win = True
+    out = []
+    while sys.modules["msvcrt"].q or k.pending:
+        out.append(k.read())
+    return out
+
+
+def test_windows_letter_a_grave_is_typed(monkeypatch):
+    assert _win_keys(monkeypatch, ["\xe0"]) == ["à"]                       # à typed on its own
+    assert _win_keys(monkeypatch, ["v", "o", "i", "l", "\xe0", " ", "t", "o", "u", "t"]) == list("voilà tout")
+
+
+def test_windows_arrow_keys_still_work(monkeypatch):
+    assert _win_keys(monkeypatch, ["\xe0", "H"]) == ["up"]
+    assert _win_keys(monkeypatch, ["\x00", "\x0f"]) == ["shift_tab"]
+    assert _win_keys(monkeypatch, ["\xe0", "K"]) == ["left"]
+
+
+def test_windows_paste_keeps_a_grave(monkeypatch):
+    out = _win_keys(monkeypatch, list("d\xe9j\xe0 vu\r\nok"))
+    assert out == [("paste", "déjà vu\nok")]
+
+
 def test_chatgpt_relay_answers_a_json_list_with_400(tmp_path, monkeypatch):
     import http.client
     from meshpool_harness.core import chatgpt_relay as CR
