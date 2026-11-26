@@ -98,6 +98,7 @@ def test_undo_never_deletes_a_file_that_only_became_visible(tmp_path):
 
 def test_undo_never_deletes_a_big_file_that_shrank(tmp_path, monkeypatch):
     monkeypatch.setattr(_ckp, "MAX_FILE", 10)
+    monkeypatch.setattr(_ckp, "MAX_BIG", 10)          # too big to keep a copy of: only its hash is known
     root, cp = _cp(tmp_path)
     (root / "big.bin").write_bytes(b"x" * 50)
     cp.begin_turn("agent shrinks it")

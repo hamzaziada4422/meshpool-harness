@@ -175,6 +175,7 @@ def test_an_agent_that_cannot_start_is_recorded_and_auto_skips_it(home, monkeypa
 
 
 def test_an_auto_chat_whose_agent_cannot_start_moves_on_and_sends_again(chat, monkeypatch):
+    """0.0.18 round 2: the message runs again on meshpool's own agent (it was the next agent Auto picked)."""
     A, proj, made = chat
     from meshpool_harness.hrouter import health
     v = A.create({"kind": "code", "harness": "meshpool-auto", "task": "fix the bug", "workdir": str(proj)})
@@ -187,10 +188,11 @@ def test_an_auto_chat_whose_agent_cannot_start_moves_on_and_sends_again(chat, mo
     rs = [_row("meshpool-code", "code"), _row("pi", "code", "pi")]
     monkeypatch.setattr(HR, "load_all", lambda: rs)
     moved = []
-    monkeypatch.setattr(s, "handoff", lambda hid, why="": moved.append(hid))
-    s.harness = _row("pi", "code", "pi")           # the chat currently runs on Pi, which just failed
-    assert s._start_failed_handoff("fix the bug") is True and moved == ["meshpool-code"]
-    assert s._start_failed_handoff("fix the bug") is False      # once only
+    monkeypatch.setattr(s, "handoff", lambda hid, why="", quiet=False: moved.append(hid))
+    s.harness = _row("pi", "code", "pi")           # the chat currently runs on Pi, which Auto picked and which failed
+    A.write_meta(s.id, routed="pi")
+    assert s._engine_fallback("fix the bug") is True and moved == ["meshpool-code"]
+    assert s._engine_fallback("fix the bug") is False      # once only
 
 
 def test_a_start_failure_handoff_shows_the_message_once(chat, monkeypatch):
@@ -207,15 +209,16 @@ def test_a_start_failure_handoff_shows_the_message_once(chat, monkeypatch):
     s.emit({"type": "turn_end"})
     s.agent.start_error = "Pi exited during the turn."
     s.harness = _row("pi", "code", "pi")
-    monkeypatch.setattr(HRT, "route", lambda text, kind, **k: {"harness": "meshpool-code"})
+    A.write_meta(s.id, routed="pi")                                 # Auto picked Pi
     carried = []
-    monkeypatch.setattr(s, "handoff", lambda hid, why="": carried.append(
+    monkeypatch.setattr(s, "handoff", lambda hid, why="", quiet=False: carried.append(
         [e for e in s.events if e.get("type") == "user"]))
     epoch = s.epoch
-    assert s._start_failed_handoff("fix the bug", ev0) is True
+    assert s._engine_fallback("fix the bug", ev0) is True
     assert not [e for e in s.events[ev0:] if e.get("type") in ("user", "error", "turn_end")]
-    assert "could not start" in s.events[-1]["text"] and s.epoch == epoch + 1
+    assert s.epoch == epoch + 1
     assert [e["i"] for e in s.events] == list(range(len(s.events)))
     assert carried == [[]]                                         # the next agent gets no copy of the message
     s.emit({"type": "user", "text": "fix the bug"})                 # the resend
     assert sum(1 for e in s.events if e.get("type") == "user" and e.get("text") == "fix the bug") == 1
+    assert s.events[-1]["text"] == "That way of working failed, so meshpool used its own agent."   # under it

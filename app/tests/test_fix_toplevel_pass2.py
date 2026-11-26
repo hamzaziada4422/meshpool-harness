@@ -186,6 +186,7 @@ def test_insights_state_list_does_not_crash(tmp_path, monkeypatch):
 def test_big_file_change_is_noted(tmp_path, monkeypatch):
     from meshpool_harness import checkpoints as CP
     monkeypatch.setattr(CP, "MAX_FILE", 100)
+    monkeypatch.setattr(CP, "MAX_BIG", 100)
     root = tmp_path / "w"
     root.mkdir()
     (root / "big.dat").write_bytes(b"a" * 500)

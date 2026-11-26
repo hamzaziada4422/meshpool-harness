@@ -461,6 +461,18 @@ def report(jid: str, rel_to: Path | None = None, reused: str = "") -> tuple[str,
     if not res:
         return f"The {j['engine']} engine failed. {j.get('stderr', '')}", True
     notes = "\n".join((s.get("answer") or "") for s in res.get("steps") or []).strip()
+    if not made and not res.get("ok"):
+        # Priya: the engine stopped after one step (a slow model call) and saved nothing, and the report read "finished;
+        # its quality checks did not all pass (review the file). Files:" with no file. The agent then checked a file
+        # that did not exist, three times, and wrote it with a script. Say what happened and what to do.
+        from meshpool_harness.core import errtext as ET
+        why = " ".join(str(s.get("reason") or "") for s in res.get("steps") or [] if not s.get("ok")).strip() \
+            or str(res.get("reason") or "")
+        plain = ET.outside(why)[0] if why else ""
+        return (f"The {j['engine']} engine stopped before it made the file, so nothing was saved and there is nothing "
+                f"to check." + (f" Why: {plain}" if plain else "") + " Call the same tool again once with the same "
+                "request; a stop like this usually does not happen twice. If it stops again, make the file another "
+                "way and tell the user in plain words."), True
     qa = _qa(j)
     # "passed" only when nothing is flagged: an engine's ok means "a file was made", and a headline saying "passed"
     # above a list of failing rules sent the agent into rebuild after rebuild (seen live: 8 deck builds, 20 minutes).
@@ -483,12 +495,14 @@ def report(jid: str, rel_to: Path | None = None, reused: str = "") -> tuple[str,
         lines.insert(0, "This request was already built in this chat; here is that build again (nothing was rebuilt). "
                         "To build again, ask with the changes you want in the request.")
     if notes:
-        lines.append("Engine notes: " + notes[:2500])
+        lines.append("What the build did (for you; tell the user in your own words): " + _plain_notes(notes)[:2500])
     if qa:
         lines += ["Forge QA:", qa]
     lines.append("Telling the user: say in plain words what was checked (for a workbook, the totals and formulas). "
                  "Mention a check only when it is a real problem in their file, in plain words; never rule ids, "
-                 "check counts, or rules that do not apply to this kind of file. The file is in their "
+                 "check counts, or rules that do not apply to this kind of file. Never mention the engine, its "
+                 "notes, its checker or any other name it gave the file. meshpool stores the calculated values in the "
+                 "file after the turn, so never say values are missing or were not recalculated. The file is in their "
                  "folder under the name above: nothing else to copy, move or delete.")
     n = j.get("build_no", 1)
     if checks != "passed" and n < REBUILD_LIMIT:
@@ -499,6 +513,18 @@ def report(jid: str, rel_to: Path | None = None, reused: str = "") -> tuple[str,
                      "check results, stop here: rebuilding again rarely clears the rest. Deliver the best build so "
                      "far and tell the user which checks remain. Build again only for a new request from the user.")
     return "\n".join(lines), not made
+
+
+# The engine's model writes its notes for itself: "I did not recalculate the workbook, so the check cells will show
+# their results when it is opened in Excel." meshpool fills the values after the turn (xl_values), and the sentence
+# went into the reply as "I did not recalculate it" (Priya, Lina).
+_RECALC = re.compile(r"[^.\n]*\b(?:did not|didn't|not|without|could not|couldn't) (?:re)?calculat[^.\n]*\.?[ \t]*"
+                     r"|[^.\n]*\bwill show (?:their|its|the) (?:results?|values?) when [^.\n]*opened[^.\n]*\.?[ \t]*",
+                     re.I)
+
+
+def _plain_notes(notes: str) -> str:
+    return _RECALC.sub("", notes).strip()
 
 
 def _last_json(out: str) -> dict:
