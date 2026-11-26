@@ -293,7 +293,8 @@ def test_no_fragment_is_printed_when_a_part_would_be_malformed():
     assert line == "Checked: fixed 3 things. Nothing left open.", line
     st = {"persona": "", "evals": [_v("", probs)]}                  # no persona at all: the neutral one is used
     line = LR.summary_line("doc", st)
-    assert line == "Checked it as someone opening this file for the first time.", line      # nothing whole to say: no claims, no count
+    # nothing whole to say about them, but they are open: counted, never dropped (release review item 4)
+    assert line == "Checked as someone opening this file for the first time: fixed nothing. Still open: 3 things.", line
     assert_clean(line)
 
 
