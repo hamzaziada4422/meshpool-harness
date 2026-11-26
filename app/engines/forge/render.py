@@ -4022,8 +4022,8 @@ def _summary_panel(ctx, s, sl, n) -> bool:
     for i, (a, d, h) in enumerate(laid):
         rh = h + gap
         _write(_box(sl, nx, yy + 0.08, cw, 0.5, f"role_numeral_{i + 1}"),
-               [{"text": f"{i + 1:02d}", "size": T["num"], "bold": True, "heading": True, "numbers": False,
-                 "color": TC.ACCENT_1}])
+               [{"text": f"{i + 1:02d}", "size": _one_line_size("00", T["num"], cw, 12), "bold": True,
+                 "heading": True, "numbers": False, "color": TC.ACCENT_1}])
         _write(_box(sl, lx, yy + 0.1, lw, rh - 0.14, f"Claim{i + 1}"), a, ctx, n)
         if d:
             _write(_box(sl, dx, yy + 0.1, dw, rh - 0.14, f"Evidence{i + 1}"), d, ctx, n)
@@ -4132,8 +4132,9 @@ def a_executive_summary(ctx, s, sl, n):
             _icon(sl, icons[i], LEFT, y + 0.08, 0.42, re.sub(r"\*\*", "", pts[i].get("lead", ""))[:60])
         else:                                             # "01": the same mark as the section number on the slide
             _write(_box(sl, LEFT, y + 0.06, 0.5, 0.5, f"role_numeral_{i + 1}"),    # that proves this point
-                   [{"text": f"{i + 1:02d}" if tracker else str(i + 1), "size": T["num"], "bold": True,
-                     "heading": True, "numbers": False, "color": TC.ACCENT_1}])
+                   [{"text": f"{i + 1:02d}" if tracker else str(i + 1),
+                     "size": _one_line_size("00", T["num"], 0.5, 12), "bold": True,   # a wide face never breaks
+                     "heading": True, "numbers": False, "color": TC.ACCENT_1}])       # "01" into "0" over "1"
         _write(_box(sl, lx, y + 0.08, lw, rh - 0.12, f"Claim{i + 1}"), a, ctx, n)
         claims.append(y + 0.08)
         if d:
