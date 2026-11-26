@@ -650,8 +650,13 @@ def _main(argv=None):
         return OF.cli(argv[1:])
     if argv[0] == "run-due":
         from meshpool_harness import scheduler_os as SO
-        print(f"ran {SO.run_due()} scheduled task(s)", flush=True)
-        os._exit(0)                              # agent helper threads and servers must not keep a background job alive
+        failed: list = []
+        print(f"ran {SO.run_due(failed)} scheduled task(s)", flush=True)
+        if failed:
+            print(f"{len(failed)} scheduled task(s) could not be started", file=sys.stderr, flush=True)
+        # agent helper threads and servers must not keep a background job alive. A failure exits 1; the cron line
+        # sends all output to /dev/null and launchd keeps no log for this job, so that only reaches a person who ran it
+        os._exit(1 if failed else 0)
     if argv[0] == "scheduler":
         from meshpool_harness import scheduler_os as SO
         sub_cmd = argv[1] if len(argv) > 1 else ""

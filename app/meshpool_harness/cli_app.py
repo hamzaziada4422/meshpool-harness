@@ -40,7 +40,8 @@ HELP = {
     "help": "Usage: meshpool help [COMMAND | telemetry]",
     "login": "Usage: meshpool login\nAsk for your API key and save it.",
     "setup": "Usage: meshpool setup\nFirst-run setup: key, folder and preferences.",
-    "run-due": "Usage: meshpool run-due\nRun every scheduled task that is due, then exit.",
+    "run-due": "Usage: meshpool run-due\nRun every scheduled task that is due, then exit. Exits 1 when a task "
+               "could not be started.",
     "scheduler": "Usage: meshpool scheduler install | uninstall | status\nRun scheduled tasks while the app is closed.",
     "import": "Usage: meshpool import <export.zip | claude-code | codex>\n       meshpool import agents [--dry-run] [--yes] [--from claude,codex]",
     "app": "Usage: meshpool app\nOpen the desktop app.",

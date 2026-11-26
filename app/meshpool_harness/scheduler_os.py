@@ -163,8 +163,9 @@ def available(platform: str | None = None) -> bool:
     return True if plat.startswith("win") or plat == "darwin" else bool(shutil.which("crontab"))
 
 
-def run_due() -> int:
-    """Run every task that is due, one after another, and wait for each to finish. Returns how many ran."""
+def run_due(failed: list | None = None) -> int:
+    """Run every task that is due, one after another, and wait for each to finish. Returns how many ran. The name of
+    each task that could not be started is added to `failed` when one is given."""
     import time
 
     from meshpool_harness import assistant as AS
@@ -183,4 +184,6 @@ def run_due() -> int:
             n += 1
         except Exception as e:  # noqa: BLE001
             print(f"could not run {t.get('name')}: {e}", file=sys.stderr)
+            if failed is not None:
+                failed.append(t.get("name") or t.get("id") or "?")
     return n

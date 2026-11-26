@@ -75,3 +75,52 @@ def test_lp01_container_command_ends_inside_the_container_and_output_is_capped(t
     out, code = ws._run("yes meshpool", 60, "bash", raw=True)
     assert "output stopped" in out
     assert time.time() - t0 < 30
+
+
+def test_lp02_run_due_exits_nonzero_when_a_task_could_not_start(monkeypatch, capsys, tmp_path):
+    """LP-02: `meshpool run-due` exits 1 when a task failed to start and still prints each failure; the cron line
+    keeps sending its output to /dev/null so the exit code is harmless there."""
+    import subprocess
+
+    from meshpool_harness import assistant as AS
+    from meshpool_harness import cli
+    from meshpool_harness import config as C
+    from meshpool_harness import scheduler_os as SO
+    from meshpool_harness.ui import agent_api as A
+
+    class _Done:
+        state = "done"
+
+    def start(t):
+        if t["name"] == "broken":
+            raise ValueError("folder gone")
+        return "s1"
+
+    monkeypatch.setenv("MESHPOOL_HEADLESS", "1")
+    monkeypatch.setattr(C, "load_into_env", lambda *a, **k: None)
+    monkeypatch.setattr(AS, "due", lambda: [{"name": "broken"}, {"name": "fine"}])
+    monkeypatch.setattr(A, "run_scheduled", start)
+    monkeypatch.setattr(A, "get", lambda sid: _Done())
+
+    def fake_exit(code):
+        raise SystemExit(code)
+    monkeypatch.setattr(os, "_exit", fake_exit)
+    with pytest.raises(SystemExit) as e:
+        cli.main(["run-due"])
+    assert e.value.code == 1
+    io = capsys.readouterr()
+    assert "ran 1 scheduled task(s)" in io.out and "could not run broken: folder gone" in io.err
+
+    monkeypatch.setattr(AS, "due", lambda: [{"name": "fine"}])
+    with pytest.raises(SystemExit) as e:
+        cli.main(["run-due"])
+    assert e.value.code == 0
+
+    seen = {}
+
+    def run(cmd, input=None, **kw):
+        seen["tab"] = input
+        return subprocess.CompletedProcess(cmd, 0 if input is not None else 1, "", "no crontab for user")
+    monkeypatch.setattr(SO, "_data_home", lambda: tmp_path)
+    SO.install(run=run, platform="linux")
+    assert ">/dev/null 2>&1" in seen["tab"]
