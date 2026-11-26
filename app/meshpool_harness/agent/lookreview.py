@@ -459,10 +459,17 @@ def run_actions(browser, url: str, actions: list, out_dir, tag: str, deadline_s:
             elif do == "press":
                 page.keyboard.press(a["target"] or "Tab")
             else:                                                       # look_at
-                el = _find_click(page, a["target"]) if a["target"] else None
+                el = None
+                if a["target"]:
+                    try:                                          # a section is named by its heading, not by a link to it
+                        hd = page.get_by_role("heading", name=_rx(a["target"]))
+                        el = hd.first if hd.count() and hd.first.is_visible() else None
+                    except Exception:  # noqa: BLE001
+                        el = None
+                    el = el or _find_click(page, a["target"])
                 if el is not None:
                     el.scroll_into_view_if_needed(timeout=2000)
-                    try:                                         # what a person would read there, for a reviewer with no picture
+                    try:                                       # what a person would read there, for a reviewer with no picture
                         seen = el.evaluate("e => ((e.closest('section,article,form,main,aside,footer') || e).innerText || '')"
                                            ".replace(/\\s+/g, ' ').trim()")
                         note_pre = ("it shows: " + seen[:260] + "; ") if seen else ""
