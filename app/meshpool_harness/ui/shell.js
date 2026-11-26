@@ -229,7 +229,7 @@ const PR_LABEL = {open: "Open", draft: "Draft", merged: "Merged", closed: "Close
 function thHTML(t, o = {}) {
   const st = stateOf(t), code = isCodeThread(t);
   const pj = t.project_id && S.pj.find(p => p.id === t.project_id);
-  const icons = code ? `${t.pr ? `<span class="si pr" data-prtip="${esc(t.id)}" aria-label="Pull request #${t.pr.number}">${ICON.pr}</span>` : ""}${isMgd(t.workdir) ? `<span class="si" title="GitHub workspace">${ICON.cloud}</span>` : ""}${t.state === "waiting" ? `<span class="si warn" title="Waiting for you">${ICON.warn}</span>` : ""}` : "";
+  const icons = code ? `${t.pr ? `<span class="si pr" data-prtip="${esc(t.id)}" aria-label="Pull request #${t.pr.number}">${ICON.pr}</span>` : ""}${isMgd(t.workdir) ? `<span class="si" title="GitHub workspace">${ICON.cloud}</span>` : ""}` : "";   // waiting shows as the row's one amber dot, not a second warning icon
   return `<li class="th ${S.view === "chat" && S.cur?.id === t.id ? "on" : ""}" data-id="${esc(t.id)}" data-nav tabindex="0" title="${esc(t.title + (pj ? " · " + pj.name : ""))}">${t.scheduled ? `<span class="pi bolt" title="Started by a scheduled task">${ICON.bolt}</span>` : ""}<span class="tt">${esc(t.title)}${false && pj ? `<small class="tf">${esc(pj.name)}</small>` : ""}</span><span class="end">${icons}<span class="dot ${st}"></span><button class="iconbtn more" data-tmenu="${esc(t.id)}" aria-label="Options for ${esc(t.title)}" aria-haspopup="menu">${ICON.more}</button></span></li>`;
 }
 
