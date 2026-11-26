@@ -461,7 +461,9 @@ def _pptx(p: Path, ocr_mode: str = "auto") -> str:
         notes = ""
         if s.has_notes_slide and s.notes_slide.notes_text_frame is not None:
             notes = s.notes_slide.notes_text_frame.text.strip()
-        out.append(f"\n## Slide {i}: {title or '(no title)'}\n" + "\n".join(lines) + (f"\n[notes] {notes}" if notes else ""))
+        hidden = " [hidden slide: not shown in the slide show]" if s._element.get("show") in ("0", "false") else ""
+        out.append(f"\n## Slide {i}: {title or '(no title)'}{hidden}\n" + "\n".join(lines)
+                   + (f"\n[notes] {notes}" if notes else ""))
         for sh in s.shapes:
             if getattr(sh, "shape_type", None) == 13:
                 try:

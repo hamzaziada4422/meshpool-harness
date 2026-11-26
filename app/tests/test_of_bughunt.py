@@ -515,3 +515,62 @@ def test_of17_best_of_grading_leaves_no_temp_folder(tmp_path, monkeypatch):
     got = select.judge(str(tmp_path / "deck.pptx"), Client())
     assert got["mean"] == 7.0
     assert list(tmp.iterdir()) == []
+
+
+# ---------- OF-18: hidden slides read as shown ---------------------------------------------------------------------
+
+def test_of18_hidden_slides_are_marked(tmp_path):
+    from pptx import Presentation
+    prs = Presentation()
+    for t in ("Shown", "Backup"):
+        s = prs.slides.add_slide(prs.slide_layouts[5])
+        s.shapes.title.text = t
+    prs.slides[1]._element.set("show", "0")
+    prs.save(str(tmp_path / "d.pptx"))
+    out = _read(tmp_path / "d.pptx")
+    assert "## Slide 1: Shown\n" in out
+    assert "## Slide 2: Backup [hidden slide: not shown in the slide show]" in out
+
+
+# ---------- OF-19: two requests for the same preview page shared one part file, and one of them failed --------------
+
+def test_of19_two_requests_for_one_page_both_get_it(tmp_path, monkeypatch):
+    import pathlib
+    import threading
+    from reportlab.pdfgen import canvas
+    from meshpool_harness.ui import previews as PV
+    from meshpool_harness.ui import workbench as W
+    root = tmp_path / "proj"
+    root.mkdir()
+    monkeypatch.setattr(W, "known_roots", lambda: [root])
+    c = canvas.Canvas(str(root / "a.pdf"))
+    c.drawString(72, 700, "page")
+    c.save()
+    rendered, written = threading.Barrier(2, timeout=5), threading.Barrier(2, timeout=5)
+
+    def render(pdf, page, width):
+        rendered.wait()                                   # both requests found no cached page
+        return b"\x89PNG fake"
+    monkeypatch.setattr(PV, "_render", render)
+    real = pathlib.Path.write_bytes
+
+    def write_bytes(self, data):
+        n = real(self, data)
+        if self.suffix == ".tmp":
+            written.wait()                                # both wrote their part before either moves it
+        return n
+    monkeypatch.setattr(pathlib.Path, "write_bytes", write_bytes)
+    got, errors = [], []
+
+    def ask():
+        try:
+            got.append(PV.page_png(str(root), "a.pdf", 0, 400))
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+    ts = [threading.Thread(target=ask) for _ in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(10)
+    assert not errors, errors
+    assert got == [b"\x89PNG fake"] * 2

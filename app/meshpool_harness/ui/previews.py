@@ -365,7 +365,9 @@ def page_png(root: str, rel: str, page: int, width: int = MAX_WIDTH) -> bytes:
         except OSError:
             pass
     data = _render(pdf, page, width)
-    tmp = f.with_suffix(".tmp")
+    # each request writes its own part file: two requests for one page (two tabs) shared one name, and the second
+    # move found nothing there and failed the page
+    tmp = f.with_name(f"{f.stem}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_bytes(data)
     tmp.replace(f)
     if k == "pdf":
