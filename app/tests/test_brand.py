@@ -200,7 +200,10 @@ def test_brand_off_leaves_the_meshpool_look(tmp_path):
     render(copy.deepcopy(B.SAMPLE), str(out), fix_labels=False)
     pages = _shapes(str(out))
     assert not any(n == "ov_Logo" for pg in pages for n, _ in pg)
-    assert dict(pages[1])["Firm"].text_frame.text.startswith("Meshpool")
+    # WF-03: the owner's rule changed: a user's deck never carries the product name. With no brand the footer label
+    # is the page number alone (it said "Meshpool      2" before).
+    foot = dict(pages[1])["Firm"].text_frame.text
+    assert "meshpool" not in foot.lower() and foot.strip().isdigit(), foot
 
 
 @lo

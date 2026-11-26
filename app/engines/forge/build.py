@@ -1869,6 +1869,15 @@ Return ONLY JSON: {{"slides": [the full slide JSON for every slide, in order]}}.
     return changed
 
 
+def _stage(text: str) -> None:
+    """What the deck build is doing now, for the chat's working line (checks.stage; a no-op outside a chat)."""
+    try:
+        from meshpool_harness import checks as CK
+        CK.stage("Deck: " + text)
+    except Exception:  # noqa: BLE001 - a progress line never breaks a build
+        pass
+
+
 def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=None, task_id="forge",
           theme=None, density: str | None = None, fixed_pages: list | None = None,
           extra_facts: list | None = None, template: str | None = None, brand: dict | None = None,
@@ -1986,6 +1995,8 @@ supports it. Choose varied archetypes that prove each title.
     frame_txt = frame_block(frame)
     (out / "frame.json").write_text(json.dumps(frame, indent=1))
     story, why = (start_story if start else {}), ""
+    if not start:
+        _stage("planning the storyline")
     for budget in (() if start else (8000, 16000)):   # once more with room when a reasoning model ran out of tokens
         try:
             story = _call(client, STORY_MODEL, story_sys, f"{frame_txt}\n\nBrief:\n{brief[:14000]}\n\nFacts (cite by id):\n{fact_txt}"
@@ -2036,6 +2047,7 @@ supports it. Choose varied archetypes that prove each title.
     if panel_on and not start:                         # a resumed run keeps its storyline; the deck panel still runs
         max_sb = _cap(max(1, int(os.environ.get("MH_STORYBOARD_ROUNDS") or cfg["max_storyboard_rounds"])))
         for rnd in range(1, max_sb + 1):
+            _stage(f"reviewers read the storyline (round {rnd})")
             mat = critics.storyboard_material(story, facts, brief, narrative_n, agenda=agenda)
             pn = critics.run_panel(client, "storyboard", mat, critics.text_models(cfg), bar=cfg["bar"],
                                    timeout=float(cfg["timeout_s"]), task_id=f"{task_id}-sb{rnd}", who=cfg["who"])
@@ -2126,8 +2138,12 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
                 + f"\n\nThis slide: {json.dumps(x)}\n\nFacts (cite by id):\n"
                 + "\n".join(f"{f['id']}: {f['text']}" for f in rel), f"{task_id}-c{x.get('node')}", 6000)
         except Exception as e:
-            return {"archetype": "cover", "node": x.get("node"), "title": x.get("title", ""), "notes": f"content failed: {e}"}
-    retried = []
+            # the model's error is for the log and the chat, never for the user's file (a live deck carried
+            # "content failed: claude-sonnet returned no JSON ..." in slide 1's speaker notes)
+            content_failed.append({"node": x.get("node"), "title": x.get("title", ""), "error": str(e)[:300]})
+            print(f"slide {x.get('node')} content failed: {e}", file=sys.stderr)
+            return {"archetype": "cover", "node": x.get("node"), "title": x.get("title", "")}
+    retried, content_failed = [], []
 
     def one_as_planned(x):
         """The slide as the storyline planned it: a body slide that comes back as a cover or divider (a live build
@@ -2144,6 +2160,7 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
     if start:
         content = {"slides": [dict(x) for x in start_slides]}
     else:
+        _stage(f"writing {len(plan)} slides")
         with ThreadPoolExecutor(6) as ex:
             content = {"slides": list(ex.map(one_as_planned, plan))}
         calls += len(plan) + len(retried)
@@ -2157,6 +2174,7 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
     fill_agenda(slides, plan)
     is_fixed = lambda i: bool(slides[i].get("fixed")) or slides[i].get("archetype") in ("agenda", "section_divider")  # noqa: E731
     from engines.forge import clarity                          # a second, smaller model reads every line once
+    _stage("checking that every line reads clearly")
     clear = [clarity.review(slides, client, main_model=MODEL, task_id=task_id + "-clarity")]
     calls += 1
     def collect(r, res):                                   # every content check, after a render
@@ -2237,6 +2255,7 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
         return res
 
     def draw():
+        _stage("drawing and checking the slides")
         try:                                  # one value per figure across the deck, fixed in code where mechanical
             unified.extend(unify_figures(slides, client, critics.text_models(critics.settings(rules)),
                                          f"{task_id}-consistency"))
@@ -2256,6 +2275,7 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
 
     def repair(fails, tag):                                    # one call per failing slide, all in parallel
         nonlocal calls
+        _stage(f"fixing {len(fails)} flagged slide{'s' if len(fails) != 1 else ''}")
 
         def fix_one(item):
             n, msgs = item
@@ -2478,6 +2498,7 @@ choice or the number of items; never layout. Keep node and keep the point of the
         stall = 0
         max_rv = _cap(max(1, int(os.environ.get("MH_REVIEW_ROUNDS") or cfg["max_review_rounds"])))
         for rnd in range(1, max_rv + 1):
+            _stage(f"reviewers read the deck (round {rnd})")
             n_samples = max(1, int(os.environ.get("MH_DECK_REVIEW_SAMPLES") or 1))
             if n_samples == 1:                                # the default: one panel, exactly as before
                 pn = critics.deck_panel(client, str(pptx), slides, str(out / ".review" / f"r{rnd}"), cfg,
@@ -2541,6 +2562,7 @@ choice or the number of items; never layout. Keep node and keep the point of the
         # writer once, then the deck is reviewed again for the verdict (engines/forge/review.py)
         from engines.forge import review as RV
         ref_on, ref_k = RV.references_on(rules)             # golden library pictures beside each slide (off)
+        _stage("partner review")
         rv = RV.review_deck(str(pptx), slides=slides, client=client, out_dir=str(out / ".review"),
                             task_id=f"{task_id}-review", references=ref_k if ref_on else 0)
         reviews.append(rv)
@@ -2596,7 +2618,9 @@ choice or the number of items; never layout. Keep node and keep the point of the
     (out / "qa.json").write_text(json.dumps(qa, indent=1, default=str))
     return {"pptx": str(pptx), "calls": calls, "rounds": rounds, "rules": res["rules"], "density": density,
             "unresolved": {k: v for k, v in left.items()}, "review": verdict, "panel": panel,
-            "slides": len(slides), "design": dz}
+            "slides": len(slides), "design": dz,
+            "content_failed": [f"slide {c['node']} ({c['title']}): the model's answer could not be used, so it is a "
+                               "title-only slide" for c in content_failed]}
 
 
 if __name__ == "__main__":
