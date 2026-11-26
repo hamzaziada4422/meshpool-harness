@@ -6,17 +6,20 @@ fix once to see the test fail again. Rows from the 0.0.17 ledger were not counte
 
 ## Summary
 
-| Area | fixed | with a test | found, not fixed |
+| Area | fixed | with a test | still open |
 |---|---|---|---|
-| CPU and process waste (CPU) | 13 | 13 | 2 |
-| Web UI (UI) | 13 | 13 | 1 |
-| Agent core and tools (AG) | 15 | 15 | 2 |
-| Office files and engines (OF) | 19 | 19 | 2 |
-| Server and security (SV) | 13 | 13 | 3 |
-| Command line and setup (CL) | 13 | 13 | 3 |
+| CPU and process waste (CPU) | 13 | 13 | 0 |
+| Web UI (UI) | 13 | 13 | 0 |
+| Agent core and tools (AG) | 15 | 15 | 0 |
+| Office files and engines (OF) | 19 | 19 | 0 |
+| Server and security (SV) | 14 | 14 | 2 |
+| Command line and setup (CL) | 13 | 13 | 0 |
 | Lead (LD) | 8 | 7 | 0 |
 | Later pass (LP, LQ) | 12 | 12 | 3 |
-| all | 106 | 105 | 5 |
+| all | 107 | 106 | 5 |
+
+"Still open" counts what the "Found, not fixed" section lists today: one question for the owner and four known limits.
+What the first pass found but left was fixed in the later pass.
 
 The one fix without a test is LD-07. The race behind it could not be made to happen reliably.
 
@@ -134,6 +137,7 @@ tests that slept a fixed time now wait for an event).
 | SV-11 | The browser was opened with the app's lifetime launch key on its command line. The key is now single-use. |
 | SV-12 | A blank folder path became the app's own working folder. |
 | SV-13 | The mp_s session cookie reached every other server on 127.0.0.1 the user opened in the same browser, since cookies are not scoped by port. That server could replay it to GET / and read the API token. The cookie alone now gets a page without the token. The token comes back only when the cookie arrives with a per-launch page secret that the meshpool page keeps in localStorage, which is scoped to its own origin and port. |
+| SV-14 | The Office panel token was baked into taskpane.html, which any local process can fetch without a token. The page now carries none: the panel pairs, the user allows its code in the app, and only then does it get a session token (ui/office_pair.py; app/tests/test_sv_office_pair.py). |
 
 ## Command line and setup (app/tests/test_cl_b018.py)
 
@@ -173,11 +177,11 @@ tests that slept a fixed time now wait for an event).
 ## Found, not fixed
 
 Needs the owner (a design decision):
-- SV: The Office panel token is in taskpane.html, which any local process can fetch without a token. Office loads the
-  page without a secret, so closing this needs a different design.
 - SV: The launch key printed in the terminal in browser mode still lasts for the app's life (testkit scripts reuse it).
 
 Known limits:
+- SV-14: A process that reads the Office webview's memory, or one that the user lets in by allowing its code, can
+  still use the panel's routes. A paired panel can answer approvals "yes" once, as before; "always" stays in the app.
 - LP-01: In a container without `timeout` (coreutils or busybox), Stop ends only the top process.
 - LP-05: An old chat that names an upload by path loses that file after 30 days. Today only company profiles upload,
   and learning a profile copies the files into the brand store.

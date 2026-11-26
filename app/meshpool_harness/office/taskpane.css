@@ -52,3 +52,8 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .note { flex: 1; color: var(--muted); font-size: 12px; }
 .off { padding: 24px 14px; }
 .off h2 { font-size: 15px; margin: 0 0 6px; }
+.pair { padding: 16px 14px; }
+.pair h2 { font-size: 15px; margin: 0 0 6px; }
+.pair p { margin: 0 0 8px; }
+.pair .code { font: 600 26px/1.2 ui-monospace, Consolas, monospace; letter-spacing: 2px; margin: 10px 0; }
+body.unpaired #newChat, body.unpaired #ctx, body.unpaired #quick, body.unpaired #log, body.unpaired #status, body.unpaired #composer { display: none; }

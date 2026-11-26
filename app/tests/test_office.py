@@ -28,6 +28,14 @@ def home(tmp_path, monkeypatch):
     return tmp_path
 
 
+def _panel_token(host: str = "Excel") -> str:
+    """A session token the way a real panel gets one: it asks to pair, and the user allows its code in the app."""
+    from meshpool_harness.ui import office_pair as OP
+    r = OP.start(host)
+    assert OP.decide(r["code"], True)
+    return OP.check(r["pair"])["token"]
+
+
 def _check_certs(made):
     from cryptography import x509
     ca = x509.load_pem_x509_certificate(Path(made["ca"]).read_bytes())
@@ -161,7 +169,7 @@ def test_https_listener_serves_the_panel_with_the_token(home, monkeypatch):
         base = f"https://localhost:{OF.port()}"
         with urllib.request.urlopen(base + "/office/taskpane.html", context=ctx, timeout=10) as r:
             html = r.read().decode()
-            assert S.OFFICE_TOKEN in html and "__MESHPOOL_TOKEN__" not in html
+            assert "mp-token" not in html and "__MESHPOOL_TOKEN__" not in html    # no token in the page: it pairs
             csp = r.headers["Content-Security-Policy"]
             assert csp.startswith("frame-ancestors 'self' https://*.officeapps.live.com") and "*" not in csp.split()[1:2]
         with urllib.request.urlopen(base + "/office/icon-80.png", context=ctx, timeout=10) as r:
@@ -170,8 +178,8 @@ def test_https_listener_serves_the_panel_with_the_token(home, monkeypatch):
             assert Image.open(io.BytesIO(r.read())).size == (80, 80)
         with pytest.raises(urllib.error.HTTPError) as e:
             urllib.request.urlopen(base + "/api/settings", context=ctx, timeout=10)
-        assert e.value.code == 403                             # the token is still required on this listener
-        req = urllib.request.Request(base + "/api/settings", headers={"X-Meshpool-Token": S.OFFICE_TOKEN})
+        assert e.value.code == 401                             # a paired panel's token is required on this listener
+        req = urllib.request.Request(base + "/api/settings", headers={"X-Meshpool-Token": _panel_token()})
         with urllib.request.urlopen(req, context=ctx, timeout=10) as r:
             assert "fields" in json.loads(r.read())
         req = urllib.request.Request(base + "/office/taskpane.html", headers={"Host": "evil.example"})
@@ -282,14 +290,15 @@ def test_the_panel_listener_only_serves_the_panel_and_its_calls(home):
             except urllib.error.HTTPError as e:
                 return e.code, b""
         code, html = get(base + "/office/taskpane.html", context=ctx)
-        assert code == 200 and S.OFFICE_TOKEN.encode() in html and S.TOKEN.encode() not in html
-        assert get(base + "/api/settings", S.OFFICE_TOKEN, context=ctx)[0] == 200
-        assert get(base + "/api/settings", S.TOKEN, context=ctx)[0] == 403          # the app's token is not for here
-        assert get(base + "/api/memory", S.OFFICE_TOKEN, context=ctx)[0] == 404      # nothing else of the app
-        assert get(base + "/", S.OFFICE_TOKEN, context=ctx)[0] == 404
+        assert code == 200 and S.TOKEN.encode() not in html
+        tok = _panel_token()
+        assert get(base + "/api/settings", tok, context=ctx)[0] == 200
+        assert get(base + "/api/settings", S.TOKEN, context=ctx)[0] == 401          # the app's token is not for here
+        assert get(base + "/api/memory", tok, context=ctx)[0] == 404                 # nothing else of the app
+        assert get(base + "/", tok, context=ctx)[0] == 404
         mp = f"http://127.0.0.1:{main.server_address[1]}"
         assert get(mp + "/office/taskpane.html")[0] != 200                            # never on the app's own port
-        assert get(mp + "/api/settings", S.OFFICE_TOKEN)[0] == 403
+        assert get(mp + "/api/settings", tok)[0] == 403
 
         def body_of(path, payload):
             h = S.OfficeHandler.__new__(S.OfficeHandler)
