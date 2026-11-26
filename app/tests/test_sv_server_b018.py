@@ -356,7 +356,37 @@ def test_editor_save_that_cannot_write_is_a_plain_400(httpd, tmp_path, monkeypat
     assert sorted(p.name for p in proj.iterdir()) == ["x.csv"]          # no temporary file left behind
 
 
-def _serve_quietly(monkeypatch, tmp_path, desktop: bool):
+# ---------------------------------------------------------------------------------------------------- SV-11
+def test_the_address_handed_to_a_browser_or_window_works_once(httpd, monkeypatch):
+    """SV-11: the app opened its window or browser with the one launch key that stays valid for the life of the app:
+    webbrowser.open puts it on the browser's command line (readable by every local user in /proc/<pid>/cmdline while
+    that browser runs), on Windows the window process gets it as an argument, and the browser keeps it in its history
+    file. Any of them could load the page and take the API token. The address the app hands out now carries a key of
+    its own that opens the page once (a short grace covers a double load); the window keeps its session cookie."""
+    import webbrowser
+    monkeypatch.delenv("MH_UI_OPEN_PAGE", raising=False)
+    opened = []
+    monkeypatch.setattr(webbrowser, "open", lambda url, *a, **k: opened.append(url) or True)
+    monkeypatch.setattr(S, "ON_SHOW", [])
+    st, _ = _post(httpd, "/show", b"{}", token="none")    # a second launch, no window of ours: a browser opens
+    assert st == 200 and len(opened) == 1
+    url = opened[0]
+    assert S.LAUNCH_KEY not in url and "?k=" in url
+    path = url.split(f":{httpd}", 1)[1]
+    st, body, r = _get(httpd, path)
+    assert st == 200 and S.TOKEN.encode() in body
+    cookie = r.getheader("Set-Cookie").split(";")[0]
+    monkeypatch.setattr(S, "ONCE_GRACE_S", 0, raising=False)
+    time.sleep(0.05)
+    st, body, _ = _get(httpd, path)                       # the same address later, from history or ps: refused
+    assert st == 403 and S.TOKEN.encode() not in body
+    st, body, _ = _get(httpd, path, {"Cookie": cookie})   # the window that opened it reloads with its cookie
+    assert st == 200 and S.TOKEN.encode() in body
+    st, body, _ = _get(httpd, f"/?k={S.LAUNCH_KEY}")      # the link printed in the terminal still opens the app
+    assert st == 200
+
+
+def _serve_quietly(monkeypatch, tmp_path, desktop: bool, open_browser: bool = False):
     """Run the real serve() on a free port with its background helpers stubbed; returns (port, stop)."""
     from meshpool_harness import autoupdate as AU
     from meshpool_harness import harnesses as HR
@@ -375,7 +405,7 @@ def _serve_quietly(monkeypatch, tmp_path, desktop: bool):
     monkeypatch.delenv("MH_UI_OPEN_PAGE", raising=False)
     ready = threading.Event()
     box = {}
-    t = threading.Thread(target=lambda: S.serve(_free_port(), open_browser=False, desktop=desktop,
+    t = threading.Thread(target=lambda: S.serve(_free_port(), open_browser=open_browser, desktop=desktop,
                                                 on_ready=lambda p: (box.update(port=p), ready.set())), daemon=True)
     t.start()
     assert ready.wait(20)
@@ -409,9 +439,18 @@ def test_desktop_app_log_does_not_carry_the_launch_key(monkeypatch, tmp_path, ca
 def test_browser_mode_still_prints_the_link_that_opens_the_app(monkeypatch, tmp_path, capfd):
     """SV-06 (the other half): `meshpool ui` in a terminal keeps printing the keyed link, since the user may need to
     open it by hand when no browser opened."""
-    port, stop = _serve_quietly(monkeypatch, tmp_path, desktop=False)
+    import webbrowser
+    opened = []
+    monkeypatch.setattr(webbrowser, "open", lambda url, *a, **k: opened.append(url) or True)
+    port, stop = _serve_quietly(monkeypatch, tmp_path, desktop=False, open_browser=True)
     try:
         out = capfd.readouterr().out
         assert f"http://127.0.0.1:{port}/?k={S.LAUNCH_KEY}" in out
+        end = time.time() + 5
+        while not opened and time.time() < end:
+            time.sleep(0.05)
+        assert opened and S.LAUNCH_KEY not in opened[0]   # SV-11: the browser's command line gets a one-time key
+        st, body, _ = _get(port, opened[0].split(f":{port}", 1)[1])
+        assert st == 200 and S.TOKEN.encode() in body
     finally:
         stop()

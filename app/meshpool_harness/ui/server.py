@@ -50,7 +50,7 @@ OFFICE_FRAMES = ("frame-ancestors 'self' https://*.officeapps.live.com https://*
                  "https://*.microsoft365.com https://*.cloud.microsoft")
 OFFICE_HTTPD: list = []
 OFFICE_CHATS: set = set()      # the chats the Office panel started: the only ones its token reaches
-# The page that carries TOKEN is served only to the app's own window: it opens app_url(port), whose launch key sets an
+# The page that carries TOKEN is served only to the app's own window: it opens open_url(port), whose key sets an
 # HttpOnly, SameSite=Strict session cookie. Any other local process (a sandboxed command, a script the user allowed)
 # that asks for / gets no token, so it cannot reach /api/term or /api/settings (security review: `curl
 # http://127.0.0.1:8765/` handed the token to anything on the machine). The key lives in this process's memory only.
@@ -59,8 +59,46 @@ SESSION = secrets.token_urlsafe(24)
 
 
 def app_url(port: int) -> str:
-    """The URL that opens the app: the launch key in it lets the page carry the API token."""
+    """The URL that opens the app: the launch key in it lets the page carry the API token. Printed in the terminal
+    only; a browser or window the app opens itself gets open_url(port)."""
     return f"http://127.0.0.1:{int(port)}/?k={LAUNCH_KEY}"
+
+
+# Keys of the addresses the app hands to a browser or a window. The address ends up where other processes can read
+# it (the browser's command line, the window process's arguments, the browser history), so its key opens the page
+# once; the page then has its session cookie. A second load within ONCE_GRACE_S (a webview that loads twice) works.
+_ONCE: dict = {}                     # key -> time of first use (None: not used yet)
+_ONCE_LOCK = threading.Lock()
+ONCE_GRACE_S = 20
+
+
+def open_url(port: int) -> str:
+    """A one-time address for the app's own window or browser tab."""
+    key = secrets.token_urlsafe(24)
+    with _ONCE_LOCK:
+        if len(_ONCE) > 50:          # never used ones from long ago: no window is still on its way
+            for k in [k for k, t in _ONCE.items() if t is not None][:25]:
+                _ONCE.pop(k, None)
+        _ONCE[key] = None
+    return f"http://127.0.0.1:{int(port)}/?k={key}"
+
+
+def _key_ok(key: str) -> bool:
+    if not key:
+        return False
+    if secrets.compare_digest(key, LAUNCH_KEY):
+        return True
+    with _ONCE_LOCK:
+        if key not in _ONCE:
+            return False
+        first = _ONCE[key]
+        now = time.time()
+        if first is None:
+            _ONCE[key] = now
+            return True
+        return now - first < ONCE_GRACE_S
+
+
 UI_VER = secrets.token_hex(4)
 DESKTOP = False
 LAST_PING = [time.time()]
@@ -412,7 +450,7 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
             key = parse_qs(u.query).get("k", [""])[0]
-            keyed = bool(key) and secrets.compare_digest(key, LAUNCH_KEY)
+            keyed = _key_ok(key)
             if not (keyed or self._session_ok() or os.environ.get("MH_UI_OPEN_PAGE") == "1"):
                 return self._send(403, b"<!doctype html><meta charset=utf-8><title>Meshpool</title><p>Open Meshpool "
                                        b"from its app icon, or with the link the app printed when it started.</p>",
@@ -724,7 +762,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(403, {"error": "forbidden"})
             shown = any(fn() for fn in list(ON_SHOW))
             if not shown and HTTPD[0] is not None:     # no window of ours: this instance opens one with its own key
-                webbrowser.open(app_url(HTTPD[0].server_address[1]))   # (the second launch never learns the key)
+                webbrowser.open(open_url(HTTPD[0].server_address[1]))   # (the second launch never learns the key)
                 shown = True
             return self._send(200, {"ok": True, "native": shown})
         if self.headers.get("X-Meshpool-Token") != TOKEN:
@@ -1389,7 +1427,7 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     print("  Use Quit in the app to stop Meshpool." if desktop else "  Close this window (or press Ctrl+C) to stop Meshpool.")
     print("", flush=True)                           # a log file gets the address now, not when its buffer fills
     if open_browser:
-        threading.Timer(0.8, lambda: webbrowser.open(url)).start()   # the app itself, in a browser tab (not the desktop app)
+        threading.Timer(0.8, lambda: webbrowser.open(open_url(port))).start()   # the app in a browser tab: a one-time key
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
