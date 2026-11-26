@@ -134,3 +134,63 @@ def test_slash_project_keeps_a_windows_folder_whole():
     cmds.cmd_project(r'new Taxes --folder "C:\Users\Jo Doe\Taxes"')
     assert seen == [["projects", "new", "Taxes", "--folder", r"C:\Users\Jo Doe\Taxes"]]
     assert TS.split_args('add "unbalanced') == ["add", '"unbalanced']
+
+
+# ---- CL-07: the key relay read a refused request's body as the next request, and crashed on odd input ---------------
+@pytest.fixture
+def relay(tmp_path, monkeypatch):
+    from meshpool_harness.core import key_relay as KR
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path))
+    monkeypatch.setenv("MESHPOOL_API_KEY", "sk-test-1234567890abcdef")
+    KR.stop()
+    url, tok = KR.ensure()
+    yield int(url.split(":")[2].split("/")[0]), tok
+    KR.stop()
+
+
+def test_key_relay_does_not_read_an_unread_body_as_the_next_request(relay):
+    import http.client
+    port, tok = relay
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    c.request("POST", "/v1/nothing", body=json.dumps({"model": "m", "messages": []}),
+              headers={"Authorization": "Bearer " + tok})
+    r = c.getresponse()
+    assert r.status == 404
+    r.read()
+    try:                                       # the client may reuse the connection; the relay must not misread it
+        c.request("GET", "/v1/models", headers={"Authorization": "Bearer " + tok})
+        status = c.getresponse().status
+    except (http.client.HTTPException, OSError):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        c.request("GET", "/v1/models", headers={"Authorization": "Bearer " + tok})
+        status = c.getresponse().status
+    assert status == 200
+
+
+@pytest.mark.parametrize("headers,body", [({"Content-Length": "abc"}, None), ({}, "[1, 2]")])
+def test_key_relay_answers_odd_requests_with_400(relay, headers, body):
+    import http.client
+    port, tok = relay
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    c.putrequest("POST", "/v1/chat/completions")
+    c.putheader("Authorization", "Bearer " + tok)
+    for k, v in headers.items():
+        c.putheader(k, v)
+    if body is not None:
+        c.putheader("Content-Length", str(len(body)))
+    c.endheaders(body.encode() if body is not None else None)
+    assert c.getresponse().status == 400
+
+
+def test_chatgpt_relay_answers_a_json_list_with_400(tmp_path, monkeypatch):
+    import http.client
+    from meshpool_harness.core import chatgpt_relay as CR
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path))
+    CR.stop()
+    url, tok = CR.ensure()
+    try:
+        c = http.client.HTTPConnection("127.0.0.1", int(url.split(":")[2].split("/")[0]), timeout=10)
+        c.request("POST", "/v1/chat/completions", body="[1]", headers={"Authorization": "Bearer " + tok})
+        assert c.getresponse().status == 400
+    finally:
+        CR.stop()
