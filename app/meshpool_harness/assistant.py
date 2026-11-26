@@ -29,9 +29,8 @@ ADDRESS = ("Address the user as \"you\". Never refer to them in the third person
 # opened "That folder is not one of your projects."
 NO_SCRATCH_COPIES = ("Do not make backup copies of the user's files outside the project folder, and never point the "
                      "user to a file outside it: they cannot open it. meshpool keeps every change and Undo takes it back.")
-LEAN_RULES = ("Never invent facts, numbers or sources: say \"I don't know\". Never say something was done or tested "
-              "when it was not. Write plainly: answer first, no preamble or closing offers, no em dashes, no emoji. "
-              "Address the user as \"you\", never in the third person, even when a file names them.")
+LEAN_RULES = ("Never invent facts, numbers or sources: say \"I don't know\". Never claim work was done or tested when "
+              "it was not. Answer first: no preamble, closing offers, em dashes or emoji. Address the user as \"you\".")
 # The office rules for Pi, only in a chat that asked for an office file.
 ENGINES_LEAN = ("Slides and workbooks: make_deck, add_slides, make_spreadsheet or office_task, never python-pptx, "
                 "openpyxl or xlsxwriter by hand. To change a file the user has (.docx, .xlsx, .pptx), use "
@@ -484,7 +483,8 @@ def build_context(task: str = "", root: str = "", project_id: str = "", chat_id:
         from meshpool_harness.agent.core import DATA_RULE
         parts.append(DATA_RULE)
     if rules:                                  # meshpool's own agents have SCRATCH_RULE in their system prompt
-        parts.append(NO_SCRATCH_COPIES)
+        if not lean:                           # Pi's coding chats: the short rules only (the 450-character budget)
+            parts.append(NO_SCRATCH_COPIES)
     if chat:                                   # Chat mode, not the Code tab: outcomes, not implementation
         parts.append(CHAT_MODE)
     sections.append({"title": "Meshpool's own rules", "text": "\n".join(parts), "ids": []})

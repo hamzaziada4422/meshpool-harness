@@ -420,8 +420,8 @@ def test_no_all_good_under_a_reply_that_ends_unsure():
 
 def test_the_prompt_says_you_never_the_third_person():
     from meshpool_harness import assistant as AS
-    for text in (AS.PLAIN, AS.LEAN_RULES):
-        assert 'the user as "you"' in text and "third person" in text
+    assert 'the user as "you"' in AS.PLAIN and "third person" in AS.PLAIN
+    assert 'the user as "you"' in AS.LEAN_RULES      # Pi's short rules keep within their 450-character budget
     assert "lock file" in AS.ADDRESS and "she" in AS.ADDRESS
     block = json.dumps(AS.build_context("fix the budget", rules=True, record=False, lookup=False), ensure_ascii=False)
     assert json.dumps(AS.ADDRESS, ensure_ascii=False)[1:-1] in block
