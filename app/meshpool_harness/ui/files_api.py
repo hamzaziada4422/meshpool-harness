@@ -80,17 +80,15 @@ CHAT: contextvars.ContextVar[str] = contextvars.ContextVar("meshpool_fs_chat", d
 
 
 def _uploads_ok(p: Path) -> None:
-    """Refuses a path in runs/_uploads unless it is in the folder of the chat that asks (chat A never opens chat B's
-    dropped files, whatever path a message names)."""
+    """Refuses a path in runs/_uploads outside config.upload_roots for the chat that asks: its own chat-<id> folder
+    and the folders of no chat. Chat A never opens chat B's dropped files, whatever path a message names."""
     try:
         ups = (C.runs_dir() / "_uploads").resolve()
     except OSError:
         return
     if p != ups and ups not in p.parents:
         return
-    chat = CHAT.get()
-    parts = p.relative_to(ups).parts
-    if not chat or not parts or parts[0] != f"chat-{chat}":
+    if not any(p == r or r in p.parents for r in C.upload_roots(CHAT.get() or None)):
         raise ValueError("That file belongs to another chat.")
 
 
@@ -103,7 +101,9 @@ def _other_upload(p: Path) -> bool:
         q = p.resolve()
     except OSError:
         return False
-    return ups in q.parents and q.relative_to(ups).parts[0] != f"chat-{CHAT.get()}"
+    if q.parent != ups:
+        return False
+    return q not in C.upload_roots(CHAT.get() or None)
 
 
 def safe(root_s: str, rel: str) -> tuple[Path, Path]:
