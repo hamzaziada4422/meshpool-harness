@@ -5,7 +5,8 @@
 ## Running one request
 
 - `--output-format json` prints one JSON object at the end: the reply, the session id, usage and steps. `stream-json` also prints each event as it happens.
-- `--permission-mode` is `ask`, `edits`, `auto` or `plan`. `--allowed-tools` and `--disallowed-tools` take tool names or `bash:` patterns.
+- `--permission-mode` is `ask`, `edits`, `auto` or `plan`. `--allowed-tools` and `--disallowed-tools` take tool names or `bash:` patterns. In `ask` and `edits`, ordinary commands and edits in the folder run in the OS sandbox without a question (Linux and macOS). With `-p` nobody can answer a question, so a step that needs one is refused, and the summary names each refused step and a flag that allows it.
+- `--model NAME` runs on that model. If the endpoint does not serve it, the run stops and lists the close names it does serve.
 - `--max-turns` stops after that many tool steps.
 - `--mcp-config` adds MCP servers for this run only. With `--strict-mcp-config`, only those servers start, not your saved ones or the project's.
 - `--settings FILE` applies meshpool settings for this run, from a JSON object or `KEY=VALUE` lines. Other flags still win.
@@ -21,7 +22,7 @@
 
 ## Sessions
 
-- `-c` continues the last session in this folder. `--resume ID` continues a session by id.
+- `-c` continues the last session in this folder. `--resume ID` continues a session by id. Either one runs in the mode and on the model the command line gives, or the defaults, not in the full access the session last had.
 - `--fork-session`, with `-c` or `--resume`, continues in a new session and leaves the old one as it was.
 - `--session-id ID` gives a new session the id you choose (letters, digits, `-` and `_`). With `--fork-session` it names the new session.
 - `--no-session-persistence`, with `-p`, keeps nothing of the run on disk.
