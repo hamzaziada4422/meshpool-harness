@@ -1022,9 +1022,16 @@ function commitStage(cur) {
   cur.stage = null; EASE.clear();
   const col = $("#col"); col.replaceChildren(...st.childNodes); col.classList.remove("loading");
   for (const n of col.children) n.classList.remove("enter");
+  foldHistory(col);
+  // Items are drawn only near the screen (content-visibility), and until then count as 96 px guesses: the column was
+  // scrolled to the end of the guesses, painted its top or middle for a frame, then jumped down. The scroll event of
+  // that jump arrived after the real heights, read as the reader scrolling up and unpinned the chat, so about one open
+  // in six stayed at the top (UX audit 0.0.18). The newest items get their real size before the first paint (.settle
+  // in app.css), and scroll events until the second frame never unpin.
+  col.classList.add("settle"); S.settling = true;
   S.pinned = true; scrollConv(true);
   if (cur.live) easeStart(cur.live);
-  foldHistory(col);
+  requestAnimationFrame(() => requestAnimationFrame(() => { col.classList.remove("settle"); S.settling = false; if (S.pinned) scrollConv(); }));
 }
 /* Long chats: with thousands of items directly in #col, every frame of a streaming reply laid out, hit-tested and
    paint-walked all of them, even though each skips its own content (content-visibility): a 3000-event chat used a
@@ -1267,7 +1274,9 @@ function frame() {
 // The reply grows by easing its box open to the height of its text (a line is revealed in a few frames), so the page
 // scrolls with it smoothly instead of stepping a whole line at a time.
 const EASE = new Set();
-function easeStart(node) { wakeFrame(); if (!node || EASE.has(node)) return; node.classList.add("rv"); if (!node.style.height) node.style.height = Math.round(node.firstElementChild?.offsetHeight || 0) + "px"; EASE.add(node); }
+// With reduced motion asked for, the reply simply grows: no eased height, and no frames spent easing it (UX audit 0.0.18).
+const lessMotion = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+function easeStart(node) { wakeFrame(); if (!node || EASE.has(node) || lessMotion()) return; node.classList.add("rv"); if (!node.style.height) node.style.height = Math.round(node.firstElementChild?.offsetHeight || 0) + "px"; EASE.add(node); }
 function easeEnd(node) { if (node) node.dataset.done = "1"; }
 function easeAll() {
   for (const n of EASE) {
@@ -1302,7 +1311,10 @@ function setupScroll() {
   const jd = Object.assign(document.createElement("button"), {className: "jumpdown", hidden: true, textContent: "Jump to latest", type: "button"});
   conv.parentElement.appendChild(jd);
   jd.onclick = () => { S.pinned = true; conv.scrollTop = conv.scrollHeight; jd.hidden = true; $("#input")?.focus({preventScroll: true}); };
-  conv.addEventListener("scroll", () => { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; S.pinned = gap < 80; jd.hidden = gap < 160 || S.view !== "chat" || !S.cur; }, {passive: true});
+  conv.addEventListener("scroll", () => {
+    const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight;
+    if (S.settling && S.pinned) { if (gap > 1) conv.scrollTop = conv.scrollHeight; return; }   // a chat being drawn, not the reader
+    S.pinned = gap < 80; jd.hidden = gap < 160 || S.view !== "chat" || !S.cur; }, {passive: true});
   if (window.ResizeObserver) new ResizeObserver(() => { if (S.view !== "chat" || !S.cur) { jd.hidden = true; return; } if (S.pinned) conv.scrollTop = conv.scrollHeight; else { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; jd.hidden = gap < 160; } }).observe(col);
   wakeFrame();
 }
@@ -1338,10 +1350,19 @@ function mdRender(node, text) {
       if (code) { code.appendChild(document.createTextNode(add)); pv.src = srcs[i]; continue; }
     }
     const t = document.createElement("template"); t.innerHTML = linkFiles(md(srcs[i]));
-    const nodes = [...t.content.childNodes], old = prev[i]?.nodes || [];
-    const ref = old.length ? old[0] : (prev[i + 1]?.nodes[0] || null);
-    for (const n of nodes) root.insertBefore(n, ref && ref.parentNode === root ? ref : null);
-    for (const n of old) n.remove();
+    // The block keeps its elements while it grows: a paragraph, list or table already on screen is patched where it
+    // differs (shell.js morphNode), not thrown away and drawn again each frame, so a selection in it survives and the
+    // line being written does not flash (UX audit 0.0.18: 840 elements replaced while one long reply streamed).
+    const fresh = [...t.content.childNodes], old = prev[i]?.nodes || [], nodes = [];
+    let first = old.length ? old[0] : (prev[i + 1]?.nodes[0] || null); if (first && first.parentNode !== root) first = null;
+    let k = 0;
+    for (; k < fresh.length; k++) {
+      const o = old[k], n = fresh[k], live = o && o.parentNode === root;
+      if (live && o.nodeName === n.nodeName && (o.nodeType !== 1 || o.className === n.className)) { morphNode(o, n); nodes.push(o); continue; }
+      const at = nodes.length ? nodes[nodes.length - 1].nextSibling : (live ? o : first);
+      root.insertBefore(n, at); nodes.push(n); if (live) o.remove();
+    }
+    for (; k < old.length; k++) old[k].remove();
     prev[i] = {src: srcs[i], nodes, hl: Date.now()};
   }
   while (prev.length > srcs.length) { for (const n of prev.pop().nodes) n.remove(); }
@@ -1942,7 +1963,7 @@ function panelOutputs(body) {
   body.innerHTML = `<div class="pbar"><span class="chip">${ICON.dir}${esc(projName(curRoot()))}</span><span style="flex:1"></span><button class="btn" id="oOpen" aria-label="Show every file in the folder">Browse files</button></div>
     ${outs.length ? `<ul class="outs" style="padding:10px">${outs.map(o => `<li><button data-open="${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button></li>`).join("")}</ul>` : `<div class="pnote">Files this chat makes or changes show here. Click one to preview it.</div>`}
     <div style="border-top:1px solid var(--line-2);flex:1;min-height:160px;display:flex;flex-direction:column"><div class="pnote" style="padding:8px 12px 0">All files in the folder</div><div style="flex:1;overflow:auto" id="tree"></div></div></div>`;
-  $("#oOpen").onclick = () => $("#tree")?.scrollIntoView({block: "start", behavior: "smooth"});
+  $("#oOpen").onclick = () => $("#tree")?.scrollIntoView({block: "start", behavior: lessMotion() ? "auto" : "smooth"});
   $$("[data-open]", body).forEach(b => b.onclick = () => openPreview(curRoot(), b.dataset.open));
   fsTree($("#tree"), curRoot(), {open: S.fsOpen?.root === curRoot() ? S.fsOpen.path : ""}); S.fsOpen = null;
 }

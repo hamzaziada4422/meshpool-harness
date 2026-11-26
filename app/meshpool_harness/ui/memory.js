@@ -141,7 +141,7 @@ function bindPortrait() {
     const ids = (MEM.portrait.sentences[+b.dataset.sent] || {}).ids || [];
     MEM.hl = new Set(ids); $$("[data-sent]").forEach(x => x.classList.toggle("on", x === b && ids.length));
     $$(".mem-row").forEach(r => r.classList.toggle("hl", MEM.hl.has(r.dataset.id)));
-    const first = $(".mem-row.hl"); if (first) first.scrollIntoView({block: "center", behavior: "smooth"});
+    const first = $(".mem-row.hl"); if (first) first.scrollIntoView({block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"});
     else if (ids.length) memScrollTo(ids[0]);
   });
 }

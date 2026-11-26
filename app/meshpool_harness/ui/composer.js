@@ -143,9 +143,7 @@ function renderSel() {
   if (setHTML($("#selrow"), html, true)) {
     $("#mPill").onclick = e => modelMenu(e.currentTarget);
     $("#aPill").onclick = e => permMenu(e.currentTarget);
-    $("#projSel")?.addEventListener("click", e => projectSelector(e.currentTarget));
-    $("#envSel")?.addEventListener("click", e => envSelector(e.currentTarget));
-    $("#repoSel")?.addEventListener("click", e => repoSelector(e.currentTarget));
+    for (const [id, fn] of [["projSel", projectSelector], ["envSel", envSelector], ["repoSel", repoSelector]]) { const b = $("#" + id); if (b) b.onclick = e => fn(e.currentTarget); }
   }
 }
 function renderBar() {
@@ -161,19 +159,20 @@ function renderBar() {
     <button class="send ${c.busy ? "add" : ""}" id="sendBtn" data-tip="${c.busy ? "Add to the task" : "Send"}" data-kbd="Enter" aria-label="${c.busy ? "Add to the task" : "Send"}">${ICON.send}</button>`;
   if (setHTML($("#cbar"), barHTML, true)) {       // rebuilt only when something in it changed; focus and hover survive a run
     $("#attBtn").onclick = e => plusMenu(e.currentTarget);
-    $("#planChip")?.addEventListener("click", () => setPlan(false));
+    const on = (id, fn) => { const b = $("#" + id); if (b) b.onclick = fn; };    // onclick: a kept button is bound once
+    on("planChip", () => setPlan(false));
     window.cbar010bind?.();
-    $("#styleChip")?.addEventListener("click", e => styleMenu(e.currentTarget));
-    $("#sendBtn")?.addEventListener("click", () => sendNow(false));
-    $("#stopBtn")?.addEventListener("click", stopNow);
-    $("#intrBtn")?.addEventListener("click", () => { if ($("#input").value.trim() || S.attachments.length) sendNow(true); else { $("#input").focus(); toast("Type what to do instead, then press Send now."); } });
+    on("styleChip", e => styleMenu(e.currentTarget));
+    on("sendBtn", () => sendNow(false));
+    on("stopBtn", stopNow);
+    on("intrBtn", () => { if ($("#input").value.trim() || S.attachments.length) sendNow(true); else { $("#input").focus(); toast("Type what to do instead, then press Send now."); } });
   }
   renderSel();
   const goal = S.cur?.view?.goal;
   const touch = matchMedia("(pointer: coarse)").matches;
   const hintHTML = (goal ? `<span class="goalh" title="${esc(goal)}">Goal: <b>${esc(clip(goal, 70))}</b> <button class="linkbtn" id="goalClr">Clear</button></span>${c.busy && !touch ? " · " : ""}` : "")
     + (c.busy && !touch ? `Enter adds to the task${store("escstop") === "off" ? "" : " · Esc stops"}` : "");
-  if (setHTML($("#hintTxt"), hintHTML)) { $("#goalClr")?.addEventListener("click", () => setGoal("")); }
+  if (setHTML($("#hintTxt"), hintHTML)) { const g = $("#goalClr"); if (g) g.onclick = () => setGoal(""); }
   const inp = $("#input"), pj = S.view === "project" ? S.pj.find(p => p.id === S.pjId) : null;
   const code = S.mode === "code" && !S.cur;
   const ph = c.busy ? "Reply" : S.cur ? "Reply" : pj ? `Start a chat in ${pj.name}` : code ? "Describe a task or ask a question" : "What would you like to do?";

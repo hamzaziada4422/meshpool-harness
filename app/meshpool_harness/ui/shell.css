@@ -4,10 +4,18 @@
    switches all of it off (app.css). */
 
 /* ---------- shell and sidebar ---------- */
-.app{--sw:288px;grid-template-columns:var(--sw) minmax(0,1fr) auto;transition:grid-template-columns var(--t-side) ease}
+.app{--sw:288px;grid-template-columns:var(--sw) minmax(0,1fr) auto}
 .side{background:var(--side);border-right:1px solid var(--line-2)}
 .side-in{width:288px}
 .app.noside .side,.app.autoside .side{visibility:hidden;transition:visibility 0s var(--t-side),border-color var(--t-side)}
+/* Showing and hiding the sidebar: the columns change once, and the sidebar slides in or out like a drawer, over the
+   page, with transform only. The grid width used to animate, which laid out the whole chat, the header and the
+   composer again on every frame for 200 ms (UX audit 0.0.18: 12 frames of moving layout per toggle). */
+@media (min-width:761px){
+  .side{transition:transform var(--t-side) var(--ease)}
+  .app.noside .side,.app.autoside .side{position:absolute;top:0;bottom:0;left:0;width:var(--sw-open,288px);z-index:30;transform:translateX(-100%);pointer-events:none;
+    transition:transform var(--t-menu) ease-in,visibility 0s var(--t-menu)}
+}
 .side-head{display:flex;align-items:center;gap:6px;height:44px;padding:0 10px 0 12px;flex:none}
 .side-head .iconbtn{color:var(--ink-2)}
 .wm{display:flex;align-items:center;gap:8px;min-width:0;flex:1;padding-left:2px}
@@ -25,7 +33,7 @@
 .nav{display:flex;flex-direction:column;gap:0;margin-bottom:14px}
 .nv{position:relative;display:flex;align-items:center;gap:12px;width:100%;height:34px;border:0;background:none;border-radius:var(--r-m);padding:0 10px;color:var(--ink);font-size:var(--fs-m);text-align:left;transition:background-color var(--t-hover) ease}
 .nv svg{width:16px;height:16px;color:var(--ink-2);flex:none}
-.nv:hover,.nv.on{background:var(--hover)}
+.nv:hover{background:var(--hover)}.nv.on{background:var(--sel)}
 .nv .bdot{margin-left:auto;margin-right:2px}
 .nv .nvplus{margin-left:auto;display:none;place-items:center;color:var(--ink-2)}
 .nv:hover .nvplus{display:grid}
@@ -42,7 +50,7 @@
 .threads.sub{padding:0 0 4px 0}
 .th{display:flex;align-items:center;gap:10px;min-height:34px;padding:0 8px 0 10px;border-radius:var(--r-m);cursor:pointer;color:var(--ink);font-size:var(--fs-m);position:relative;outline-offset:-2px;transition:background-color var(--t-hover) ease}
 .th:hover{background:var(--hover)}
-.th.on{background:var(--hover)}
+.th.on{background:var(--sel)}
 .th .tt{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;mask-image:linear-gradient(90deg,#000 calc(100% - 18px),transparent);-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 18px),transparent)}
 .th:not(:hover):not(.on) .tt{mask-image:none;-webkit-mask-image:none}
 .th .tt small.tf{display:block;font-size:var(--fs-xs);color:var(--ink-3);line-height:1.2}
@@ -60,7 +68,7 @@
 .th .end .tm{display:none}
 .dot{width:7px;height:7px;border-radius:50%;flex:none;background:transparent}
 .dot.run{background:var(--brand);animation:mp-breathe 1.4s ease-in-out infinite}
-.dot.done{background:var(--pool);animation:mp-lightup .4s ease-out both}
+.dot.done{background:var(--pool);animation:mp-lightup var(--t-med) ease-out both}
 .dot.wait{background:var(--warn)}
 .si{display:inline-grid;color:var(--ink-3)}.si svg{width:14px;height:14px}.si.warn{color:var(--warn)}.si.pr{color:var(--ink-2)}
 .empty-side{color:var(--ink-3);font-size:var(--fs-s);padding:6px 10px 10px;line-height:1.45}
@@ -123,6 +131,10 @@
 .composer-wrap{padding:0 24px 8px}
 .composer{max-width:var(--colw,656px);border-radius:var(--r-xl);background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow-s)}
 .composer:focus-within{border-color:var(--line-3)}
+/* Reached with the keyboard (html.kbd, set on Tab in shell.js), the message box shows the same focus ring as the other
+   fields: its border alone went from #E0E0E0 to #CBCBCB, a 1.2:1 change nobody can see (UX audit 0.0.18). A click
+   into the box keeps the quiet border. */
+.kbd .composer:focus-within{border-color:var(--focus);box-shadow:0 0 0 3px var(--pool-soft),var(--shadow-s)}
 .composer textarea{padding:16px 18px 4px;min-height:56px;font-size:var(--fs-m)}
 .cbar{padding:4px 10px 10px}
 .pill{border-radius:var(--r-m);color:var(--ink-2)}

@@ -14,8 +14,9 @@ window.cbar010 = function () {
   return xr + ic;
 };
 window.cbar010bind = function () {
-  $("#xrayBtn")?.addEventListener("click", e => xray010(e.currentTarget));
-  $("#incogBtn")?.addEventListener("click", () => setIncognito010(!S.draft.incognito));
+  const x = $("#xrayBtn"), i = $("#incogBtn");                       // onclick: renderBar keeps these buttons
+  if (x) x.onclick = e => xray010(e.currentTarget);
+  if (i) i.onclick = () => setIncognito010(!S.draft.incognito);
 };
 function setIncognito010(on) {
   if (S.cur) return;
