@@ -1883,6 +1883,7 @@ function applyEvRaw(ev) {
       // the count is of the user's files: an engine's build and check files (qa.json, slides.json...) are not counted
       const nf = t && t.changed ? (t.changed.filter(c => !pvBuildFile(c.path)).length || t.changed.length) : 0;
       if (t && cur.lastFoot && nf && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; safe(() => pvTurnCards(cur, cur.lastFoot, t.n)); cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${nf} file${nf === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }
+      if (t && t.changed && typeof pvRefresh === "function") safe(() => pvRefresh(curRoot(), t.changed.map(c => c.path)));   // an open preview of a changed file
       break; }
     case "turn_end": {
       endLook(cur, "");

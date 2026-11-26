@@ -129,6 +129,49 @@ def _engine_tool(name: str) -> bool:
     return n == "office_task" or (n.startswith("mcp__meshpool_office__") and n.rsplit("__", 1)[-1] in ENGINE_MCP)
 
 
+_MADE_EXT = (".pptx", ".docx", ".xlsx", ".pdf")
+
+
+def _job_file(out: str, root) -> str:
+    """The deliverable an office engine call reports it wrote ("Saved as: X", "saved it as X", "Saved the Word document:
+    X", or the first deliverable under "Files:"), as a path that exists, else ""."""
+    text = str(out or "")
+    cands = re.findall(r"Saved as: (.+?\.(?:pptx|docx|xlsx|pdf))\b", text) + \
+        re.findall(r"saved it as (.+?\.(?:pptx|docx|xlsx|pdf))\b", text) + \
+        re.findall(r"Saved the (?:Word document|PDF): (.+?\.(?:docx|pdf))\b", text) + \
+        re.findall(r"^- (.+?\.(?:pptx|docx|xlsx|pdf))\s*$", text, re.M)
+    for c in cands:
+        p = Path(c.strip())
+        p = p if p.is_absolute() else Path(root or ".") / p
+        if p.is_file():
+            return str(p)
+        hit = next(iter(Path(root or ".").glob(f"**/{Path(c).name}")), None) if root else None
+        if hit is not None and hit.is_file():
+            return str(hit)
+    return ""
+
+
+def _made_summary(path: str) -> str:
+    """A plain line for a job that finished when the model's last reply came back empty: "Made X.pptx, 7 slides." """
+    p = Path(path or "")
+    if not path or not p.is_file():
+        return ""
+    extra = ""
+    try:
+        if p.suffix.lower() == ".pptx":
+            from pptx import Presentation
+            n = len(Presentation(str(p)).slides)
+            extra = f", {n} slide{'s' if n != 1 else ''}"
+        elif p.suffix.lower() == ".xlsx":
+            import zipfile
+            with zipfile.ZipFile(p) as z:
+                n = len([x for x in z.namelist() if re.match(r"xl/worksheets/sheet\d+\.xml$", x)])
+            extra = f", {n} sheet{'s' if n != 1 else ''}"
+    except Exception:  # noqa: BLE001 - the name alone still says what was made
+        extra = ""
+    return f"Made {p.name}{extra}."
+
+
 def _codex_prompt(lean: bool = False, work: bool = False) -> str:
     """Codex's base instructions (app/defaults/engines/codex/prompt.md, Apache-2.0, see its NOTICE comment, which is
     for readers of the file and is not sent to the model). lean: the short codex-tuned prompt (prompt-core.md).
@@ -3736,6 +3779,14 @@ class Agent:
                         "[Meshpool] Your reply ran out of output space while you were thinking, before any answer. "
                         "Give your answer now, briefly, without more deliberation.")})
                     continue
+                if not calls and not content.strip() and not said and g.get("made"):
+                    # Daniel, 0.0.19: the deck job finished and wrote its file, then the last model turn came back
+                    # empty and a red "empty reply" error ended the turn. The job's own result says what was made.
+                    done = _made_summary(g["made"])
+                    if done:
+                        self.messages.append({"role": "assistant", "content": done})
+                        self.emit({"type": "assistant", "text": done, "streamed": False, "has_tools": False})
+                        return done
                 if not calls and not content.strip() and not said:
                     # nothing said and nothing asked for: not a reply to keep in the history
                     self.emit({"type": "assistant", "text": "", "streamed": streamed, "has_tools": False})
@@ -3939,6 +3990,10 @@ class Agent:
                     step_out += outs
                     for c, out in zip(batch, outs):
                         self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": clean(out)})
+                        if _engine_tool((c.get("function") or {}).get("name") or ""):   # the file an office job made
+                            made = _job_file(str(out), self.root)
+                            if made:
+                                g["made"] = made
                         if (c.get("function") or {}).get("name") in ("apply_patch", "edit", "write_file", "edit_file") \
                                 and str(out).lstrip().startswith(("ERROR", "Error", "error:")):
                             edit_failed = True

@@ -129,6 +129,18 @@ async function openPreview(root, path) {
   };
   load();
 }
+// A file a turn changed while its preview is open: its pages are read again, on the same page (a deck that grew from
+// 6 to 7 slides kept "2 / 6" until it was reopened: Daniel, 0.0.19). app.js calls this with the turn's changed files.
+async function pvRefresh(root, paths) {
+  if (!PVX.open || PVX.snippet || !PVX.path || PVX.root !== root || !(paths || []).includes(PVX.path)) return;
+  if (!PVX.m || PVX.m.kind !== "pages") return;
+  const id = PVX.id, keep = PVX.page || 0;
+  let m; try { m = await api(`/api/preview?${pvQuery(root, PVX.path)}`); } catch (e) { return; }
+  if (id !== PVX.id) return;
+  if (m.state === "working") { clearTimeout(PVX.poll); PVX.poll = setTimeout(() => pvRefresh(root, paths), 1000); return; }
+  if (m.kind !== "pages") return;
+  PVX.m = m; pvPages(m); pvGo(keep);
+}
 // Code from a reply (no file): html or svg, shown the same way.
 async function openPreviewCode(lang, code) {
   if (typeof edGuard === "function" && !await edGuard()) return;
