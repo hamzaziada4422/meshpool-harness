@@ -249,8 +249,8 @@ def check(path, schemas: str | None = None, _name: str | None = None) -> dict:
         try:                                # visible checks: only the part that ran is recorded (no-op when idle)
             from meshpool_harness import checks
             subj = os.path.basename(str(path)) if isinstance(path, (str, os.PathLike)) else ""
-            kind, label = ("office_schema", "Office schema") if folder else ("office_structure",
-                                                                              "Office file structure")
+            kind, label = ("office_schema", "the file follows Office's format rules") if folder else (
+                "office_structure", "the file opens and reads correctly")
             (checks.passed if not problems else checks.failed)(kind, label, None, subj)
         except Exception:  # noqa: BLE001
             pass

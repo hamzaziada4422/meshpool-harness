@@ -134,10 +134,10 @@
 .composer-wrap{padding:0 24px 8px}
 .composer{max-width:var(--colw,656px);border-radius:var(--r-xl);background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow-s)}
 .composer:focus-within{border-color:var(--line-3)}
-/* Reached with the keyboard (html.kbd, set on Tab in shell.js), the message box shows the same focus ring as the other
+/* Reached with the keyboard (html.kbdnav, set on Tab in shell.js), the message box shows the same focus ring as the other
    fields: its border alone went from #E0E0E0 to #CBCBCB, a 1.2:1 change nobody can see (UX audit 0.0.18). A click
    into the box keeps the quiet border. */
-.kbd .composer:focus-within{border-color:var(--focus);box-shadow:0 0 0 3px var(--pool-soft),var(--shadow-s)}
+.kbdnav .composer:focus-within{border-color:var(--focus);box-shadow:0 0 0 3px var(--pool-soft),var(--shadow-s)}
 .composer textarea{padding:16px 20px 4px;min-height:56px;font-size:var(--fs-m)}
 .cbar{padding:4px 12px 12px}
 .pill{border-radius:var(--r-m);color:var(--ink-2)}
@@ -331,7 +331,7 @@
 .mhead2 h2{font:500 var(--fs-l)/1 var(--body);margin:0}
 .mnav{background:var(--side);border-right:1px solid var(--line-2);padding:16px 12px;gap:0}
 .msearch{display:flex;align-items:center;gap:8px;border:1px solid var(--line-3);border-radius:var(--r-m);padding:0 12px;height:36px;color:var(--ink-3);margin-bottom:8px}
-.kbd .msearch:focus-within{border-color:var(--focus)}.msearch input{flex:1;min-width:0;border:0;background:none;outline:none;color:var(--ink);font-size:var(--fs-m)}
+.kbdnav .msearch:focus-within{border-color:var(--focus)}.msearch input{flex:1;min-width:0;border:0;background:none;outline:none;color:var(--ink);font-size:var(--fs-m)}
 .msearch svg{width:16px;height:16px}
 .mgrp{display:flex;flex-direction:column;gap:2px;padding:8px 0;border-top:1px solid var(--line-2)}.mgrp:first-of-type{border-top:0;padding-top:2px}
 .mnav button{display:flex;align-items:center;gap:8px;height:32px;white-space:nowrap;padding:0 12px;border-radius:var(--r-m);color:var(--ink);font-size:var(--fs-m);font-weight:400;transition:background-color var(--t-hover) var(--ease)}

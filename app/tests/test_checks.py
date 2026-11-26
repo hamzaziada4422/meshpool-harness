@@ -32,10 +32,11 @@ def test_the_line_lists_what_passed_with_counts(home):
     K.passed("office_schema", "Office schema", None, "a.pptx")
     K.passed("sources", "sources", 14)
     s = K.summary("c1")
-    assert s["line"] == "Checked: 20 design rules, Office schema, 14 sources" and s["failed"] == 0
+    assert s["line"] == ("Checked the deck: all 20 checks passed. Checked the file follows Office's own format rules. "
+                         "Checked 14 sources.") and s["failed"] == 0
     assert K.final_line("c1") == s["line"]
     ev = K.events_for("c1")
-    assert [e["type"] for e in ev] == ["check"] * 3 and ev[0]["text"] == "20 design rules passed"
+    assert [e["type"] for e in ev] == ["check"] * 3 and ev[0]["text"] == "20 checks on the deck passed"
     assert K.events_for("c1", since=2)[0]["kind"] == "sources"
     K.end("c1")
     assert K.current() == ""
@@ -46,7 +47,7 @@ def test_a_rule_that_did_not_run_is_never_listed(home):
     K.rules_ran("deck_rules", "design rules", {"P0": "pass", "P1": "pass", "P2": "not_run", "P3": "not_run",
                                                "P4": "warn", "P5": "fail"}, "d.pptx")
     s = K.summary("c2")
-    assert s["line"] == "Checked: 3 design rules (1 did not pass)"        # P0, P1, P4 ran and passed; P5 failed
+    assert s["line"] == "Checked the deck: 3 of 4 checks passed."        # P0, P1, P4 ran and passed; P5 failed
     K.begin("c3")
     K.rules_ran("deck_rules", "design rules", {"P0": "not_run"})
     assert K.summary("c3")["line"] == ""                                     # nothing ran: no line at all
@@ -65,14 +66,14 @@ def test_the_same_deck_checked_again_counts_once(home):
     import time
     time.sleep(1.2)
     K.passed("deck_rules", "design rules", 18, "a.pptx")
-    assert K.summary("c5")["line"] == "Checked: 18 design rules"
+    assert K.summary("c5")["line"] == "Checked the deck: all 18 checks passed."
 
 
 def test_a_child_process_finds_the_run_through_the_pointer_file(home, monkeypatch):
     K.begin("c6")
     monkeypatch.delenv("MH_CHECK_RUN")                     # a tool server started before the turn has no env var
     assert K.current() == "c6" and K.passed("sources", "sources", 2)
-    assert K.summary("c6")["line"] == "Checked: 2 sources"
+    assert K.summary("c6")["line"] == "Checked 2 sources."
 
 
 def test_workbook_rules_are_recorded_and_the_result_is_unchanged(home):
@@ -91,7 +92,7 @@ def test_workbook_rules_are_recorded_and_the_result_is_unchanged(home):
     items = K.summary("w1")["items"]
     assert any(i["kind"] == "workbook_rules" for i in items if i["ok"]) == (ok > 0)
     if ok:
-        assert f"{ok} workbook rule" in K.summary("w1")["line"]
+        assert f"{ok} of " in K.summary("w1")["line"] or f"all {ok} checks" in K.summary("w1")["line"]
 
 
 def test_a_deck_build_records_its_rules(home):
@@ -108,7 +109,7 @@ def test_a_deck_build_records_its_rules(home):
     ok = sum(1 for s in ran if s in ("pass", "warn"))
     bad = sum(1 for s in ran if s == "fail")
     sm = K.summary("d1")
-    assert ok > 0 and f"{ok} design rule" in sm["line"]
+    assert ok > 0 and (f"{ok} of " in sm["line"] or f"all {ok} checks" in sm["line"])
     assert sm["failed"] == bad
     assert "P0" not in sm["line"] and not any(r == "not_run" for r in [])      # not_run rules are never counted
     nr = sum(1 for s in res["rules"].values() if s == "not_run")

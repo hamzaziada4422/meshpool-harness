@@ -192,7 +192,10 @@ def chat_record(sid: str, meta: dict | None = None, sess: dict | None = None) ->
         return None
     meta = meta if meta is not None else _jread(d / "meta.json", {})
     texts, tools, outs, ins = [], [], [], []
+    reply = ""
     for m in sess.get("messages") or []:
+        if m.get("role") == "assistant" and _text_of(m.get("content")):
+            reply = _text_of(m.get("content"))                 # the last thing said: what a next-step chip must relate to
         if m.get("role") == "user":
             t = _text_of(m.get("content"))
             if t and not AUTO_TEXT.match(t) and not t.startswith(("[Meshpool]", "[meshpool]")):
@@ -213,7 +216,7 @@ def chat_record(sid: str, meta: dict | None = None, sess: dict | None = None) ->
                         (ins if _IN_TOOLS.match(name) else outs if _OUT_TOOLS.search(name) else ins).append(base)
     route = sess.get("route") or {}
     return {"id": sid, "ts": float(sess.get("updated") or 0), "created": float(sess.get("created") or 0),
-            "title": sess.get("title") or "", "texts": texts, "tools": tools, "steps": len(tools),
+            "title": sess.get("title") or "", "texts": texts, "tools": tools, "steps": len(tools), "reply": reply[:4000],
             "outputs": list(dict.fromkeys(outs + list(meta.get("outputs") or []))),
             "inputs": list(dict.fromkeys(ins + list(meta.get("inputs") or []))),
             "project_id": meta.get("project_id") or "", "incognito": bool(meta.get("incognito")),
@@ -738,9 +741,35 @@ def output_kind(chat: dict) -> str:
     return ""
 
 
-def followup_chips(kind: str) -> list[dict]:
-    """The fixed next-step table for an output type: [{id, label, text}]."""
-    return [{"id": i, "label": lab, "text": txt} for i, lab, txt in FOLLOWUPS.get(kind, [])]
+# A chip is offered only when the reply or the request is about what it does (priya018: a sensitivity table, a trend
+# chart and a one-slide summary after a plain list of room sizes). Each pattern is matched against the last request
+# and the last reply; "block" patterns rule a chip out. A chip with no entry here is always offered.
+_RELATES = {
+    "sens": (r"\b(forecast|scenario|assumption|sensitiv|growth|margin|revenue|valuation|dcf|budget|price|pricing|cost|irr|npv|"
+             r"projection|profit|cash ?flow|return)\b", None),
+    "chart": (r"\b(trend|over time|monthly|quarterly|yearly|annual|by month|by year|by quarter|series|history|forecast|timeline|"
+              r"growth|weekly|daily)\b", None),
+    "onepager": (r"\b(report|proposal|paper|white ?paper|strategy|analysis|study|chapters?|sections?|findings)\b",
+                 r"\b(one[- ]page|one page|short|brief|update|note|letter)\b"),
+    "cover": (r"\b(send|email|e-mail|share|client|customer|letter|proposal|application|submit|forward)\b", None),
+}
+
+
+def _chip_relates(chip_id: str, chat: dict | None) -> bool:
+    rule = _RELATES.get(chip_id)
+    if rule is None or chat is None:
+        return True
+    text = ((chat.get("texts") or [""])[-1] + " " + (chat.get("reply") or "")).lower()
+    want, block = rule
+    if block and re.search(block, text):
+        return False
+    return bool(re.search(want, text))
+
+
+def followup_chips(kind: str, chat: dict | None = None) -> list[dict]:
+    """The fixed next-step table for an output type: [{id, label, text}]. With the chat, only the chips that relate to
+    its last request and reply (none when none do)."""
+    return [{"id": i, "label": lab, "text": txt} for i, lab, txt in FOLLOWUPS.get(kind, []) if _chip_relates(i, chat)]
 
 
 def detect_followup(c: Corpus, chat_id: str | None = None) -> list[dict]:
@@ -753,7 +782,7 @@ def detect_followup(c: Corpus, chat_id: str | None = None) -> list[dict]:
             continue
         where = "task" if ch.get("scheduled") else "turn"
         n = len(ch["texts"])
-        for chip in followup_chips(kind):
+        for chip in followup_chips(kind, ch):
             out.append(_card("followup", chip["label"], chip["text"],
                              [{"text": f"This reply made a {kind}", "chat_id": ch["id"], "ts": ch["ts"]}],
                              {"kind": "send", "label": chip["label"], "payload": {"text": chip["text"], "chip": chip["id"]}},

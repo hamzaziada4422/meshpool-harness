@@ -74,9 +74,9 @@ function shell() {
   setupComposer();
   setupPanelResize();
   document.addEventListener("keydown", globalKeys);
-  // Keyboard or pointer: a field reached with Tab shows a focus ring that a click into it does not (.kbd in shell.css).
-  document.addEventListener("keydown", e => { if (e.key === "Tab") document.documentElement.classList.add("kbd"); }, true);
-  document.addEventListener("pointerdown", () => document.documentElement.classList.remove("kbd"), true);
+  // Keyboard or pointer: a field reached with Tab shows a focus ring that a click into it does not (.kbdnav in shell.css).
+  document.addEventListener("keydown", e => { if (e.key === "Tab") document.documentElement.classList.add("kbdnav"); }, true);
+  document.addEventListener("pointerdown", () => document.documentElement.classList.remove("kbdnav"), true);
   if (store("sidehidden")) $("#app").classList.add("noside");
   $("#app").classList.toggle("steps", !!S.steps);
   syncMode();
@@ -101,7 +101,7 @@ function setAppMode3(m) {
   const kind = S.cur && (S.cur.view?.kind === "code" && !S.cur.view?.scratch ? "code" : "chat");
   if (S.view === "page" || !S.cur || kind !== m) newThread(); else { renderSide(); renderBar(); }
 }
-const isCodeThread = t => t && t.kind === "code" && !t.scratch;
+const isCodeThread = t => t && t.kind === "code" && !t.scratch && t.code_mode !== false;   // code_mode false: a chat in a folder, never started from the Code tab
 function toggleSteps() {
   S.steps = !S.steps; store("steps", S.steps);
   $("#app").classList.toggle("steps", S.steps);
@@ -281,7 +281,7 @@ function renderSide() {
     }
     html += `<button class="linkbtn addfolder" id="sideAddFolder" title="Work in a folder on this computer: it becomes a project here">${ICON.folder}<span>Add a folder</span></button>`;
     html += secHead("recents", "Recents");
-    if (open("recents")) html += rest.length ? `<ul class="threads">${(S.allRecents ? rest : rest.slice(0, 40)).map(t => thHTML(t, {})).join("")}</ul>${rest.length > 40 ? `<button class="linkbtn moreproj" id="moreRecents">${S.allRecents ? "Show fewer" : `Show all ${rest.length}`}</button>` : ""}` : `<div class="empty-side">Your chats show up here. Start one with New.</div>`;
+    if (open("recents")) html += rest.length ? `<ul class="threads">${(S.allRecents ? rest : rest.slice(0, 40)).map(t => thHTML(t, {})).join("")}</ul>${rest.length > 40 ? `<button class="linkbtn moreproj" id="moreRecents">${S.allRecents ? "Show fewer" : `Show all ${rest.length}`}</button>` : ""}` : `<div class="empty-side">${all.some(t => !isCodeThread(t) || t.project_id) ? "Everything is pinned or inside a project above." : "Your chats show up here. Start one with New."}</div>`;   // the start-one hint only when there are no chats at all (priya018)
   }
   const arch = S.threads.filter(t => t.archived && (code ? isCodeThread(t) : !isCodeThread(t)));
   if (arch.length) {
@@ -551,6 +551,7 @@ function renderTop() {
   $("#topbar").classList.toggle("newt", !v);
   const topHTML = `
     ${hidden ? `<button class="tbtn showside" id="showSide" data-tip="Show sidebar" data-kbd="${MOD}B" data-tip-pos="below" aria-label="Show sidebar">${ICON.side}<i class="ndot" ${attention() ? "" : "hidden"}></i></button>` : ""}
+    ${hidden && (v || onProject || onPage) ? `<button class="tbtn topnew" id="topNew" data-tip="New chat" data-kbd="${MOD}N" data-tip-pos="below" aria-label="New chat">${ICON.plus}</button>` : ""}
     ${pj && !onProject && v ? `<button class="chip" id="pjChip" data-tip="Open project" data-tip-pos="below">${ICON.stack}<span class="cl">${esc(pj.name)}</span></button><span class="crumb" aria-hidden="true">/</span>` : ""}
     ${!v && !onProject && !onPage && S.mode === "code" ? `<span class="toplabel">New session</span>` : ""}
     ${v || onProject ? `<span class="title" id="ttl" data-id="${esc(v?.id || "")}" ${v ? `role="button" tabindex="0" aria-haspopup="menu" data-tip="Chat options" data-tip-pos="below"` : ""}>${esc(title)}</span>${v ? `<button class="tbtn ttlchev" id="ttlChev" aria-label="Chat options" aria-haspopup="menu">${ICON.chev}</button>` : ""}` : ""}
@@ -563,6 +564,7 @@ function renderTop() {
   if (!setHTML($("#topbar"), topHTML, true)) { renderBranch(); return; }      // nothing changed: leave the header alone
   const on = (id, fn) => { const b = $("#" + id); if (b) b.onclick = fn; };      // onclick: a kept button is bound once
   on("showSide", toggleSide);
+  on("topNew", () => newThread());
   on("panelBtn", () => togglePanel(S.panel || (panelSet().includes("progress") ? "progress" : panelSet()[0]), !S.panel));
   on("shareBtn", e => exportMenu(e));
   on("devBtn", e => devPop(e));

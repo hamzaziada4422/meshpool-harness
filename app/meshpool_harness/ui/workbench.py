@@ -1616,6 +1616,38 @@ def is_build_file(rel: str) -> bool:
     return "Meshpool outputs" in p.parts[:-1] and p.suffix.lower() in BUILD_SUFFIXES
 
 
+def _sha1_file(p: Path) -> str:
+    import hashlib
+    try:
+        return hashlib.sha1(p.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def own_changes(turns: list, root) -> list:
+    """The turns as the chat shows them ("2 files changed", the file cards): a file a job copied into its "Meshpool
+    outputs" folder whose bytes are the same as a file that was already in the folder is not a change (priya018: the
+    sheets engine stages a copy of the attached rooms.xlsx, and the reply said it changed rooms.xlsx). Compared by
+    content hash, never by time. The checkpoints themselves are left as they are, so Undo is unaffected."""
+    root = Path(root) if root else None
+    out = []
+    for t in turns or []:
+        ch = t.get("changed") or []
+        keep = []
+        for c in ch:
+            rel = str(c.get("path") or "")
+            parts = rel.replace("\\", "/").split("/")
+            if root is not None and c.get("status") == "added" and "Meshpool outputs" in parts[:-1]:
+                mine = _sha1_file(root / rel)
+                twins = [root / parts[-1], *sorted(root.glob("*/" + parts[-1]))[:20]]
+                if mine and any(q.is_file() and "Meshpool outputs" not in q.parts[len(root.parts):] and _sha1_file(q) == mine
+                                for q in twins):
+                    continue
+            keep.append(c)
+        out.append(dict(t, changed=keep) if len(keep) != len(ch) else t)
+    return out
+
+
 def outputs_from(evs: list, turns: list, root: Path, found: dict | None = None) -> list[dict]:
     """Files a session created or changed, from its events (edits and writes, files its tools said they saved) and
     from what its checkpoints recorded per reply. Only files that still exist inside the folder. `found`: what the
@@ -1658,7 +1690,7 @@ def session_outputs(s, root: Path) -> list[dict]:
     _found_in_events(evs[start:], root, found)
     s._outputs_scan = (lst, key, len(evs), found)
     try:
-        turns = s.cp.turns() if s.cp else []
+        turns = own_changes(s.cp.turns(), s.cp.root) if s.cp else []
     except Exception:  # noqa: BLE001
         turns = []
     return outputs_from(evs, turns, root, found)

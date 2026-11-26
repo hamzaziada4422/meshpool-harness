@@ -878,15 +878,15 @@ def test_a_long_file_name_on_a_card_ends_in_an_ellipsis(page):
 # ---------------------------------------------------------------------------------------------------- UX-40
 def test_code_steps_are_named_in_words(page):
     """UX-40: a Code chat's steps showed their tool names ("exec command", "apply patch"), and a group with a failed
-    step read "1 step, 1 failed". Steps now read "Ran a command" and "Edited files", and the group "1 step, 1 did not
-    work". Display only: the tools themselves are unchanged."""
+    step read "1 step, 1 failed". Steps now read "Ran a command" and "Edited files", and the group "1 step, 1 had a
+    problem". Display only: the tools themselves are unchanged."""
     _fake_chat(page)
     got = page.evaluate("""() => { applyEv({type: 'user', text: 'go', i: 0});
         applyEv({type: 'tool_start', id: 'a', name: 'exec_command', summary: 'ls', i: 1}); applyEv({type: 'tool_end', id: 'a', ok: true, output: 'x', i: 2});
         applyEv({type: 'tool_start', id: 'b', name: 'apply_patch', summary: 'a.py', i: 3}); applyEv({type: 'tool_end', id: 'b', ok: false, output: '[exit 1] no', i: 4});
         return [document.querySelector('#tool-a .tn').textContent, document.querySelector('#tool-b .tn').textContent, document.querySelector('#col .work .wl').textContent]; }""")
     assert got[0] == "Ran a command" and got[1] == "Edit files", got
-    assert got[2] == "2 steps, 1 did not work", got
+    assert got[2] == "2 steps, 1 had a problem", got
     assert page.errors == [], page.errors
 
 

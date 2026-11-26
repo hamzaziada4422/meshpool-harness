@@ -356,7 +356,7 @@ def test_one_tab_style_and_no_focus_ring_until_the_keyboard():
                 r'\.ptabs \.sp\{[^}]*\}\.ptabs button\[aria-selected="true"\]', r'\.mem-chips \.chip\.on'):
         assert "background:var(--sel)" in _block(sel), sel
     assert "border-bottom-color:var(--ink)" in _block(r'\.subtabs button\[aria-selected="true"\]')
-    assert ".kbd .msearch:focus-within" in ALL_CSS and not re.search(r"(?<!\.kbd )\.msearch:focus-within", ALL_CSS)
+    assert ".kbdnav .msearch:focus-within" in ALL_CSS and not re.search(r"(?<!\.kbdnav )\.msearch:focus-within", ALL_CSS)
 
 
 # Colours that carry meaning, not decoration: GitHub's merged purple on a PR state tag, and the editor's search

@@ -259,8 +259,8 @@ def _opens_cleanly(path, failures):
         failures.append(F("X0", pr["check"], f"{pr['part']}: {pr['detail']}. Office would offer to repair "
                           "this file.", fix_scope="renderer"))
     if r["schema_validation"] == "not_run":
-        failures.append(F("X0", "schema", "Office schemas not installed; only package and relationship checks "
-                          "ran (python -m engines.forge.ooxml_check --install-schemas).", status="not_run",
+        failures.append(F("X0", "schema", "The file's format rules were not checked; the check that it opens and "
+                          "reads correctly did run.", status="not_run",
                           severity="info", fix_scope="renderer"))
 
 
@@ -718,7 +718,8 @@ def validate(path: str, rules: dict | None = None, recompute: dict | None = None
     rules_status = summarize(failures, RULES)
     try:                                    # the visible-checks recorder: the rules that ran (no-op when idle)
         from meshpool_harness import checks
-        checks.rules_ran("workbook_rules", "workbook rules", rules_status, subject=os.path.basename(str(path)))
+        checks.rules_ran("workbook_rules", "workbook rules", rules_status, subject=os.path.basename(str(path)),
+                         names={f["rule"]: f.get("message", "") for f in failures if f.get("status") == "fail"})
     except Exception:  # noqa: BLE001 - the recorder never changes a validation
         pass
     return {"file": str(path), "sha256": file_sha, "rules": rules_status, "failures": failures,
