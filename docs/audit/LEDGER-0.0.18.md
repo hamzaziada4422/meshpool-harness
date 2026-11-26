@@ -9,6 +9,9 @@ Their findings went to hunts for error messages (ER), functional fixes (PF), wor
 UI smoothness (UX), the developer command line (OM) and approvals (AP). A pre-release review (RR) and the merges (MG)
 added the rest. A row that repeats another is listed but counted once, where the row says.
 
+A third round followed on the same branch: the design pass (US, UV), the look review step (RV, UXR, VF, LP2) and the
+independent persona reviewer (PR). The feature rows, UXR-01 and PR-01, count as fixed with tests like the rest.
+
 ## Summary
 
 | Area | fixed | with a test | still open |
@@ -31,15 +34,22 @@ added the rest. A row that repeats another is listed but counted once, where the
 | Approvals (AP) | 7 | 7 | 1 |
 | Pre-release review (RR) | 12 | 12 | 0 |
 | Merge fixes (MG) | 3 | 2 | 0 |
-| all | 239 | 237 | 17 |
+| Design pass (US) | 17 | 17 | 0 |
+| Design pass check (UV) | 5 | 5 | 0 |
+| Look review step (RV, UXR) | 4 | 4 | 1 |
+| Fixes from the review step's live check (VF) | 5 | 5 | 0 |
+| Review step polish (LP2) | 6 | 6 | 2 |
+| Independent persona reviewer (PR) | 5 | 4 | 1 |
+| all | 281 | 278 | 21 |
 
-"Still open" counts what the "Found, not fixed" section lists today: two questions for the owner and fifteen known
+"Still open" counts what the "Found, not fixed" section lists today: two questions for the owner and nineteen known
 limits and open bugs, all open for 0.0.19. What the first pass found but left was fixed in the later pass.
 
 Rows listed but not counted: WF-E (counted under WF-07), SR-12 (under UX-20), SR-14 (under AP), AP-08 (under UX-33),
 OM-07 (not a bug) and UI-14 (under LD-06).
 
-Two fixes have no test. LD-07: the race behind it could not be made to happen reliably. MG-02: a word list.
+Three fixes have no test. LD-07: the race behind it could not be made to happen reliably. MG-02: a word list. PR-04:
+the look_at test passes with and without the change, so none of the tests holds it.
 
 The later pass fixed the items the first pass found but left, and closed PA-skills-13 from the 0.0.17 ledger (three
 tests that slept a fixed time now wait for an event).
@@ -398,7 +408,99 @@ A review of the release candidate by area, before the persona fixes were merged.
 
 Tests changed with no product change: test_fix_pass2_open_server.py follows the ER detail wording, test_awake.py resets
 the holder's give-up flag that PF-05 added (4f3c9b2f), a panel test waits for the UX-14 slide to end (3b3cf16e), and the
-UX tests open the top-level Permissions page (03fad180).
+UX tests open the top-level Permissions page (03fad180). Later: the live-line test and the polish UI test skip the fake
+chat's "This chat is gone" note, which they counted one run in four (38551047, ca09b450). The testkit's claude_shim
+follows a format the instructions ask for, so the reviewer's JSON reads the same as on the real adapter (ff36e256). None
+of these is counted. The Copy toast of the same merge is MG-03.
+
+## Design pass (app/tests/test_unslop018.py)
+
+Merge of d0e23e00 (the design pass branch, with the look review merged into it). After unslop by Damir Sokolovsky
+(CC BY 4.0). The owner approved the rules below, and each test holds one of them. Most tests read the UI files. The last
+two drive the real app in Chromium and are skipped when no Chromium can start.
+
+| ID | Area | What was wrong | Fix | Test | Status |
+|---|---|---|---|---|---|
+| US-01 | motion | The spring curve overshot on every button transform. It ran beside a second easing and the ease, ease-in, ease-out and ease-in-out words. Some keyframes squashed, rotated or pulsed a ring. | One easing curve. No keyframe overshoots, squashes, rotates or pulses. | test_one_easing_and_no_spring_or_overshoot | fixed |
+| US-02 | motion | Motion ran from 70 to 900 ms. | Hover and press take 120 ms, menus 160, panels 200. A longer loop is allowed only for live work, and only when it fades or turns a spinner. | test_durations_are_200ms_or_less_except_opacity_fades | fixed |
+| US-03 | motion | People who ask for less motion still got some. | Reduced motion turns everything off, pseudo-elements included. | test_reduced_motion_turns_everything_off | fixed |
+| US-04 | motion | The side panel and each child faded in, which is twice the work for one change. The progress bar animated its width, a layout on every frame. | The panel alone slides. The bar scales. | test_the_panel_slides_once_and_its_bar_scales_instead_of_growing | fixed |
+| US-05 | type | Display headings were weight 700 in Bricolage Grotesque with negative tracking. | IBM Plex only. Display at 500 with no negative tracking below 40 px. Bold defaults to 600. | test_no_700_weights_and_no_bricolage | fixed |
+| US-06 | type | Sizes of 10, 11, 15, 15.5, 18, 26 and 32 px were off the scale. The receipt line had no one look. | Sizes sit on the scale. The receipt line is Plex Mono 12/16 with tabular figures. | test_sizes_are_on_the_scale_and_the_receipt_is_the_signature | fixed |
+| US-07 | spacing | 14 px had 49 uses and 18 px had 13. Values of 5, 7 and 9 were scattered. | Every padding, margin and gap in the UI CSS, and in the inline styles the scripts write, is a multiple of 4. A 2 px nudge is allowed. | test_every_padding_margin_and_gap_is_on_the_4px_grid | fixed |
+| US-08 | spacing | Sidebar rows were 34 px, the settings nav 34 px and menu rows 34 px, beside 36 px popovers. | Navigation, chat rows, settings nav and menu rows are 32 px. | test_rows_in_a_list_share_one_height | fixed |
+| US-09 | copy | "Meshpool" was in about 149 UI strings. | Every string the scripts show says lowercase "meshpool". A header name, the outputs folder and the macOS app bundle keep their spelling. | test_the_product_name_is_lowercase_in_every_ui_string | fixed |
+| US-10 | copy | The home said "Good morning" and the first run said "Welcome to meshpool". Costs read $0.0005 beside $0.0020 and durations 0.6 s beside 3 min 45 s. The receipt named the model differently from the composer. | No greeting. One cost format and one duration format (whole minutes read "3 min"). The receipt names the model as the composer does. | test_copy_has_no_greeting_and_one_cost_and_duration_format | fixed |
+| US-11 | color | On the light sidebar, hover (#E8E8E8) and selected (#DCDCDC) looked the same. The open chat stacked a fill, a 3 px blue edge and a dot. | Selected is a clear step past hover in both themes (a luminance ratio of at least 1.08). The selected row adds weight 500 and a hairline, not the accent edge. | test_hover_and_selected_read_apart_in_both_themes | fixed |
+| US-12 | color | Four selected styles (a blue underline, grey tabs, a black Memory chip, the nav fill). The settings search showed a focus ring on every click. | One selected fill with ink text. The settings sub-tab underline is ink. The search rings only when reached by Tab. | test_one_tab_style_and_no_focus_ring_until_the_keyboard | fixed |
+| US-13 | color | Two accents (pool blue and the logo's teal), a hard-coded #3FB37F and coloured gallery tiles. | Every coloured token is pool blue or a semantic colour (add, delete, warn). No rule outside the tokens writes a colour. Teal is gone. | test_pool_blue_is_the_only_accent_in_the_chrome | fixed |
+| US-14 | color | Dark text was pure white on large surface steps. | A graphite ramp. All three text roles reach 4.5:1 on the page, sidebar, cards and menus, in light and dark. | test_text_reaches_4_5_to_1_on_every_surface_in_both_themes | fixed |
+| US-15 | icons | Icons were 12, 13, 14, 15, 16 and 18 px with a 1.8 stroke. | The chrome draws icons at 16 px with a 1.5 stroke. Only the gallery's type tiles and the file card's type icon are larger. | test_one_icon_size_and_stroke_in_the_chrome | fixed |
+| US-16 | layout | At 1280 px the preview squeezed the chat to about 400 px and cut the model name. | Below 1366 px the sidebar folds away while the preview is open. The chat keeps 560 px or more, with the model name whole. | test_the_preview_at_1280_keeps_the_chat_560px_wide | fixed |
+| US-17 | layout | The home title was a greeting, "New" was drawn as the current page, and the composer's model, permission, eye and lock buttons had no name. | The home title is the context. "New" is an action and is not selected. The composer buttons say what they are. | test_home_has_no_greeting_new_is_not_selected_and_composer_buttons_are_labelled | fixed |
+
+## Design pass check (app/tests/test_unslop_verify018.py)
+
+Commits 1c9357bf and c030ea4d. A separate look at the design pass, driven in the real app in Chromium, found five
+regressions. Each test failed before its fix. The rules of the design pass still hold.
+
+| ID | Area | What was wrong | Fix | Test | Status |
+|---|---|---|---|---|---|
+| UV-01 | chat steps | The step chevron sat 3 px above its text (an inline icon on the text baseline). | The chevron is an inline grid, so it is centred on the line. | test_the_step_chevron_is_centred_on_its_text | fixed |
+| UV-02 | side panel | Four panel tabs wrapped onto two rows at 1024 px once the tab padding went to 12 px. | Tab padding is 4 px by 8 px. The tabs share one row. | test_four_panel_tabs_share_one_row_at_1024 | fixed |
+| UV-03 | links | A link button had no hover, so it looked dead. | Hover sets the ink colour and a thicker underline. | test_a_link_button_reads_as_hovered | fixed |
+| UV-04 | home | The links in the home line kept their 4 px padding, so the full stop floated away from "Home". | Links in the home line have no padding. | test_the_hero_links_keep_the_full_stop_beside_them | fixed |
+| UV-05 | menus | The checked menu item carries the class the composer pills use for a fixed 32 px height, so a long description spilled over the next item. | A checked item grows with its description. | test_a_checked_menu_item_grows_with_its_description | fixed |
+
+## The look review step (app/tests/test_look_review.py, test_review_interact.py)
+
+Branch merged at 5243ae55 (commits 10808b05, 0c624b68 and 5243ae55, with the interaction module 20c13e7d merged in).
+Before this step the agent never looked at what it made unless the user asked.
+
+| ID | Area | What was wrong | Fix | Test | Status |
+|---|---|---|---|---|---|
+| RV-01 | agent/look.py | The agent never looked at a web page it built. A Word file, sheet, deck, PDF or image made in a chat was not drawn either. | At the final answer of a turn that wrote or changed a web page, meshpool opens it in one headless Chromium at 1280x800 and 390x844. It collects console errors, failed requests, broken images, sideways scroll, overlap, cut text, low contrast, placeholder text and empty lists. The model gets one review message with the request, the findings and (when it takes images) the pictures, fixes what is wrong and is checked again, at most two rounds. The answer ends with a "Checked:" line that also goes in the receipt. Files made in a chat are drawn through view.render and the kept LibreOffice, unless an engine check or the agent's own look ran after the last write. No server is started. Off with MH_LOOK_REVIEW=0 or the Settings switch "Look at web pages it makes". | test_overflow_and_console_error_reach_the_review_and_the_fix_is_checked, test_real_render_closes_its_browser_and_measures, test_at_most_two_review_rounds, test_no_second_look_when_nothing_changed_after_the_review, test_off_switch, test_settings_switch_turns_it_off, test_plain_answer_has_no_review, test_dev_server_the_turn_started_is_used_and_none_is_started, test_docx_made_in_a_chat_gets_a_render_check, test_no_second_render_when_engine_qa_already_ran, test_mock_model_chat_turn_is_reviewed_and_fixed, test_print_mode_reviews_without_an_approval_prompt and the other tests in test_look_review.py | fixed |
+| RV-02 | agent/look.py | Each review round added two to four screenshots to the chat history, so a second round sent all of them again on every later request. | Older review pictures become a short note, as screenshots from tools already do. | test_second_round_replaces_the_first_rounds_pictures | fixed |
+| RV-03 | agent/look.py | At phone width, an inline label that wraps has a box that covers the label beside it. A plain form was reported as "label Name overlaps label Email", and the review sent the model after a problem nobody sees. | Overlap is measured per line box. The review uses the merged interaction check (UXR-01), looked up through importlib, with the review's one browser. A missing module means no interaction checks. | test_wrapped_inline_labels_are_not_called_overlapping, test_dead_button_and_unchecked_form_reach_the_review, test_interaction_findings_and_shots_join_the_review, test_missing_interaction_module_means_no_interaction_checks, test_broken_interaction_module_does_not_break_the_review | fixed |
+| UXR-01 | review_interact.py (feature) | Nothing tried a page the way a user would. A dead button or a form that takes empty fields passed the measured checks. | exercise(target, request, out_dir) opens the page at each width and ranks the buttons, links, forms, menus, dialogs and tabs by how closely the request names them. It clicks, fills and submits forms (also empty), opens and closes menus and dialogs, tabs through the page, hovers the main buttons and opens the phone menu. It writes what went wrong in plain words ("The 'Order now' button does nothing when clicked"). It makes no model calls, opens only local pages, blocks other hosts and never raises. It closes its browser, and kills it at the time limit. | test_review_interact.py (22 tests) | fixed |
+
+## Fixes from the review step's live check (app/tests/test_look_live_line.py, test_look_review.py)
+
+Commits 2dfe978f and fae0c1b4. Found by running the review step on the live model and in the web UI.
+
+| ID | Area | What was wrong | Fix | Test | Status |
+|---|---|---|---|---|---|
+| VF-01 | web UI | The Checked line arrived as a second short assistant bubble until the chat was reloaded. | The line joins the reply's own log entry and bubble as it arrives, and a reopened chat shows the same. A line with no reply before it still shows. | test_checked_line_joins_the_reply_live, test_checked_line_is_the_same_as_a_reopened_chat, test_a_line_with_no_reply_before_it_still_shows | fixed |
+| VF-02 | agent/look.py | make_document, check_document, make_workbook and check_workbook never draw a page, but counted as a look. A Word file made through the office engine was never drawn and got no Checked line. | Only engine steps that draw pages (check_deck, make_deck and the viewing tools) skip the look. | test_a_structure_only_check_is_not_a_look | fixed |
+| VF-03 | web UI | While the look ran, the footer did not say what it waited for. | The status event for the look carries look=true, and the footer says it is looking. | test_looking_line_goes_when_the_checked_line_arrives_and_the_footer_names_the_wait | fixed |
+| VF-04 | web UI | The grey "Looking at the result" line stayed in the thread after the Checked line arrived. | The line goes when the Checked line joins the reply. | test_looking_line_goes_when_the_checked_line_arrives_and_the_footer_names_the_wait | fixed |
+| VF-05 | agent core | The harness skips notes that start with "[Meshpool]" when it looks for the user's request, images and insights. The review's own note says "[meshpool]", so it was taken for the user's words. | The checks in core, grader, compat, insights and the terminal accept the lowercase form. | test_the_review_message_says_lowercase_meshpool_and_is_still_a_harness_note | fixed |
+
+## Review step polish (app/tests/test_look_polish.py, test_look_polish_ui.py)
+
+Merge of de56c7f3, and the coordinator's commit 38551047. The prefix is LP2 because LP is taken (the later pass).
+
+| ID | Area | What was wrong | Fix | Test | Status |
+|---|---|---|---|---|---|
+| LP2-01 | agent, web UI, terminal | The reply written before a review round stayed as if it were the answer. It was the one to copy, and the Checked line joined it. | Each review round marks the reply before it as a first answer (a review_round event). The web UI folds it under "First answer, before the check", and the Checked line joins the last answer. The terminal prints a dim note. In print mode only the last answer is written. | test_each_review_round_marks_the_reply_before_it_as_a_first_answer, test_print_mode_writes_the_last_answer_only, test_print_mode_still_writes_an_answer_that_no_review_follows, test_the_json_result_holds_the_last_answer, test_the_first_answer_folds_and_the_last_one_carries_the_checked_line | fixed |
+| LP2-02 | agent/look.py | The review sent the model after a control the request itself called a placeholder ("a Buy button that does nothing yet"). | Findings and steps about a control the request calls inert are dropped, and the review message says the user's choices win. | test_a_control_the_request_calls_a_placeholder_is_not_a_finding, test_the_review_message_says_the_users_choices_win, test_real_page_dead_button_follows_the_request | fixed |
+| LP2-03 | agent/look.py | The Checked line named what was fixed in general words and said "updated it after the review". | It names what was fixed and what is still open, from the findings before and after ("low contrast on 'See prices'"). It keeps four and counts the rest. With nothing left open it says the page was changed after comparing it with the request. | test_checked_line_names_what_was_fixed_and_what_is_open, test_checked_line_without_findings_does_not_say_updated_after_the_review, test_checked_line_in_a_real_turn | fixed |
+| LP2-04 | agent/look.py | Round two began with two "[meshpool]" headers. | One header. | test_round_two_has_one_meshpool_header | fixed |
+| LP2-05 | web UI | The "Looking at the result" line stayed in the thread when no Checked line followed (an error, a stop, a turn that ends). | The line is removed at the end of the turn. After an error or a stop it says "Could not finish the check" and why. | test_looking_line_does_not_stay_without_a_checked_line | fixed |
+| LP2-06 | agent/look.py | Tools named make_report or build_* counted as a look. A connected server may use those names and only write the file, so the page was never looked at. | Only meshpool's own tools that draw pages (check_deck, view_output, read_document, measure_office_file, make_deck) skip the review. | test_only_tools_that_draw_pages_skip_the_review | fixed |
+
+## The independent persona reviewer (app/tests/test_look_reviewer.py, app/meshpool_harness/agent/lookreview.py)
+
+Commits eca33e6f, ca09b450, a1758ddf, 2500e27a, c4bf300e and 45beef42. The coordinator's commit ff36e256 (the testkit
+shim) is not counted.
+
+| ID | Area | What was wrong | Fix | Test | Status |
+|---|---|---|---|---|---|
+| PR-01 | agent/lookreview.py (feature) | The builder reviewed its own work in its own conversation, with its own reasoning in view. | A separate model call with a fresh context (none of the builder's messages, system prompt or reasoning) first names who would really use the thing, such as a customer ordering on her phone, never the person who asked. It then tries a page as that person, with up to 4 actions of its own in the same browser, and returns problems ranked blocker, major or minor. The builder fixes them and the same persona checks again, at most twice. Files get a reader persona and no actions. The Checked line names the persona. The calls run on the chat's own model and gate, and are counted in the receipt. When the reviewer cannot be had, the builder gets the measured findings and the line says "Checked: measured only". | test_reviewer_call_has_a_fresh_context_and_none_of_the_builders, test_reviewer_text_never_shows_as_an_assistant_reply, test_persona_is_derived_kept_for_round_two_and_shown_in_the_note, test_action_requests_run_and_their_results_go_back_to_the_reviewer, test_actions_run_in_the_browser_that_drew_the_pictures_and_it_is_closed_after, test_a_pass_ends_the_loop_with_no_second_model_loop, test_at_most_two_rounds_when_the_reviewer_never_passes, test_blockers_reach_the_builder_first_with_the_persona, test_explicit_user_choices_win_over_the_reviewer, test_receipt_counts_the_reviewers_calls_and_tokens, test_a_bad_reviewer_reply_falls_back_to_the_measured_findings, test_a_docx_gets_a_reader_persona_and_no_action_requests, test_the_persona_is_the_end_user_never_the_requester, test_mock_server_full_loop_with_the_independent_reviewer and the other tests in the file | fixed |
+| PR-02 | agent/lookreview.py | On the live Claude adapter, a verdict with a stray closing bracket made the whole review fall back. The plan reply called a problem "problem" instead of "what". A "look at" action told a reviewer with no picture nothing, and an action the browser could not run was not reported. | The reply is read with the stray bracket left out (brackets inside text are kept), "problem" is read as "what", "look at" reports the text of the section, and an action the browser could not run is said to be "not tried". | test_replies_recorded_from_the_adapter_are_read, test_a_recorded_verdict_with_a_stray_bracket_no_longer_ends_the_review, test_look_at_tells_a_reviewer_with_no_picture_what_is_there, test_a_missing_browser_is_said_not_hidden | fixed |
+| PR-03 | agent/lookreview.py | A reply the tolerant reader could not parse sent the whole review back to measured only. | One retry in a fresh context that shows the reviewer its own reply and asks for only the JSON object. The retry is counted in the turn's usage. Only a second failure falls back. | test_a_reply_only_the_retry_fixes_is_retried_once_in_a_fresh_context_and_counted, test_a_reply_the_retry_cannot_fix_falls_back_after_one_retry, test_a_reply_the_tolerant_parser_reads_needs_no_retry, test_a_failing_reviewer_call_falls_back_too | fixed |
+| PR-04 | agent/lookreview.py | A "look at" action that names a section by its heading ("Hours") looked for a link or button with that name, so the section was not found. | look_at finds a section by its heading first, then by the old lookup. | none (the look_at test passes with or without the change) | fixed |
+| PR-05 | agent/lookreview.py | The Checked line carried the reviewer's whole sentences, cut in the middle of a word at 90 characters, with the reason after a comma ("..., so a keyboard user cannot see where they are"). | The reviewer is asked for each problem as a short phrase. The line keeps the thing and leaves out the why, and a long phrase ends on a word. | test_problem_phrases_in_the_checked_line_are_short_and_end_on_a_word | fixed |
 
 ## Persona testing
 
@@ -440,3 +542,10 @@ Known limits and open bugs:
 - OM: The note the model gets when `-p` refuses a step (DENIED_NOTE in agent/tui_session.py) still suggests
   `--permission-mode edits`.
 - AP: Keynote and Pages leave no lock file, so a Keynote or Pages file open on a Mac can be replaced without a question.
+- PR: The persona reviewer cannot run on the ChatGPT-subscription wire (_aux_complete refuses there). The review falls
+  back to the measured findings, and the line says "Checked: measured only".
+- LP2: In the interactive terminal, the first answer before the check has already streamed and cannot be folded. A dim
+  note says a final answer follows.
+- LP2: Only the look review sends the review_round fold. The grader and independent-review rounds do not, so their
+  first answers are not folded.
+- RV: The last builder fix after round 2 is not reviewed again (the two-round cap).
