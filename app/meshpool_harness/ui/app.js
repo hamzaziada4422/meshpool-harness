@@ -1957,30 +1957,45 @@ async function panelFiles(body) {
 }
 function panelTerm(body) {
   const root = curRoot(); if (!root) { body.innerHTML = `<div class="pnote">Choose a project folder first.</div>`; return; }
-  S.term = S.term && S.term.root === root ? S.term : {root, html: "", hist: [], hi: 0, id: null};
-  body.innerHTML = `<pre class="term-out" id="tout">${S.term.html || `<span class="rc">Commands run in ${esc(shortPath(root))}</span>\n`}</pre><div class="term-in">${termShellPicker()}<input id="tin" placeholder="Run a command" spellcheck="false" autocomplete="off"><button class="btn" id="tstop" hidden>Stop</button></div>`;
+  S.term = S.term && S.term.root === root ? S.term : {root, html: "", hist: [], hi: 0, id: null, running: false};
+  body.innerHTML = `<pre class="term-out" id="tout">${S.term.html || `<span class="rc">Commands run in ${esc(shortPath(root))}</span>\n`}</pre><div class="term-in">${termShellPicker()}<input id="tin" placeholder="Run a command" spellcheck="false" autocomplete="off"><button class="btn" id="tstop" ${S.term.running ? "" : "hidden"}>Stop</button></div>`;
   const out = $("#tout"), inp = $("#tin"); out.scrollTop = out.scrollHeight; inp.focus();
-  const save = () => { S.term.html = out.innerHTML; };
+  const term = S.term, save = () => { term.html = out.innerHTML; };
+  // A command's output goes to the terminal on screen now (the panel may have been closed and opened again since it
+  // started, which made a new #tout), or into the saved text while the Terminal tab is not shown. Writing to the
+  // element the command started in lost everything printed after a tab switch, and hid its Stop button.
+  const shown = () => { const o = $("#tout"); return S.term === term && S.panel === "term" && o ? o : null; };
+  const put = html => { const o = shown(); if (o) { o.insertAdjacentHTML("beforeend", html); o.scrollTop = o.scrollHeight; term.html = o.innerHTML; } else term.html += html; };
   inp.onkeydown = async e => {
     if (e.key === "ArrowUp") { e.preventDefault(); if (S.term.hist.length) { S.term.hi = Math.max(0, S.term.hi - 1); inp.value = S.term.hist[S.term.hi] || ""; } return; }
     if (e.key === "ArrowDown") { e.preventDefault(); S.term.hi = Math.min(S.term.hist.length, S.term.hi + 1); inp.value = S.term.hist[S.term.hi] || ""; return; }
     if (e.key !== "Enter") return;
     const cmd = inp.value.trim(); if (!cmd) return;
     if (cmd === "clear") { out.innerHTML = ""; inp.value = ""; save(); return; }
-    S.term.hist.push(cmd); S.term.hi = S.term.hist.length; inp.value = "";
-    out.insertAdjacentHTML("beforeend", `<span class="cmd">$ ${esc(cmd)}</span>\n`);
+    term.hist.push(cmd); term.hi = term.hist.length; inp.value = "";
+    put(`<span class="cmd">$ ${esc(cmd)}</span>\n`);
+    const stopBtn = v => { const b = shown() && $("#tstop"); if (b) b.hidden = !v; };
     try {
-      const t = await post("/api/term", {root, command: cmd, shell: store("term_shell") || S.settings?.shells?.default || ""}); S.term.id = t.id; $("#tstop").hidden = false;
-      let since = 0;
+      const t = await post("/api/term", {root, command: cmd, shell: store("term_shell") || S.settings?.shells?.default || ""}); term.id = t.id; term.running = true; stopBtn(true);
+      let since = 0, fails = 0;
       const tick = async () => {
-        const r = await api(`/api/term/${t.id}?since=${since}`); since = r.next;
-        if (r.lines.length) { out.insertAdjacentText("beforeend", r.lines.join("")); out.scrollTop = out.scrollHeight; }
-        if (r.running) setTimeout(tick, 250); else { out.insertAdjacentHTML("beforeend", r.rc ? `<span class="rc">[exit ${r.rc}]</span>\n` : ""); $("#tstop") && ($("#tstop").hidden = true); save(); }
+        let r;
+        try { r = await api(`/api/term/${t.id}?since=${since}`); fails = 0; }
+        catch (err) {                            // a lost request must not leave Stop up and the output frozen for good
+          if (++fails < 4) { setTimeout(tick, 1000 * fails); return; }
+          term.running = false; stopBtn(false); put(`<span class="rc">${esc(err.message)}</span>\n`); return;
+        }
+        since = r.next;
+        if (r.lines.length) put(esc(r.lines.join("")));
+        // Four times a second while its output is on screen. A long command (a dev server) with the panel closed or
+        // the window hidden is read every 2 s instead, so it does not keep the app and the server busy.
+        if (r.running) setTimeout(tick, shown() && !document.hidden ? 250 : 2000);
+        else { term.running = false; put(r.rc ? `<span class="rc">[exit ${r.rc}]</span>\n` : ""); stopBtn(false); }
       };
       tick();
-    } catch (err) { out.insertAdjacentText("beforeend", err.message + "\n"); save(); }
+    } catch (err) { put(esc(err.message) + "\n"); }
   };
-  $("#tstop").onclick = () => S.term.id && post(`/api/term/${S.term.id}/stop`).catch(() => {});
+  $("#tstop").onclick = () => term.id && post(`/api/term/${term.id}/stop`).catch(() => {});
 }
 async function panelGit(body) {
   const root = curRoot(); if (!root) { body.innerHTML = `<div class="pnote">Choose a project folder first.</div>`; return; }
