@@ -30,13 +30,13 @@ from meshpool_harness.providers import configured_model  # noqa: E402
 MODEL = os.environ.get("FORGE_MODEL") or configured_model()
 STORY_MODEL = os.environ.get("FORGE_STORY_MODEL", MODEL)
 
-_COVER_LINE = """"date" (the occasion and today's month and year, e.g. "Board meeting, " + the month)."""
+_COVER_LINE = """"date" (today's month and year; an occasion only when the brief names one)."""
 _COVER_METRICS = """
   "metrics": 2-3 of {"value", "label" (<= 6 words), "prov"}: the figures that size the decision, shown on the cover."""
 
 _ARCH = """Archetypes (pick the one that best PROVES the title; never more than 3 of the same in a row). The
 renderer applies a strict consulting design; you only fill fields.
-- cover: title, subtitle, "date" (the occasion and today's month and year, e.g. "Board meeting, " + the month).
+- cover: title, subtitle, "date" (today's month and year; an occasion only when the brief names one).
 - grid: a slide assembled from PARTS on a grid when one exhibit is not enough (or too much). "layout": full, halves,
   halves_v, thirds, quarters, main_side (2/3 + 1/3), side_main, main_stack (left half + two stacked quarters right),
   stack_main; "look": editorial | boxed | minimal | bold; "parts": one per region, each {"type", "heading", ...}:
@@ -68,8 +68,10 @@ renderer applies a strict consulting design; you only fill fields.
   decision, shown large in a panel beside the points (always give them when the answer has a size).
 - closing: the last slide when the deck ends on action. "title" (the call to action, with a verb), "steps": 3-5 of
   {"action": imperative, <= 8 words, "detail": what it involves and why, <= 25 words, with its numbers,
-  "milestones": 1-3 short lines (first milestones, decision gates, the measure of success), "owner": who,
-  "timing": when, "prov": [fact ids]}.
+  "milestones": 1-3 short lines (first milestones, decision gates, the measure of success), "owner": who, only
+  when the brief or the facts name the owner, "timing": when, only a date the brief or the facts give (leave
+  owner and timing out otherwise: never invent them, and a "proposed" footnote does not make them sourced),
+  "prov": [fact ids]}.
 - challenge_matrix: numbered rows x two lenses. "columns": [row header, lens A, lens B] (e.g. ["Challenge",
   "A - Today", "B - Outlook"]); "rows": 3-5 of {"icon": one word meaning (e.g. money, congestion, store, people,
   safety, growth, risk, time), "label": "**Key word** rest of label" (<= 6 words), "cells": [A, B]} where each
@@ -92,7 +94,8 @@ renderer applies a strict consulting design; you only fill fields.
   the table (required when it has fewer than 12 rows: a short table sits beside them).
 - bar_takeaway / column_trend / line_trend / waterfall_bridge: "subtitle" (measure, unit, period), one "chart"
   {kind, categories, series[{name, values}], unit, decimals, highlight_categories, "target": a goal value drawn as a
-  dashed line, "delta": {"from": category, "to": category, "label": optional, e.g. "25-35x"} drawn as an arrow
+  dashed line, only a target the facts or the brief state as one (a reference such as an average takes
+  "target_label": "Average 47%"), "delta": {"from": category, "to": category, "label": optional, e.g. "25-35x"} drawn as an arrow
   with the multiple or gap in a pill, "descriptors": [one short line per category saying what it is]} on the left
   2/3, a "takeaway"
   {"text"} (bold lead) and "bullets" [2-3 {"text","prov"}] interpreting it on the right 1/3.
@@ -146,9 +149,9 @@ def arch_help(density: str = "read") -> str:
 ARCH_HELP = arch_help("read")                     # the dense send-ahead guide (kept for callers that import it)
 
 SLIDE_SHAPE = """Slide JSON: {"id","node" (from the storyline),"archetype","title","title_prov":[fact ids],
- ...archetype fields..., "source": {"text": original sources, "prov": [ids]}, "footnotes": [...], "tags": optional
- ["Non-exhaustive"] (a stamp such as "Preliminary" or "Draft" only when the brief asks for one), "notes": 3 to 5 plain
- sentences the presenter reads aloud}.
+ ...archetype fields..., "source": {"text": the report's title or the file's name, "prov": [ids]}, "footnotes": [...],
+ "tags": optional ["Non-exhaustive"] (a stamp such as "Preliminary" or "Draft" only when the brief asks for one),
+ "notes": 40 to 120 words, plain sentences the presenter reads aloud}.
 Notes are for the presenter only: no fact, calc or option ids, no "prov", no JSON, no remarks about the brief, the
 storyline, the facts or corrections, no instructions to yourself.
 Every text element that holds numbers carries "prov": [fact ids] (bullets as {"text","prov"}; cells as
@@ -197,7 +200,9 @@ CONSULTING = """House style (always, whatever the brief says about look):
 - One exhibit across the page with its so-what under it is the norm. Put an argument beside the exhibit only when it
   has 3-4 points of its own; give each point a 2-4 word header. Blocks side by side share their top and bottom
   edges: never a column that stops short of the one beside it.
-- The last slide is the decision and the next steps, each with an owner and a date.
+- The last slide is the decision and the next steps. An owner, a date, a target or a meeting appears only where
+  the brief or the facts give it; never invent one.
+- Source lines name the report's title or the file's name, never "fact base", "dossier" or fact ids.
 - Never write about the evidence on the page ("not stated", "the sources do not say", "not a stated fact"): a gap in
   a table is N/A; what a number rests on goes in one short footnote or in the notes.
 - At most four big numbers on a slide; the most important one comes first and the rest support it. Two figures
@@ -564,7 +569,7 @@ def _user_prefs() -> str:
 def today_line() -> str:
     d = _today()
     return (f"- Today is {d.day} {d:%B %Y}. The cover date is {d:%B %Y} (or the meeting date the brief gives); every date "
-            f"in a plan, roadmap or next step is after today.")
+            f"in a plan, roadmap or next step is after today, and only a date the brief or the facts give.")
 
 
 _MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov",
@@ -2260,10 +2265,26 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
     from engines.forge import requested as RQ
     asked = (brand or {}).get("asked") or None              # brand items the request spells out (requested.py)
     stamps_ok = sorted(RQ.allowed_stamps(brief.split("\n--- ", 1)[0]))   # the request, not the attached files
+    from engines.forge import notes as _NT
+    notes_words = _NT.limit_for(brief.split("\n--- ", 1)[0])           # notes of about 40 to 120 words a slide
+
+    from engines.forge import grounded as GR
+    grounded_log: list[str] = []
 
     def tidy():
         """What the brief did not ask for never reaches the page: a "Preliminary" or "Draft" stamp the brief does not
-        use, and section numbers on slides added to a deck that has its own (Daniel, 0.0.19)."""
+        use, and section numbers on slides added to a deck that has its own (Daniel, 0.0.19); a target line, owners,
+        dates and an occasion the sources and the request do not give (Daniel, round 2: grounded.py); a source line
+        that names the working files instead of the report."""
+        try:
+            grounded_log[:] = GR.ground(slides, GR.sources(brief, facts), GR.request_of(brief), _today())
+        except Exception as e:  # noqa: BLE001 - the check after rendering still reports what is left
+            grounded_log[:] = [f"grounding skipped: {type(e).__name__}"]
+        try:
+            from engines.forge.render import plain_sources
+            plain_sources(slides, brief)
+        except Exception:  # noqa: BLE001
+            pass
         for s_ in slides:
             if isinstance(s_.get("tags"), list):
                 s_["tags"] = [t for t in s_["tags"] if not isinstance(t, str) or RQ.stamp_ok(t, set(stamps_ok))]
@@ -2280,11 +2301,13 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             pass
         tidy()
         qbrief = {"slide_count": len(slides) if fixed else slides_wanted, **ends, "stamps": stamps_ok,
-                  **({"brand": asked} if asked else {})}
+                  **({"brand": asked} if asked else {}), "corpus": GR.sources(brief, facts),
+                  "request": GR.request_of(brief), "today": _today().isoformat()}
         for _ in range(3):                    # a designed page that fails its checks is redrawn by its archetype
             specs, view_ = designed()
             r = render(view_, str(pptx), carry=False, theme=theme, density=density, template=template,
-                       brand=brand)          # the brief's slide count is a hard limit
+                       brand=brand, notes_words=notes_words)   # the brief's slide count is a hard limit
+            r.setdefault("remarks", []).extend(grounded_log)
             prov = json.loads(Path(r["provenance"]).read_text())
             res = validate(str(pptx), rules, brief=qbrief, provenance=prov, storyline={"nodes": nodes}, render=True,
                            density=density)

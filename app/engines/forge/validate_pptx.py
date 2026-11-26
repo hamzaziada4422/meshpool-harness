@@ -1017,6 +1017,18 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
     else:
         failures.append(F("P28", "brand", "The request named no brand items; none were checked.", status="not_run",
                           severity="info", fix_scope="renderer"))
+    if (brief or {}).get("corpus"):                       # P29: nothing on a slide the sources or request do not state
+        from .grounded import check as _grounded
+        import datetime as _dt
+        try:
+            when = _dt.date.fromisoformat(brief["today"]) if brief.get("today") else None
+            failures += _grounded(str(path), brief["corpus"], brief.get("request") or "", provenance, when)
+        except Exception as e:  # noqa: BLE001 - reported, never a pass
+            failures.append(F("P29", "invented", f"Could not run: {type(e).__name__}.", status="not_run",
+                              severity="info", fix_scope="content"))
+    else:
+        failures.append(F("P29", "invented", "No sources given; slides were not checked against them.",
+                          status="not_run", severity="info", fix_scope="content"))
 
     rules_status = summarize(failures, RULES + _VRULES)
     try:                                    # the visible-checks recorder: the rules that ran (no-op when idle)
