@@ -30,9 +30,9 @@ The leftover-slide check, live (reorder_fix, 3eff2941, 3 runs): 2/3, against 1/3
 fired and the agent removed the hidden slide properly; the other failure deleted a wrong slide (a model mistake, not
 a leftover). No run left a deleted slide in the file.
 
-Claude Sonnet as the model (decks_sonnet, 1 run each, meshpool's own harness through testkit/claude_shim.py, no
-gateway credit): 5/5, 4 to 5 calls a task (DeepSeek: 8 to 17), median 32 s. One task took 566 s, of which 549 s was
-one `claude -p` call waiting on the subscription.
+Claude Sonnet as the model (decks_sonnet, 1 run each, meshpool's own harness through a local adapter that is not part
+of this repository): 5/5, 4 to 5 calls a task (DeepSeek: 8 to 17), median 32 s. One task took 566 s, of which 549 s was
+one slow model call.
 
 ## Office-7, OfficeBench, SpreadsheetBench on 0.0.18 (cc84a5cd)
 
@@ -51,5 +51,4 @@ ratios move with the hour (0.0.17's same-hour runs gave 1.22x and 1.07x).
 testkit/office_panel.js against the real app with the mock model: 22/22 after the fix in cc84a5cd (a panel chat
 keeps the Work route and has ask_user; before it, the panel's questions failed).
 
-Spend for everything here: about $0.87 of the gateway key (87.36 to 88.23), under the owner's $89.70 ceiling. The
-Sonnet runs used the Claude subscription, not the key.
+Spend for everything here: about $0.87 of model credit for the DeepSeek runs.

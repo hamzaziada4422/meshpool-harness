@@ -352,7 +352,41 @@ NETWORK = re.compile(
     r"|\b(?:npm|pnpm|yarn|bun)\s+(?:i|install|ci|add|update|upgrade|publish|login|dlx|create|x|exec)\b"
     r"|\buv\s+(?:add|sync|lock|tool\s+install|run\s+--with)\b"
     r"|\bgit\s+(?:clone|fetch|pull|push|submodule|ls-remote|remote\s+update)\b"
-    r"|\bdocker\s+(?:pull|push|login|build|run)\b|https?://", re.I)
+    r"|\bdocker\s+(?:pull|push|login|build|run)\b|https?://"
+    # builds that fetch their dependencies (review, 0.0.18): run offline they fail, and nobody is asked
+    r"|\bcargo\s+(?:build|run|test|check|fetch|update|install|doc|bench|add|vendor|publish)\b"
+    r"|\bgo\s+(?:build|test|run|mod|generate|work|vet)\b|\bgit\s+lfs\b"
+    r"|(?:^|[;&|(\n]\s*)(?:\./)?(?:mvn|mvnw|gradle|gradlew|sbt|lein|bundle|pod|carthage|hf|huggingface-cli)(?=\s|$)"
+    r"|\b(?:swift\s+(?:build|package|run|test)|dotnet\s+(?:restore|build|run|test|add|publish|tool)|"
+    r"(?:flutter|dart)\s+pub|deno\s+(?:run|install|cache))\b"
+    r"|(?:^|[;&|(\n]\s*)(?:yarn|pnpm|bun)\s*(?=$|[;&|)\n])", re.I)
+
+# The home folder named without a literal path: $HOME, %USERPROFILE%, a bare cd, Path.home() in a script (review,
+# 0.0.18: `cd && cat .ssh/id_rsa` and `cat $HOME/.aws/credentials` ran without a question).
+_HOME_REF = re.compile(
+    r"\$\{?(?:HOME|USERPROFILE|HOMEPATH|HOMEDRIVE|APPDATA|LOCALAPPDATA|XDG_CONFIG_HOME|XDG_DATA_HOME)\b"
+    r"|%(?:USERPROFILE|HOMEPATH|HOMEDRIVE|APPDATA|LOCALAPPDATA)%|\$env:|\bexpanduser\b|\bPath\.home\b|\bgetpwuid\b"
+    r"|\bos\.environ\b|\bgetenv\b|\bhomedir\b"
+    r"|(?:^|[;&|(\n]\s*)(?:cd|pushd|chdir)(?=\s*$|\s*[;&|)\n]|\s+-(?:\s|$|[;&|)]))", re.I)
+_WINPATH = re.compile(r"(?<![\w])[A-Za-z]:[\\/][^\s'\"|;&<>]*")
+# Deletes never run unasked (review, 0.0.18): Undo skips ignored, large and very many files, often the data files.
+# rm of named scratch (temp files, caches, a named file in the project: scratch_rm) still runs.
+DELETES = re.compile(
+    r"(?:^|[\s;&|(`])(?:rm|rmdir|unlink|shred|truncate|srm)(?=$|[\s;&|)])"
+    r"|\bfind\b[^;&|\n]*\s-(?:delete\b|exec(?:dir)?\s+(?:\S*/)?rm\b)"
+    r"|\bshutil\.rmtree\b|\bos\.(?:remove|unlink|rmdir|removedirs)\b|\.unlink\s*\(|\.rmdir\s*\(|\bRemove-Item\b"
+    r"|\bfs\.(?:rm|unlink|rmdir)\b|\.(?:rmSync|unlinkSync|rmdirSync)\s*\(|\bunlink\s*\(", re.I)
+
+
+def _deletes_unasked_ok(cmd: str, root, cwd=None) -> bool:
+    """Every delete in cmd is a plain rm that scratch_rm clears (named files in the project or temp, caches)."""
+    hits = [m.group(0).strip(" ;&|(`\n").lower() for m in DELETES.finditer(cmd)]
+    if not hits:
+        return True
+    if any(h != "rm" for h in hits) or re.search(r"(?<![\w-])rm\s+[^;&|\n]*[*?\[]", cmd):
+        return False                          # rmdir, find -delete, a script's rmtree, a wildcard: ask
+    return scratch_rm(re.sub(r"(?<![\w-])rm\s+(?!-)", "rm -f ", cmd), root,
+                      None if cwd is None else os.path.relpath(str(cwd), str(root)))
 
 
 _PATHLIKE = re.compile(r"(?<![\w.:/-])(~[\w.~/-]*|/[\w.~/-]*|\.\./[\w.~/-]*)")
@@ -370,15 +404,18 @@ def sandbox_auto_ok(cmd: str, root, cwd=None) -> bool:
     network cut): it does not reach the network or install software, and every path it names is in the project, a
     temp folder, or outside the user's home folder (programs, system files). A path elsewhere in the home folder
     (~/.ssh, ~/Documents outside the project) still asks. Compound commands are fine: the sandbox confines them all."""
-    if not cmd or not cmd.strip() or NETWORK.search(cmd):
+    if not cmd or not cmd.strip() or NETWORK.search(cmd) or _HOME_REF.search(cmd):
         return False
     if cwd is not None and not _inside(str(cwd), root):
+        return False
+    if not _deletes_unasked_ok(cmd, root, cwd):
         return False
     # paths from the words of the command (when it parses) and from anywhere in its text, heredoc bodies and
     # `python -c` code included: '/home/u/.ssh/id_rsa' inside a script is a path like any other
     toks = _tokens(cmd.replace("&&", " ").replace("||", " ").replace("|", " ").replace(";", " ")) or []
     # a lone "/" found in the text is division in code (a / b), not the root folder; as a word (find /) it counts
     cands = [v for a in toks for v in _arg_paths(a)] + [v for v in _PATHLIKE.findall(cmd) if v != "/"]
+    cands += _WINPATH.findall(cmd)                    # C:\Users\me\.ssh (no sandbox there: Windows)
     home, temps = _home(), _temp_roots()
     for v in cands:
         v = v.strip("'\"")
