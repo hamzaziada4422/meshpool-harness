@@ -445,6 +445,8 @@ function browseFolder(start) {
     const key = e => {
       if (e.key === "Escape") { e.stopPropagation(); done(""); return; }
       if (e.target.id === "fbIn") { if (e.key === "Enter") { e.preventDefault(); go(e.target.value.trim()); } return; }
+      // Enter on Cancel or "Use this folder" is that button's own click; the list's keys work only in the list.
+      if (!e.target.closest?.("#fbList")) return;
       if (e.key === "ArrowDown") { e.preventDefault(); mark(act + 1); }
       else if (e.key === "ArrowUp") { e.preventDefault(); mark(act - 1); }
       else if (e.key === "Enter" && act >= 0) { e.preventDefault(); go(items()[act].dataset.p); }
