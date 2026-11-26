@@ -24,6 +24,17 @@ function splitRow(line) {
   return out;
 }
 
+/** What to show when meshpool answered a request with an error: its own words, else what the status means. */
+function failText(status, j) {
+  const said = j && typeof j.error === "string" ? j.error.trim() : "";
+  if (said) return said;
+  if (status === 403) return "meshpool refused this request from the panel. Close the panel and open it again.";
+  if (status === 404) return "meshpool does not know this request: the app may be older than this panel. Update meshpool, then open the panel again.";
+  if (status === 429) return "meshpool is busy with other requests from this panel. Wait a moment, then try again.";
+  if (status >= 500) return `meshpool had a problem answering (status ${status}) and gave no reason. Try again; if it keeps happening, restart the meshpool app.`;
+  return `meshpool could not do that (status ${status}) and gave no reason. Try again.`;
+}
+
 const SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
 
 /** The first markdown table in a reply, as rows of cells (header first), or null. */
@@ -169,7 +180,7 @@ function safeFormulas(m) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = {esc, parseTable, firstCode, plain, toMatrix, mdToHtml, buildMessage, cellsText, splitAddress, safeFormulas};
+  module.exports = {esc, parseTable, firstCode, plain, toMatrix, mdToHtml, buildMessage, cellsText, splitAddress, safeFormulas, failText};
 }
 
 // ------------------------------------------------------------------------------------------- the panel
@@ -206,7 +217,7 @@ if (typeof document !== "undefined") (function () {
       pair();
       throw new Error("This panel is not connected to meshpool. Allow it in the meshpool app, then try again.");
     }
-    if (!r.ok) throw new Error(j.error || `meshpool answered ${r.status}.`);
+    if (!r.ok) throw new Error(failText(r.status, j));
     return j;
   }
 
@@ -227,7 +238,7 @@ if (typeof document !== "undefined") (function () {
     const fail = text => { $("pairCode").hidden = true; $("pairNote").textContent = text; $("pairAgain").hidden = false; };
     try {
       const [r, j] = await call("POST", "/office/pair", {host: S.host});
-      if (!r.ok) return fail(j.error || `meshpool answered ${r.status}.`);
+      if (!r.ok) return fail(failText(r.status, j));
       $("pairCode").textContent = j.code;
       $("pairNote").textContent = "Waiting for you to allow it in the meshpool app. Allow it only if the app shows this same code.";
       const end = Date.now() + (j.expires_in || 120) * 1000;
@@ -542,7 +553,7 @@ if (typeof document !== "undefined") (function () {
         break;
       }
       case "question_done": S.asking = false; $("send").disabled = S.busy; break;
-      case "error": note(ev.text || "Something went wrong.", true); break;
+      case "error": note(ev.text || "The chat stopped on an error, and meshpool sent no details. Try again, or open this chat in the meshpool app to see what happened.", true); break;
       case "turn_end": endTurn(); break;
     }
   }

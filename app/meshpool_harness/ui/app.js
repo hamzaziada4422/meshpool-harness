@@ -81,14 +81,14 @@ function modelName(id) {
   const known = {deepseek: "DeepSeek", gpt: "GPT", qwen: "Qwen", glm: "GLM", kimi: "Kimi", llama: "Llama", mistral: "Mistral", grok: "Grok", openai: "OpenAI", minimax: "MiniMax"};
   return bareModel(id).split("/").pop().split(/[-_ ]+/).map(w => known[w.toLowerCase()] || (/^v?\d/.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))).join(" ").replace(/(\d) (?=\d)/g, "$1.");
 }
+// The check's own sentence (settings_api / core/endpoint.explain) already names the cause, the service's words and what
+// to do: it is shown as it is. Only a raw network error text, which says nothing to a person, is put in plain words.
 function connMsg(d) {
-  d = String(d || "");
-  if (/reject|401|403/i.test(d)) return "The endpoint didn't accept this key. Check that you copied all of it.";
+  d = String(d || "").trim();
+  if (!d) return "The connection test didn't work, and no reason came back. Check the address and the key, then try again.";
   if (/read operation timed out/i.test(d) && !/urlopen error|refused|resolve|getaddrinfo|ssl|certificate/i.test(d)) return "The endpoint took the connection but didn't answer in time: the gateway is up but isn't serving this key right now. Running tasks wait for it and carry on by themselves. Try the test again in a minute.";
-  if (/429|rate.?limit|too many|parallel/i.test(d)) return "The endpoint says this key is at its limit right now (too many requests at once). Running tasks wait and carry on. Try again in a minute.";
-  if (/HTTP 0|timed out|connection|refused|resolve|getaddrinfo/i.test(d)) return "Can't reach that address. Check the base URL and your internet connection.";
-  if (/404/.test(d)) return "That address answered, but it isn't a model endpoint. Check the base URL (it usually ends in /v1).";
-  return "The connection test didn't work: " + d.slice(0, 160);
+  if (/^HTTP 0\b|urlopen error|\[Errno|getaddrinfo|Name or service not known/i.test(d)) return "Can't reach that address. Check the base URL and your internet connection.";
+  return d.length > 400 ? d.slice(0, 399) + "…" : d;
 }
 function get0(k) { return ((S.settings?.fields || []).find(x => x.key === k) || {}).value; }
 function shortPath(p) {
@@ -171,13 +171,15 @@ async function api(path, opts = {}) {
   let r;
   try { r = await fetch(path, {...opts, headers: {"X-Meshpool-Token": MP.token, ...(opts.body ? {"Content-Type": "application/json"} : {}), ...(opts.headers || {})}}); }
   catch (e) { throw new Error("Meshpool isn't responding. If this keeps happening, quit and reopen Meshpool."); }
-  let j = null; try { j = await r.json(); } catch (e) { /* not JSON */ }
+  let j = null, unread = false; try { const t = await r.text(); if (t) j = JSON.parse(t); else unread = r.status !== 204; } catch (e) { unread = true; }   /* not JSON */
   if (j && j.inapp && r.ok && typeof showSignIn === "function") { try { showSignIn(); } catch (e) { /* the page still opened */ } }   // a sign-in page opened inside Meshpool
   if (!r.ok) {
-    if (j && j.error && r.status < 500) throw new Error(j.error);
+    if (j && typeof j.error === "string" && j.error.trim()) throw new Error(j.error);   // the server's own plain words
     if (r.status === 403) throw new Error("This page lost its connection to Meshpool. Reload the window.");
-    throw new Error("Something went wrong on Meshpool's side. Try again." + (j && j.error ? ` (${j.error})` : ""));
+    if (r.status === 404) throw new Error("meshpool does not know this request: the window may be from an older version. Reload the window.");
+    throw new Error(`meshpool's background service failed on this request and sent no explanation (status ${r.status}). Try again; if it keeps happening, quit and reopen meshpool.`);
   }
+  if (unread) throw new Error("meshpool sent an answer this window could not read. Reload the window; if it keeps happening, quit and reopen meshpool.");
   return j;
 }
 const post = (path, body) => api(path, {method: "POST", body: JSON.stringify(body || {})});

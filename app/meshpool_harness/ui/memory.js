@@ -222,7 +222,13 @@ async function memAddFlow() {
   if (v) memAct({action: "add", text: v});
 }
 async function memExport(kind) {
-  const r = await fetch("/api/memory/export?type=" + kind, {headers: {"X-Meshpool-Token": MP.token}});
+  let r;
+  try { r = await fetch("/api/memory/export?type=" + kind, {headers: {"X-Meshpool-Token": MP.token}}); }
+  catch (e) { toast("meshpool isn't responding, so nothing was exported. Try again; if it keeps happening, quit and reopen meshpool."); return; }
+  if (!r.ok) {                                  // never save an error reply as the exported file
+    let m = ""; try { m = (await r.json()).error || ""; } catch (e) { /* not JSON */ }
+    toast(m || `The export did not work: meshpool gave no reason (status ${r.status}). Try again.`); return;
+  }
   const blob = await r.blob(), a = document.createElement("a");
   a.href = URL.createObjectURL(blob); a.download = kind === "md" ? "what-meshpool-knows.md" : "how-i-work.md"; document.body.appendChild(a); a.click(); a.remove();
 }
