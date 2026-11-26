@@ -371,3 +371,39 @@ def test_cpu10_a_shell_command_walks_the_project_twice_not_four_times(tmp_path, 
     assert (root / "made.txt").read_text().strip() == "hi"
     assert edits == [e0 + 1, e0 + 1, e0 + 1]
     assert walks[0] == 6, f"{walks[0]} walks of the project for 3 commands"
+
+
+# ---------------------------------------------------------------------------------------------------- CPU-11
+def test_cpu11_edit_check_starts_no_python_process_for_the_same_python(tmp_path, monkeypatch):
+    import subprocess
+
+    from meshpool_harness.core import tools as T
+    from meshpool_harness.hrouter import packs as PK
+    root = tmp_path / "proj"
+    (root / "sub dir").mkdir(parents=True)
+    ws = T.Workspace(str(root), str(tmp_path / "run"))
+    files = {"ok.py": "def f(x):\n    return x\n", "bad.py": "def f(:\n    return 1\n",
+             "sub dir/bad.json": '{"a": 1,,}', "ok.json": '{"a": [1, 2]}', "bad.toml": "a = = 1\n",
+             "bad.yaml": "a: [1, 2\n", ".vscode/settings.json": '{"a": 1, // note\n}'}
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text)
+    monkeypatch.setattr(PK, "newest_python", lambda: sys.executable)
+    monkeypatch.setattr(PK, "_tool", lambda ws, name: None)      # no ruff here: only the syntax check is measured
+    real = subprocess.run
+    spawned = []
+
+    def counting(cmd, *a, **k):
+        spawned.append(cmd)
+        return real(cmd, *a, **k)
+    monkeypatch.setattr(subprocess, "run", counting)
+    got = {rel: PK.quick_check(ws, rel) for rel in files}
+    assert spawned == [], f"{len(spawned)} processes for {len(files)} edit checks"
+    assert got["ok.py"] == "" and got["ok.json"] == "" and got[".vscode/settings.json"] == ""
+    assert "bad.py:1:" in got["bad.py"] and "SyntaxError" in got["bad.py"]
+    assert "sub dir/bad.json:1:" in got["sub dir/bad.json"] and "JSONDecodeError" in got["sub dir/bad.json"]
+    assert "bad.toml:1:" in got["bad.toml"] and "bad.yaml:" in got["bad.yaml"]
+    # the same findings, word for word, as the check run in a process of its own
+    monkeypatch.setattr(PK, "_same_python", lambda exe: False)
+    assert {rel: PK.quick_check(ws, rel) for rel in files} == got
+    assert len(spawned) == len(files)

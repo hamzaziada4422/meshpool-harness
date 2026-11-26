@@ -424,6 +424,64 @@ def strip_ansi(s: str) -> str:
 QUICK_EXTS = (".py", ".pyi", ".js", ".mjs", ".cjs", ".json", ".toml", ".yml", ".yaml", ".sh", ".bash")
 
 
+class _Stop(Exception):
+    pass
+
+
+def _same_python(exe: str) -> bool:
+    """True when `exe` is this Python, or another copy of the same minor version (it accepts the same syntax)."""
+    import sys
+    try:
+        if os.path.realpath(exe) == os.path.realpath(sys.executable):
+            return True
+    except (OSError, ValueError):
+        return False
+    from meshpool_harness import config as C
+    got = C.program_version(exe)                      # asked once per program file
+    m = re.match(r"Python (\d+)\.(\d+)", got[1]) if got and got[0] == 0 else None
+    return bool(m) and (int(m.group(1)), int(m.group(2))) == tuple(sys.version_info[:2])
+
+
+def _inline(body: str, root, rel: str) -> str:
+    """Run one of the check scripts above in this process on one file: what it prints. Every edit of a .py, .json,
+    .toml or .yaml file used to start a Python process for this (about 30 ms of CPU each); when the newest Python on
+    the computer is the same version as this one, its answer is the same. The script sees its own argv, exit and
+    print, and opens files relative to the project, as it would in a process of its own."""
+    import builtins
+    import sys
+    import types
+    out: list[str] = []
+
+    def _exit(code=0):
+        raise _Stop()
+    fake = types.SimpleNamespace(argv=["check", rel], version_info=sys.version_info, exit=_exit)
+    real_import = builtins.__import__
+
+    def _import(name, *a, **k):
+        return fake if name == "sys" else real_import(name, *a, **k)
+
+    def _open(f, *a, **k):
+        return builtins.open(os.path.join(str(root), f), *a, **k)
+    env = dict(vars(builtins), __import__=_import, open=_open,
+               print=lambda *a, **k: out.append(" ".join(str(x) for x in a)))
+    try:
+        exec(compile(body, "<meshpool check>", "exec"), {"__builtins__": env, "__name__": "__check__"})  # noqa: S102
+    except _Stop:
+        pass
+    except Exception:  # noqa: BLE001 - a crash in its own process printed no finding either
+        pass
+    return "\n".join(out)
+
+
+def _syntax_lines(ws, exe: str, name: str, body: str, rel: str) -> list[str]:
+    if _same_python(exe):
+        text = _inline(body, ws.root, rel)
+    else:
+        text = subprocess.run([exe, _script(ws, name, body), rel], cwd=ws.root, capture_output=True, text=True,
+                              timeout=15).stdout
+    return [l for l in text.splitlines() if re.match(r".+:\d+:\d+: ", l)]
+
+
 def quick_check(ws, path: str) -> str:
     """Problems in one just-edited file (syntax, undefined names, config syntax), or "" when it is clean.
     Appended to the edit's result, so the model sees a broken edit at once without spending a call on it."""
@@ -441,9 +499,7 @@ def quick_check(ws, path: str) -> str:
         if rel.endswith((".py", ".pyi")):
             exe = newest_python()
             if exe:
-                r = subprocess.run([exe, _script(ws, "py_syntax.py", PY_SYNTAX), rel], cwd=ws.root,
-                                   capture_output=True, text=True, timeout=15)
-                lines += [l for l in r.stdout.splitlines() if re.match(r".+:\d+:\d+: ", l)]
+                lines += _syntax_lines(ws, exe, "py_syntax.py", PY_SYNTAX, rel)
             ruff = _tool(ws, "ruff")
             if ruff and not lines:
                 r = subprocess.run([ruff, "check", "--no-fix", "--output-format", "concise", "--select", "F821,F822,F823,F811,F632,F401,E9",
@@ -460,9 +516,7 @@ def quick_check(ws, path: str) -> str:
         elif rel.endswith((".json", ".toml", ".yml", ".yaml")):
             exe = newest_python()
             if exe:
-                r = subprocess.run([exe, _script(ws, "config_syntax.py", CONFIG_SYNTAX), rel], cwd=ws.root,
-                                   capture_output=True, text=True, timeout=15)
-                lines += [l for l in r.stdout.splitlines() if re.match(r".+:\d+:\d+: ", l)]
+                lines += _syntax_lines(ws, exe, "config_syntax.py", CONFIG_SYNTAX, rel)
         elif rel.endswith((".sh", ".bash")) and shutil.which("bash"):
             r = subprocess.run(["bash", "-n", rel], cwd=ws.root, capture_output=True, text=True, timeout=15)
             lines += [l.strip() for l in r.stderr.splitlines() if l.strip()][:3]
