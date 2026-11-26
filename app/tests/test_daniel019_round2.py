@@ -1,5 +1,5 @@
 """Daniel (consultant persona), round 2 of the release candidate: the brand and notes fixes held; these flaws were
-still visible. Fixtures: his final deck (round2_deck.pptx), his live slide plan (round2_slides.json), the report he
+still visible. Fixtures: his final deck as text (round2_deck.json, rebuilt by the test), his live slide plan (round2_slides.json), the report he
 attached (northfield_report.txt) and the scripted first-pass plan (slides.json). No model is called.
 
 1 visual flaws: a chevron squeezed over a panel, a bracket touching a value label, a column head wrapping into the
@@ -23,8 +23,115 @@ from pptx import Presentation
 from test_daniel019_decks import BRIEF, FACTS, FOOTER, PLAN, Scripted
 
 FIX = Path(__file__).parent / "fixtures" / "daniel019"
-DECK = FIX / "round2_deck.pptx"
 LIVE = json.loads((FIX / "round2_slides.json").read_text())
+
+
+def _build_daniel_deck(path: Path) -> Path:
+    """Daniel's round 2 deck rebuilt from its text spec (fixtures/daniel019/round2_deck.json, read from the file he
+    downloaded): every shape at its place with its text, and each chart's plot geometry, value scale and labels, on
+    the forge's own template in his brand. Test fixtures are text, never decks."""
+    from lxml import etree
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION
+    from pptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE, PP_PLACEHOLDER
+    from pptx.oxml.ns import qn
+    from pptx.util import Inches, Pt
+    from engines.forge import requested as RQ
+    from engines.forge.render import render
+    spec = json.loads((FIX / "round2_deck.json").read_text())
+    theme, brand = RQ.look(RQ.parse(BRIEF))
+    theme["fonts"] = {"major": "Georgia", "minor": "Georgia"}               # his deck: Georgia throughout
+    base = path.with_name("template.pptx")
+    render([{"archetype": "cover", "title": "Template"}, {"archetype": "argument_only", "title": "Template page",
+            "blocks": [{"text": "x"}]}], str(base), fix_labels=False, theme=theme, brand=brand)
+    prs = Presentation(str(base))
+    lst = prs.slides._sldIdLst
+    for sid in list(lst):
+        prs.part.drop_rel(sid.rId)
+        lst.remove(sid)
+    I = lambda v: Inches(v)                                                 # noqa: E731
+    kinds = {"title": (PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE),
+             "center_title": (PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE), "subtitle": (PP_PLACEHOLDER.SUBTITLE,)}
+
+    def text(sh, d):
+        tf = sh.text_frame
+        bp = tf._txBody.find(qn("a:bodyPr"))
+        for k in ("anchor", "wrap"):
+            if d.get(k):
+                bp.set(k, d[k])
+        for v, attr in zip(d.get("margins") or [], ("margin_left", "margin_top", "margin_right", "margin_bottom")):
+            if v is not None:
+                setattr(tf, attr, I(v))
+        for k, runs in enumerate(d["paras"]):
+            p = tf.paragraphs[0] if k == 0 else tf.add_paragraph()
+            for r in runs:
+                run = p.add_run()
+                run.text = r["t"]
+                if r["pt"]:
+                    run.font.size = Pt(r["pt"])
+                run.font.bold = r["b"]
+                if r["face"]:
+                    etree.SubElement(run._r.get_or_add_rPr(), qn("a:latin"), typeface=r["face"])
+    for s in spec:
+        sl = prs.slides.add_slide(next(lay for lay in prs.slide_layouts if lay.name == s["layout"]))
+        used = set()
+        for d in s["shapes"]:
+            x, y, w, h = d["box"]
+            if d.get("ph"):
+                sh = next(p for p in sl.placeholders if p.placeholder_format.type in kinds[d["ph"]])
+                used.add(sh.shape_id)
+                sh.left, sh.top, sh.width, sh.height = I(x), I(y), I(w), I(h)
+            elif d["kind"] == "line":
+                sh = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, I(x), I(y), I(w), I(h))
+            elif d["kind"] == "chart":
+                c = d["chart"]
+                cd = CategoryChartData()
+                cd.categories = c["cats"]
+                for k, vals in enumerate(c["vals"]):
+                    cd.add_series(f"S{k + 1}", vals)
+                sh = sl.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, I(x), I(y), I(w), I(h), cd)
+                ch = sh.chart
+                if c["gap"] is not None:
+                    ch.plots[0].gap_width = c["gap"]
+                if c["max"] is not None:
+                    ch.value_axis.maximum_scale = c["max"]
+                    ch.value_axis.minimum_scale = c["min"] or 0
+                if c["label_pt"]:
+                    dl = ch.plots[0].series[0].data_labels
+                    dl.show_value = True
+                    dl.font.size = Pt(c["label_pt"])
+                    if c["label_pos"] == "outEnd":
+                        dl.position = XL_LABEL_POSITION.OUTSIDE_END
+                if c["layout"]:
+                    pa = ch._chartSpace.find(".//" + qn("c:plotArea"))
+                    lay = pa.find(qn("c:layout"))
+                    if lay is None:
+                        lay = etree.SubElement(pa, qn("c:layout"))
+                        pa.insert(0, lay)
+                    ml = etree.SubElement(lay, qn("c:manualLayout"))
+                    for tag, val in (("layoutTarget", "inner"), ("xMode", "edge"), ("yMode", "edge"),
+                                     *((k, c["layout"][k]) for k in ("x", "y", "w", "h"))):
+                        etree.SubElement(ml, qn(f"c:{tag}"), val=str(val))
+            elif d["kind"] == "shape":
+                sh = sl.shapes.add_shape(MSO_SHAPE.CHEVRON if d["auto"] == "chevron" else MSO_SHAPE.RECTANGLE,
+                                         I(x), I(y), I(w), I(h))
+            else:
+                sh = sl.shapes.add_textbox(I(x), I(y), I(w), I(h))
+            sh.name = d["name"]
+            if d.get("rot"):
+                sh.rotation = d["rot"]
+            if d.get("paras"):
+                text(sh, d)
+        for p in list(sl.placeholders):
+            if p.shape_id not in used:
+                p._element.getparent().remove(p._element)
+    prs.save(str(path))
+    return path
+
+
+@pytest.fixture(scope="module")
+def r2_deck(tmp_path_factory):
+    return _build_daniel_deck(tmp_path_factory.mktemp("r2deck") / "Ridgeway_PdM_Client_Deck.pptx")
 REPORT = FIX / "northfield_report.txt"
 TODAY = "2026-11-26"
 
@@ -43,8 +150,8 @@ def _texts(sl):
 
 
 # ---------------------------------------------------------------------------------------------------- item 1
-def test_the_checks_fail_each_flaw_daniel_saw_in_his_round_2_deck():
-    got = _fails(DECK)
+def test_the_checks_fail_each_flaw_daniel_saw_in_his_round_2_deck(r2_deck):
+    got = _fails(r2_deck)
     s4 = " ".join(got.get(("P31", 4), []))
     assert "ov_FlowPointer" in s4, got                                     # the chevron over the left panel
     assert "touches the value label '31'" in s4, got                        # "12 months faster" on the "31"
@@ -219,11 +326,11 @@ def test_the_source_lines_of_the_built_deck_name_the_report(grounded_deck):
     assert grounded_deck["qa"]["rules"]["P30"] == "pass"
 
 
-def test_the_invented_material_check_flags_daniels_deck():
+def test_the_invented_material_check_flags_daniels_deck(r2_deck):
     from engines.forge.grounded import check
     import datetime as dt
     corpus = BRIEF + "\n--- Northfield_PdM_Benchmark_2025.pdf ---\n" + REPORT.read_text()
-    got = {f["slide"]: f["message"] for f in check(str(DECK), corpus, BRIEF, None, dt.date(2026, 11, 26))}
+    got = {f["slide"]: f["message"] for f in check(str(r2_deck), corpus, BRIEF, None, dt.date(2026, 11, 26))}
     assert "the occasion 'Board meeting'" in got.get(1, ""), got
     assert "a 'Target' the sources do not set" in got.get(3, ""), got
     for bit in ("the owner 'Plants'", "the owner 'HR'", "the date '29 Jan 2027'", "the date 'January 2027'"):
@@ -297,9 +404,9 @@ def quiet_build(monkeypatch):
     monkeypatch.setattr(CM, "find_soffice", lambda *a, **k: None)
 
 
-def test_slides_added_to_a_deck_are_saved_into_that_deck(tmp_path, quiet_build):
+def test_slides_added_to_a_deck_are_saved_into_that_deck(tmp_path, quiet_build, r2_deck):
     deck = tmp_path / "Ridgeway_PdM_Client_Deck.pptx"
-    shutil.copy(DECK, deck)
+    shutil.copy(r2_deck, deck)
     (tmp_path / "work").mkdir()
     res = _add_one(deck, tmp_path)
     assert res["artifacts"] == [str(deck)], res
@@ -308,14 +415,14 @@ def test_slides_added_to_a_deck_are_saved_into_that_deck(tmp_path, quiet_build):
     assert "changed in place" in res["answer"] and "Undo" in res["answer"]
 
 
-def test_a_slide_added_to_a_deck_keeps_its_title_in_the_title_placeholder(tmp_path, quiet_build):
+def test_a_slide_added_to_a_deck_keeps_its_title_in_the_title_placeholder(tmp_path, quiet_build, r2_deck):
     """Slide 7 of Daniel's deck, added by the forge, had its title as a plain shape "Title 1": the checks reported
     "no filled title placeholder" (P7)."""
     from pptx.enum.shapes import PP_PLACEHOLDER
-    old = Presentation(str(DECK)).slides[6]
+    old = Presentation(str(r2_deck)).slides[6]
     assert old.shapes.title is None                                   # the round 2 deck, as delivered
     deck = tmp_path / "Ridgeway_PdM_Client_Deck.pptx"
-    shutil.copy(DECK, deck)
+    shutil.copy(r2_deck, deck)
     (tmp_path / "work").mkdir()
     _add_one(deck, tmp_path)
     prs = Presentation(str(deck))
@@ -332,10 +439,10 @@ def test_a_slide_added_to_a_deck_keeps_its_title_in_the_title_placeholder(tmp_pa
                 "title" in f["message"].lower() and "placeholder" in f["message"].lower()], res["failures"]
 
 
-def test_a_copy_only_for_a_lock_file_or_an_explicit_save_as(tmp_path, quiet_build):
+def test_a_copy_only_for_a_lock_file_or_an_explicit_save_as(tmp_path, quiet_build, r2_deck):
     from engines.forge.engine import deck_target
     deck = tmp_path / "Board deck.pptx"
-    shutil.copy(DECK, deck)
+    shutil.copy(r2_deck, deck)
     (tmp_path / "work").mkdir()
     assert deck_target(deck, "Update the same deck") == (deck, "in_place")
     assert deck_target(deck, "Add a slide and save it as a new file")[1] == "save_as"
