@@ -184,8 +184,23 @@ def test_real_render_closes_its_browser_and_measures(proj):
     r = L.render_web((proj / "p.html").as_uri(), proj.parent / "shots", "r1", ASK)
     rules = {f["rule"] for f in r["findings"]}
     assert {"sideways-scroll", "console", "contrast", "left-over-text"} <= rules, r["findings"]
-    assert [lbl.split()[0] for lbl, _ in r["shots"]] == ["desktop", "phone"]
+    assert [lbl.split()[0] for lbl, _ in r["shots"]][:2] == ["desktop", "phone"]
+    assert len(r["shots"]) <= 4
     assert not _chrome_children()
+
+
+@needs_browser
+def test_wrapped_inline_labels_are_not_called_overlapping(proj):
+    """At phone width an inline label wraps onto the next line; its bounding box then covers the label beside it. That
+    is not an overlap a person sees, so it must not be reported (the review would send the model after a ghost)."""
+    (proj / "f.html").write_text(DEAD)
+    r = L.render_web((proj / "f.html").as_uri(), proj.parent / "shots", "r1", ASK)
+    assert not [f for f in r["findings"] if f["rule"] == "overlap"], r["findings"]
+    (proj / "o.html").write_text(BUGGY.replace("<h1>", '<div style="position:relative;height:40px"><span style="position:'
+                                               'absolute;top:0">Order roses</span><span style="position:absolute;top:3px;'
+                                               'left:6px">Free delivery</span></div><h1>'))
+    r = L.render_web((proj / "o.html").as_uri(), proj.parent / "shots", "r2", ASK)
+    assert [f for f in r["findings"] if f["rule"] == "overlap"]           # a real overlap is still found
 
 
 # ---------- images or text ------------------------------------------------------------------------------------------
@@ -401,7 +416,11 @@ def test_no_second_render_when_engine_qa_already_ran(proj):
                     reason="LibreOffice not available")
 def test_real_docx_render_through_libreoffice(proj):
     _docx(proj / "r.docx")
-    r = L.render_doc(str(proj / "r.docx"), proj.parent / "shots")
+    from meshpool_harness import lo_session
+    try:
+        r = L.render_doc(str(proj / "r.docx"), proj.parent / "shots")
+    finally:
+        lo_session.close_all()               # the kept LibreOffice: later tests count this process's children
     assert not r.get("error"), r
     assert r["shots"] and "Spend report" in r["text"]
 
@@ -498,3 +517,27 @@ def test_print_mode_reviews_without_an_approval_prompt(proj, tmp_path, mock_llm)
     sent = [json.loads(x) for x in log.read_text().splitlines()]
     assert len(sent) >= 4                                               # write, answer, review: fix, answer
     assert "Allow" not in r.stdout and "approve" not in r.stdout.lower()
+
+
+DEAD = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" "
+        "content=\"width=device-width\"><title>Petal</title></head><body><main><h1>Petal flowers</h1>"
+        "<p>Fresh bouquets every morning.</p><button id=\"order\">Order now</button>"
+        "<h2>Contact us</h2><form id=\"contact\" onsubmit=\"event.preventDefault()\">"
+        "<label>Name <input name=\"name\"></label><label>Email <input name=\"email\"></label>"
+        "<button type=\"submit\">Send</button></form></main></body></html>\n")
+
+
+@needs_browser
+def test_dead_button_and_unchecked_form_reach_the_review(proj, monkeypatch):
+    """End to end with the real interaction check (review_interact.exercise), in the same browser."""
+    pytest.importorskip("meshpool_harness.review_interact")
+    Model(monkeypatch, [write("index.html", DEAD), "Made index.html.", "Noted. The page is index.html."])
+    a, _ = agent(proj)
+    a.send(ASK + " with an order button and a contact form")
+    rv = reviews(a)
+    assert len(rv) == 1
+    t = text_of(rv[0])
+    assert "'Order now' button does nothing when clicked" in t, t
+    assert "empty fields" in t, t                                      # the form takes empty fields without a word
+    assert sum(p.get("type") == "image_url" for p in rv[0]["content"]) <= 4
+    assert not _chrome_children()

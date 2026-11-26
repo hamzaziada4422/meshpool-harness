@@ -255,16 +255,17 @@ EXTRA_JS = r"""
   if (ph) out.push({rule: "placeholder", msg: `placeholder or unfilled text on the page: "${ph[0]}"`, sel: ""});
   // text drawn on top of other text, or on a button or field
   const texts = all.filter(e => own(e) || ["BUTTON", "INPUT", "SELECT", "TEXTAREA", "IMG"].includes(e.tagName)).slice(0, 350);
-  const rects = texts.map(e => e.getBoundingClientRect());
+  // one box per line of an inline element: the bounding box of text that wraps covers lines it is not on
+  const rects = texts.map(e => [...e.getClientRects()].filter(r => r.width > 1 && r.height > 1));
+  const hit = (r, s) => { const w = Math.min(r.right, s.right) - Math.max(r.left, s.left), h = Math.min(r.bottom, s.bottom) - Math.max(r.top, s.top);
+    return w > 4 && h > 4 && w * h > 0.25 * Math.min(r.width * r.height, s.width * s.height); };
   let n = 0;
   for (let i = 0; i < texts.length && n < 5; i++) for (let j = i + 1; j < texts.length && n < 5; j++) {
     const a = texts[i], b = texts[j];
     if (a.contains(b) || b.contains(a)) continue;
     if (a.tagName === "IMG" && b.tagName === "IMG") continue;
     if ((a.tagName === "IMG") !== (b.tagName === "IMG")) continue;      // text on a picture is often on purpose
-    const r = rects[i], s = rects[j];
-    const w = Math.min(r.right, s.right) - Math.max(r.left, s.left), h = Math.min(r.bottom, s.bottom) - Math.max(r.top, s.top);
-    if (w > 4 && h > 4 && w * h > 0.25 * Math.min(r.width * r.height, s.width * s.height)) {
+    if (rects[i].some(r => rects[j].some(s => hit(r, s)))) {
       n++; out.push({rule: "overlap", msg: `overlaps ${sel(b)}`, sel: sel(a)});
     }
   }
@@ -297,8 +298,9 @@ KEEP = {"left-over-text", "placeholder-link", "chart-text-cut-off", "sideways-sc
 def _interact(target: str, request: str, out_dir: str, browser) -> dict:
     """The interaction check (review_interact.exercise), when that module is installed: it clicks and types through
     the page's main actions in the same browser. Without it, no interaction checks."""
+    import importlib
     try:
-        from meshpool_harness import review_interact as RI
+        RI = importlib.import_module("meshpool_harness.review_interact")
     except ImportError:
         return {"steps": [], "findings": [], "shots": [], "console_errors": [], "ms": 0}
     try:
