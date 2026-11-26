@@ -11,6 +11,7 @@
   <a href="https://github.com/hamzaziada4422/meshpool-harness/releases"><img alt="Latest version (beta)" src="https://img.shields.io/github/v/release/hamzaziada4422/meshpool-harness?include_prereleases&label=version%20(beta)&color=1670E8"></a>
   <img alt="Mac, Windows and Linux app" src="https://img.shields.io/badge/app-Mac%20%7C%20Windows%20%7C%20Linux-16181D">
   <img alt="Command line on macOS, Linux and Windows" src="https://img.shields.io/badge/CLI-macOS%20%7C%20Linux%20%7C%20Windows-16181D">
+  <a href="LICENSE"><img alt="Licence: Apache-2.0" src="https://img.shields.io/badge/licence-Apache--2.0-16181D"></a>
 </p>
 
 Meshpool runs on your own computer. It does research, writing, analysis, spreadsheets, decks and code with any model on the Meshpool endpoint, your own OpenAI-compatible key, or the ChatGPT plan you already pay for.
@@ -124,6 +125,10 @@ python -m meshpool_harness ui
 ```
 
 `app/` holds the agent, the desktop UI, the office engines and the tests; `packaging/` the installers and launchers; `testkit/` the mock model and end-to-end checks; `docs/` [benchmarks](docs/BENCHMARKS.md), [routing](docs/ROUTING.md), [building](docs/BUILDING.md) and [releasing](docs/RELEASING.md).
+
+## Licence
+
+Meshpool is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE).
 
 ## Credits
 
