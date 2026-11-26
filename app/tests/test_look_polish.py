@@ -39,14 +39,15 @@ def test_each_review_round_marks_the_reply_before_it_as_a_first_answer(proj, mon
 
 def test_print_mode_writes_the_last_answer_only(proj, monkeypatch):
     a, ev, final = _two_rounds(proj, monkeypatch)
-    out = io.StringIO()
-    t = Terminal(print_mode=True, out=out, err=io.StringIO(), interactive=False)
+    out, err = io.StringIO(), io.StringIO()
+    t = Terminal(print_mode=True, out=out, err=err, interactive=False)
     for e in ev:
         t.emit(dict(e, streamed=False) if e["type"] == "assistant" else e)
     text = out.getvalue()
-    assert "Tried again." in text and "Checked:" in text, text
+    assert "Tried again." in text and "Checked:" not in text, text          # stdout: the answer alone
     assert "Made it." not in text and "Tried." not in text.replace("Tried again.", ""), text
-    assert text.count("Checked:") == 1
+    assert [ln for ln in err.getvalue().splitlines() if ln.startswith("Checked:")]   # the Checked line: stderr
+    assert len([ln for ln in err.getvalue().splitlines() if ln.startswith("Checked:")]) == 1
 
 
 def test_print_mode_still_writes_an_answer_that_no_review_follows():
@@ -64,6 +65,8 @@ def test_the_json_result_holds_the_last_answer(proj, monkeypatch):
     fe = TermFrontend.__new__(TermFrontend)
     fe.s = type("S", (), {"agent": a, "lock": __import__("threading").Lock(), "events": ev})()
     assert fe.reply() == final and fe.reply().startswith("Tried again.") and "Checked:" in fe.reply()
+    assert fe.answer().startswith("Tried again.") and "Checked:" not in fe.answer()    # -p: the answer alone
+    assert fe.checked() == a.last_look["line"] and fe.checked().startswith("Checked:")
 
 
 # ---------- 2: the user's explicit choices win --------------------------------------------------------------------------

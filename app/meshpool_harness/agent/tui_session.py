@@ -221,6 +221,16 @@ class TermFrontend:
                     return e["text"]
         return ""
 
+    def checked(self) -> str:
+        """The "Checked:" line of this run's last turn (agent/look.py), or ""."""
+        lk = getattr(self.s.agent, "last_look", None) or {}
+        return str(lk.get("line") or "") if lk.get("turn") == getattr(self.s.agent, "_turn_no", 0) else ""
+
+    def answer(self) -> str:
+        """The last answer without the "Checked:" line under it: -p reports that line on its own."""
+        from meshpool_harness.agent import look as L
+        return L.strip_checked(self.reply(), self.checked())
+
     @staticmethod
     def _tool_steps(a) -> int:
         return len([m for m in getattr(a, "messages", []) or [] if m.get("role") == "tool"])
@@ -254,13 +264,15 @@ class TermFrontend:
 
     def result(self, failed: bool) -> dict:
         a = self.s.agent
-        out = {"type": "result", "ok": not failed, "result": self.reply(), "session_id": self.s.id,
+        out = {"type": "result", "ok": not failed, "result": self.answer(), "session_id": self.s.id,
                "chat_id": self.s.id, "usage": self._usage(a, getattr(self, "_u0", None)),
                "steps": max(0, self._tool_steps(a) - getattr(self, "_steps0", 0)),
                "denied": list(self.denied)}
         err = self._error() if failed else ""
         if err:
             out["error"] = err
+        if self.checked():                                   # the look at what it made (agent/look.py)
+            out["checked"] = self.checked()
         rv = getattr(a, "last_review", None)
         if rv:                                               # the independent check of a big task (agent/grader.py)
             out["review"] = {k: v for k, v in rv.items() if k not in ("type", "turn")}

@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from meshpool_harness import config as C  # noqa: E402
 from meshpool_harness.agent import core, look as L, lookreview as LR  # noqa: E402
 from tests.test_look_review import (ASK, BUGGY, CONSOLE, FIXED, OVER, _chrome_children, _shots, agent, call,  # noqa: E402
-                                    fake_render, needs_browser, overwrite, reviews, say, text_of, write)
+                                    fake_render, journal, needs_browser, overwrite, reviews, say, text_of, write)
 
 PERSONA = "a shopper on her phone looking for fresh bouquets at the Petal flower shop"
 SECRET = "BUILDER-ONLY-MARKER-91c4"
@@ -452,6 +452,7 @@ def test_a_docx_gets_a_reader_persona_and_no_action_requests(proj, tmp_path, mon
                 [verdict([("the cache hit rate has no date", "page 1", "major")], persona=memo, ok=False),
                  verdict(persona=memo)])
     a, _ = agent(proj)
+    journal(a, proj)                         # the command's file is booked by the chat's checkpoint journal
     final = a.send("write a word memo with the spend report for the board")
     assert (proj / "spend.docx").exists() and seen
     first = body_text(both.r_bodies[0])

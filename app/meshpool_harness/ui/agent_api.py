@@ -2964,6 +2964,11 @@ def _purge(sid: str, force: bool = False) -> None:
     if d.is_dir() and d.parent == SESSIONS:
         shutil.rmtree(d, ignore_errors=True)
     list_dirty()
+    try:                                              # the look's pictures of its pages go with it
+        from meshpool_harness.agent import look as LK
+        LK.forget(sid)
+    except Exception:  # noqa: BLE001
+        pass
     try:                                              # its checks records go with it
         from meshpool_harness import checks as CK
         for f in [CK._file(sid), *CK._dir().glob(f"{CK._safe(sid)}_*.jsonl")]:
@@ -3362,6 +3367,11 @@ def prune_old_chats(days: float | None = None, now: float | None = None) -> list
                 gone.append(sid)
             except Exception:  # noqa: BLE001
                 continue
+    try:                                              # the look's pictures of chats that are gone, untouched as long
+        from meshpool_harness.agent import look as LK
+        LK.prune(cutoff, keep=[d.name for d in SESSIONS.iterdir() if d.is_dir()])
+    except Exception:  # noqa: BLE001
+        pass
     return gone
 
 

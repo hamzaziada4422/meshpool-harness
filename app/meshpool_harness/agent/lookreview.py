@@ -23,11 +23,11 @@ import re
 import threading
 import time
 from pathlib import Path
-from urllib.parse import urlparse
 
 MAX_ACTIONS = 4
 MAX_PROBLEMS = 10
-MAX_REVIEW_IMAGES = 6
+MAX_REVIEW_IMAGES = 4          # pictures in one reviewer call
+MAX_REVIEW_CALLS = 4           # reviewer calls in one turn, retries included
 SEVERITIES = ("blocker", "major", "minor")
 _SEV_ALIAS = {"critical": "blocker", "block": "blocker", "blocking": "blocker", "high": "major", "medium": "major",
               "moderate": "major", "low": "minor", "nit": "minor", "trivial": "minor"}
@@ -252,14 +252,6 @@ _SNAP_JS = r"""() => {
 }"""
 
 
-def _local(url: str) -> bool:
-    try:
-        u = urlparse(url)
-    except ValueError:
-        return False
-    return u.scheme in ("file", "data", "blob", "about") or u.hostname in ("127.0.0.1", "localhost", "::1")
-
-
 def _rx(text: str):
     return re.compile(re.escape(text.strip()), re.I) if text and text.strip() else None
 
@@ -401,9 +393,14 @@ def _change_note(a: dict, b: dict) -> tuple[bool, str]:
     return bool(bits), "; ".join(bits)
 
 
-def run_actions(browser, url: str, actions: list, out_dir, tag: str, deadline_s: float = 30.0) -> list:
-    """Try each requested action on a fresh page in `browser`. Returns [{"action", "ok", "note", "shot"}]. Only local
-    pages are opened; every request to another host is blocked. Never raises."""
+def run_actions(browser, url: str, actions: list, out_dir, tag: str, deadline_s: float = 30.0, allowed=None) -> list:
+    """Try each requested action on a fresh page in `browser`. Returns [{"action", "ok", "note", "shot"}]. Only the
+    page's own origin (and `allowed`: the other servers this chat started) can be reached; every other request, file:
+    URLs included, is blocked. Never raises."""
+    from meshpool_harness.agent import look as L
+    from meshpool_harness.review_interact import guard
+    allowed = set(allowed or ()) | L._origins(url)
+    snap = (lambda pg: L.eval_bounded(pg, _SNAP_JS))
     out: list = []
     t_end = time.time() + deadline_s
     Path(out_dir).mkdir(parents=True, exist_ok=True)
@@ -417,7 +414,8 @@ def run_actions(browser, url: str, actions: list, out_dir, tag: str, deadline_s:
         try:
             ctx = browser.new_context(viewport={"width": w, "height": h}, device_scale_factor=1,
                                       has_touch=a.get("width") == "phone", is_mobile=a.get("width") == "phone")
-            ctx.route("**/*", lambda r: r.continue_() if _local(r.request.url) else r.abort())
+            guard(ctx, allowed)
+            ctx.set_default_timeout(5000)
             page = ctx.new_page()
             errs: list = []
             page.on("pageerror", lambda e, p=errs: p.append(f"script error: {str(e)[:120]}"))
@@ -425,7 +423,7 @@ def run_actions(browser, url: str, actions: list, out_dir, tag: str, deadline_s:
             page.on("dialog", lambda d: (errs.append(f"the page showed an alert: {d.message[:100]}"), d.dismiss()))
             page.goto(url, wait_until="load", timeout=12000)
             page.wait_for_timeout(200)
-            before = page.evaluate(_SNAP_JS)
+            before = snap(page)
             note_pre, ok = "", True
             do = a["do"]
             if do == "click":
@@ -478,7 +476,7 @@ def run_actions(browser, url: str, actions: list, out_dir, tag: str, deadline_s:
                 elif a["target"]:
                     ok, note_pre = False, f"could not find '{a['target']}' on the page"
             page.wait_for_timeout(450)
-            after = page.evaluate(_SNAP_JS)
+            after = snap(page)
             changed, note = _change_note(before, after)
             if errs:
                 note = (note + "; " if note else "") + "; ".join(dict.fromkeys(errs))[:200]
@@ -487,11 +485,14 @@ def run_actions(browser, url: str, actions: list, out_dir, tag: str, deadline_s:
             shot = None
             try:
                 f = Path(out_dir) / f"{tag}-act{n}.jpg"
-                page.screenshot(path=str(f), type="jpeg", quality=60)
+                page.screenshot(path=str(f), type="jpeg", quality=60, timeout=5000)
                 shot = str(f)
             except Exception:  # noqa: BLE001
                 pass
             out.append({"action": text, "ok": ok, "note": (note_pre + (note or "")).strip("; ")[:420], "shot": shot})
+        except L.Frozen:
+            out.append({"action": text, "ok": False, "note": "could not do it: the page froze", "shot": None})
+            t_end = 0                                       # a frozen page answers nothing more: the rest is not tried
         except Exception as e:  # noqa: BLE001 - one action failing never stops the others
             out.append({"action": text, "ok": False, "note": f"could not do it: {type(e).__name__}: {str(e)[:100]}",
                         "shot": None})
@@ -507,7 +508,9 @@ def run_actions(browser, url: str, actions: list, out_dir, tag: str, deadline_s:
 # ---------- the browser kept open between the render and the actions ------------------------------------------------------
 class Hold:
     """The headless Chromium that drew the pictures, kept open on its own thread until close() so the reviewer's actions
-    run in it. look._web_once fills it. It closes itself after IDLE_S whatever happens, so no browser is left behind."""
+    run in it. look.render_web fills it and attaches the worker that owns the browser. It closes itself after IDLE_S
+    whatever happens, a request that does not come back in time or a Stop kills the browser by pid, and close() kills
+    it when it does not end on its own, so no browser is left behind."""
     IDLE_S = 150.0
 
     def __init__(self):
@@ -515,9 +518,22 @@ class Hold:
         self.ready = threading.Event()
         self.res: dict | None = None
         self.alive = False
-        self.thread: threading.Thread | None = None
+        self.worker = None
+        self.stop = None
+        self._end = None
 
-    def serve(self, browser, url: str, out_dir, tag: str) -> None:
+    @property
+    def thread(self):
+        return getattr(self.worker, "thread", None)
+
+    def attach(self, worker, end, stop=None) -> None:
+        """look.render_web: the worker that owns the browser, and end(why) that ends it (killed when why is set)."""
+        self.worker, self._end, self.stop = worker, end, stop
+
+    def detach(self) -> None:
+        self._end = None
+
+    def serve(self, browser, url: str, out_dir, tag: str, allowed=None) -> None:
         """Called on the browser's thread once the pictures are taken: answer action requests until closed."""
         self.alive = True
         end = time.time() + self.IDLE_S
@@ -530,24 +546,47 @@ class Hold:
                 if cmd is None:
                     break
                 actions, reply = cmd
-                reply.put(run_actions(browser, url, actions, out_dir, tag))
+                reply.put(run_actions(browser, url, actions, out_dir, tag, allowed=allowed))
         finally:
             self.alive = False
 
+    def _stopped(self) -> bool:
+        try:
+            return bool(self.stop and self.stop())
+        except Exception:  # noqa: BLE001
+            return False
+
     def run(self, actions: list, timeout: float = 60.0) -> list | None:
+        """The results of the actions, or None when the browser is gone, the time ran out or Stop was pressed (the
+        browser is then killed)."""
         if not self.alive:
             return None
         reply: queue.Queue = queue.Queue()
         self.q.put((actions, reply))
-        try:
-            return reply.get(timeout=timeout)
-        except queue.Empty:
-            return None
+        t_end = time.time() + timeout
+        while True:
+            try:
+                return reply.get(timeout=0.2)
+            except queue.Empty:
+                pass
+            if self._stopped() or time.time() > t_end or not self.alive:
+                self.kill()
+                return None
+
+    def kill(self) -> None:
+        end, self._end = self._end, None
+        if end is not None:
+            end("killed")
+        elif self.worker is not None:
+            self.worker.kill()
 
     def close(self, wait: float = 15.0) -> None:
         self.q.put(None)
-        if self.thread is not None:
-            self.thread.join(wait)
+        end, self._end = self._end, None
+        if self.worker is not None:
+            self.worker.join(min(wait, 1.0) if self._stopped() else wait)
+        if end is not None:
+            end("killed" if self.worker is not None and self.worker.alive() else None)
 
 
 # ---------- the messages the reviewer gets --------------------------------------------------------------------------------
@@ -557,21 +596,25 @@ def _files_line(target: dict) -> list:
 
 
 def _evidence(kind: str, target: dict, res: dict, request: str, blind: bool, finding_lines: list) -> list:
+    from meshpool_harness.agent import look as L
     steps = [s for s in res.get("steps") or [] if isinstance(s, dict)]
     what = (f"{target['label']}, opened in a headless browser at desktop width and at phone width" if kind == "web"
             else f"{target['label']}, drawn as pictures of its first pages")
     t = ["The request that led to this being made:", request or "(not available)", "", f"What was made: {what}.", ""]
     t += _files_line(target)
-    t.append("What meshpool measured:" if finding_lines else "What meshpool measured: no problems found by the checks.")
-    t += ["- " + ln for ln in finding_lines[:30]]
+    data = ["What meshpool measured:" if finding_lines else "What meshpool measured: no problems found by the checks."]
+    data += ["- " + ln for ln in finding_lines[:30]]
     if steps:
-        t += ["", "What happened when meshpool clicked and typed through it (not you, a scripted check):"]
-        t += [f"- {'ok' if s.get('ok', True) else 'FAILED'}: {str(s.get('action', ''))[:120]}"
-              + (f" ({str(s.get('note'))[:160]})" if s.get("note") else "") for s in steps[:12]]
+        data += ["", "What happened when meshpool clicked and typed through it (not you, a scripted check):"]
+        data += [f"- {'ok' if s.get('ok', True) else 'FAILED'}: {str(s.get('action', ''))[:120]}"
+                 + (f" ({str(s.get('note'))[:160]})" if s.get("note") else "") for s in steps[:12]]
+    if kind != "web" and res.get("text"):
+        data += ["", "The text on those pages:", res["text"]]
+    if res.get("blocked"):
+        data += ["", L.blocked_line(res["blocked"])]
+    t += L.fence(data, "the page and the checks")
     if kind != "web":
         t += ["", DOC_NOTE]
-        if res.get("text"):
-            t += ["", "The text on those pages:", res["text"]]
     return t
 
 
@@ -589,10 +632,11 @@ def build_user(mode: str, kind: str, target: dict, res: dict, request: str, blin
     text = _evidence(kind, target, res, request, blind, finding_lines)
     shots = [(lbl, f) for lbl, f in (res.get("shots") or [])][:4]
     if acts:
-        text += ["", "What happened when meshpool tried the actions you asked for:"]
-        text += [f"- {'ok' if a.get('ok') else 'DID NOT WORK'}: {a['action']}" + (f" -> {a['note']}" if a.get("note") else "")
-                 for a in acts]
-        shots += [(f"after: {a['action'][:40]}", a["shot"]) for a in acts if a.get("shot")]
+        from meshpool_harness.agent import look as L
+        text += [""] + L.fence(["What happened when meshpool tried the actions you asked for:"] + [
+            f"- {'ok' if a.get('ok') else 'DID NOT WORK'}: {a['action']}" + (f" -> {a['note']}" if a.get("note") else "")
+            for a in acts], "the page")
+        shots = shots[:2] + [(f"after: {a['action'][:40]}", a["shot"]) for a in acts if a.get("shot")]
     shots = shots[:MAX_REVIEW_IMAGES]
     text += _image_note([] if blind else shots, blind)
     text.append("")
@@ -625,6 +669,9 @@ def user_content(text: str, shots: list):
 def _call(agent, turn: dict, text: str, shots: list, stats: dict) -> str:
     """One reviewer call: a fresh context (the reviewer's instructions and this one message), the chat's own model and
     endpoint. Adds its calls, tokens and seconds to stats."""
+    if stats.get("tried", 0) >= MAX_REVIEW_CALLS:
+        raise RuntimeError(f"the reviewer's limit of {MAX_REVIEW_CALLS} calls for this turn was reached")
+    stats["tried"] = stats.get("tried", 0) + 1
     t0 = time.time()
     b = {k: turn.get(k, 0) for k in ("in", "out", "calls", "cached")}
     try:
@@ -730,12 +777,47 @@ def _same(a: dict, b: dict) -> bool:
     return bool(x and y) and len(x & y) / len(x | y) >= 0.4
 
 
+_STOPWORDS = {"a", "an", "the", "of", "and", "or", "to", "with", "for", "in", "on", "at", "by", "from", "as", "is", "are",
+              "it", "its", "that", "this", "but", "so", "when", "while", "than", "then", "if", "into", "onto", "after",
+              "before", "not", "no", "be", "was", "were", "shows", "show", "says"}
+# a problem the reviewer could not check is not evidence that anything is wrong
+_UNSURE = re.compile(r"^(?:i\s+)?(?:can(?:'|no)?t|cannot|could\s?n[o']t|unable to|not able to)\s+"
+                     r"(?:confirm|verify|tell|check|be sure|see whether|see if|determine)\b|"
+                     r"^(?:not sure|unclear|it is unclear|it's unclear|unknown)\b", re.I)
+
+
+def unsure(p: dict) -> bool:
+    """True for a problem that only says the reviewer could not check something ("can't confirm the page says where
+    the open house is"): not evidence that it is still wrong."""
+    return bool(_UNSURE.search(re.sub(r"\s+", " ", str(p.get("what") or "")).strip()))
+
+
 def _phrase(p: dict) -> str:
-    t = re.sub(r"\s+", " ", p["what"]).strip().rstrip(".")
+    """The problem as a short clean phrase for the Checked line: one clause, never "could not find" or an "instead of"
+    tail, never ending in the middle of a word or on a small word."""
+    t = re.sub(r"\s+", " ", str(p["what"])).strip().rstrip(".")
+    t = t.split(";")[0].strip()
+    t = re.split(r",? so (?:i|she|he|they|a|the|keyboard|it|you|we)\b|, which\b|, because\b|\s+instead of\b|"
+                 r"\s+when (?:looking|checking|i|she|he|they)\b|\s+-\s+|:\s", t, 1, flags=re.I)[0].rstrip(" ,;")   # the thing, not the why
+    t = re.sub(r"\s*\([^()]*\)", "", t)                                   # ('not-an-email'), (where: ...)
+    t = re.sub(r"^(?:i\s+)?(?:could\s?n[o']t|can(?:no|')?t|unable to|did\s?n[o']t)\s+(?:find|see|locate)\s+"
+               r"(?:the\s+|any\s+|an?\s+)?", "missing ", t, flags=re.I)
+    m = re.match(r"^(?:the\s+)?(.+?)\s+(?:could\s?n[o']t|can(?:no|')?t)\s+be\s+(?:found|seen|located)\b", t, re.I)
+    if m:
+        t = "missing " + m.group(1)
+    t = re.sub(r"\s+(?:on the page|anywhere)?\s*(?:at|on)\s+(?:the\s+)?(?:(?:phone|desktop|mobile|narrow|wide)\s+"
+               r"(?:width|screen size|size)|\d+\s*px(?:\s+width)?)$", "", t, flags=re.I)
+    t = re.sub(r"\s+(?:on the page|anywhere on the page)$", "", t, flags=re.I).strip(" ,;:")
     t = t[:1].lower() + t[1:] if t[:2] != t[:2].upper() else t
-    t = re.split(r",? so (?:i|she|he|they|a|the|keyboard)\b|, which\b|, because\b", t, 1)[0].rstrip(" ,;")   # the thing, not the why
-    if len(t) > 90:
-        t = t[:90].rsplit(" ", 1)[0].rstrip(" ,;")                       # never in the middle of a word
+    if len(t) > 80:
+        t = t[:80].rsplit(" ", 1)[0]                                    # never in the middle of a word
+    words = t.split(" ")
+    while len(words) > 1 and words[-1].lower().strip(",;:") in _STOPWORDS:
+        words.pop()                                                     # never on "an", "the", "of"
+    t = " ".join(words).rstrip(" ,;:")
+    for o, c in (("(", ")"), ("'", "'"), ('"', '"')):
+        if (t.count(o) - t.count(c) if o != c else t.count(o) % 2) > 0:
+            t = t[:t.rfind(o)].rstrip(" ,;:")                           # an open quote or bracket: cut before it
     return t
 
 
@@ -746,20 +828,36 @@ def _join(xs: list) -> str:
 
 def summary_line(kind: str, st: dict, extra: list | None = None) -> str:
     """The closing line from the reviewer's first and last verdicts: "Checked: a customer on her phone ordering a
-    birthday cake tried it; fixed the order form error and low contrast; still open: no delivery date picker."."""
+    birthday cake tried it; fixed the order form error and low contrast; still open: no delivery date picker."
+
+    Something is "still open" only when the last look shows it: the last verdict lists it (a "could not confirm" is
+    not evidence), or `extra`, the last measurement, has it. When the builder changed the page after the only verdict
+    and no later verdict could be had, its problems read "changed after the check", not "still open"."""
     evals = st.get("evals") or []
     persona = st.get("persona") or persona_fallback(kind)
     verb = "tried it" if kind == "web" else "looked it over"
     first, last = evals[0], evals[-1]
-    fixed = [p for p in first["problems"] if not any(_same(p, q) for q in last["problems"])] if len(evals) > 1 else []
-    left = [] if last["pass"] and not last["problems"] else last["problems"]
-    measured = [x for x in (extra or []) if not any(_words(x) & _words(_phrase(p)) for p in left)]
+    known = [p for p in first["problems"] if not unsure(p)]
+    seen_last = [p for p in last["problems"] if not unsure(p)]
+    changed: list = []
+    if len(evals) > 1:
+        fixed = [p for p in known if not any(_same(p, q) for q in seen_last)]
+        left = seen_last
+    elif st.get("changed"):                       # fixed after this verdict, then no reviewer saw it again
+        fixed, left, changed = [], [], known
+    else:
+        fixed, left = [], seen_last
+    left_p = list(dict.fromkeys(p for p in (_phrase(x) for x in left) if p))
+    measured = [x for x in (extra or []) if not any(_words(x) & _words(q) for q in left_p)]
     bits = []
     if fixed:
-        bits.append("fixed " + _join(list(dict.fromkeys(_phrase(p) for p in fixed))))
-    if left or measured:
+        bits.append("fixed " + _join(list(dict.fromkeys(p for p in (_phrase(x) for x in fixed) if p))))
+    if changed:
+        bits.append("changed after the check: " + _join(list(dict.fromkeys(p for p in (_phrase(x) for x in changed)
+                                                                               if p))))
+    if left_p or measured:
         bits.append(("minor things left: " if last["pass"] and not measured else "still open: ")
-                    + _join(list(dict.fromkeys([_phrase(p) for p in left] + measured))))
+                    + _join(list(dict.fromkeys(left_p + measured))))
     if not bits:
         bits.append("no problems found")
     return f"Checked: {persona} {verb}; " + "; ".join(bits) + "."

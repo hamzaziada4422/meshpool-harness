@@ -880,6 +880,13 @@ def _args_ok(call: dict) -> bool:
         return False
 
 
+# What one picture costs a vision model, as characters for the usage estimates (core/usage.estimate counts 3 characters
+# a token). A 1280 px wide screenshot is about 1,100 to 1,600 tokens on the common vision models (tiles or pixel
+# area, after their own downscaling), so it is counted as 1,600 tokens.
+IMAGE_EST_TOKENS = 1600
+IMAGE_EST_CHARS = IMAGE_EST_TOKENS * 3
+
+
 def _image_part(im: dict) -> dict:
     """An image_url part for an attached or returned image, shrunk when it is huge (OSS-23: one 12 MB photo must not
     brick a chat). The file on disk is untouched; the chat stores the smaller one."""
@@ -5340,7 +5347,7 @@ class Agent:
         body = {"model": model, "max_tokens": max_tokens, "temperature": 0,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
         ulen = len(user) if isinstance(user, str) else sum(
-            len(p.get("text", "")) if p.get("type") == "text" else 1500 for p in user if isinstance(p, dict))
+            len(p.get("text", "")) if p.get("type") == "text" else IMAGE_EST_CHARS for p in user if isinstance(p, dict))
         _apply_refused(body)
         body = self._prepare(body)
         resp = None

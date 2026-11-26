@@ -459,9 +459,7 @@ def _target_url(target: str) -> str:
             raise ValueError(f"only local pages can be tried (127.0.0.1 or localhost), not {host or t[:60]}")
         return t
     if t.lower().startswith("file://"):
-        p = Path(unquote(urlparse(t).path))
-        if os.name == "nt" and re.match(r"^/[A-Za-z]:", str(urlparse(t).path)):
-            p = Path(unquote(urlparse(t).path)[1:])
+        p = Path(_file_path(t))
     elif re.match(r"(?i)^[a-z][a-z0-9+.-]*://", t):
         raise ValueError(f"only a file or a local http page can be tried, not {t[:60]}")
     else:
@@ -474,18 +472,101 @@ def _target_url(target: str) -> str:
     return p.as_uri()
 
 
-def _is_local(url: str) -> bool:
+def origin(url: str) -> str:
+    """scheme://host:port of an http(s) or ws(s) URL, with the default port filled in ("" for anything else)."""
+    try:
+        u = urlparse(url)
+        port = u.port
+    except ValueError:
+        return ""
+    scheme = {"ws": "http", "wss": "https"}.get(u.scheme.lower(), u.scheme.lower())
+    if scheme not in ("http", "https") or not u.hostname:
+        return ""
+    host = u.hostname.lower()
+    host = f"[{host}]" if ":" in host else host
+    return f"{scheme}://{host}:{port or (443 if scheme == 'https' else 80)}"
+
+
+def _inside(path: str, root: str) -> bool:
+    try:
+        a, b = os.path.normcase(os.path.realpath(path)), os.path.normcase(os.path.realpath(root))
+        return os.path.commonpath([a, b]) == b
+    except (OSError, ValueError):
+        return False
+
+
+def _is_local(url: str, root: str | None = None, allow=None) -> bool:
+    """May the page load this URL? With `allow` (a set of origins, see origin()): only those origins and in-memory
+    data (data:, blob:, about:). Without it: a file inside `root`, or http on 127.0.0.1 or localhost. A file outside
+    `root`, or any file when no root is given, is never local."""
     u = urlparse(url)
-    if u.scheme in ("file", "data", "blob", "about", "chrome-error"):
+    if u.scheme in ("data", "blob", "about", "chrome-error"):
         return True
+    if allow is not None:
+        return bool(origin(url)) and origin(url) in allow
+    if u.scheme == "file":
+        return bool(root) and _inside(_file_path(url), root)
     return (u.hostname or "").lower() in LOCAL_HOSTS
+
+
+def _file_path(url: str) -> str:
+    """The path of a file:// URL. On Windows "file:///C:/x" is C:/x, not /C:/x."""
+    path = unquote(urlparse(url).path)
+    if os.name == "nt" and re.match(r"^/[A-Za-z]:", path):
+        path = path[1:]
+    return path
+
+
+NO_RTC_JS = ("(() => { for (const k of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'RTCDataChannel']) "
+             "{ try { delete window[k]; window[k] = undefined; } catch (e) {} } })()")
+
+
+def guard(ctx, allowed, root: str | None = None, blocked: list | None = None) -> None:
+    """Block every request of this context that is not to an allowed origin (or, with no `allowed`, not local): page
+    loads, frames, scripts, fetch, forms, popups and web sockets. WebRTC, which goes around the request routing, is
+    removed from the pages."""
+    def route(r):
+        try:
+            if _is_local(r.request.url, root, allowed):
+                r.continue_()
+            else:
+                if blocked is not None:
+                    host = urlparse(r.request.url).hostname or r.request.url[:40]
+                    if host not in blocked:
+                        blocked.append(host)
+                r.abort("blockedbyclient")
+        except Exception:  # noqa: BLE001
+            pass
+    ctx.route("**/*", route)
+    if hasattr(ctx, "route_web_socket"):
+        def ws_route(ws):
+            try:
+                if _is_local(re.sub(r"^ws", "http", ws.url), root, allowed):
+                    ws.connect_to_server()
+                else:
+                    ws.close()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            ctx.route_web_socket(re.compile(".*"), ws_route)
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        ctx.add_init_script(NO_RTC_JS)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# Chromium resolves no host name or address but this computer's own: a <link rel=dns-prefetch> or preconnect, which
+# skip the request routing, cannot carry data out in a name lookup or open a connection to another host.
+LAUNCH_ARGS = ["--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE localhost , EXCLUDE 127.0.0.1 , EXCLUDE [::1]"]
 
 
 def launch_browser(pw):
     """Headless Chromium the way meshpool opens it for previews (ui_audit.launcher): Playwright's own build first, else
     MH_TEST_CHROMIUM, else any Chromium a Playwright install left on this computer (PLAYWRIGHT_BROWSERS_PATH first)."""
     try:
-        return pw.chromium.launch(headless=True)
+        return pw.chromium.launch(headless=True, args=LAUNCH_ARGS)
     except Exception as first:  # noqa: BLE001
         cands = [os.environ.get("MH_TEST_CHROMIUM") or ""]
         try:
@@ -495,7 +576,7 @@ def launch_browser(pw):
             pass
         for exe in dict.fromkeys(c for c in cands if c):
             try:
-                return pw.chromium.launch(headless=True, executable_path=exe)
+                return pw.chromium.launch(headless=True, executable_path=exe, args=LAUNCH_ARGS)
             except Exception:  # noqa: BLE001
                 continue
         raise first
@@ -561,8 +642,10 @@ def _driver_pids(before: set) -> list:
 class _Run:
     """One try-out of one page. Holds the result as it grows, so a run cut short still returns what it found."""
 
-    def __init__(self, url: str, request: str, out_dir: str, widths, max_steps: int, deadline: float):
+    def __init__(self, url: str, request: str, out_dir: str, widths, max_steps: int, deadline: float,
+                 root: str | None = None, allow=None):
         self.url = url
+        self.root, self.allow = root, (set(allow) if allow is not None else None)
         self.request = request or ""
         self.req_words = _words(request)
         self.out = Path(out_dir)
@@ -646,31 +729,7 @@ class _Run:
         ctx.set_default_timeout(self.ms(5))
         ctx.set_default_navigation_timeout(self.ms(10))
 
-        def route(r):
-            try:
-                if _is_local(r.request.url):
-                    r.continue_()
-                else:
-                    host = urlparse(r.request.url).hostname or r.request.url[:40]
-                    if host not in self.blocked:
-                        self.blocked.append(host)
-                    r.abort("blockedbyclient")
-            except Exception:  # noqa: BLE001
-                pass
-        ctx.route("**/*", route)
-        if hasattr(ctx, "route_web_socket"):
-            def ws_route(ws):
-                try:
-                    if _is_local(ws.url.replace("ws", "http", 1)):
-                        ws.connect_to_server()
-                    else:
-                        ws.close()
-                except Exception:  # noqa: BLE001
-                    pass
-            try:
-                ctx.route_web_socket(re.compile(".*"), ws_route)
-            except Exception:  # noqa: BLE001
-                pass
+        guard(ctx, self.allow, self.root, self.blocked)
 
         def on_page(p):
             self.events += 1
@@ -725,7 +784,8 @@ class _Run:
     def _on_failed(self, r):
         try:
             why = r.failure or ""
-            if "ERR_BLOCKED_BY_CLIENT" in why or "ERR_ABORTED" in why or r.url.endswith("favicon.ico") or not _is_local(r.url):
+            if ("ERR_BLOCKED_BY_CLIENT" in why or "ERR_ABORTED" in why or r.url.endswith("favicon.ico")
+                    or not _is_local(r.url, self.root, self.allow)):
                 return
             if r.is_navigation_request() and r.frame.parent_frame is None:
                 self.nav_fail.append((r.url, why))
@@ -1389,7 +1449,7 @@ class _Run:
 
 
 def exercise(target: str, request: str, out_dir: str, *, browser=None, widths=(1280, 390), max_steps: int = 12,
-             timeout_s: float = 45) -> dict:
+             timeout_s: float = 45, allow=None, root: str | None = None) -> dict:
     """Try the page at `target` the way a user would and say what went wrong. Never raises.
 
     target: a file path (opened as file://) or an http URL on 127.0.0.1 or localhost. request: the user's original
@@ -1397,6 +1457,9 @@ def exercise(target: str, request: str, out_dir: str, *, browser=None, widths=(1
     None, a headless Chromium is launched and closed (killed at timeout_s if it hangs). widths: the first width is where
     controls are tried; the others are checked for sideways scrolling and, under 700 px, for a working menu button.
     max_steps bounds the controls tried at the first width; the Tab walk and the phone checks always run.
+    allow: the origins the page may load from (the look's own server, a dev server the chat started); everything else
+    is blocked, files included. Without it, only files inside `root` (default: the page's folder) and http on
+    127.0.0.1 or localhost load.
 
     Returns {"steps": [{"action", "ok", "note", "shot"}], "findings": [str], "shots": [str], "console_errors": [str], "ms": int}.
     """
@@ -1410,7 +1473,11 @@ def exercise(target: str, request: str, out_dir: str, *, browser=None, widths=(1
     run = None
     try:
         url = _target_url(target)
-        run = _Run(url, request, out_dir, widths, max_steps, deadline)
+        if allow is not None and not _is_local(url, None, allow):
+            raise ValueError("the page is not on an address this check may open")
+        if root is None and url.startswith("file:"):
+            root = os.path.dirname(_file_path(url))
+        run = _Run(url, request, out_dir, widths, max_steps, deadline, root=root, allow=allow)
         if browser is not None:
             try:
                 run.run(browser)
@@ -1428,57 +1495,118 @@ def exercise(target: str, request: str, out_dir: str, *, browser=None, widths=(1
     return res
 
 
+class Worker:
+    """Playwright's sync API on a thread of its own, with the processes it starts known by pid: the Playwright driver
+    and every Chromium under it. kill() ends them all, from any thread, so a page stuck in an endless script or a
+    browser that stops answering never keeps the caller waiting or leaves a process behind. Only processes this worker
+    started are touched; nothing is ever killed by name."""
+
+    def __init__(self, name: str = "meshpool-browser"):
+        import psutil
+        try:
+            self.before = {c.pid for c in psutil.Process().children()}
+        except Exception:  # noqa: BLE001
+            self.before = set()
+        self.name = name
+        self.pids: list = []
+        self.procs: list = []          # psutil.Process objects noted while they ran (a pid reused later is not hit)
+        self.exact = False
+        self.killed = False
+        self.error = None
+        self.thread: threading.Thread | None = None
+
+    def start(self, work) -> "Worker":
+        """Run work(playwright) on the worker's thread. An exception is kept in .error (not after a kill)."""
+        def body():
+            sp = None
+            try:
+                from playwright.sync_api import sync_playwright
+                manager = sync_playwright()
+                sp = manager.start()
+                exact = _exact_driver_pid(manager, sp)
+                self.exact = bool(exact)
+                self.pids = [exact] if exact else _driver_pids(self.before)
+                if self.killed:
+                    return
+                work(sp)
+            except _Stop:
+                pass
+            except Exception as e:  # noqa: BLE001
+                if not self.killed:
+                    self.error = e
+            finally:
+                if sp is not None:
+                    try:
+                        sp.stop()
+                    except Exception:  # noqa: BLE001
+                        pass
+        self.thread = threading.Thread(target=body, name=self.name, daemon=True)
+        self.thread.start()
+        return self
+
+    def note(self) -> None:
+        """Remember the processes under the driver now (call it once the browser is up)."""
+        try:
+            have = {p.pid for p in self.procs}
+            self.procs += [p for p in _tree(self.pids) if p.pid not in have]
+        except Exception:  # noqa: BLE001
+            pass
+
+    def alive(self) -> bool:
+        return self.thread is not None and self.thread.is_alive()
+
+    def join(self, seconds: float) -> None:
+        if self.thread is not None and self.thread is not threading.current_thread():
+            self.thread.join(max(0.0, seconds))
+
+    def kill(self, wait: float = 5.0) -> None:
+        """End the driver and every browser process under it, then wait up to `wait` s for the thread."""
+        self.killed = True
+        procs = _tree(self.pids or _driver_pids(self.before))
+        have = {p.pid for p in procs}
+        procs += [p for p in self.procs if p.pid not in have]
+        _kill(procs)
+        self.join(wait)
+
+    def finish(self) -> None:
+        """After the thread is done: end anything it left (only when its processes are known exactly)."""
+        if self.exact or self.killed:
+            left = [p for p in _tree(self.pids) + self.procs if _running(p)]
+            if left:
+                _kill(left)
+
+
+def _running(p) -> bool:
+    try:
+        import psutil
+        return p.is_running() and p.status() != psutil.STATUS_ZOMBIE
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _run_own(run: _Run, deadline: float) -> None:
     """Launch a browser in a worker thread, so the caller's thread (which may run an asyncio loop) is never blocked
     past the deadline, and kill the browser and the Playwright driver if the deadline passes."""
-    import psutil
-    try:
-        before = {c.pid for c in psutil.Process().children()}
-    except Exception:  # noqa: BLE001
-        before = set()
-    box: dict = {"pids": [], "killed": False, "error": None}
+    w = Worker("review-interact")
 
-    def work():
-        sp = b = None
+    def work(sp):
+        b = launch_browser(sp)
         try:
-            from playwright.sync_api import sync_playwright
-            manager = sync_playwright()
-            sp = manager.start()
-            exact = _exact_driver_pid(manager, sp)
-            box["exact"] = bool(exact)
-            box["pids"] = [exact] if exact else _driver_pids(before)
-            if box["killed"]:
-                return
-            b = launch_browser(sp)
-            if box["killed"]:
-                return
-            run.run(b)
-        except _Stop:
-            pass
-        except Exception as e:  # noqa: BLE001
-            if not box["killed"]:
-                box["error"] = e
+            w.note()
+            if not w.killed:
+                run.run(b)
         finally:
-            for close in ((b.close if b else None), (sp.stop if sp else None)):
-                if close is None:
-                    continue
+            if not w.killed:
                 try:
-                    close()
+                    b.close()
                 except Exception:  # noqa: BLE001
                     pass
-
-    th = threading.Thread(target=work, name="review-interact", daemon=True)
-    th.start()
-    th.join(max(0.5, deadline - time.monotonic()))
-    if th.is_alive():
-        box["killed"] = True
-        _kill(_tree(box["pids"] or _driver_pids(before)))
-        th.join(5)
+    w.start(work)
+    w.join(max(0.5, deadline - time.monotonic()))
+    if w.alive():
+        w.kill()
         run.find(f"could not exercise the page: it did not finish within {run.total:.0f} s "
                  "(the page or the browser stopped responding); the steps above are what was done")
-    if box.get("exact") or box["killed"]:     # never touch a process that may belong to another caller
-        left = _tree(box["pids"])
-        if left:
-            _kill(left)
-    if box["error"] is not None:
-        raise box["error"]
+    w.finish()
+    if w.error is not None:
+        raise w.error

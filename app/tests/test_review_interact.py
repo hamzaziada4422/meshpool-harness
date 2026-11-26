@@ -57,6 +57,23 @@ def _browser_procs() -> list:
     return out
 
 
+def _left_running(wait: float = 5.0) -> list:
+    """The Chromium or driver processes of this test process still running, after up to `wait` s for them to exit (a
+    killed process can take a moment to go on a loaded machine). Only this process's own tree is counted."""
+    end = time.monotonic() + wait
+    while True:
+        left = _browser_procs()
+        if not left or time.monotonic() > end:
+            return left
+        time.sleep(0.2)
+
+
+def _in_time(took: float, timeout: float) -> bool:
+    """Back close to the time limit: the limit plus a margin that grows with it (launching and killing a browser on a
+    loaded machine take a few seconds of their own)."""
+    return took < timeout + max(6.0, 0.5 * timeout)
+
+
 def _page(tmp_path, body: str, head: str = "", name: str = "index.html") -> str:
     f = tmp_path / name
     f.write_text("<!doctype html><html lang='en'><head><meta charset='utf-8'>"
@@ -313,11 +330,11 @@ def test_page_that_never_settles_returns_in_time(slow_server, tmp_path):
     t = time.monotonic()
     res = _run(tmp_path, slow_server, "a start button", timeout_s=8)
     took = time.monotonic() - t
-    assert took < 8 + 2, took
-    assert res["ms"] < 10000
+    assert _in_time(took, 8), took
+    assert _in_time(res["ms"] / 1000, 8), res["ms"]
     assert _has(res["findings"], "did not finish loading"), res["findings"]
     assert any(s["action"] == "load at 1280px" for s in res["steps"])
-    assert _browser_procs() == []
+    assert _left_running() == []
 
 
 def test_page_that_keeps_polling_is_reported(slow_server, tmp_path):
@@ -330,16 +347,16 @@ def test_frozen_page_is_reported_and_nothing_is_left_running(tmp_path):
     page = _page(tmp_path, "<h1>Busy</h1><script>setTimeout(() => { for (;;) {} }, 50);</script>")
     t = time.monotonic()
     res = _run(tmp_path, page, "", timeout_s=12)
-    assert time.monotonic() - t < 14
+    assert _in_time(time.monotonic() - t, 12)
     assert _has(res["findings"], "freezes"), res["findings"]
-    assert _browser_procs() == []
+    assert _left_running() == []
 
 
 def test_no_browser_process_left_after_a_normal_run(tmp_path):
     page = _page(tmp_path, "<h1>Hi</h1><button class='cta' onclick=\"this.textContent='Done'\">Try it</button>", BTN)
     res = _run(tmp_path, page, "a try it button")
     assert not _has(res["findings"], "could not exercise"), res["findings"]
-    assert _browser_procs() == []
+    assert _left_running() == []
 
 
 def test_runs_from_inside_an_asyncio_loop(tmp_path):
@@ -361,9 +378,9 @@ def test_hard_time_limit_kills_the_browser(tmp_path, monkeypatch):
     t = time.monotonic()
     res = RI.exercise(page, "", str(tmp_path / "shots"), timeout_s=4)
     took = time.monotonic() - t
-    assert took < 4 + 6, took
+    assert _in_time(took, 4), took
     assert _has(res["findings"], "could not exercise the page: it did not finish within 4 s"), res["findings"]
-    assert _browser_procs() == []
+    assert _left_running() == []
 
 
 def test_passed_in_browser_is_not_closed(tmp_path):

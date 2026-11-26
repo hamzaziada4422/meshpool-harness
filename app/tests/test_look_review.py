@@ -122,6 +122,14 @@ def overwrite(path, content, cid="w2"):
     return pick
 
 
+def journal(a, proj):
+    """The chat's checkpoint journal, as the app and -p give every chat: it books what the turn's commands wrote."""
+    from meshpool_harness.checkpoints import Checkpoints
+    a.checkpoint = Checkpoints(str(proj), proj.parent / "_cp", mode="journal")
+    a.checkpoint.begin_turn("turn")
+    return a.checkpoint
+
+
 def agent(proj, profile="work", **kw):
     ev = []
     return core.Agent(str(proj), emit=ev.append, mode="auto", profile=profile, **kw), ev
@@ -143,16 +151,26 @@ OVER = {"rule": "sideways-scroll", "sel": "body", "msg": "the page scrolls sidew
 CONSOLE = {"rule": "console", "sel": "", "msg": "script error: initGallery is not defined", "views": ["desktop", "phone"]}
 
 
-def _chrome_children() -> list:
+def _chrome_now() -> list:
     import psutil
     out = []
     for p in psutil.Process(os.getpid()).children(recursive=True):
         try:
-            if "chrom" in p.name().lower() or "headless" in p.name().lower():
+            if ("chrom" in p.name().lower() or "headless" in p.name().lower()) and p.status() != psutil.STATUS_ZOMBIE:
                 out.append(p)
         except psutil.Error:
             pass
     return out
+
+
+def _chrome_children(wait: float = 5.0) -> list:
+    """Chromium processes under this test process still running, after up to `wait` s for killed ones to exit."""
+    end = time.monotonic() + wait
+    while True:
+        left = _chrome_now()
+        if not left or time.monotonic() > end:
+            return left
+        time.sleep(0.2)
 
 
 # ---------- the review round on a real page ------------------------------------------------------------------------
@@ -396,6 +414,7 @@ def test_docx_made_in_a_chat_gets_a_render_check(proj, monkeypatch):
                     {"command": ["bash", "-lc", f"python3 -c \"{script}\""]})
     Model(monkeypatch, [make, "Saved spend.docx.", "It matches the request. Saved spend.docx."])
     a, _ = agent(proj)
+    journal(a, proj)                         # a command's file is the turn's when the checkpoint journal booked it
     final = a.send("write a word doc with the spend report")
     assert (proj / "spend.docx").exists()
     assert calls and calls[0].endswith("spend.docx")
@@ -523,7 +542,9 @@ def test_print_mode_reviews_without_an_approval_prompt(proj, tmp_path, mock_llm)
                         "--permission-mode", "edits", "--no-mcp"], cwd=str(proj), env=env, stdin=subprocess.DEVNULL,
                        capture_output=True, text=True, timeout=240)
     assert r.returncode == 0, (r.stdout[-2000:], r.stderr[-2000:])
-    assert "Checked: looked at the page at desktop and phone width" in r.stdout, (r.stdout[-2000:], r.stderr[-2000:])
+    # the Checked line goes to stderr: stdout is the answer alone, for scripts that read it
+    assert "Checked: looked at the page at desktop and phone width" in r.stderr, (r.stdout[-2000:], r.stderr[-2000:])
+    assert "Checked:" not in r.stdout, r.stdout[-2000:]
     assert "initGallery" not in (proj / "index.html").read_text()
     sent = [json.loads(x) for x in log.read_text().splitlines()]
     assert len(sent) >= 4                                               # write, answer, review: fix, answer

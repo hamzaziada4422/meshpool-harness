@@ -531,6 +531,10 @@ class Terminal:
             else:
                 self._flush_text()
                 self.p(st.dim("  (that was a first answer. meshpool is checking it, and the final answer follows)"))
+        elif t == "assistant" and self.print_mode and ev.get("look"):
+            # -p: the "Checked:" line goes to stderr, so a script that reads the answer from stdout gets the answer
+            # alone (the JSON result has it as "checked")
+            self._write(str(ev.get("text") or "") + "\n", self.info)
         elif t == "assistant" and self.print_mode and not ev.get("has_tools"):
             if ev.get("append") and getattr(self, "_held", None) is not None:
                 self._held += "\n\n" + str(ev.get("text") or "")      # the Checked line joins the answer it ends
@@ -2121,7 +2125,7 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
                 print(note, file=sys.stderr)
             if output_last_message:
                 from pathlib import Path
-                Path(output_last_message).expanduser().write_text(front.reply(), encoding="utf-8")
+                Path(output_last_message).expanduser().write_text(front.answer(), encoding="utf-8")
             if json_out:
                 sys.__stdout__.write(json.dumps(front.result(failed), ensure_ascii=False, default=str) + "\n")
                 sys.__stdout__.flush()            # a piped stdout is block buffered: the caller must see the result now
