@@ -163,7 +163,7 @@ def test_installing_hides_update_now(fake):
     _poll(f)
     assert pg.locator("#updGo").count() == 0
     assert "Installing update" in pg.inner_text("#updBar")
-    assert "Installing Meshpool 9.9.9" in pg.inner_text("#updRes")
+    assert "Installing meshpool 9.9.9" in pg.inner_text("#updRes")   # the product name is lowercase in the UI (0.0.18)
     assert "restarts when it is done" in pg.inner_text("#updRes")
     pg.evaluate("updatePanel(curUpd())")          # a re-render must not bring the button back either
     pg.evaluate("updatePanel(S.upd)")

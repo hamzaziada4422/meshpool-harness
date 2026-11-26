@@ -22,7 +22,7 @@ function edReveal(root, path) {
 function edCtx(e, root, path, isDir) {
   e.preventDefault(); e.stopPropagation();
   const items = [
-    {label: isDir ? "Open folder" : "Open in Meshpool", icon: isDir ? ICON.folderopen : ICON.files, fn: () => isDir ? openFolderInApp(root, path) : openPreview(root, path)},
+    {label: isDir ? "Open folder" : "Open in meshpool", icon: isDir ? ICON.folderopen : ICON.files, fn: () => isDir ? openFolderInApp(root, path) : openPreview(root, path)},
     ...(isDir ? [] : [{label: "Download", icon: ICON.dl, fn: () => pvDownload(root, path)}]),
     {label: "Copy path", icon: ICON.copy, fn: () => { try { navigator.clipboard.writeText(root.replace(/[\\/]$/, "") + (path ? "/" + path : "")); toast("Path copied", 2000); } catch (err) { toast("Could not copy the path."); } }},
     {sep: true},
@@ -241,7 +241,7 @@ async function edLoad(root, path, id, mode) {
   let f;
   try { f = await api(`/api/fs/read?${edQ(root, path)}`); } catch (e) { if (id === PVX.id) pvNote(e.message); return; }
   if (id !== PVX.id) return;
-  if (f.kind !== "text") { pvNote(f.note || "Meshpool cannot show this kind of file yet."); return; }
+  if (f.kind !== "text") { pvNote(f.note || "meshpool cannot show this kind of file yet."); return; }
   edStop();
   const lang = edLangOf(path);
   EDX.f = {root, path, name: f.name, sha: f.sha, mtime_ns: f.mtime_ns, size: f.size, readonly: !!f.readonly, note: f.note || "", lang, ext: f.ext};
@@ -376,7 +376,7 @@ async function edCheckDisk() {                        // the agent or another to
   if (EDX.f !== f) return;
   if (s.gone) { edWarn("This file is gone from the folder.", []); return; }
   if (s.sha && s.sha !== f.sha) {
-    if (!EDX.dirty) { await edReload(); toast("The file changed on disk, so Meshpool reloaded it.", 3000); }
+    if (!EDX.dirty) { await edReload(); toast("The file changed on disk, so meshpool reloaded it.", 3000); }
     else if ($("#edWarn")?.hidden) edConflict("This file changed on disk while you were editing it.");
   }
 }

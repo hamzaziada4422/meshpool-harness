@@ -82,7 +82,7 @@ def describe() -> dict:
         return {"path": path, "source": source, "note": note}
     if is_packaged():
         return {"path": None, "source": "", "note": "missing from this install (Meshpool never uses a LibreOffice "
-                "installed on your computer); reinstall Meshpool"}
+                "installed on your computer); reinstall meshpool"}
     return {"path": None, "source": "", "note": "not found (source checkout: set MH_SOFFICE, or "
             "MH_ALLOW_SYSTEM_SOFFICE=1 to use the system copy)"}
 

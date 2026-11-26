@@ -266,6 +266,6 @@ def test_restart_failure_reopens_the_gate_and_says_restart(server, monkeypatch):
         if log[-1].startswith("finished"):
             break
         time.sleep(0.05)
-    assert log[-1] == ("finished:False:Meshpool was updated but could not restart itself. "
+    assert log[-1] == ("finished:False:meshpool was updated but could not restart itself. "
                        "Quit and open it again.")
     assert A.QUIESCING[0] is False

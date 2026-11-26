@@ -366,7 +366,7 @@ def _disposition(kind: str, name: str) -> str:
     return f"{kind}; filename=\"{plain}\"; filename*=UTF-8''{quote(name, safe='')}"
 
 
-_RESTART_FAILED = "Meshpool was updated but could not restart itself. Quit and open it again."
+_RESTART_FAILED = "meshpool was updated but could not restart itself. Quit and open it again."
 
 
 def _restart_or_recover(UP, AU) -> None:
@@ -572,7 +572,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, BOOT_PAGE, "text/html; charset=utf-8",
                                   {"Content-Security-Policy": "frame-ancestors 'none'"})
             if not (keyed or os.environ.get("MH_UI_OPEN_PAGE") == "1"):
-                return self._send(403, b"<!doctype html><meta charset=utf-8><title>Meshpool</title><p>Open Meshpool "
+                return self._send(403, b"<!doctype html><meta charset=utf-8><title>meshpool</title><p>Open meshpool "
                                        b"from its app icon, or with the link the app printed when it started.</p>",
                                   "text/html; charset=utf-8", {"Content-Security-Policy": "frame-ancestors 'none'"})
             html = (HERE / "index.html").read_text(encoding="utf-8").replace("__MESHPOOL_TOKEN__", TOKEN) \
@@ -595,16 +595,16 @@ class Handler(BaseHTTPRequestHandler):
             q = parse_qs(u.query)
             try:
                 name = CN.finish(q.get("state", [""])[0], q.get("code", [None])[0], q.get("error", [None])[0])
-                msg, ok = f"{name} is connected. You can close this tab and go back to Meshpool.", True
+                msg, ok = f"{name} is connected. You can close this tab and go back to meshpool.", True
                 cid = CN.LAST_FINISHED[0]
                 r = CN.check(cid) if cid else {"ok": True, "tools": []}
                 if r["ok"]:
-                    msg = f"{name} is connected ({len(r['tools'])} tools). You can close this tab and go back to Meshpool."
+                    msg = f"{name} is connected ({len(r['tools'])} tools). You can close this tab and go back to meshpool."
                 else:
                     msg, ok = f"{name} signed in, but the connection test failed: {r['error']}", False
             except Exception as e:  # noqa: BLE001
                 msg, ok = str(e), False
-            page = ("<!doctype html><meta charset=utf-8><title>Meshpool</title><body style=\"font:15px -apple-system,"
+            page = ("<!doctype html><meta charset=utf-8><title>meshpool</title><body style=\"font:15px -apple-system,"
                     "Segoe UI,sans-serif;display:grid;place-items:center;height:90vh;color:#0B131F\"><div style=\"max-width:"
                     "460px\"><h2 style=\"margin:0 0 8px\">" + ("Connected" if ok else "Sign-in did not finish") +
                     "</h2><p>" + msg.replace("<", "&lt;") + "</p></div>")
@@ -1225,7 +1225,7 @@ class Handler(BaseHTTPRequestHandler):
                 if u.path == "/api/capabilities":
                     return self._send(200, {"features": SV.set_capability(b.get("id", ""), bool(b.get("on")))})
                 if u.path == "/api/notify":
-                    A._notify(str(b.get("title", "Meshpool")), str(b.get("body", "")))
+                    A._notify(str(b.get("title", "meshpool")), str(b.get("body", "")))
                     return self._send(200, {"ok": True})
                 if b.get("action") == "export":
                     import base64
@@ -1385,13 +1385,13 @@ class Handler(BaseHTTPRequestHandler):
             if m:
                 s_ = A.get(m.group(1))
                 if not hasattr(s_.agent, "add_dir"):
-                    raise ValueError("Adding a folder works with Meshpool's own agents.")
+                    raise ValueError("Adding a folder works with meshpool's own agents.")
                 return self._send(200, {"folder": s_.agent.add_dir(str(self._json().get("path") or ""))})
             m = re.fullmatch(r"/api/agent/([\w-]+)/btw", u.path)        # a side question, kept out of the chat
             if m:
                 s_ = A.get(m.group(1))
                 if not hasattr(s_.agent, "side_question"):
-                    raise ValueError("Side questions work with Meshpool's own agents.")
+                    raise ValueError("Side questions work with meshpool's own agents.")
                 return self._send(200, {"answer": s_.agent.side_question(str(self._json().get("question") or ""))})
             m = re.fullmatch(r"/api/agent/([\w-]+)/(model|plan|goal|revert|route|harness|style|effort)", u.path)
             if m:
@@ -1447,7 +1447,7 @@ def _open_web(url: str) -> bool:
     own browser cannot start does it use the system browser (False). The terminal sign-in (agent/connect_cli.py) has
     no panel and keeps printing the link and trying the system browser."""
     if not re.match(r"https?://", url or "", re.I):
-        raise ValueError("That app's sign-in address is not a web page, so Meshpool did not open it.")
+        raise ValueError("That app's sign-in address is not a web page, so meshpool did not open it.")
     try:
         from meshpool_harness.ui import browser_api as BA
         BA.open_signin(url)

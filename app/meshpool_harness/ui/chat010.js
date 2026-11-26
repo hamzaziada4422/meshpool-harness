@@ -56,7 +56,7 @@ async function xray010(anchor) {
   const draw = () => `<h4>What the agent sees</h4><p class="note">${esc(x.note)} ${x.incognito ? "Incognito: no memory." : x.memory_on ? "" : "Memory is off."}</p>
     ${x.sections.map(sec => `<div class="sec2">${esc(sec.title)}</div>${sec.facts.length ? sec.facts.map(f => `<label class="it"><span><input type="checkbox" data-leave="${esc(f.id)}" ${exclude.has(f.id) ? "" : "checked"}> ${esc(f.text)}<small>${esc(f.scope_label)}</small></span></label>`).join("") : `<details><summary class="note">Show</summary><pre>${esc(sec.text.length > 500 ? sec.text.slice(0, 500) + "…" : sec.text)}</pre></details>`}`).join("")}
     ${(x.excluded || []).length ? `<div class="sec2">Left out of this chat</div>${x.excluded.map(f => `<label class="it"><span><input type="checkbox" data-leave="${esc(f.id)}" ${exclude.has(f.id) ? "" : "checked"}> ${esc(f.text)}</span></label>`).join("")}` : ""}
-    <p class="note" style="margin-top:10px">Untick to leave a fact out of this chat. <button class="linkbtn" id="xrMem">Open memory</button></p>`;
+    <p class="note" style="margin-top:8px">Untick to leave a fact out of this chat. <button class="linkbtn" id="xrMem">Open memory</button></p>`;
   const p = popAt(anchor, draw(), "xray");
   const bind = () => {
     $$("[data-leave]", p).forEach(c => c.onchange = async () => {
@@ -73,7 +73,7 @@ const REV_WORD = {met: "Met", not_met: "Not done", unverified: "Could not check"
 window.reviewCard010 = function (ev, add) {
   const v = ev.verdict || "error", items = ev.items || [], open = items.filter(i => i.status !== "met").length;
   const acc = {accept: "The reviewer would accept this as it is.", accept_with_notes: "The reviewer would accept this, with notes.", would_send_back: "The reviewer would send this back."}[ev.acceptance] || "";
-  const meta = ev.secs ? `${Math.round(ev.secs)} s · ${(((ev.tokens?.in || 0) + (ev.tokens?.out || 0)) / 1000).toFixed(1)}k tokens` : "";
+  const meta = ev.secs ? `${fmtDur(ev.secs)} · ${(((ev.tokens?.in || 0) + (ev.tokens?.out || 0)) / 1000).toFixed(1)}k tokens` : "";
   const head = esc(String(ev.text || "Independent check").split("\n")[0]);
   const rows = items.map(i => `<li class="${esc(i.status)}"><span class="rv-s">${REV_WORD[i.status] || esc(i.status)}</span> ${esc(i.requirement)}${i.evidence ? `<small>${esc(i.evidence)}</small>` : ""}</li>`).join("");
   const why = (ev.acceptance_reasons || []).map(r => `<p class="rv-why">${esc(r)}</p>`).join("");
@@ -97,6 +97,25 @@ async function checkThis010(btn) {
   btn.disabled = false;
 }
 
+/* ---------- the receipt line: time, cost, model ----------
+   Drawn from the receipt's own fields the way receipts.py line() writes it now, so a chat saved by an older version
+   reads the same: "3 min 45 s · <$0.01 · DeepSeek V4.1 Flash, chosen for documents". The saved text is the fallback. */
+function receiptBits010(ev) {
+  if (!("secs" in ev) && !("model" in ev)) return String(ev.text || "").split(" · ");
+  const bits = [], unp = Number(ev.unpriced_calls) || 0, tok = (Number(ev.tokens_in) || 0) + (Number(ev.tokens_out) || 0);
+  if (ev.secs != null) bits.push(fmtDur(ev.secs));
+  if (ev.cost != null) bits.push(fmtCost(ev.cost) + (unp ? ` + ${unp} unpriced call${unp === 1 ? "" : "s"}` : ""));
+  else if (unp) bits.push("cost not known (unpriced model)");
+  else if (tok) bits.push(`${tok >= 1000 ? (tok / 1000).toFixed(1) + "k" : tok} tokens, cost not measured`);
+  const rv = String(ev.text || "").split(" · ").find(b => b.startsWith("checked independently: "));
+  if (rv) bits.push(rv);
+  const own = /^meshpool/i.test(String(ev.harness || ev.harness_name || ""));
+  const who = [own ? "" : lowBrand(ev.harness_name || ""), ev.model ? modelName(ev.model) : ""].filter(Boolean).join(" on ");
+  const why = String(ev.text || "").match(/, (chosen for [^·]+|[^,·]+)$/);
+  if (who) bits.push(who + (why && ev.reason ? ", " + why[1].trim() : ""));
+  return bits;
+}
+
 /* ---------- events after a turn ---------- */
 const seen010 = new Set();
 function foot010() { return S.cur?.lastFoot || null; }
@@ -118,7 +137,7 @@ function ev010(ev) {
   }
   if (ev.type === "task_receipt") {
     // "cost not known (unpriced model)" on every reply said nothing new: it moves to the line's tooltip.
-    const bits = String(ev.text || "").split(" · "), unk = bits.some(b => /^cost not known/.test(b));
+    const bits = receiptBits010(ev), unk = bits.some(b => /^cost not known/.test(b));
     const tip = [unk ? "The cost is not known: this model has no price list." : "", ev.reason || ""].filter(Boolean).join(" ");
     under010(`<span title="${esc(tip)}">${esc(bits.filter(b => !/^cost not known/.test(b)).join(" · "))}</span>`, "rcpt010"); return;
   }
@@ -126,7 +145,7 @@ function ev010(ev) {
     insightUnder010(ev.card);
     const ns = Object.assign({suggest: false}, store("notify") || {});
     if (ev.card.type !== "followup" && ns.suggest && document.hidden) {        // only if the user allowed it, and Meshpool is not in view
-      post("/api/insights/os", {}).then(r => { if (r && r.card) post("/api/notify", {title: "Meshpool", body: r.card.title}).catch(() => {}); }).catch(() => {});
+      post("/api/insights/os", {}).then(r => { if (r && r.card) post("/api/notify", {title: "meshpool", body: r.card.title}).catch(() => {}); }).catch(() => {});
     }
     return;
   }
@@ -295,7 +314,7 @@ openThread = function (id, fresh) {
 
 
 /* ---------- under every reply: copy, try again, thumbs. Edit on your own message rewinds to that point. ---------- */
-const THUMB = d => `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
+const THUMB = d => `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
 const UP = THUMB("M7 11v9H4v-9zM7 11l4-8a2 2 0 0 1 2 2v4h5.5a2 2 0 0 1 2 2.3l-1.2 6A2 2 0 0 1 17.3 20H7");
 const DOWN = THUMB("M7 13V4H4v9zM7 13l4 8a2 2 0 0 0 2-2v-4h5.5a2 2 0 0 0 2-2.3l-1.2-6A2 2 0 0 0 17.3 4H7");
 function feedback010(outcome, n) { if (S.cur) post("/api/receipt/feedback", {chat: S.cur.id, outcome, turn: n}).catch(() => {}); }
@@ -324,7 +343,7 @@ function acts010(n, text, ei) {
     if (b.dataset.ra === "check") return checkThis010(b);
     const on = b.getAttribute("aria-pressed") !== "true";
     $$("[data-ra=up],[data-ra=down]", w).forEach(x => { x.setAttribute("aria-pressed", "false"); x.classList.remove("on"); });
-    if (on) { b.setAttribute("aria-pressed", "true"); b.classList.add("on"); feedback010(b.dataset.ra, n); toast(b.dataset.ra === "up" ? "Thanks." : "Thanks. Meshpool will use agents like this less for this kind of task.", 3500); }
+    if (on) { b.setAttribute("aria-pressed", "true"); b.classList.add("on"); feedback010(b.dataset.ra, n); toast(b.dataset.ra === "up" ? "Thanks." : "Thanks. meshpool will use agents like this less for this kind of task.", 3500); }
   };
 }
 // Edit and Try again go back to just before one of your messages, found by its event number (the server maps it to the
@@ -359,7 +378,7 @@ document.addEventListener("click", async e => {
   e.stopImmediatePropagation();
   const fill = () => fillInput(text);             // a draft in the box is kept: the message goes after it
   if (S.cur.busy || idx < 1 || isNaN(ei)) { fill(); return toast("Edit it and send to ask again.", 3500); }
-  if (idx < msgs.length && !await ask({title: "Edit this message?", text: "The replies after it are removed, and files Meshpool changed after it go back.", ok: "Edit it", danger: true})) return;
+  if (idx < msgs.length && !await ask({title: "Edit this message?", text: "The replies after it are removed, and files meshpool changed after it go back.", ok: "Edit it", danger: true})) return;
   try { const r = await rewind010(ei); fill(); toast(r.forked ? "This agent cannot go back in place, so the conversation up to there is a new chat. Edit it and send." : "Edit it and send. The old reply is gone.", 4000); } catch (err) { toast(err.message); }
 }, true);
 const _ev010b = ev010;

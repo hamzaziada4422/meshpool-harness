@@ -54,19 +54,21 @@ def test_cost_comes_from_the_users_prices(monkeypatch):
     _row("c3")
     r = RC.receipt_for("c3")
     assert r["cost"] == round((5000 * 0.30 + 15000 * 0.03 + 3000 * 1.20) / 1e6, 4) == 0.0056
-    assert r["cost_label"] == "" and "$0.0056" in r["text"]
+    # under a cent reads "<$0.01" in the line (one cost format, 0.0.18 design pass); the exact cost stays in the field
+    assert r["cost_label"] == "" and "<$0.01" in r["text"] and "$0.0056" not in r["text"]
 
 
 def test_the_agent_model_and_reason_are_in_the_line():
     _row("c4")
     t = RC.receipt_for("c4")["text"]
-    assert "deepseek-v4.1-flash" in t and "it is the best measured agent for decks" in t
+    # the model is named as the composer names it; meshpool's own agent is not named (0.0.18 design pass)
+    assert "DeepSeek V4.1 Flash" in t and "it is the best measured agent for decks" in t and "Meshpool Work" not in t
 
 
 def test_a_turn_without_a_reason_says_nothing_about_why():
     _row("c5", reason="")
     t = RC.receipt_for("c5")["text"]
-    assert t.endswith("deepseek-v4.1-flash") and "because" not in t
+    assert t.endswith("DeepSeek V4.1 Flash") and "because" not in t and "chosen" not in t
 
 
 def test_a_broken_log_line_is_skipped():

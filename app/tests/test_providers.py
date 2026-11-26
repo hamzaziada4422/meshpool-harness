@@ -60,7 +60,7 @@ def test_meshpool_key_runs_meshpool_agents_and_codex(home):
     HR.use_provider("meshpool")
     r = rows()
     assert HR.ready()
-    assert r["meshpool-code"]["ready"] and r["meshpool-code"]["runs_on"] == "Meshpool"
+    assert r["meshpool-code"]["ready"] and r["meshpool-code"]["runs_on"] == "meshpool"   # the product name is lowercase where people see it (0.0.18)
     cx = r["codex"]
     assert cx["ready"] and cx["prepare"] == "codex" and cx["models"] == "meshpool"
     assert cx["env"]["CODEX_HOME"] == str(HR.codex_home())       # Meshpool's own Codex config, not ~/.codex

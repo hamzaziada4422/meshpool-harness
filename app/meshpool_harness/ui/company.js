@@ -9,12 +9,12 @@
   const css = document.createElement("style");
   css.textContent = `
 .co-top{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 16px}
-.co-top select{min-width:220px;border:1px solid var(--line-3);border-radius:var(--r-s);padding:6px 10px;background:var(--surface);color:var(--ink)}
+.co-top select{min-width:220px;border:1px solid var(--line-3);border-radius:var(--r-s);padding:8px 12px;background:var(--surface);color:var(--ink)}
 .co-drop{border:1px dashed var(--line-3);border-radius:var(--r-m);padding:16px;text-align:center;color:var(--ink-2);font-size:var(--fs-s);cursor:pointer;margin:0 0 20px}
 .co-drop:hover,.co-drop.over{background:var(--hover)}
 .co-drop b{color:var(--ink);font-weight:500}
 .co-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px;margin:0 0 16px}
-.co-sw{display:flex;gap:10px;align-items:center;border:1px solid var(--line);border-radius:var(--r-s);padding:8px 10px}
+.co-sw{display:flex;gap:8px;align-items:center;border:1px solid var(--line);border-radius:var(--r-s);padding:8px 12px}
 .co-sw input[type=color]{width:34px;height:34px;border:1px solid var(--line-3);border-radius:var(--r-s);padding:0;background:none;flex:none;cursor:pointer}
 .co-sw span{display:flex;flex-direction:column;min-width:0;font-size:var(--fs-s);font-weight:500}
 .co-sw small{font-weight:400;color:var(--ink-3);font-size:var(--fs-xs);line-height:1.3}
@@ -24,7 +24,7 @@
 .co-logo .im{width:180px;height:56px;border:1px solid var(--line);border-radius:var(--r-s);display:grid;place-items:center;background:#fff;color:#6B6B6B;font-size:var(--fs-xs)}
 .co-logo img{max-width:170px;max-height:48px}
 .co-row{display:flex;gap:12px;flex-wrap:wrap}.co-row .field{flex:1 1 220px}
-.co-opts{display:flex;flex-direction:column;gap:6px;margin:0 0 16px;font-size:var(--fs-s)}
+.co-opts{display:flex;flex-direction:column;gap:8px;margin:0 0 16px;font-size:var(--fs-s)}
 .co-opts label{display:flex;gap:8px;align-items:flex-start}.co-opts small{display:block;color:var(--ink-3);font-size:var(--fs-xs)}
 .co-prev{width:100%;max-width:560px;aspect-ratio:16/9;border:1px solid var(--line-3);border-radius:var(--r-s);background:#fff;position:relative;overflow:hidden;color:#111;margin:0 0 16px}
 .co-prev .co-t{position:absolute;left:4.5%;top:6%;right:4.5%;font-weight:700;font-size:15px;line-height:1.2}
@@ -33,19 +33,19 @@
 .co-prev .co-bars i{flex:1;display:flex;flex-direction:column;justify-content:flex-end}
 .co-prev .co-side{position:absolute;left:61%;right:4.5%;top:25%;height:58%;padding:3%;font-size:9px;line-height:1.35}
 .co-prev .co-side b{display:block;font-size:10px;margin-bottom:4px}
-.co-prev .co-hl{margin-top:8px;padding:3px 5px;font-weight:700}
-.co-prev .co-call{margin-top:6px;padding:4px 6px;color:#fff;font-weight:600}
-.co-prev .co-ft{position:absolute;left:4.5%;right:4.5%;bottom:4%;display:flex;justify-content:space-between;align-items:center;font-size:7px;border-top:1px solid #999;padding-top:3px}
+.co-prev .co-hl{margin-top:8px;padding:4px 4px;font-weight:700}
+.co-prev .co-call{margin-top:4px;padding:4px 8px;color:#fff;font-weight:600}
+.co-prev .co-ft{position:absolute;left:4.5%;right:4.5%;bottom:4%;display:flex;justify-content:space-between;align-items:center;font-size:7px;border-top:1px solid #999;padding-top:4px}
 .co-prev .co-ft img{max-height:12px;max-width:70px}
 .co-styles{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin:0 0 8px}
-.co-style{display:flex;flex-direction:column;gap:6px;text-align:left;border:1px solid var(--line);border-radius:var(--r-s);padding:8px 10px;background:var(--surface);color:var(--ink);cursor:pointer;font:inherit}
+.co-style{display:flex;flex-direction:column;gap:8px;text-align:left;border:1px solid var(--line);border-radius:var(--r-s);padding:8px 12px;background:var(--surface);color:var(--ink);cursor:pointer;font:inherit}
 .co-style:hover{background:var(--hover)}
 .co-style[aria-pressed=true]{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
 .co-style .sw{display:flex;height:18px;border-radius:3px;overflow:hidden;border:1px solid var(--line)}
 .co-style .sw i{flex:1}
 .co-style b{font-size:var(--fs-s);font-weight:500}
 .co-style small{color:var(--ink-3);font-size:var(--fs-xs);line-height:1.3}
-.co-note{font-size:var(--fs-s);color:var(--ink-2);margin:0 0 6px}
+.co-note{font-size:var(--fs-s);color:var(--ink-2);margin:0 0 4px}
 .co-note.bad{color:var(--del)}
 `;
   document.head.appendChild(css);
@@ -95,10 +95,10 @@
     const p = current();
     const roles = D.roles;
     b.innerHTML = `${close}<h3>Company and brand</h3>
-      <p class="lead">Decks are built in your company's look. Add a few of your existing decks and Meshpool learns the colours, fonts, logo, name and slide master from them. Check what it found and change anything; the deck content is still written fresh each time.</p>
+      <p class="lead">Decks are built in your company's look. Add a few of your existing decks and meshpool learns the colours, fonts, logo, name and slide master from them. Check what it found and change anything; the deck content is still written fresh each time.</p>
       <div class="co-h">Style</div>
       <p class="co-note">No company decks to learn from? Pick a ready-made look for new decks. It is used when no company look below is set to be used.</p>
-      <div class="co-styles" id="coStyles">${[{name: "", label: "Meshpool default", description: "Navy and blue on white, Segoe UI.", palette: {dk2: "0A2540", accent1: "1E5BD8", accent2: "D6E3F8", accent3: "29B6E8", accent4: "1A73B8"}}, ...(D.styles || [])].map(s => `<button type="button" class="co-style" data-style="${esc(s.name)}" aria-pressed="${(D.style || "") === s.name}"><span class="sw">${["dk2", "accent1", "accent2", "accent3", "accent4"].map(k => `<i style="background:${hex(s.palette[k])}"></i>`).join("")}</span><b>${esc(s.label)}</b><small>${esc(s.description)}</small></button>`).join("")}</div>
+      <div class="co-styles" id="coStyles">${[{name: "", label: "meshpool default", description: "Navy and blue on white, Segoe UI.", palette: {dk2: "0A2540", accent1: "1E5BD8", accent2: "D6E3F8", accent3: "29B6E8", accent4: "1A73B8"}}, ...(D.styles || [])].map(s => `<button type="button" class="co-style" data-style="${esc(s.name)}" aria-pressed="${(D.style || "") === s.name}"><span class="sw">${["dk2", "accent1", "accent2", "accent3", "accent4"].map(k => `<i style="background:${hex(s.palette[k])}"></i>`).join("")}</span><b>${esc(s.label)}</b><small>${esc(s.description)}</small></button>`).join("")}</div>
       <div class="res" id="coStyleRes"></div>
       ${ps.length ? `<div class="co-top"><select id="coSel" aria-label="Company">${ps.map(x => `<option value="${esc(x.id)}" ${x.id === CO.sel ? "selected" : ""}>${esc(x.name || "Unnamed company")}${x.id === D.active ? " (used for new decks)" : ""}</option>`).join("")}</select>
         <label class="switchrow" style="margin:0"><input type="checkbox" id="coActive" ${p && p.id === D.active ? "checked" : ""}> Use for new decks</label>
@@ -122,8 +122,8 @@
         <datalist id="coFonts">${fontsList.map(f => `<option value="${f}">`).join("")}</datalist></div>
       <div class="co-h">Layout</div>
       <div class="co-opts">
-        <label><input type="radio" name="coMode" value="master" ${p.template_mode === "master" ? "checked" : ""} ${p.has_master ? "" : "disabled"}><span>Your slide master<small>${p.has_master ? "Your master's background and artwork, with Meshpool's page layouts on top." : esc("Not available: " + (p.master_note || "learn from a deck to use its master."))}</small></span></label>
-        <label><input type="radio" name="coMode" value="forge" ${p.template_mode !== "master" ? "checked" : ""}><span>Meshpool layout in your colours<small>A clean white master with your colours, fonts and logo.</small></span></label></div>
+        <label><input type="radio" name="coMode" value="master" ${p.template_mode === "master" ? "checked" : ""} ${p.has_master ? "" : "disabled"}><span>Your slide master<small>${p.has_master ? "Your master's background and artwork, with meshpool's page layouts on top." : esc("Not available: " + (p.master_note || "learn from a deck to use its master."))}</small></span></label>
+        <label><input type="radio" name="coMode" value="forge" ${p.template_mode !== "master" ? "checked" : ""}><span>meshpool layout in your colours<small>A clean white master with your colours, fonts and logo.</small></span></label></div>
       <div class="co-h">Preview</div>
       <div class="co-prev" id="coPrev" aria-label="Preview of a slide in this look"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" id="coSave">Save</button><button class="btn" id="coSample">Build a sample deck</button></div>
@@ -164,7 +164,7 @@
     const p = current(); if (!p) return;
     $("#coSel", b).onchange = e => { CO.sel = e.target.value; redraw(); };
     $("#coActive", b).onchange = async e => {
-      try { CO.data = await post("/api/company/activate", {id: e.target.checked ? p.id : null}); redraw(); toast(e.target.checked ? "New decks use this look" : "New decks use the Meshpool look"); }
+      try { CO.data = await post("/api/company/activate", {id: e.target.checked ? p.id : null}); redraw(); toast(e.target.checked ? "New decks use this look" : "New decks use the meshpool look"); }
       catch (err) { toast(err.message); }
     };
     $("#coDel", b).onclick = async () => {

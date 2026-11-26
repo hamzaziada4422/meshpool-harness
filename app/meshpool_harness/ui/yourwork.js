@@ -19,38 +19,38 @@
     s.id = "mw-css";
     s.textContent = `
 .mw{max-width:960px;margin:0 auto;padding:36px 32px 48px;color:var(--ink)}
-.mw h2{font:600 var(--fs-l)/1.3 var(--display);margin:0 0 10px}
-.mw .mw-sub{color:var(--ink-3);font-size:var(--fs-s);margin:0 0 18px}
+.mw h2{font:600 var(--fs-l)/1.3 var(--display);margin:0 0 8px}
+.mw .mw-sub{color:var(--ink-3);font-size:var(--fs-s);margin:0 0 16px}
 .mw-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:28px}
-.mw-stat{border:1px solid var(--line);border-radius:var(--r-l);padding:14px 16px;background:var(--bg)}
-.mw-stat b{display:block;font:700 28px/1.1 var(--display);letter-spacing:-.02em}
+.mw-stat{border:1px solid var(--line);border-radius:var(--r-l);padding:16px 16px;background:var(--bg)}
+.mw-stat b{display:block;font:500 var(--fs-2xl)/1.1 var(--display);letter-spacing:0;font-variant-numeric:tabular-nums}
 .mw-stat span{color:var(--ink-3);font-size:var(--fs-s)}
-.mw-sec{margin:0 0 30px}
+.mw-sec{margin:0 0 32px}
 .mw-cols{display:grid;grid-template-columns:1fr 1fr;gap:28px}
-.mw-bar{display:grid;grid-template-columns:150px 1fr 40px;align-items:center;gap:10px;margin:6px 0;font-size:var(--fs-m)}
+.mw-bar{display:grid;grid-template-columns:150px 1fr 40px;align-items:center;gap:8px;margin:4px 0;font-size:var(--fs-m)}
 .mw-bar i{display:block;height:10px;border-radius:5px;background:var(--pool);min-width:4px}
 .mw-bar em{font-style:normal;color:var(--ink-3);text-align:right;font-size:var(--fs-s)}
 .mw-chips{display:flex;flex-wrap:wrap;gap:8px}
-.mw-chip{border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:var(--fs-s);background:var(--bg);color:var(--ink-2)}
+.mw-chip{border:1px solid var(--line);border-radius:var(--r-m);padding:4px 12px;font-size:var(--fs-s);background:var(--bg);color:var(--ink-2)}
 .mw-chip b{color:var(--ink);font-weight:600;margin-left:4px}
-.mw-hours{display:flex;align-items:flex-end;gap:3px;height:64px}
+.mw-hours{display:flex;align-items:flex-end;gap:4px;height:64px}
 .mw-hours span{flex:1;background:var(--pool-soft);border-radius:3px 3px 0 0;min-height:2px}
 .mw-hours span.top{background:var(--pool)}
 .mw-axis{display:flex;justify-content:space-between;color:var(--ink-3);font-size:var(--fs-xs);margin-top:4px}
-.mw-gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
-.mw-file{border:1px solid var(--line);border-radius:var(--r-m);padding:10px 12px;background:var(--bg);min-width:0}
+.mw-gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.mw-file{border:1px solid var(--line);border-radius:var(--r-m);padding:12px 12px;background:var(--bg);min-width:0}
 .mw-file b{display:block;font-weight:500;font-size:var(--fs-s);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mw-file small{color:var(--ink-3);font-size:var(--fs-xs)}
-.mw-line{display:flex;gap:10px;padding:7px 0;border-bottom:1px solid var(--line-2);font-size:var(--fs-m)}
+.mw-line{display:flex;gap:8px;padding:8px 0;border-bottom:1px solid var(--line-2);font-size:var(--fs-m)}
 .mw-line small{color:var(--ink-3);min-width:56px}
-.mw-sug{display:flex;align-items:center;gap:14px;border:1px solid var(--line);border-radius:var(--r-l);padding:14px 16px;margin-bottom:10px;background:var(--bg)}
+.mw-sug{display:flex;align-items:center;gap:12px;border:1px solid var(--line);border-radius:var(--r-l);padding:16px 16px;margin-bottom:8px;background:var(--bg)}
 .mw-sug div{flex:1;min-width:0}.mw-sug b{display:block;font-weight:600}.mw-sug span{color:var(--ink-3);font-size:var(--fs-s)}
 .mw-recap{display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap}
 .mw-recap img{width:240px;border-radius:var(--r-m);border:1px solid var(--line);background:var(--fill)}
-.mw-note{color:var(--ink-3);font-size:var(--fs-s);margin-top:6px}
-.mw-brief h3{font:600 var(--fs-m)/1.3 var(--body);margin:16px 0 6px}
-.mw-brief ul{margin:0;padding-left:18px}.mw-brief li{margin:3px 0}
-.mw-catch{border:1px solid var(--line);border-radius:var(--r-l);padding:14px 16px;background:var(--pool-soft);margin:14px 0}
+.mw-note{color:var(--ink-3);font-size:var(--fs-s);margin-top:4px}
+.mw-brief h3{font:600 var(--fs-m)/1.3 var(--body);margin:16px 0 4px}
+.mw-brief ul{margin:0;padding-left:20px}.mw-brief li{margin:4px 0}
+.mw-catch{border:1px solid var(--line);border-radius:var(--r-l);padding:16px 16px;background:var(--pool-soft);margin:16px 0}
 @media (max-width:640px){.mw{padding:24px 16px 40px}.mw-stats{grid-template-columns:1fr 1fr}.mw-cols{grid-template-columns:1fr}.mw-bar{grid-template-columns:110px 1fr 36px}}`;
     document.head.appendChild(s);
   }
@@ -85,7 +85,7 @@
       </div>
       ${sec("What you worked on", d.topics.length ? `<div class="mw-chips">${d.topics.map(x => `<span class="mw-chip">${esc(x.topic)}<b>${x.chats}</b></span>`).join("")}</div>` : "")}
       <div class="mw-cols">
-        ${sec("Kinds of work", d.kinds.length ? bars(d.kinds, k => k.label, k => k.count) : `<p class="mw-note">Kinds of work show once Meshpool has routed a few requests.</p>`)}
+        ${sec("Kinds of work", d.kinds.length ? bars(d.kinds, k => k.label, k => k.count) : `<p class="mw-note">Kinds of work show once meshpool has routed a few requests.</p>`)}
         ${sec("Agents", d.agents.length ? bars(d.agents, a => a.name, a => a.chats) + (d.models.length ? `<p class="mw-note">Models: ${d.models.map(m => `${esc(m.name)} (${m.chats})`).join(", ")}</p>` : "") : "")}
       </div>
       ${sec("When you work", `<div class="mw-hours" role="img" aria-label="Requests by hour of the day">${w.hour.map((n, h) => `<span class="${h === w.busiest_hour ? "top" : ""}" style="height:${Math.round(100 * n / maxH)}%" title="${hourLabel(h)}: ${n}"></span>`).join("")}</div>
@@ -96,8 +96,8 @@
         ${sec("Skills and connectors", (d.skills.length || d.connectors.length) ? `<div class="mw-chips">${d.skills.map(s => `<span class="mw-chip">Skill ${esc(s.name)}<b>${s.chats}</b></span>`).join("")}${d.connectors.map(s => `<span class="mw-chip">${esc(s.name)}<b>${s.chats}</b></span>`).join("")}</div>` : "")}
         ${sec("Cost", `<p class="mw-note">${esc(u.note)}</p>`)}
       </div>
-      ${sec("What you taught Meshpool", d.taught.length ? d.taught.slice(0, 12).map(x => `<div class="mw-line"><small>${day(x.ts)}</small><span>${esc(x.what)}: ${esc(x.text)}</span></div>`).join("") : "")}
-      ${sec("Worth doing next", d.suggestions.length ? d.suggestions.map((s, i) => `<div class="mw-sug"><div><b>${esc(s.title)}</b><span>${esc(s.detail)}</span></div>${actionButton(s, i)}</div>`).join("") : `<p class="mw-note">No repeated pattern worth a change yet. Meshpool stays quiet when it has nothing real to suggest.</p>`)}
+      ${sec("What you taught meshpool", d.taught.length ? d.taught.slice(0, 12).map(x => `<div class="mw-line"><small>${day(x.ts)}</small><span>${esc(x.what)}: ${esc(x.text)}</span></div>`).join("") : "")}
+      ${sec("Worth doing next", d.suggestions.length ? d.suggestions.map((s, i) => `<div class="mw-sug"><div><b>${esc(s.title)}</b><span>${esc(s.detail)}</span></div>${actionButton(s, i)}</div>`).join("") : `<p class="mw-note">No repeated pattern worth a change yet. meshpool stays quiet when it has nothing real to suggest.</p>`)}
       <section class="mw-sec"><h2>Share a recap</h2><div class="mw-recap"><div><button class="btn" id="mwRecap">Preview recap image</button><p class="mw-note">Drawn on your computer from counts and categories only. No chat text, file names or memory.</p></div><div id="mwPrev"></div></div></section>
       <p class="mw-note">${esc(d.privacy)}</p>`;
     box.querySelectorAll("[data-mw-act]").forEach(b => b.onclick = () => {
@@ -109,7 +109,7 @@
       e.target.disabled = true;
       try {
         const p = await get(`/api/work/recap?range=${state.range}`);
-        prev.innerHTML = `<img alt="Recap preview" src="data:image/png;base64,${p.png_b64}"><div style="margin-top:10px"><button class="btn primary" id="mwSave">Save as image</button></div>`;
+        prev.innerHTML = `<img alt="Recap preview" src="data:image/png;base64,${p.png_b64}"><div style="margin-top:8px"><button class="btn primary" id="mwSave">Save as image</button></div>`;
         prev.querySelector("#mwSave").onclick = async () => {
           const r = await fetch(`/api/work/recap.png?range=${state.range}&download=1`, {headers: {"X-Meshpool-Token": (window.MP || {}).token || ""}});
           const url = URL.createObjectURL(await r.blob());
@@ -157,7 +157,7 @@
       const out = box.querySelector("#mwCatchOut");
       try {
         const r = await post("/api/summaries/catchup", {id: pid});
-        out.innerHTML = `<div class="mw-catch"><b>${r.since ? "Since " + day(r.since) : "So far"}</b><p style="margin:6px 0 0">${esc(r.text)}</p>${r.items.length ? `<ul>${r.items.slice(0, 6).map(i => `<li>${esc(i.summary || i.title)}</li>`).join("")}</ul>` : ""}</div>`;
+        out.innerHTML = `<div class="mw-catch"><b>${r.since ? "Since " + day(r.since) : "So far"}</b><p style="margin:4px 0 0">${esc(r.text)}</p>${r.items.length ? `<ul>${r.items.slice(0, 6).map(i => `<li>${esc(i.summary || i.title)}</li>`).join("")}</ul>` : ""}</div>`;
       } catch (err) { out.innerHTML = `<p class="mw-note">${esc(err.message)}</p>`; }
       e.target.disabled = false;
     };

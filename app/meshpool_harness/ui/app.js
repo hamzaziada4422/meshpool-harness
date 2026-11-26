@@ -32,6 +32,15 @@ function routeMenu(anchor) {
   });
   m.querySelector("button")?.focus();
 }
+// One cost format: "$0.42", and "<$0.01" for anything under a cent (never "$0.0005"). One duration format: "<1 s",
+// "42 s", "3 min 45 s", "1 h 5 min" (receipts.py writes the same).
+// "Summarized 12 earlier messages so the task can keep going." (agent/core.py) in the words of the chat.
+const plainStatus = t => String(t || "").replace(/^Summarized \d+ earlier messages so the task can keep going( \(from the log only\))?\.$/, "Made room to keep going: the earlier steps are now a short summary.");
+function fmtCost(x) { x = Number(x) || 0; return x > 0 && x < 0.01 ? "<$0.01" : "$" + x.toFixed(2); }
+function fmtDur(s) {
+  s = Number(s); if (!(s >= 0)) return ""; if (s < 1) return "<1 s";
+  s = Math.round(s); return s < 60 ? `${s} s` : s < 3600 ? `${Math.floor(s / 60)} min` + (s % 60 ? ` ${s % 60} s` : "") : `${Math.floor(s / 3600)} h ${Math.floor(s % 3600 / 60)} min`;
+}
 function ago(t) {
   if (typeof t === "string") t = isNaN(Number(t)) ? Date.parse(t) / 1000 : Number(t);   // ISO or numeric text
   if (!t || isNaN(t)) return "";
@@ -103,18 +112,18 @@ const RES = id => document.getElementById(id) || {className: "", textContent: ""
 const folderOrNone = v => typeof v === "string" ? v : "";
 function store(k, v) { try { if (v === undefined) return JSON.parse(localStorage.getItem("mp_" + k)); localStorage.setItem("mp_" + k, JSON.stringify(v)); } catch (e) { return null; } }
 
-const I = (p, w = 16) => `<svg viewBox="0 0 24 24" width="${w}" height="${w}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
+const I = (p, w = 16) => `<svg viewBox="0 0 24 24" width="${w}" height="${w}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
 const ICON = {
-  pin: I('<path d="M12 17v5"/><path d="M9 4h6l-1 5.5 3 3.5H7l3-3.5z"/>', 15), trash: I('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>', 15),
-  archive: I('<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11h14V8M10 12h4"/>', 15), book: I('<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 19V5"/>', 15),
-  brain: I('<path d="M12 3v3M12 18v3M3 12h3M18 12h3M6 6l2 2M16 16l2 2M18 6l-2 2M8 16l-2 2"/><circle cx="12" cy="12" r="2.5"/>', 15),
-  sliders: I('<path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>', 15),
-  pencil: I('<path d="M12 20h9M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z"/>', 15), link: I('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>', 15),
-  upload: I('<path d="M12 16V4M7 9l5-5 5 5M4 20h16"/>', 15),
+  pin: I('<path d="M12 17v5"/><path d="M9 4h6l-1 5.5 3 3.5H7l3-3.5z"/>'), trash: I('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>'),
+  archive: I('<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11h14V8M10 12h4"/>'), book: I('<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 19V5"/>'),
+  brain: I('<path d="M12 3v3M12 18v3M3 12h3M18 12h3M6 6l2 2M16 16l2 2M18 6l-2 2M8 16l-2 2"/><circle cx="12" cy="12" r="2.5"/>'),
+  sliders: I('<path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>'),
+  pencil: I('<path d="M12 20h9M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z"/>'), link: I('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>'),
+  upload: I('<path d="M12 16V4M7 9l5-5 5 5M4 20h16"/>'),
   plus: I('<path d="M12 5v14M5 12h14"/>'), search: I('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
   folder: I('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
-  chev: I('<path d="m6 9 6 6 6-6"/>', 14), chevR: I('<path d="m9 6 6 6-6 6"/>', 14),
-  cloud: I('<path d="M7 18a4 4 0 0 1-.6-8A6 6 0 0 1 18 9.5a4.2 4.2 0 0 1-.5 8.5z"/>', 14),
+  chev: I('<path d="m6 9 6 6 6-6"/>'), chevR: I('<path d="m9 6 6 6-6 6"/>'),
+  cloud: I('<path d="M7 18a4 4 0 0 1-.6-8A6 6 0 0 1 18 9.5a4.2 4.2 0 0 1-.5 8.5z"/>'),
   gear: I('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'),
   send: I('<path d="M12 19V5M5 12l7-7 7 7"/>'), stop: I('<rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor"/>'),
   clip: I('<path d="m21 11-8.6 8.6a5 5 0 0 1-7-7l8.5-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.3-2.3l7.9-8"/>'),
@@ -123,19 +132,19 @@ const ICON = {
   branch: I('<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="7" r="2"/><path d="M6 7v10M18 9a6 6 0 0 1-6 6H6"/>'),
   more: I('<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>'),
   side: I('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>'),
-  star: I('<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>', 14),
-  check: I('<path d="m5 12 5 5 9-10"/>', 14), x: I('<path d="M6 6l12 12M18 6 6 18"/>'),
-  cpu: I('<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>', 14),
-  bolt: I('<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>', 14), shield: I('<path d="M12 3 5 6v6c0 4.4 3 7.6 7 9 4-1.4 7-4.6 7-9V6z"/>', 14),
-  list: I('<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>', 14), user: I('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>', 14),
-  tool: I('<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/>', 14),
-  edit: I('<path d="M12 20h9M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z"/>', 14), run: I('<path d="m4 17 6-5-6-5M12 19h8"/>', 14),
-  read: I('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>', 14),
-  skill: I('<path d="M12 2 2 7l10 5 10-5z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>', 14),
-  refresh: I('<path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/>', 14), undo: I('<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-1"/>', 14),
+  star: I('<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>'),
+  check: I('<path d="m5 12 5 5 9-10"/>'), x: I('<path d="M6 6l12 12M18 6 6 18"/>'),
+  cpu: I('<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>'),
+  bolt: I('<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>'), shield: I('<path d="M12 3 5 6v6c0 4.4 3 7.6 7 9 4-1.4 7-4.6 7-9V6z"/>'),
+  list: I('<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>'), user: I('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'),
+  tool: I('<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/>'),
+  edit: I('<path d="M12 20h9M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z"/>'), run: I('<path d="m4 17 6-5-6-5M12 19h8"/>'),
+  read: I('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
+  skill: I('<path d="M12 2 2 7l10 5 10-5z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>'),
+  refresh: I('<path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/>'), undo: I('<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-1"/>'),
   chat: I('<path d="M21 12a8 8 0 0 1-11.8 7L4 20l1.1-4.4A8 8 0 1 1 21 12z"/>'),
-  check2: I('<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>', 14),
-  ring: I('<circle cx="12" cy="12" r="9"/>', 14),
+  check2: I('<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>'),
+  ring: I('<circle cx="12" cy="12" r="9"/>'),
   pr: I('<circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><path d="M6 8v8M18 16V9a3 3 0 0 0-3-3h-4m0 0 2-2m-2 2 2 2"/>'),
   eye: I('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
   plug: I('<path d="M9 2v6M15 2v6M7 8h10v4a5 5 0 0 1-10 0zM12 17v5"/>'),
@@ -150,32 +159,32 @@ const ICON = {
   codebr: I('<path d="m8 8-5 4 5 4M16 8l5 4-5 4M14 5l-4 14"/>'),
   filter: I('<path d="M4 6h16M7 12h10M10 18h4"/>'),
   monitor: I('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>'),
-  ext: I('<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>', 14),
+  ext: I('<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>'),
   grid: I('<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>'),
   lines: I('<path d="M4 6h16M4 12h16M4 18h16"/>'),
   sort: I('<path d="M7 4v16M7 20l-3-3M7 20l3-3M17 20V4M17 4l-3 3M17 4l3 3"/>'),
-  warn: I('<path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17.5v.01"/>', 14),
-  lock: I('<rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>', 14),
-  copy: I('<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>', 14),
+  warn: I('<path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17.5v.01"/>'),
+  lock: I('<rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>'),
+  copy: I('<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>'),
   flag: I('<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>'),
-  folderopen: I('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1H7l-4 8z"/><path d="M3 17l3-7h17l-3 7z"/>', 14),
+  folderopen: I('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1H7l-4 8z"/><path d="M3 17l3-7h17l-3 7z"/>'),
   help: I('<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .9-1 1.7M12 17v.01"/>'),
   logout: I('<path d="M9 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h4M16 8l4 4-4 4M20 12H9"/>'),
   globe2: I('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'),
   share: I('<path d="M12 15V4M8 8l4-4 4 4M5 13v6a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-6"/>'),
   dl: I('<path d="M12 4v11M8 11l4 4 4-4M5 19h14"/>'),
-  file: I('<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>', 14), dir: I('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>', 14),
+  file: I('<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>'), dir: I('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
 };
 
 async function api(path, opts = {}) {
   let r;
   try { r = await fetch(path, {...opts, headers: {"X-Meshpool-Token": MP.token, ...(opts.body ? {"Content-Type": "application/json"} : {}), ...(opts.headers || {})}}); }
-  catch (e) { throw new Error("Meshpool isn't responding. If this keeps happening, quit and reopen Meshpool."); }
+  catch (e) { throw new Error("meshpool isn't responding. If this keeps happening, quit and reopen meshpool."); }
   let j = null, unread = false; try { const t = await r.text(); if (t) j = JSON.parse(t); else unread = r.status !== 204; } catch (e) { unread = true; }   /* not JSON */
   if (j && j.inapp && r.ok && typeof showSignIn === "function") { try { showSignIn(); } catch (e) { /* the page still opened */ } }   // a sign-in page opened inside Meshpool
   if (!r.ok) {
     if (j && typeof j.error === "string" && j.error.trim()) throw new Error(j.error);   // the server's own plain words
-    if (r.status === 403) throw new Error("This page lost its connection to Meshpool. Reload the window.");
+    if (r.status === 403) throw new Error("This page lost its connection to meshpool. Reload the window.");
     if (r.status === 404) throw new Error("meshpool does not know this request: the window may be from an older version. Reload the window.");
     throw new Error(`meshpool's background service failed on this request and sent no explanation (status ${r.status}). Try again; if it keeps happening, quit and reopen meshpool.`);
   }
@@ -254,7 +263,7 @@ async function officePairs() {
   const many = list.length > 1;
   sc.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="Connect an Office panel"><h3>Connect ${many ? "Office panels" : "the Office panel"}?</h3>
     <p>${many ? "More than one request is waiting. Allow only the one whose code your meshpool panel in Office shows, and deny the rest." : "Allow it only if the meshpool panel in Office shows this same code. If you did not just open the panel, deny it."} A connected panel can start Work chats and answer their approvals.</p>
-    ${list.map(x => `<div class="row" style="justify-content:space-between;margin-bottom:10px"><span><b style="font:600 18px/1 ui-monospace,Consolas,monospace;letter-spacing:1px">${esc(x.code)}</b> <span style="color:var(--ink-2)">${esc(x.host)}</span></span><span style="display:flex;gap:8px"><button class="btn" data-c="${esc(x.code)}" data-a="deny">Deny</button><button class="btn primary" data-c="${esc(x.code)}" data-a="allow">Allow</button></span></div>`).join("")}
+    ${list.map(x => `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span><b style="font:500 20px/1 var(--mono);letter-spacing:.08em">${esc(x.code)}</b> <span style="color:var(--ink-2)">${esc(x.host)}</span></span><span style="display:flex;gap:8px"><button class="btn" data-c="${esc(x.code)}" data-a="deny">Deny</button><button class="btn primary" data-c="${esc(x.code)}" data-a="allow">Allow</button></span></div>`).join("")}
     <div class="row"><button class="btn" data-a="later">Decide later</button></div></div>`;
   document.body.appendChild(sc);
   $$("[data-a]", sc).forEach(b => b.onclick = async () => {
@@ -407,7 +416,7 @@ function threadMenu(e, id) {
 }
 async function confirmDelete(id) {
   const t = S.threads.find(x => x.id === id) || {};
-  if (await ask({title: "Delete this chat?", text: `“${clip(t.title || "This chat", 60)}” is removed from Meshpool. Files it made in a project folder stay where they are.`, ok: "Delete chat", cancel: "Keep chat", danger: true})) threadAct(id, "delete");
+  if (await ask({title: "Delete this chat?", text: `“${clip(t.title || "This chat", 60)}” is removed from meshpool. Files it made in a project folder stay where they are.`, ok: "Delete chat", cancel: "Keep chat", danger: true})) threadAct(id, "delete");
 }
 async function moveChat(id, pid) {
   const t = S.threads.find(x => x.id === id), prev = t?.project_id || "";
@@ -656,7 +665,6 @@ async function sendNow(interrupt) {
   clearTimeout(S.suggT); if ($("#sugg")) $("#sugg").hidden = true;
   inp.value = ""; inp.style.height = "auto";
   // Doherty threshold: answer the press at once, before the server does
-  const sb = $("#sendBtn"); if (sb) { sb.classList.remove("go"); void sb.offsetWidth; sb.classList.add("go"); }
   S.sendHold = Date.now() + 2500; setWorking("Sending"); scrollConv(true);
   let created = null; const draft0 = {project: S.draft.project, pid: S.draft.pid, incognito: !!S.draft.incognito};
   try {
@@ -953,11 +961,11 @@ function modelPop(anchor) {
   const M = S.models || {models: [], favorites: [], groups: []};
   const own = S.cur && h.models !== "meshpool" ? (S.cur.view?.harness_models || []) : [];   // models a running agent offers itself
   // First choose where the model runs (a tab per provider), then the model.
-  const keyName = (M.groups || []).find(g => g.id === "key")?.name || "Meshpool";
+  const keyName = (M.groups || []).find(g => g.id === "key")?.name || "meshpool";
   const TABS = [["key", keyName, ["key"]], ["chatgpt", "ChatGPT", ["chatgpt"]]];
   let tab = (TABS.find(t => t[2].includes(provOf(c.model))) || TABS[0])[0];
-  const tabBtn = ([id, name, gs]) => { const on = (M.groups || []).some(g => gs.includes(g.id) && g.ready); return `<button type="button" role="tab" data-tab="${id}" aria-selected="${id === tab}" style="flex:1;padding:6px 4px;border-radius:var(--r-s);border:1px solid ${id === tab ? "var(--pool)" : "var(--line)"};background:${id === tab ? "var(--pool-soft)" : "transparent"};color:var(--ink);font:inherit;font-size:13px;cursor:pointer">${esc(name)}${on ? "" : ` <span style="color:var(--ink-3)">· set up</span>`}</button>`; };
-  const p = openPop(anchor, `<div class="ph"><div role="tablist" aria-label="Where the model runs" id="mtabs" style="display:flex;gap:4px;margin-bottom:6px"></div><input id="mq" placeholder="Search models" aria-label="Search models"></div><div class="pl" id="ml"></div>
+  const tabBtn = ([id, name, gs]) => { const on = (M.groups || []).some(g => gs.includes(g.id) && g.ready); return `<button type="button" role="tab" data-tab="${id}" aria-selected="${id === tab}" style="flex:1;padding:8px 4px;border-radius:var(--r-s);border:1px solid ${id === tab ? "var(--pool)" : "var(--line)"};background:${id === tab ? "var(--pool-soft)" : "transparent"};color:var(--ink);font:inherit;font-size:13px;cursor:pointer">${esc(name)}${on ? "" : ` <span style="color:var(--ink-3)">· set up</span>`}</button>`; };
+  const p = openPop(anchor, `<div class="ph"><div role="tablist" aria-label="Where the model runs" id="mtabs" style="display:flex;gap:4px;margin-bottom:4px"></div><input id="mq" placeholder="Search models" aria-label="Search models"></div><div class="pl" id="ml"></div>
     <div class="pf" style="display:flex;gap:4px"><button class="opt" id="mRefresh" style="flex:1">${ICON.refresh}<span class="ol">Refresh</span></button><button class="opt" id="mManage" style="flex:1">${ICON.gear}<span class="ol">Providers and keys</span></button></div>`, {width: 440});
   const draw = () => {
     $("#mtabs").innerHTML = TABS.map(tabBtn).join("");
@@ -1339,11 +1347,11 @@ function setWorking(text, secs) {
   if (!wk) { wk = document.createElement("span"); wk.id = "working"; wk.className = "working"; wk.setAttribute("role", "status"); wk.innerHTML = `<span class="dot run"></span><span class="wt"></span><span class="el"></span>`; slot.appendChild(wk); }
   const wt = $(".wt", wk), el = $(".el", wk);
   if (wt.textContent !== text) wt.textContent = text;
-  const e = secs == null ? "" : secs + "s"; if (el.textContent !== e) el.textContent = e;
+  const e = secs == null ? "" : fmtDur(secs); if (el.textContent !== e) el.textContent = e;
 }
 function workTick(cur) {
   if (!cur) return;
-  const g = cur.group; if (g && g.isConnected && !g.dataset.done && g._t0) { const el = $(".gel", g), s = Math.round((Date.now() - g._t0) / 1000) + "s"; if (el && el.textContent !== s) el.textContent = s; }
+  const g = cur.group; if (g && g.isConnected && !g.dataset.done && g._t0) { const el = $(".gel", g), s = fmtDur((Date.now() - g._t0) / 1000); if (el && el.textContent !== s) el.textContent = s; }
   const waiting = cur.view?.state === "waiting";   // the server says what it waits on; a stale card in the column must not hide Working
   const pd = cur.working ? planData() : null;
   if (cur.working && !waiting) setWorking(cur.down ? "Waiting for the model service" : cur.jobStage && !cur.live ? cur.jobStage : pd ? planLine(pd) : cur.live ? "Writing" : String(cur.activity || "Working").split(" ").slice(0, 3).join(" ").replace(/[:,]$/, ""), Math.round((Date.now() - (cur.since || Date.now())) / 1000));
@@ -1357,7 +1365,7 @@ function workTick(cur) {
 function waitNote(secs) {
   let n = $("#waitNote");
   if (!secs) { n?.remove(); return; }
-  const t = secs < 60 ? `${secs} s` : `${Math.floor(secs / 60)} min`;
+  const t = fmtDur(secs < 60 ? secs : secs - secs % 60);   // whole minutes once past one: the line changes once a minute
   if (!n) {
     const col = $("#col"); if (!col) return;
     n = document.createElement("div"); n.id = "waitNote"; n.className = "note waitnote"; n.setAttribute("role", "status");
@@ -1672,7 +1680,7 @@ function applyEvRaw(ev) {
       });
       scrollConv(true); break; }
     case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /approval|waiting/i.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
-      const d = cardEl("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.closed ? "Closed when Meshpool restarted." : ev.decision === "stopped" ? "Stopped before running." : ev.decision === "timeout" ? "No answer in time." : ev.reason ? esc(ev.reason) : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "save" ? "Allowed, and saved for this folder." : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
+      const d = cardEl("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.closed ? "Closed when meshpool restarted." : ev.decision === "stopped" ? "Stopped before running." : ev.decision === "timeout" ? "No answer in time." : ev.reason ? esc(ev.reason) : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "save" ? "Allowed, and saved for this folder." : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
         const g = d.previousElementSibling; if (g?.classList.contains("work") && d === col.lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
       if (ev.final && cur.thoughtLive) {      // the saved copy of what streamed live: add only what this page missed
@@ -1711,7 +1719,8 @@ function applyEvRaw(ev) {
         // Auto's reason is the router's own note ("Best benchmark quality for a data task (csv)"): it stays out of the
         // transcript, on the line's tooltip and in the Session panel's Agent section.
         const why = ev.auto && ev.auto.reason ? String(ev.auto.reason) : "";
-        const un = add(`<span${why ? ` title="${esc(why)}"` : ""}>${esc(ev.text)}</span>` + (ev.back ? ` <button class="linkbtn" data-back="1">Use ${esc(ev.back.name)} instead</button>` : ""), "note using");
+        if (/^Using meshpool\b/i.test(ev.text || "") && !ev.back && !ev.handoff) { sessionSoon(); break; }   // meshpool's own agent: nothing to announce
+        const un = add(`<span${why ? ` title="${esc(why)}"` : ""}>${esc(lowBrand(ev.text))}</span>` + (ev.back ? ` <button class="linkbtn" data-back="1">Use ${esc(lowBrand(ev.back.name))} instead</button>` : ""), "note using");
         $("[data-back]", un)?.addEventListener("click", async () => {   // one click back to the mode's own agent, history kept
           try { const v = await post(`/api/agent/${cur.id}/harness`, {harness: ev.back.harness, since: 1e9}); cur.view.harness = v.harness || harness(ev.back.harness); $("[data-back]", un)?.remove(); renderBar(); }
           catch (e) { toast(e.message); } });
@@ -1726,7 +1735,7 @@ function applyEvRaw(ev) {
         cur.down = !!ev.down; if (!ev.down) cur.downEl = null;
         break; }
       if (ev.look) cur.activity = String(ev.text || "").replace(/\.+$/, "");   // the footer names the wait (agent/look.py)
-      { const nn = add(esc(ev.text) + (ev.detail ? ` <details class="notedet"><summary>Details</summary><div>${esc(ev.detail).replace(/\n/g, "<br>")}</div></details>` : ""), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); if (ev.look) cur.lookEl = nn; } break; }
+      { const nn = add(esc(plainStatus(ev.text)) + (ev.detail ? ` <details class="notedet"><summary>Details</summary><div>${esc(ev.detail).replace(/\n/g, "<br>")}</div></details>` : ""), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); if (ev.look) cur.lookEl = nn; } break; }
     case "gate": {                                      // all model slots busy: say so while it waits, drop the line once it runs
       if (cur.gateEl && !cur.gateEl.isConnected) cur.gateEl = null;
       if (ev.state === "waiting") {
@@ -1777,7 +1786,7 @@ function questionEv(ev, add) {
 // The card sits in the transcript like any message. Rows are full width; 1-9 pick a row, arrows move, Enter on a chosen row
 // sends. Answered, it folds into one line (its height eases down, so nothing jumps).
 const qId = ev => "q-" + String(ev.id).replace(/[^\w-]/g, "");
-const QCHECK = `<svg class="qck" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>`;
+const QCHECK = `<svg class="qck" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>`;
 function questionCard(ev, add) {
   const qs = ev.questions || [], cid = qId(ev), many = qs.length > 1;
   const html = qs.map((q, i) => {
@@ -1876,10 +1885,10 @@ async function drawRules(box, r) {
   try { r = r || await api("/api/rules"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
   const NAMES = {allow: ["Always allowed", "Runs without asking."], ask: ["Always asks", "Asks first, even with full access or an allow rule."], deny: ["Never allowed", "Refused, whatever the mode."]};
   const row = (lst, rule, folder) => `<li><span class="tg"><code>${esc(rule)}</code></span><button class="iconbtn" data-rrm="${esc(lst)}" data-rule="${esc(rule)}" ${folder ? `data-folder="${esc(folder)}"` : ""} aria-label="Remove ${esc(rule)}">${ICON.x}</button></li>`;
-  box.innerHTML = `<h3 style="font-size:16px;margin:18px 0 4px">Saved rules</h3><p class="pnote">A rule is a tool name (<code>edit</code>), or <code>bash:</code> and a command with * for any text (<code>bash:git push*</code>). Saved in ${esc(r.path)}.</p>
+  box.innerHTML = `<h3 style="font-size:16px;margin:16px 0 4px">Saved rules</h3><p class="pnote">A rule is a tool name (<code>edit</code>), or <code>bash:</code> and a command with * for any text (<code>bash:git push*</code>). Saved in ${esc(r.path)}.</p>
     ${Object.entries(NAMES).map(([k, [h, d]]) => `<h4 style="margin:12px 0 4px">${h}</h4><small class="pnote">${d}</small><ul class="rows2">${(r[k] || []).map(x => row(k, x)).join("") || `<li class="pnote">None.</li>`}</ul>`).join("")}
     ${r.folders.length ? `<h4 style="margin:12px 0 4px">Allowed in one folder</h4>${r.folders.map(f => `<small class="pnote">${esc(f.folder)}</small><ul class="rows2">${f.allow.map(x => row("allow", x, f.folder)).join("")}</ul>`).join("")}` : ""}
-    <div class="srow" style="margin-top:10px"><select id="ruleList" aria-label="Kind of rule"><option value="ask">Always ask</option><option value="deny">Never allow</option><option value="allow">Always allow</option></select><input id="ruleText" placeholder="bash:git push*" spellcheck="false"><button class="btn" id="ruleAdd">Add rule</button></div><div class="res" id="ruleRes"></div>`;
+    <div class="srow" style="margin-top:8px"><select id="ruleList" aria-label="Kind of rule"><option value="ask">Always ask</option><option value="deny">Never allow</option><option value="allow">Always allow</option></select><input id="ruleText" placeholder="bash:git push*" spellcheck="false"><button class="btn" id="ruleAdd">Add rule</button></div><div class="res" id="ruleRes"></div>`;
   const act = async body => { try { drawRules(box, await post("/api/rules", body)); } catch (e) { const x = $("#ruleRes", box); x.className = "res bad"; x.textContent = e.message; } };
   $$("[data-rrm]", box).forEach(x => x.onclick = () => act({action: "remove", list: x.dataset.rrm, rule: x.dataset.rule, folder: x.dataset.folder || ""}));
   $("#ruleAdd", box).onclick = () => act({action: "add", list: $("#ruleList", box).value, rule: $("#ruleText", box).value});
@@ -1932,7 +1941,7 @@ function fillInput(text, opts = {}) {
   toast("Your message is back in the box as a draft. Edit it, then send it again if you want to.", 6000);
 }
 async function undoTurn(n) {
-  if (!await ask({title: "Undo this reply?", text: "Files Meshpool changed go back to how they were before it, and the conversation goes back to that point. Replies after it are undone too.", ok: "Undo changes", danger: true})) return;
+  if (!await ask({title: "Undo this reply?", text: "Files meshpool changed go back to how they were before it, and the conversation goes back to that point. Replies after it are undone too.", ok: "Undo changes", danger: true})) return;
   const t = (S.cur.view?.turns || []).find(x => x.n === n) || {};
   const ue = threadLog().find(e => e.type === "user" && (t.message_index != null && e.mi === t.message_index)) ||
     threadLog().find(e => e.type === "user" && t.event_index != null && e.i === t.event_index);
@@ -1965,7 +1974,7 @@ async function rewindFork(kind, el) {
       await loadThreads(); openThread(r.id); toast("Forked into a new chat. Nothing changed in your files.", 4000); return;
     }
     const a = await ask({title: "Rewind to here?", text: "The conversation goes back to just before this message, and the reply and everything after it are removed. The message goes back into the box so you can change it.",
-      ok: "Rewind", danger: true, check: "Also undo the file changes Meshpool made from here on"});
+      ok: "Rewind", danger: true, check: "Also undo the file changes meshpool made from here on"});
     if (!a) return;
     const r = await post(`/api/agent/${cur.id}/rewind`, {event_index: ei, files: a.checked, since: 1e9});
     if (r.forked) { await loadThreads(); openThread(r.forked); toast("This agent cannot go back in place, so the conversation up to there is a new chat.", 5000); return; }
@@ -1993,7 +2002,8 @@ function setupPanelResize() {
   });
 }
 function fitPanel() {
-  const want = (!!S.panel || (typeof PVX !== "undefined" && PVX.open)) && innerWidth < 1180 && innerWidth > 760 && !S.keepSide;   // only where both cannot fit
+  const pv = typeof PVX !== "undefined" && PVX.open;   // the preview needs more room than the panel: 560px of chat beside it
+  const want = ((!!S.panel && innerWidth < 1180) || (pv && innerWidth < 1366)) && innerWidth > 760 && !S.keepSide;   // only where both cannot fit
   if ($("#app").classList.contains("autoside") !== want) { $("#app").classList.toggle("autoside", want); renderTop(); }
 }
 // Each drawing of the side panel gets a number. A tab that loads its data (Git and CI, Changes) checks it after the
@@ -2074,6 +2084,7 @@ function progressUpdate() {
   const stateHTML = busy ? `<span class="cwbusy">${v.state === "waiting" ? "Waiting for you" : "Working"}</span>` : v.state === "idle" && pr.items.length ? (threadLog().slice(-12).some(e => e.type === "interrupted") ? `<span class="cwstop">Stopped</span>` : `<span class="cwdone">Done</span>`) : "";
   if (hd._h !== stateHTML) { hd._h = stateHTML; hd.innerHTML = stateHTML; }
   const box = $("#pgSteps", body); let ol = $("ol", box);
+  if (box.classList.contains("live") !== busy) box.classList.toggle("live", busy);
   if (!pr.items.length) { ol?.remove(); setHTML(box, `<div class="pnote" style="padding:4px 0">${busy ? "Getting started..." : "No steps yet for this task."}</div>`); }
   else {
     if (!ol) { box.innerHTML = ""; box._h = null; ol = document.createElement("ol"); ol.className = "stepl"; box.appendChild(ol); }
@@ -2086,7 +2097,7 @@ function progressUpdate() {
     if (!ul) { fbox.innerHTML = ""; fbox._h = null; ul = document.createElement("ul"); ul.className = "outs"; fbox.appendChild(ul); }
     reconcile(ul, outs, o => o.path, o => { const li = document.createElement("li"); li.innerHTML = `<button data-open="${esc(o.path)}" title="Open ${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button>`; $("button", li).onclick = () => openPreview(curRoot(), o.path); return li; }, () => {});
   }
-  setTxt($("#pgHarness", body), v.harness?.name || ""); setTxt($("#pgModel", body), modelName(v.model || ""));
+  setTxt($("#pgHarness", body), lowBrand(v.harness?.name || "")); setTxt($("#pgModel", body), modelName(v.model || ""));
 }
 function panelProgress(body) {
   if (!S.cur) { body.innerHTML = `<div class="pnote">Start a task and its progress shows here: the plan, each step as it finishes, the files it makes and what it can reach.</div>`; return; }
@@ -2114,7 +2125,7 @@ function panelOutputs(body) {
   const own = !!S.cur?.view?.scratch;
   body.innerHTML = `<div class="pbar"><span class="chip" title="${esc(curRoot())}">${ICON.dir}${esc(rootLabel())}</span><span style="flex:1"></span><button class="btn" id="oOpen" aria-label="Show every file in the folder">Browse files</button></div>
     ${own && outs.length ? `<div class="pnote" id="oCopyNote">These files are in this chat's own folder. A file you attached is a copy here: your original is unchanged. Use Download to keep one.</div>` : ""}
-    ${outs.length ? `<ul class="outs" style="padding:10px">${outs.map(o => `<li><button data-open="${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button></li>`).join("")}</ul>` : `<div class="pnote">Files this chat makes or changes show here. Click one to preview it.</div>`}
+    ${outs.length ? `<ul class="outs" style="padding:12px">${outs.map(o => `<li><button data-open="${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button></li>`).join("")}</ul>` : `<div class="pnote">Files this chat makes or changes show here. Click one to preview it.</div>`}
     <div style="border-top:1px solid var(--line-2);flex:1;min-height:160px;display:flex;flex-direction:column"><div class="pnote" style="padding:8px 12px 0">All files in the folder</div><div style="flex:1;overflow:auto" id="tree"></div></div></div>`;
   // the folder in the in-app file list (the viewer pane): the list below was already on screen, so scrolling to it did nothing
   $("#oOpen").onclick = () => { if (curRoot()) edFolderPane(curRoot(), ""); };
@@ -2246,15 +2257,15 @@ async function panelGit(body) {
   if (!g.git) { body.innerHTML = `<div class="pnote">Git is not installed on this computer.${isMac ? " Open Terminal and run <code>xcode-select --install</code>, then come back." : ""}</div>`; return; }
   if (!g.repo) { body.innerHTML = `<div class="gitbox"><div class="stat">This folder is not a Git repository.</div><div class="row"><button class="btn primary" id="ginit">Start a Git repository here</button></div></div>`; $("#ginit").onclick = () => gitAct({action: "init"}); return; }
   body.innerHTML = `<div class="gitbox">
-    <div><h4>Branch</h4><div class="row" style="margin-top:6px"><select id="gbr">${g.branches.map(b => `<option ${b === g.branch ? "selected" : ""}>${esc(b)}</option>`).join("")}</select></div>
-      <div class="row" style="margin-top:6px"><input id="gnew" placeholder="New branch name"><button class="btn" id="gcreate">Create</button></div>
-      <div class="stat" style="margin-top:6px">${g.upstream ? `${g.ahead} to push, ${g.behind} to pull` : "Not pushed yet"}${g.remote ? ` · ${esc(g.github || g.remote)}` : " · no remote"}</div></div>
-    <div><h4>Changes (${g.dirty})${g.staged ? ` · ${g.staged} staged` : ""}</h4><ul class="flist" style="border:1px solid var(--line-2);border-radius:var(--r-s);margin-top:6px;max-height:180px;overflow:auto">${g.files.map((f, i) => `<li><span class="badge modified">${esc(GIT_WORD[String(f.status).trim()] || f.status)}</span><span class="p">${esc(f.path)}</span>${f.unstaged ? `<button class="linkbtn" data-gst="${i}" title="Stage this file for the next commit">Stage</button>` : ""}${f.staged ? `<button class="linkbtn" data-gun="${i}" title="Take it out of the next commit; the change stays">Unstage</button>` : ""}</li>`).join("") || `<li class="pnote" style="padding:6px 10px">Nothing to commit.</li>`}</ul></div>
-    <div><h4>Commit</h4><textarea id="gmsg" rows="2" placeholder="What changed and why" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px">${g.staged ? `<button class="btn primary" id="gcommitst">Commit staged (${g.staged})</button>` : ""}<button class="btn ${g.staged ? "" : "primary"}" id="gcommit" ${g.dirty ? "" : `disabled title="Nothing to commit: no files have changed."`}>Commit all</button><button class="btn" id="gpush" ${g.remote ? "" : `disabled title="This folder has no remote to push to."`}>Push</button><button class="btn" id="gpull" ${g.upstream ? "" : `disabled title="This branch is not linked to a remote branch yet."`}>Pull</button></div></div>
+    <div><h4>Branch</h4><div class="row" style="margin-top:4px"><select id="gbr">${g.branches.map(b => `<option ${b === g.branch ? "selected" : ""}>${esc(b)}</option>`).join("")}</select></div>
+      <div class="row" style="margin-top:4px"><input id="gnew" placeholder="New branch name"><button class="btn" id="gcreate">Create</button></div>
+      <div class="stat" style="margin-top:4px">${g.upstream ? `${g.ahead} to push, ${g.behind} to pull` : "Not pushed yet"}${g.remote ? ` · ${esc(g.github || g.remote)}` : " · no remote"}</div></div>
+    <div><h4>Changes (${g.dirty})${g.staged ? ` · ${g.staged} staged` : ""}</h4><ul class="flist" style="border:1px solid var(--line-2);border-radius:var(--r-s);margin-top:4px;max-height:180px;overflow:auto">${g.files.map((f, i) => `<li><span class="badge modified">${esc(GIT_WORD[String(f.status).trim()] || f.status)}</span><span class="p">${esc(f.path)}</span>${f.unstaged ? `<button class="linkbtn" data-gst="${i}" title="Stage this file for the next commit">Stage</button>` : ""}${f.staged ? `<button class="linkbtn" data-gun="${i}" title="Take it out of the next commit; the change stays">Unstage</button>` : ""}</li>`).join("") || `<li class="pnote" style="padding:8px 12px">Nothing to commit.</li>`}</ul></div>
+    <div><h4>Commit</h4><textarea id="gmsg" rows="2" placeholder="What changed and why" style="margin-top:4px"></textarea><div class="row" style="margin-top:4px">${g.staged ? `<button class="btn primary" id="gcommitst">Commit staged (${g.staged})</button>` : ""}<button class="btn ${g.staged ? "" : "primary"}" id="gcommit" ${g.dirty ? "" : `disabled title="Nothing to commit: no files have changed."`}>Commit all</button><button class="btn" id="gpush" ${g.remote ? "" : `disabled title="This folder has no remote to push to."`}>Push</button><button class="btn" id="gpull" ${g.upstream ? "" : `disabled title="This branch is not linked to a remote branch yet."`}>Pull</button></div></div>
     <div id="chgBox"></div>
     ${g.log?.length ? `<details class="cil"><summary><b>Recent commits</b> <span class="stat">${g.log.length}</span></summary><ul class="flist glog">${g.log.map(c => `<li title="${esc(c.author)}"><code>${esc(c.hash)}</code> <span class="cn">${esc(c.subject)}</span> <span class="stat">${esc(c.when)}</span></li>`).join("")}</ul></details>` : ""}
-    <div id="ciBox"><h4>Pull request, checks and deployments</h4><div class="pnote" style="padding:6px 0">Loading from GitHub...</div></div>
-    <div><h4>Open a pull request</h4><input id="gprt" placeholder="Title (defaults to the last commit)" style="margin-top:6px"><textarea id="gprb" rows="3" placeholder="Description" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px"><button class="btn" id="gpr" ${g.github ? "" : `disabled title="Needs a GitHub remote."`}>Open pull request</button>${g.github ? "" : `<span class="stat">Needs a GitHub remote.</span>`}</div><div class="stat" id="gres"></div></div>
+    <div id="ciBox"><h4>Pull request, checks and deployments</h4><div class="pnote" style="padding:8px 0">Loading from GitHub...</div></div>
+    <div><h4>Open a pull request</h4><input id="gprt" placeholder="Title (defaults to the last commit)" style="margin-top:4px"><textarea id="gprb" rows="3" placeholder="Description" style="margin-top:4px"></textarea><div class="row" style="margin-top:4px"><button class="btn" id="gpr" ${g.github ? "" : `disabled title="Needs a GitHub remote."`}>Open pull request</button>${g.github ? "" : `<span class="stat">Needs a GitHub remote.</span>`}</div><div class="stat" id="gres"></div></div>
   </div>`;
   $("#gbr").onchange = () => gitAct({action: "checkout", branch: $("#gbr").value});
   $("#gcreate").onclick = () => gitAct({action: "checkout", branch: $("#gnew").value, create: true});
@@ -2296,7 +2307,7 @@ async function drawCI(root, fresh) {
     ${!ci.connected ? `<div class="stat">Connect GitHub to see private repositories and to rerun or merge. <button class="linkbtn" id="ciConn">Connect GitHub</button></div>` : ""}
     ${ci.error ? `<div class="stat">${esc(ci.error)}</div>` : ""}
     ${pr ? `<div class="prcard"><a href="${esc(pr.url)}" target="_blank" rel="noopener"><b>#${pr.number} ${esc(pr.title)}</b></a><span class="badge ${pr.state === "open" ? "added" : pr.state === "merged" ? "modified" : "deleted"}">${pr.draft ? "Draft" : pr.state === "open" ? "Open" : pr.state === "merged" ? "Merged" : "Closed"}</span><small>${esc(ci.branch)} into ${esc(pr.base)}${pr.author ? " by " + esc(pr.author) : ""}</small>
-      ${pr.state === "open" && ci.connected ? `<div class="row" style="margin-top:6px"><button class="btn" id="ciMerge" ${ci.summary === "failing" ? "disabled title='Fix the failing checks first'" : ""}>Squash and merge</button></div>` : ""}</div>`
+      ${pr.state === "open" && ci.connected ? `<div class="row" style="margin-top:4px"><button class="btn" id="ciMerge" ${ci.summary === "failing" ? "disabled title='Fix the failing checks first'" : ""}>Squash and merge</button></div>` : ""}</div>`
       : `<div class="stat">No pull request for ${esc(ci.branch)} yet.</div>`}
     <div class="cil"><b>Checks</b> <span class="stat">${esc(ci.sha)}</span>${ci.checks.length ? `<ul>${ci.checks.map(c => { const [cl, tx] = ckState(c); return `<li><span class="cidot ${cl}"></span><span class="cn">${esc(c.name)}</span><span class="cs">${tx}</span>${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">Details</a>` : ""}</li>`; }).join("")}</ul>` : `<div class="stat">No checks on this commit.</div>`}</div>
     ${ci.runs.length ? `<div class="cil"><b>Workflow runs (CI)</b><ul>${ci.runs.map(r => { const [cl, tx] = ckState(r); return `<li><span class="cidot ${cl}"></span><span class="cn">${esc(r.name)}</span><span class="cs">${tx}</span><a href="${esc(r.url)}" target="_blank" rel="noopener">Logs</a>${r.conclusion === "failure" && ci.connected ? `<button class="linkbtn" data-rerun="${r.id}">Rerun failed</button>` : ""}</li>`; }).join("")}</ul></div>` : ""}
@@ -2320,7 +2331,7 @@ async function gitAct(b) {
 }
 function panelPreview(body) {
   const url = store("preview") || "http://localhost:3000";
-  body.innerHTML = `<div class="pbar"><input id="purl" value="${esc(url)}" aria-label="Address"><button class="btn" id="pgo">Open</button><button class="btn" id="pext" title="Open in your browser">${ICON.globe}</button></div><div class="pnote" id="pempty" style="padding:6px 12px">Start your app first (for example ask Meshpool to run it), then enter its address.</div><iframe class="preview" id="pframe" hidden title="Preview" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`;
+  body.innerHTML = `<div class="pbar"><input id="purl" value="${esc(url)}" aria-label="Address"><button class="btn" id="pgo">Open</button><button class="btn" id="pext" title="Open in your browser">${ICON.globe}</button></div><div class="pnote" id="pempty" style="padding:8px 12px">Start your app first (for example ask meshpool to run it), then enter its address.</div><iframe class="preview" id="pframe" hidden title="Preview" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`;
   const go = () => {
     let u = $("#purl").value.trim(); if (!/^https?:\/\//.test(u)) u = "http://" + u; store("preview", u);
     const fr = $("#pframe"), msg = $("#pempty");
@@ -2335,7 +2346,7 @@ function panelPreview(body) {
 
 /* ================================== session panel + GitHub sessions ================================== */
 const isMgd = p => !!S.projects.find(x => x.path === p)?.managed;
-const spDur = s => { s = Math.max(0, Math.round(s)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`; };
+const spDur = fmtDur;
 const spOpen = k => { const o = store("sp_open") || {}; return o[k] !== false; };
 const spTok = n => n >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M" : n >= 1e3 ? Math.round(n / 1e3) + "K" : String(n);
 // ---- the plan: the agent's checklist. In the Session panel, patched by row; in the chat only one quiet line (the status slot).
@@ -2378,11 +2389,11 @@ function spHTML(d, pr) {
       <div class="row spbr"><select id="spBr" aria-label="Switch branch">${br.branches.map(b => `<option ${b === br.name ? "selected" : ""}>${esc(b)}</option>`).join("")}</select></div>
       <div class="row spbr"><input id="spNew" placeholder="New branch name" aria-label="New branch name"><button class="btn" id="spCreate">Create</button></div>` : ""}`;
   const cls = cx.percent >= 90 ? "bad" : cx.percent >= 70 ? "warn" : "";
-  const ctxHTML = `<div class="spctx"><div class="spbar ${cls}" role="progressbar" aria-valuenow="${cx.percent}" aria-valuemin="0" aria-valuemax="100" aria-label="Context used"><i style="width:${cx.percent}%"></i></div>
+  const ctxHTML = `<div class="spctx"><div class="spbar ${cls}" role="progressbar" aria-valuenow="${cx.percent}" aria-valuemin="0" aria-valuemax="100" aria-label="Context used"><i style="transform:scaleX(${Math.max(0, Math.min(100, Number(cx.percent) || 0)) / 100})"></i></div>
     <div class="spnum"><b>${cx.percent}%</b><span>${spTok(cx.used)} of ${spTok(cx.size)} tokens${/estimate/.test(cx.source) ? " (window estimated)" : ""}</span></div></div>`;
   const cRows = cn.servers.map(c => `<li><span class="cidot ${c.status === "connected" ? (c.used ? "ok" : "") : c.error || c.status === "error" ? "bad" : "run"}"></span><span class="cn">${esc(c.name)}</span><span class="cs">${c.used ? `used ${c.used}×` : c.status === "connected" ? `${c.tools} tools` : esc(c.status)}</span></li>`).join("");
   const outs = d.outputs;
-  const outHTML = outs.length ? `<ul class="outs">${outs.map(o => `<li><button data-open="${esc(o.path)}" title="${esc(o.path)}"><span class="fi">${ICON.file}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span><span class="spc">${esc(o.how)}</span></button></li>`).join("")}</ul>` : `<div class="pnote">Documents, spreadsheets, decks and other files Meshpool makes show up here.</div>`;
+  const outHTML = outs.length ? `<ul class="outs">${outs.map(o => `<li><button data-open="${esc(o.path)}" title="${esc(o.path)}"><span class="fi">${ICON.file}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span><span class="spc">${esc(o.how)}</span></button></li>`).join("")}</ul>` : `<div class="pnote">Documents, spreadsheets, decks and other files meshpool makes show up here.</div>`;
   const num = (v, c, sg) => `<span class="${v ? c : "zero"}">${sg}${v}</span>`;
   let chg = `<div class="sprow">${ICON.diff}<span><b>${tr.files ? `${tr.files} file${tr.files === 1 ? "" : "s"} changed` : "Working tree is clean"}</b>${tr.files ? `<small class="nw">${num(tr.added, "plus", "+")} ${num(tr.removed, "minus", "−")} not committed</small>` : ""}</span></div>`;
   if (!pr) chg += `<div class="pnote spmini">Checking GitHub...</div>`;
@@ -2464,7 +2475,7 @@ function openGithubPicker(opts = {}) {
   const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
   const gtitle = opts.title || "Work on a GitHub repository";
   sc.innerHTML = `<div class="dlg fb ghp" role="dialog" aria-modal="true" aria-label="${esc(gtitle)}"><h3>${esc(gtitle)}</h3>
-    <p>Pick a repository. Meshpool keeps its own copy and works there, so it doesn’t need to be on this computer first.</p>
+    <p>Pick a repository. meshpool keeps its own copy and works there, so it doesn’t need to be on this computer first.</p>
     <input id="ghQ" placeholder="Search your repositories, or type owner/name" spellcheck="false" autocomplete="off" aria-label="Search repositories">
     <ul class="fblist" id="ghList" role="listbox"><li class="pnote">Loading...</li></ul>
     <div id="ghBr" class="ghbr" hidden><label>Branch<select id="ghSel"></select></label><label class="chk"><input type="checkbox" id="ghNewOn"> New branch from it</label><input id="ghNewName" placeholder="New branch name" hidden></div>
@@ -2539,11 +2550,11 @@ async function renderSection(sec) {
     b.innerHTML = `${close}<h3>Instructions and memory</h3><p class="lead">Every agent reads these at the start of each new chat, so you do not repeat yourself.</p>
       <label class="field" style="max-width:none"><span>Instructions for every chat</span><textarea id="paIns" rows="6" placeholder="For example: Be direct and concise. No em dashes. I work in strategy and finance in the GCC.">${esc(a.instructions)}</textarea><small>How you want answers: tone, format, what to avoid, context about your work.</small></label>
       <label class="switchrow"><input type="checkbox" id="paInsOn" ${a.settings.instructions_on ? "checked" : ""}> Use these instructions</label>
-      <div class="field" style="max-width:none;margin-top:14px"><span>Memory</span><p class="lead" style="margin:4px 0 8px">${a.memory.split("\n").filter(x => x.trim()).length} things remembered.</p><button class="btn" id="paMemPage">Open What meshpool knows</button></div>
+      <div class="field" style="max-width:none;margin-top:16px"><span>Memory</span><p class="lead" style="margin:4px 0 8px">${a.memory.split("\n").filter(x => x.trim()).length} things remembered.</p><button class="btn" id="paMemPage">Open What meshpool knows</button></div>
       <label class="switchrow"><input type="checkbox" id="paMemOn" ${a.settings.memory_on ? "checked" : ""}> Let agents use and add to memory</label>
-      <label class="switchrow"><input type="checkbox" id="paEdits" ${a.settings.learn_from_edits ? "checked" : ""}> Learn from my edits to files Meshpool makes</label>
+      <label class="switchrow"><input type="checkbox" id="paEdits" ${a.settings.learn_from_edits ? "checked" : ""}> Learn from my edits to files meshpool makes</label>
       <div style="display:flex;gap:8px;margin-top:12px"><button class="btn primary" id="paSave">Save</button></div><div class="res" id="paRes"></div>
-      <p class="lead" style="margin-top:18px">Coming from ChatGPT, Codex or another assistant? <button class="linkbtn" id="paImport">Import your chats and context</button></p>`;
+      <p class="lead" style="margin-top:16px">Coming from ChatGPT, Codex or another assistant? <button class="linkbtn" id="paImport">Import your chats and context</button></p>`;
     $("#paImport").onclick = () => renderSection("import");
     $("#paMemPage").onclick = () => { closeSettings?.(); goPage("memory"); };
     $("#paSave").onclick = async () => {
@@ -2563,11 +2574,11 @@ async function renderSection(sec) {
   } else if (sec === "scheduled") {
     const draw = a => {
       const proj = S.projects.map(p => `<option value="${esc(p.path)}">${esc(p.name)}</option>`).join("");
-      b.innerHTML = `${close}<h3>Scheduled tasks</h3><p class="lead">Work that runs by itself: a morning news brief, a weekly pipeline report, a reminder. Each run opens a new chat and notifies you when it is done. Tasks run while Meshpool is open on this computer. You can also ask any agent to schedule something.</p>
+      b.innerHTML = `${close}<h3>Scheduled tasks</h3><p class="lead">Work that runs by itself: a morning news brief, a weekly pipeline report, a reminder. Each run opens a new chat and notifies you when it is done. Tasks run while meshpool is open on this computer. You can also ask any agent to schedule something.</p>
         <ul class="rows2">${a.tasks.map(t => `<li><span class="tg"><b>${esc(t.name)}</b><small>${esc(t.describe)} · ${t.kind === "code" ? "Code" : "Work"}</small><small class="clip2">${esc(t.prompt)}</small></span>
           <label class="switch" title="On or off"><input type="checkbox" data-ton="${esc(t.id)}" ${t.enabled ? "checked" : ""} aria-label="Run ${esc(t.name)}"><span></span></label>
           <button class="btn" data-trun="${esc(t.id)}">Run now</button>${t.last_thread ? `<button class="btn" data-topen="${esc(t.last_thread)}">Last run</button>` : ""}<button class="iconbtn" data-tdel="${esc(t.id)}" aria-label="Delete">${ICON.x}</button></li>`).join("") || `<li class="pnote">No scheduled tasks yet.</li>`}</ul>
-        <h3 style="font-size:16px;margin:18px 0 6px">New scheduled task</h3>
+        <h3 style="font-size:16px;margin:16px 0 4px">New scheduled task</h3>
         <div class="sform">
           <input id="tsName" placeholder="Name, for example Morning AI news" spellcheck="false">
           <textarea id="tsPrompt" rows="3" placeholder="What should it do? For example: Find the 5 most important AI infrastructure news stories from the last 24 hours and summarize each in two sentences with links."></textarea>
@@ -2591,7 +2602,7 @@ async function renderSection(sec) {
     draw(await api("/api/assistant")); return;
   } else if (sec === "about") {
     const a = await api("/api/about");
-    b.innerHTML = `${close}<img class="logo" src="${logoSrc()}" alt="Meshpool" style="height:30px;margin-bottom:12px"><h3>Meshpool ${esc(a.version)}${/^0\./.test(a.version) ? " beta" : ""}</h3>
+    b.innerHTML = `${close}<img class="logo" src="${logoSrc()}" alt="meshpool" style="height:30px;margin-bottom:12px"><h3>meshpool ${esc(a.version)}${/^0\./.test(a.version) ? " beta" : ""}</h3>
       <p class="lead">Made by ${esc(a.author)}. <a href="https://meshpool.ai" target="_blank" rel="noopener">meshpool.ai</a> · <a href="https://github.com/hamzaziada4422/meshpool-harness/releases" target="_blank" rel="noopener">All releases</a> · <button class="linkbtn" id="aboutReport">Report a problem</button></p>
       <div class="updbox" id="updBox"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn" id="updCheck">Check for updates</button><span class="res" id="updRes" style="margin:0"></span></div><div id="updMore"></div></div>
       <details style="margin-top:16px"><summary class="linkbtn" style="display:inline">Third-party software</summary><pre class="lic">${esc(a.third_party)}</pre></details>`;
@@ -2611,7 +2622,7 @@ async function renderSection(sec) {
     const say = (t, cls = "") => { RES("cnRes").className = "res " + cls; RES("cnRes").textContent = t; };
     const clientForm = c => `<span class="ownclient" data-cf="${esc(c.id)}"><small>${esc(c.client_help || "This app only signs in apps it knows. Create an OAuth app in its developer settings with the redirect URL below, then paste its client ID (and secret, if it gives you one).")}</small>
       <small>Redirect URL: <code>${esc(redirect)}</code></small>
-      <span class="keyrow" style="margin-top:6px"><input data-cid="${esc(c.id)}" placeholder="Client ID" autocomplete="off" spellcheck="false"><input type="password" data-csec="${esc(c.id)}" placeholder="Client secret (if any)" autocomplete="off" spellcheck="false"><button class="btn primary" data-client="${esc(c.id)}">Connect</button></span></span>`;
+      <span class="keyrow" style="margin-top:4px"><input data-cid="${esc(c.id)}" placeholder="Client ID" autocomplete="off" spellcheck="false"><input type="password" data-csec="${esc(c.id)}" placeholder="Client secret (if any)" autocomplete="off" spellcheck="false"><button class="btn primary" data-client="${esc(c.id)}">Connect</button></span></span>`;
     const row = c => {
       const cat = c.connected ? "Connected" : c.custom ? "Yours" : c.category || "Yours";
       const own = c.needs_client && !c.own_client && !c.connected;
@@ -2619,8 +2630,8 @@ async function renderSection(sec) {
         : c.auth === "none" ? `<button class="btn primary" data-turnon="${esc(c.id)}">Turn on</button>`
         : c.auth === "oauth" && !own ? `<button class="btn primary" data-go="${esc(c.id)}">${c.expired ? "Sign in again" : "Connect"}</button>` : "";
       return `<li data-id="${esc(c.id)}" data-cat="${esc(cat)}" data-text="${esc((c.name + " " + c.description + " " + (c.category || "")).toLowerCase())}"><span class="tg"><b>${esc(c.name)}</b>${c.connected ? ` <span class="badge added">${c.auth === "none" ? "On" : "Connected"}</span>` : c.expired ? ` <span class="badge deleted">Sign in again</span>` : c.auth === "none" ? ` <span class="badge">No sign-in</span>` : ""}<small>${esc(c.description)}</small>
-        ${c.id === "github" && !c.connected ? `<span class="row" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">${c.can_sign_in ? `<button class="btn primary" data-ghdev="1">Sign in with GitHub</button>` : ""}<button class="btn ${c.can_sign_in ? "" : "primary"}" data-ghfound="1">Use the GitHub login on this computer</button><a class="btn" href="https://github.com/settings/tokens/new?scopes=repo,workflow,read:org&amp;description=Meshpool" target="_blank" rel="noopener">Create a token</a></span>` : ""}
-        ${c.auth === "token" && !c.connected ? `<span class="keyrow" style="margin-top:6px"><input type="password" data-tok="${esc(c.id)}" placeholder="Paste a token" autocomplete="off" spellcheck="false"><button class="btn" data-save="${esc(c.id)}">Save</button></span><small>${esc(c.token_help)}</small>` : ""}
+        ${c.id === "github" && !c.connected ? `<span class="row" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">${c.can_sign_in ? `<button class="btn primary" data-ghdev="1">Sign in with GitHub</button>` : ""}<button class="btn ${c.can_sign_in ? "" : "primary"}" data-ghfound="1">Use the GitHub login on this computer</button><a class="btn" href="https://github.com/settings/tokens/new?scopes=repo,workflow,read:org&amp;description=meshpool" target="_blank" rel="noopener">Create a token</a></span>` : ""}
+        ${c.auth === "token" && !c.connected ? `<span class="keyrow" style="margin-top:4px"><input type="password" data-tok="${esc(c.id)}" placeholder="Paste a token" autocomplete="off" spellcheck="false"><button class="btn" data-save="${esc(c.id)}">Save</button></span><small>${esc(c.token_help)}</small>` : ""}
         ${own || S.cnNeedClient === c.id ? clientForm(c) : ""}</span>${btn}</li>`;
     };
     const filter = () => {
@@ -2642,15 +2653,15 @@ async function renderSection(sec) {
     };
     const draw = rows => {
       const order = c => (c.connected ? 0 : 1);
-      b.innerHTML = `${close}<h3>Connectors</h3><p class="lead">Connect the apps you work in. Every agent can then use them as tools. Sign-in happens between this computer and the app itself: Meshpool keeps the access on this computer only and runs no server in between.</p>
+      b.innerHTML = `${close}<h3>Connectors</h3><p class="lead">Connect the apps you work in. Every agent can then use them as tools. Sign-in happens between this computer and the app itself: meshpool keeps the access on this computer only and runs no server in between.</p>
         <div class="cnbar"><input id="cnq" placeholder="Search ${rows.length} apps" spellcheck="false" value="${esc(S.cnQ || "")}"><span class="cnchips"><button class="btn${S.cnCat ? "" : " primary"}" data-cncat="">All</button>${cats.filter(k => rows.some(c => (c.connected ? "Connected" : c.custom ? "Yours" : c.category) === k)).map(k => `<button class="btn" data-cncat="${esc(k)}">${esc(k)}</button>`).join("")}</span></div>
         <div class="res" id="cnRes"></div>
         <ul class="rows2" id="cnl">${[...rows].sort((x, z) => order(x) - order(z)).map(row).join("")}</ul>
-        <h3 style="font-size:16px;margin:18px 0 4px">Add another app</h3><p class="lead" style="font-size:13px">Any app with a remote MCP server works. Paste its address; Meshpool works out whether it needs nothing, a token or a browser sign-in. For a key that goes in another header, paste it as <code>Header-Name: value</code>.</p>
+        <h3 style="font-size:16px;margin:16px 0 4px">Add another app</h3><p class="lead" style="font-size:13px">Any app with a remote MCP server works. Paste its address; meshpool works out whether it needs nothing, a token or a browser sign-in. For a key that goes in another header, paste it as <code>Header-Name: value</code>.</p>
         <div class="cform"><input id="cxName" placeholder="Name" spellcheck="false"><input id="cxUrl" placeholder="https://mcp.example.com/mcp" spellcheck="false"><input id="cxTok" type="password" placeholder="Token or API key (optional)" autocomplete="off"><button class="btn primary" id="cxAdd">Add</button></div>
-        <details style="margin-top:8px"><summary class="linkbtn" style="display:inline;padding-left:0">More options: your own sign-in client</summary><span class="keyrow" style="margin-top:6px"><input id="cxCid" placeholder="Client ID" autocomplete="off" spellcheck="false"><input id="cxSec" type="password" placeholder="Client secret" autocomplete="off" spellcheck="false"></span><small class="muted">For apps that only sign in apps they know. Redirect URL: <code>${esc(redirect)}</code></small></details>`;
+        <details style="margin-top:8px"><summary class="linkbtn" style="display:inline;padding-left:0">More options: your own sign-in client</summary><span class="keyrow" style="margin-top:4px"><input id="cxCid" placeholder="Client ID" autocomplete="off" spellcheck="false"><input id="cxSec" type="password" placeholder="Client secret" autocomplete="off" spellcheck="false"></span><small class="muted">For apps that only sign in apps they know. Redirect URL: <code>${esc(redirect)}</code></small></details>`;
       done();
-      $("#cnq").oninput = () => { S.cnQ = $("#cnq").value; filter(); };
+      $("#cnq", b).oninput = () => { S.cnQ = $("#cnq", b).value; filter(); };   // b: drawn late, after another section opened, it is detached
       $$("[data-cncat]", b).forEach(x => x.onclick = () => { S.cnCat = x.dataset.cncat; filter(); });
       filter();
       $("#cxAdd").onclick = async () => {
@@ -2711,7 +2722,7 @@ async function renderSection(sec) {
     return;
   } else if (sec === "skills") {
     await loadSkills();
-    b.innerHTML = `${close}<h3>Skills</h3><p class="lead">Skills are instructions the agent loads when a task matches, or when you type <code>$name</code> in the message box. They use the same SKILL.md format as Codex and Hermes, and Meshpool shares them with every agent.</p>
+    b.innerHTML = `${close}<h3>Skills</h3><p class="lead">Skills are instructions the agent loads when a task matches, or when you type <code>$name</code> in the message box. They use the same SKILL.md format as Codex and Hermes, and meshpool shares them with every agent.</p>
       <div class="dropzone" id="skDrop" tabindex="0" role="button">Drop a skill folder, a .zip or a SKILL.md here, or click to choose files<input type="file" id="skFile" multiple hidden></div>
       <ul class="rows2" id="skl"></ul>
       <details><summary class="btn" style="display:inline-block">Write a new skill</summary>
@@ -2719,7 +2730,7 @@ async function renderSection(sec) {
         <label class="field"><span>When to use it (one line)</span><input id="skDesc" placeholder="Write release notes from the commits since the last tag."></label>
         <label class="field"><span>Instructions</span><textarea id="skBody" class="code" placeholder="Step-by-step instructions the agent follows."></textarea></label>
         <button class="btn primary" id="skCreate">Create skill</button></div></details>
-      <div class="res" id="skRes"></div><div style="display:flex;gap:8px;margin-top:10px"><button class="btn" id="skImp">Import from other apps</button><button class="btn" id="skOpen">Browse the skills folder</button></div><div id="skImpBox" style="margin-top:10px"></div>`;
+      <div class="res" id="skRes"></div><div style="display:flex;gap:8px;margin-top:8px"><button class="btn" id="skImp">Import from other apps</button><button class="btn" id="skOpen">Browse the skills folder</button></div><div id="skImpBox" style="margin-top:8px"></div>`;
     $("#skImp").onclick = () => importPanel($("#skImpBox"), r => { if (r) renderSection("skills"); });
     const drawSk = () => {
       $("#skl").innerHTML = S.skills.map(s => `<li><label class="switch"><input type="checkbox" data-id="${esc(s.id)}" ${s.enabled ? "checked" : ""} aria-label="Use ${esc(s.name)}"><span></span></label><span class="tg"><b>$${esc(s.name)}</b><small>${esc(s.description)}</small></span><button class="btn" data-edit="${esc(s.id)}">Edit</button><button class="iconbtn" data-rm="${esc(s.id)}" aria-label="Remove ${esc(s.name)}">${ICON.x}</button></li>`).join("") || `<li class="pnote">No skills yet.</li>`;
@@ -2728,7 +2739,7 @@ async function renderSection(sec) {
       $$("#skl [data-edit]").forEach(x => x.onclick = async () => {
         const sk = await api("/api/skill?id=" + encodeURIComponent(x.dataset.edit));
         $("#skl .sked")?.remove();                 // one editor at a time: its Save always saves its own skill
-        const li = x.closest("li"); li.insertAdjacentHTML("afterend", `<li class="sked"><div style="flex:1"><textarea class="code">${esc(sk.text)}</textarea><div style="display:flex;gap:6px;margin-top:6px"><button class="btn primary" data-sk="save">Save</button><button class="btn" data-sk="cancel">Cancel</button></div></div></li>`);
+        const li = x.closest("li"); li.insertAdjacentHTML("afterend", `<li class="sked"><div style="flex:1"><textarea class="code">${esc(sk.text)}</textarea><div style="display:flex;gap:8px;margin-top:4px"><button class="btn primary" data-sk="save">Save</button><button class="btn" data-sk="cancel">Cancel</button></div></div></li>`);
         const ed = li.nextElementSibling;
         $("[data-sk=save]", ed).onclick = () => skillAct({action: "update", id: sk.id, text: $("textarea", ed).value});
         $("[data-sk=cancel]", ed).onclick = drawSk;
@@ -2765,11 +2776,11 @@ async function renderSection(sec) {
   } else if (sec === "harnesses") {
     await loadHarnesses();
     const ex = S.hInfo.examples || [];
-    b.innerHTML = `${close}<h3>Agents</h3><p class="lead">The agent is who does the work in a chat. What it runs on is your provider (Settings, Account): ${esc((S.settings.providers || {})[S.settings.provider || "meshpool"] || "")}. Meshpool Auto picks a good agent for each task. Each agent runs on the provider of the model you pick in the message box: your API key or your ChatGPT sign-in. Other agents can be added too.</p>
-      <div class="dflt">${[["cowork", "Work"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error && h.ready !== false).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name)}${h.mode !== m && h.type !== "auto" ? " · made for " + (h.mode === "code" ? "Code" : "Work") : ""}</option>`).join("")}</select><small>${m === "code" ? "Meshpool Code and Pi both solve most coding tasks; Pi is a little faster and cheaper, Meshpool Code has the full toolset (browser, connectors, skills)." : "Meshpool Work makes Word, Excel and PowerPoint files and does research. Hermes adds long-term memory for ongoing work."}</small></label>`).join("")}</div>
+    b.innerHTML = `${close}<h3>Agents</h3><p class="lead">The agent is who does the work in a chat. What it runs on is your provider (Settings, Account): ${esc((S.settings.providers || {})[S.settings.provider || "meshpool"] || "")}. meshpool Auto picks a good agent for each task. Each agent runs on the provider of the model you pick in the message box: your API key or your ChatGPT sign-in. Other agents can be added too.</p>
+      <div class="dflt">${[["cowork", "Work"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error && h.ready !== false).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name)}${h.mode !== m && h.type !== "auto" ? " · made for " + (h.mode === "code" ? "Code" : "Work") : ""}</option>`).join("")}</select><small>${m === "code" ? "meshpool Code and Pi both solve most coding tasks; Pi is a little faster and cheaper, meshpool Code has the full toolset (browser, connectors, skills)." : "meshpool Work makes Word, Excel and PowerPoint files and does research. Hermes adds long-term memory for ongoing work."}</small></label>`).join("")}</div>
       <ul class="rows2">${S.harnesses.filter(h => !h.hidden).map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.mode === "cowork" ? "Work" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">${h.unsupported ? "Not available" : "Not installed"}</span>` : h.ready === false ? ` <span class="badge deleted">Needs setup</span>` : ""}<small>${esc(h.description || "")}</small>${h.runs_on && h.ready !== false ? `<small>Runs on ${esc(h.runs_on)}.</small>` : ""}${h.ready === false && h.setup ? `<small>${esc(h.setup)}</small>` : ""}${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}</span>${h.login ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}" ${h.available === false ? `disabled title="Not available on this computer."` : ""}>Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
-      ${ex.length ? `<h3 style="font-size:16px;margin:18px 0 8px">Add one</h3><div style="display:flex;gap:6px;flex-wrap:wrap">${ex.map(e => `<button class="btn" data-ex="${esc(e.id)}">${esc(e.name)}</button>`).join("")}</div>` : ""}
-      <div class="dropzone" id="hDrop" style="margin-top:14px" tabindex="0" role="button">Or drop an agent's .json file here<input type="file" id="hFile" accept=".json" hidden></div><div class="res" id="hRes"></div>`;
+      ${ex.length ? `<h3 style="font-size:16px;margin:16px 0 8px">Add one</h3><div style="display:flex;gap:8px;flex-wrap:wrap">${ex.map(e => `<button class="btn" data-ex="${esc(e.id)}">${esc(e.name)}</button>`).join("")}</div>` : ""}
+      <div class="dropzone" id="hDrop" style="margin-top:16px" tabindex="0" role="button">Or drop an agent's .json file here<input type="file" id="hFile" accept=".json" hidden></div><div class="res" id="hRes"></div>`;
     const act = async body => { try { await post("/api/harnesses", body); await loadHarnesses(); renderSection("harnesses"); renderBar(); } catch (e) { RES("hRes").className = "res bad"; RES("hRes").textContent = e.message; } };
     $$("[data-rm]", b).forEach(x => x.onclick = () => act({remove: x.dataset.rm}));
     $$("[data-login]", b).forEach(x => x.onclick = async () => {
@@ -2790,7 +2801,7 @@ async function renderSection(sec) {
     b.innerHTML = `${close}<h3>Tools (MCP servers)</h3><p class="lead">Tools every agent can use. Browser use and computer use are built in. New chats pick up changes.</p>
       ${m.error ? `<div class="res bad">${esc(m.error)}</div>` : ""}
       <ul class="rows2">${m.servers.map(s => `<li><label class="switch"><input type="checkbox" data-n="${esc(s.name)}" ${s.enabled ? "checked" : ""} aria-label="Use ${esc(s.name)}"><span></span></label><span class="tg"><b>${esc(s.name)}</b><small>${esc(s.description)}</small><details class="tech"><summary>Technical details</summary><code>${esc(s.target)}</code></details></span></li>`).join("")}</ul>
-      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="mTest">Check servers</button><button class="btn" id="mEdit">Edit the server list</button><button class="btn" id="mImp">Import from other apps</button></div><div class="res" id="mRes"></div><div id="mImpBox" style="margin-top:10px"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="mTest">Check servers</button><button class="btn" id="mEdit">Edit the server list</button><button class="btn" id="mImp">Import from other apps</button></div><div class="res" id="mRes"></div><div id="mImpBox" style="margin-top:8px"></div>
       <div id="mEd" hidden style="margin-top:12px"><textarea class="code" id="mText">${esc(m.text)}</textarea><button class="btn primary" id="mSave" style="margin-top:8px">Save mcp.json</button><p class="lead" style="font-size:13px;margin-top:8px">The common mcpServers format most MCP apps use. Write \${NAME} to use a value from the settings file, such as \${GITHUB_TOKEN}.</p></div>`;
     $$("input[data-n]", b).forEach(i => i.onchange = () => post("/api/mcp", {name: i.dataset.n, enabled: i.checked}).catch(e => toast(e.message)));
     $("#mEdit").onclick = () => $("#mEd").hidden = !$("#mEd").hidden;
@@ -2804,13 +2815,13 @@ async function renderSection(sec) {
       const autoOn = !["0", "off", "false", "no"].includes(String(get0("MH_SANDBOX_AUTO") ?? "1").toLowerCase());
       const fullOn = normMode(get0("MH_AGENT_PERMISSIONS")) === "auto";   // Full access: new chats never ask
       b.innerHTML = `${close}<h3>Permissions</h3>
-        <h3 style="font-size:16px;margin:4px 0 6px">When Meshpool asks you</h3>
-        <p class="lead">${fullOn ? "New chats start in Full access: Meshpool edits files and runs commands without asking, including deleting, using the internet and installing. Undo keeps every file change." : autoOn ? "Meshpool reads, runs and writes files in the chat's folder on its own (Undo keeps every change). It asks before it deletes files, uses the internet, installs something, or goes outside the folder." : "Meshpool asks before every command and every file change."}</p>
-        <div class="row" style="gap:8px;margin-bottom:6px"><select class="sr-sel" id="permAuto" aria-label="When Meshpool asks you"><option value="1" ${!fullOn && autoOn ? "selected" : ""}>Only for risky actions (recommended)</option><option value="0" ${!fullOn && !autoOn ? "selected" : ""}>Before every command and change</option><option value="full" ${fullOn ? "selected" : ""}>Never (Full access)</option></select><span class="res" id="permAutoRes"></span></div>
-        <p class="lead">${esc(r.note || "")} Meshpool works only in the folders you add.${r.platform === "darwin" ? " When an agent opens a protected folder such as Desktop, Documents or Downloads for the first time, your Mac asks you to allow it." : ""}</p>
-        ${r.platform === "darwin" ? `<button class="btn primary" id="permAll" style="margin-bottom:10px">Allow all</button>` : ""}
-        <ul class="rows2">${r.rows.map(x => `<li><span class="dot ${x.ok === true ? "" : "wait"}" style="margin-top:7px;${x.ok === true ? "background:var(--add)" : ""}"></span><span class="tg"><b>${esc(x.name)}</b><small>${x.ok === true ? "Allowed. " : x.ok === false ? "Not allowed yet. " : ""}${esc(x.why)}</small></span>${x.ok === true || r.platform !== "darwin" ? "" : `<button class="btn" data-perm="${esc(x.id)}">${x.ok === false ? "Allow" : "Open settings"}</button>`}</li>`).join("")}</ul>
-        <h3 style="font-size:16px;margin:18px 0 8px">Folders Meshpool works in</h3>
+        <h3 style="font-size:16px;margin:4px 0 4px">When meshpool asks you</h3>
+        <p class="lead">${fullOn ? "New chats start in Full access: meshpool edits files and runs commands without asking, including deleting, using the internet and installing. Undo keeps every file change." : autoOn ? "meshpool reads, runs and writes files in the chat's folder on its own (Undo keeps every change). It asks before it deletes files, uses the internet, installs something, or goes outside the folder." : "meshpool asks before every command and every file change."}</p>
+        <div class="row" style="gap:8px;margin-bottom:4px"><select class="sr-sel" id="permAuto" aria-label="When meshpool asks you"><option value="1" ${!fullOn && autoOn ? "selected" : ""}>Only for risky actions (recommended)</option><option value="0" ${!fullOn && !autoOn ? "selected" : ""}>Before every command and change</option><option value="full" ${fullOn ? "selected" : ""}>Never (Full access)</option></select><span class="res" id="permAutoRes"></span></div>
+        <p class="lead">${esc(r.note || "")} meshpool works only in the folders you add.${r.platform === "darwin" ? " When an agent opens a protected folder such as Desktop, Documents or Downloads for the first time, your Mac asks you to allow it." : ""}</p>
+        ${r.platform === "darwin" ? `<button class="btn primary" id="permAll" style="margin-bottom:8px">Allow all</button>` : ""}
+        <ul class="rows2">${r.rows.map(x => `<li><span class="dot ${x.ok === true ? "" : "wait"}" style="margin-top:8px;${x.ok === true ? "background:var(--add)" : ""}"></span><span class="tg"><b>${esc(x.name)}</b><small>${x.ok === true ? "Allowed. " : x.ok === false ? "Not allowed yet. " : ""}${esc(x.why)}</small></span>${x.ok === true || r.platform !== "darwin" ? "" : `<button class="btn" data-perm="${esc(x.id)}">${x.ok === false ? "Allow" : "Open settings"}</button>`}</li>`).join("")}</ul>
+        <h3 style="font-size:16px;margin:16px 0 8px">Folders meshpool works in</h3>
         <ul class="rows2">${S.projects.map(p => `<li><span class="tg"><b>${esc(p.name)}</b><small>${esc(p.managed ? "GitHub" : p.path)}</small></span><button class="iconbtn" data-rmp="${esc(p.path)}" aria-label="Remove">${ICON.x}</button></li>`).join("") || `<li class="pnote">No folders yet.</li>`}</ul>
         <button class="btn" id="addP">${ICON.folder} Add a folder</button>
         <div id="rulesBox"></div>`;
@@ -2832,22 +2843,22 @@ async function renderSection(sec) {
   } else if (sec === "usage") {
     const u = await api("/api/usage"); const t = u.total;
     // Cost: "$0.42" when every call was priced, "$0.42 + 3 unpriced calls" when some were not, "unpriced" when none were. Never $0.00 for unpriced.
-    const usd = x => x < 0.01 && x > 0 ? "$" + x.toFixed(4) : "$" + x.toFixed(2);
+    const usd = fmtCost;
     const money = r => !r.calls ? "-" : r.unpriced_calls >= r.calls ? "unpriced" : usd(r.cost || 0) + (r.unpriced_calls ? ` + ${r.unpriced_calls} unpriced call${r.unpriced_calls === 1 ? "" : "s"}` : "");
     const SRC = [["Chat", /^chat$/], ["Engines", /^engine:/], ["Reviewers and grader", /^(review|grader)/], ["Helpers", /^helper:/], ["Sub-agents", /^subagent/], ["External agents", /^external:/], ["Background", /^background/]];
     const bySrc = {}; for (const [k, r] of Object.entries(u.by_source || {})) { const name = (SRC.find(([, re]) => re.test(k)) || ["Other"])[0]; const b = bySrc[name] || (bySrc[name] = {in: 0, cached: 0, out: 0, calls: 0, cost: 0, unpriced_calls: 0}); for (const f in b) b[f] += r[f] || 0; }
     const srcRows = [...SRC.map(x => x[0]), "Other"].filter(n => bySrc[n]);
     const gw = (u.gateway || []).filter(g => g.inflight || g.waiting);
-    b.innerHTML = `${close}<h3>Usage</h3><p class="lead">Every model call Meshpool's own agents made on this computer, including the ones its tools, checks and sub-agents made. A cost shows only where the model's price is known.</p>
+    b.innerHTML = `${close}<h3>Usage</h3><p class="lead">Every model call meshpool's own agents made on this computer, including the ones its tools, checks and sub-agents made. A cost shows only where the model's price is known.</p>
       <div class="statgrid"><div><b>${fmt(t.in)}</b><span>Input tokens</span></div><div><b>${t.in ? Math.round(100 * t.cached / t.in) : 0}%</b><span>Served from cache</span></div><div><b>${fmt(t.out)}</b><span>Output tokens</span></div><div><b>${fmt(t.calls)}</b><span>Model calls</span></div><div><b>${esc(money(t))}</b><span>Cost</span></div></div>
       ${t.unreported_calls ? `<p class="pnote">${fmt(t.unreported_calls)} call${t.unreported_calls === 1 ? "" : "s"} did not report their tokens, so those are estimated.</p>` : ""}
       ${gw.map(g => `<p class="pnote">Model calls running: ${g.inflight} of ${g.limit} on ${esc(g.endpoint)}${g.waiting ? `, ${g.waiting} waiting` : ""}</p>`).join("")}
       <h3 style="font-size:16px;margin:0 0 8px">By model</h3><table class="t"><tr><th>Model</th><th>Chats</th><th>In</th><th>Cached</th><th>Out</th><th>Cost</th></tr>${Object.entries(u.by_model).map(([m, r]) => `<tr><td title="${esc(m)}">${esc(modelName(m))}</td><td class="n">${r.threads}</td><td class="n">${fmt(r.in)}</td><td class="n">${fmt(r.cached)}</td><td class="n">${fmt(r.out)}</td><td class="n">${esc(money(r))}</td></tr>`).join("")}</table>
-      <h3 style="font-size:16px;margin:18px 0 8px">By source</h3><table class="t"><tr><th>Source</th><th>Calls</th><th>In</th><th>Cached</th><th>Out</th><th>Cost</th></tr>${srcRows.map(n => { const r = bySrc[n]; return `<tr><td>${esc(n)}</td><td class="n">${fmt(r.calls)}</td><td class="n">${fmt(r.in)}</td><td class="n">${fmt(r.cached)}</td><td class="n">${fmt(r.out)}</td><td class="n">${esc(money(r))}</td></tr>`; }).join("")}</table>`;
+      <h3 style="font-size:16px;margin:16px 0 8px">By source</h3><table class="t"><tr><th>Source</th><th>Calls</th><th>In</th><th>Cached</th><th>Out</th><th>Cost</th></tr>${srcRows.map(n => { const r = bySrc[n]; return `<tr><td>${esc(n)}</td><td class="n">${fmt(r.calls)}</td><td class="n">${fmt(r.in)}</td><td class="n">${fmt(r.cached)}</td><td class="n">${fmt(r.out)}</td><td class="n">${esc(money(r))}</td></tr>`; }).join("")}</table>`;
   } else if (sec === "terminal") {
     const c = S.settings.cli || {};
-    b.innerHTML = `${close}<h3>Terminal command</h3><p class="lead">The same agent works in any terminal. Go to a project folder and type <code>meshpool</code>. Use <code>meshpool -p "..."</code> for one answer, and <code>meshpool acp</code> to plug Meshpool into Zed, JetBrains or other ACP apps.</p>
-      <div class="res ${c.installed ? "ok" : ""}">${c.available ? (c.installed ? (c.new_window ? "Installed. Open a new terminal window and type meshpool." : "Installed. In any terminal window, type meshpool.") : "Not on your PATH yet.") : "The meshpool command comes with the Meshpool app for Mac and Windows. On other computers, install it with the one-line installer on the Meshpool download page."}</div>
+    b.innerHTML = `${close}<h3>Terminal command</h3><p class="lead">The same agent works in any terminal. Go to a project folder and type <code>meshpool</code>. Use <code>meshpool -p "..."</code> for one answer, and <code>meshpool acp</code> to plug meshpool into Zed, JetBrains or other ACP apps.</p>
+      <div class="res ${c.installed ? "ok" : ""}">${c.available ? (c.installed ? (c.new_window ? "Installed. Open a new terminal window and type meshpool." : "Installed. In any terminal window, type meshpool.") : "Not on your PATH yet.") : "The meshpool command comes with the meshpool app for Mac and Windows. On other computers, install it with the one-line installer on the meshpool download page."}</div>
       ${c.available && !c.installed ? `<button class="btn primary" id="cliBtn" style="margin-top:8px">Install the meshpool command</button>` : ""}`;
     $("#cliBtn")?.addEventListener("click", async () => { try { const r = await post("/api/install-cli"); $(".res", b).textContent = r.message; } catch (e) { $(".res", b).textContent = e.message; } });
   } else if (sec === "office") {
@@ -2891,20 +2902,20 @@ async function renderSection(sec) {
 // Three steps when the model step is shown; two when Meshpool already had a key, so a fresh start says step 1.
 const onbSteps = n => { const t = store("onbFull") ? 3 : 2, k = n - 3 + t; return `<div class="onb-steps" aria-label="Step ${k} of ${t}">${Array.from({length: t}, (_, i) => `<span class="${i < k ? "on" : ""}"></span>`).join("")}<small>Step ${k} of ${t}</small></div>`; };
 // Providers: what the models run on. Agents (harnesses) are picked separately.
-const PROVIDERS = [["meshpool", "Meshpool API key", "Recommended. Every model on one key, 20% cheaper."],
+const PROVIDERS = [["meshpool", "meshpool API key", "Recommended. Every model on one key, 20% cheaper."],
   ["custom", "Another API key", "OpenAI, OpenRouter or any OpenAI-compatible provider."],
-  ["chatgpt", "ChatGPT subscription", "Your ChatGPT Plus, Pro or Business plan, for Meshpool's agents, Pi, Hermes and Codex. No API key needed."]];
+  ["chatgpt", "ChatGPT subscription", "Your ChatGPT Plus, Pro or Business plan, for meshpool's agents, Pi, Hermes and Codex. No API key needed."]];
 const SIGNIN = {chatgpt: {name: "ChatGPT", harness: "codex"}};
 function showOnboarding() {
   if ($("#onb")) return;
   store("onbFull", 1);
   const o = document.createElement("div"); o.className = "onb"; o.id = "onb";
   o.innerHTML = `<div class="onb-card" id="onbKey">
-    <img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
-    ${onbSteps(1)}<h1>Welcome to Meshpool</h1><p>Choose what Meshpool runs on. It stays on this computer, and you can change it any time in Settings.</p>
-    <div class="scope prov" role="radiogroup" aria-label="What Meshpool runs on">${PROVIDERS.filter(p => p[0] !== "chatgpt" || !chatgptSignInGone()).map(([id, name, desc], i) => `<button class="scopeopt" data-prov="${id}" role="radio" aria-checked="${i === 0}"><b>${name}</b><small>${desc}</small></button>`).join("")}</div>
+    <img class="logo mlogo" src="${logoSrc()}" alt="meshpool">
+    ${onbSteps(1)}<h1>Choose what meshpool runs on</h1><p>It stays on this computer, and you can change it any time in Settings.</p>
+    <div class="scope prov" role="radiogroup" aria-label="What meshpool runs on">${PROVIDERS.filter(p => p[0] !== "chatgpt" || !chatgptSignInGone()).map(([id, name, desc], i) => `<button class="scopeopt" data-prov="${id}" role="radio" aria-checked="${i === 0}"><b>${name}</b><small>${desc}</small></button>`).join("")}</div>
     <div id="oKeyBox">
-      <p class="credit" id="oCredit">No key yet? <a href="https://meshpool.ai" target="_blank" rel="noopener">Get one at meshpool.ai</a> and run every model 20% cheaper.</p>
+      <p class="credit" id="oCredit">No key yet? <a href="https://meshpool.ai" target="_blank" rel="noopener">Get one at meshpool.ai</a></p>
       <label class="field" id="oBaseF" style="max-width:none" hidden><span>Provider address (base URL)</span><input id="oBase" spellcheck="false" placeholder="https://api.openai.com/v1"></label>
       <label class="field" id="oModelF" style="max-width:none" hidden><span>Model</span><input id="oModel" spellcheck="false" placeholder="gpt-4.1-mini"></label>
       <label class="field" style="max-width:none"><span>API key</span><span class="keyrow"><input id="oKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key"><button class="btn" id="oShow" type="button">Show</button></span></label>
@@ -2919,9 +2930,9 @@ function showOnboarding() {
   const sub = () => SIGNIN[prov] && (S.harnesses || []).find(h => h.id === SIGNIN[prov].harness);
   const drawSub = () => {
     const h = sub(); const name = SIGNIN[prov]?.name || "";
-    const what = " Meshpool Code, Meshpool Work, Pi, Hermes and Codex all run on it.";
+    const what = " meshpool Code, meshpool Work, Pi, Hermes and Codex all run on it.";
     $("#oSign").hidden = !h || h.signed_in || h.available === false;
-    $("#oSubTxt").textContent = !h ? "Loading…" : h.available === false ? (h.unsupported ? `Signing in with ${name} needs Codex, which is not part of the Meshpool app. Use a Meshpool API key or another API key.` : `Signing in to ${name} needs Node.js. The desktop app includes it; otherwise install it from nodejs.org.`)
+    $("#oSubTxt").textContent = !h ? "Loading…" : h.available === false ? (h.unsupported ? `Signing in with ${name} needs Codex, which is not part of the meshpool app. Use a meshpool API key or another API key.` : `Signing in to ${name} needs Node.js. The desktop app includes it; otherwise install it from nodejs.org.`)
       : (h.signed_in ? `You are signed in to ${name} on this computer. Usage comes out of your plan.` : `Sign in with your ${name} account. Usage comes out of your plan, not an API key.`) + what;
     $("#oGo").disabled = !(h && h.signed_in);
   };
@@ -3052,13 +3063,13 @@ async function drawPlugins(b, close) {
   const act = async body => { try { const r = await post("/api/plugins", body); await loadSkills(); render(r); return r; } catch (e) { say(e.message, true); return null; } };
   const installed = r => { if (!r?.installed?.length) return; const p = r.installed; const sv = p.reduce((n, x) => n + x.servers.length, 0); say(`Installed ${p.map(x => x.name).join(", ")}: ${p.reduce((n, x) => n + x.skills.length, 0)} skills${sv ? `, ${sv} MCP server${sv === 1 ? "" : "s"} (off until you turn them on)` : ""}.` + p.flatMap(x => x.notes).map(n => " " + n).join("")); };
   const group = g => `<li><label class="switch"><input type="checkbox" data-pb="${esc(g.id)}" ${g.enabled ? "checked" : ""} aria-label="Use ${esc(g.name)}"><span></span></label><span class="tg"><b>${esc(g.name)}</b> <span class="badge modified">${g.skills.length} skills</span>${g.partly ? ` <span class="badge modified">Some on</span>` : ""}<small>${esc(g.description)}</small><small>${esc(g.source)}</small><details><summary style="cursor:pointer;font-size:12px;color:var(--ink-3)">Skills it turns on</summary><small>${g.skills.map(s => "$" + esc(s.id)).join(", ")}</small></details></span></li>`;
-  const server = s => `<span style="display:flex;gap:8px;align-items:center;margin-top:6px"><label class="switch" title="Run this server"><input type="checkbox" data-ps="${esc(s.name)}" data-cmd="${esc(s.target)}" ${s.enabled ? "checked" : ""} ${s.present ? "" : "disabled"} aria-label="Turn on ${esc(s.name)}"><span></span></label><code>${esc(s.target)}</code></span>`;
+  const server = s => `<span style="display:flex;gap:8px;align-items:center;margin-top:4px"><label class="switch" title="Run this server"><input type="checkbox" data-ps="${esc(s.name)}" data-cmd="${esc(s.target)}" ${s.enabled ? "checked" : ""} ${s.present ? "" : "disabled"} aria-label="Turn on ${esc(s.name)}"><span></span></label><code>${esc(s.target)}</code></span>`;
   const plugin = p => `<li><label class="switch"><input type="checkbox" data-pi="${esc(p.name)}" ${p.enabled ? "checked" : ""} aria-label="Use ${esc(p.name)}"><span></span></label><span class="tg"><b>${esc(p.name)}</b>${p.version ? ` <span class="badge modified">${esc(p.version)}</span>` : ""}<small>${esc(p.description)}</small>${p.skills.length ? `<small>Skills: ${p.skills.map(s => "$" + esc(s)).join(", ")}</small>` : ""}${(p.server_status || []).map(server).join("")}<small>From ${esc(p.source)}</small></span><button class="iconbtn" data-pr="${esc(p.name)}" aria-label="Remove ${esc(p.name)}">${ICON.x}</button></li>`;
   const render = v => {
     d = v;
     b.innerHTML = `${close}<h3>Plugins</h3><p class="lead">A plugin bundles skills, MCP servers and instructions for one kind of work, in the plugin format coding agents share. Nothing in a plugin runs when you install it, and its MCP servers stay off until you turn them on.</p>
-      <h3 style="font-size:16px;margin:14px 0 6px">Built in</h3><ul class="rows2">${d.catalog.map(group).join("")}</ul>
-      <h3 style="font-size:16px;margin:14px 0 6px">Installed</h3><ul class="rows2">${d.plugins.map(plugin).join("") || `<li class="pnote">No plugins installed yet.</li>`}</ul>
+      <h3 style="font-size:16px;margin:16px 0 4px">Built in</h3><ul class="rows2">${d.catalog.map(group).join("")}</ul>
+      <h3 style="font-size:16px;margin:16px 0 4px">Installed</h3><ul class="rows2">${d.plugins.map(plugin).join("") || `<li class="pnote">No plugins installed yet.</li>`}</ul>
       <div class="keyrow"><input id="plSrc" placeholder="Folder, .zip, git URL or marketplace.json" spellcheck="false"><button class="btn primary" id="plAdd">Install</button></div>
       <div class="dropzone" id="plDrop" style="margin-top:8px" tabindex="0" role="button">Or drop a plugin .zip or a marketplace.json here<input type="file" id="plFile" accept=".zip,.json" hidden></div><div class="res" id="plRes"></div>`;
     $(".mclose", b)?.addEventListener("click", () => $(".scrim").remove());
@@ -3086,14 +3097,14 @@ async function drawMcpLibrary(b) {
   try { d = await api("/api/mcp-library"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
   const say = (text, bad) => { RES("mlRes").className = "res " + (bad ? "bad" : "ok"); RES("mlRes").textContent = text; };
   const secret = n => /KEY|TOKEN|SECRET|PASSWORD|URI|STRING/.test(n);
-  const fields = e => e.settings.map(s => `<label class="field" style="margin-top:6px"><span>${esc(s.name)}</span><input data-ms="${esc(s.name)}" type="${secret(s.name) ? "password" : "text"}" placeholder="${esc(s.hint)}" autocomplete="off" spellcheck="false"></label>`).join("");
+  const fields = e => e.settings.map(s => `<label class="field" style="margin-top:4px"><span>${esc(s.name)}</span><input data-ms="${esc(s.name)}" type="${secret(s.name) ? "password" : "text"}" placeholder="${esc(s.hint)}" autocomplete="off" spellcheck="false"></label>`).join("");
   const button = e => e.transport === "connector" || e.transport === "oauth" ? (e.enabled ? "" : `<button class="btn" data-ma="${esc(e.id)}">Connect</button>`)
     : !e.added ? `<button class="btn" data-ma="${esc(e.id)}">Add</button>` : e.enabled ? "" : `<button class="btn primary" data-mo="${esc(e.id)}">${e.settings.length ? "Save and turn on" : "Turn on"}</button>`;
   const row = e => `<li data-me="${esc(e.id)}"><span class="tg"><b>${esc(e.name)}</b> ${e.enabled ? `<span class="badge added">On</span>` : e.added ? `<span class="badge modified">Added, off</span>` : ""}<small>${esc(e.description)}</small>${e.target ? `<code>${esc(e.target)}</code>` : ""}<small>${esc(e.license)} · <a href="${esc(e.docs)}" target="_blank" rel="noopener">Docs</a>${e.settings.length ? ` · Needs ${e.settings.map(s => esc(s.name)).join(", ")}` : ""}</small>${e.added && !e.enabled && e.settings.length && e.transport !== "connector" ? fields(e) : ""}</span>${button(e)}</li>`;
   const draw = () => {
     const cat = S.mcpLibCat || "";
-    box.innerHTML = `<h3 style="font-size:16px;margin:18px 0 4px">Library</h3><p class="lead" style="font-size:13px">Well-known MCP servers, checked to exist. Adding one puts it in the list above, switched off. Fill in its settings, then turn it on. Keys stay on this computer.</p>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${["", ...d.categories].map(c => `<button class="btn${c === cat ? " primary" : ""}" data-mc="${c}">${c ? c[0].toUpperCase() + c.slice(1) : "All"}</button>`).join("")}</div>
+    box.innerHTML = `<h3 style="font-size:16px;margin:16px 0 4px">Library</h3><p class="lead" style="font-size:13px">Well-known MCP servers, checked to exist. Adding one puts it in the list above, switched off. Fill in its settings, then turn it on. Keys stay on this computer.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">${["", ...d.categories].map(c => `<button class="btn${c === cat ? " primary" : ""}" data-mc="${c}">${c ? c[0].toUpperCase() + c.slice(1) : "All"}</button>`).join("")}</div>
       <ul class="rows2">${d.library.filter(e => !cat || e.category === cat).map(row).join("")}</ul><div class="res" id="mlRes"></div>`;
     $$("[data-mc]", box).forEach(x => x.onclick = () => { S.mcpLibCat = x.dataset.mc; draw(); });
     $$("[data-ma]", box).forEach(x => x.onclick = async () => {
@@ -3123,7 +3134,7 @@ async function importPanel(box, onDone) {
   const sum = a => ["skill", "mcp", "memory", "instructions", "hook"].filter(k => a.counts[k]).map(k => `${a.counts[k]} ${({skill: "skill", mcp: "tool", memory: "memor", instructions: "instruction file", hook: "hook"})[k]}${k === "memory" ? (a.counts[k] === 1 ? "y" : "ies") : a.counts[k] === 1 ? "" : "s"}`).join(", ");
   box.innerHTML = `<h3 class="onb-h">Agents on this computer</h3>
     ${agents.map(a => `<details class="impag" open><summary><b>${esc(a.name)}</b> <small class="muted">${esc(sum(a))}</small></summary><div class="impl">${a.items.map(item).join("")}</div></details>`).join("")}${agents.some(a => a.credentials_not_read.length) ? `<small class="muted">Logins are never read.</small>` : ""}
-    <div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="impGo">Import selected</button><button class="linkbtn" id="impDry">Preview only</button></div><div class="res" id="impRes"></div>`;
+    <div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn primary" id="impGo">Import selected</button><button class="linkbtn" id="impDry">Preview only</button></div><div class="res" id="impRes"></div>`;
   const keys = () => $$("[data-key]", box).filter(x => x.checked && !x.disabled).map(x => x.dataset.key);
   const say = (t, cls) => { const r = $("#impRes", box); r.className = "res " + (cls || ""); r.textContent = t; };
   const text = (r, dry) => `${dry ? "Would import" : "Imported"} ${r.skills.length} skill${r.skills.length === 1 ? "" : "s"}, ${r.mcp.length} tool${r.mcp.length === 1 ? "" : "s"}, ${r.memory} to review in Memory, ${r.instructions} instruction file${r.instructions === 1 ? "" : "s"}.`
@@ -3151,14 +3162,14 @@ function permStep(host) {
   let card = $("#onbPerm", o);
   if (!card) { card = document.createElement("div"); card.className = "onb-card"; card.id = "onbPerm"; o.appendChild(card); }
   card.hidden = false;
-  card.innerHTML = `<img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
-    ${onbSteps(2)}<h1>Choose where Meshpool can work</h1><p>Meshpool only works in the places you allow. You can change this any time in Settings → Permissions.</p>
-    <div class="scope" role="radiogroup" aria-label="Where Meshpool can work">
+  card.innerHTML = `<img class="logo mlogo" src="${logoSrc()}" alt="meshpool">
+    ${onbSteps(2)}<h1>Choose where meshpool can work</h1><p>meshpool only works in the places you allow. You can change this any time in Settings → Permissions.</p>
+    <div class="scope" role="radiogroup" aria-label="Where meshpool can work">
       <button class="scopeopt" data-scope="pick" role="radio"><b>Folders I choose</b><small>Add one or more folders now.</small></button>
       <button class="scopeopt" data-scope="home" role="radio"><b>My whole home folder</b><small>Documents, Desktop, Downloads and everything else in your user folder.</small></button>
       <button class="scopeopt" data-scope="later" role="radio"><b>Start without a folder</b><small>Each chat keeps its files in its own folder. Open it from the chat's Files panel.</small></button>
     </div><div class="res" id="oScope"></div>
-    <div id="oPermH"><h3 class="onb-h">What Meshpool can do</h3>
+    <div id="oPermH"><h3 class="onb-h">What meshpool can do</h3>
     <ul class="rows2" id="oPerms"></ul></div>
     <div class="onb-go"><button class="bigbtn" id="oAll">Allow all</button><button class="btn" id="oDone">Continue</button></div>`;
   const draw = async body => {
@@ -3182,8 +3193,8 @@ function permStep(host) {
         const mine = S.pj.filter(q => q.link?.type === "folder" && q.pinned);
         res.className = mine.length ? "res ok" : "res"; res.textContent = mine.length ? `Added ${mine.map(q => q.name).join(", ")}. New chats work in ${p ? p.name : mine[0].name}. Add more any time with Add a folder in the sidebar.` : "No folder added yet.";
       }
-      else if (x.dataset.scope === "home") { const r = await post("/api/projects", {action: "home"}); S.projects = r.projects; renderSide(); newThread(r.picked); res.className = "res ok"; res.textContent = "Meshpool can work anywhere in your home folder. It asks before deleting files, using the internet or installing anything."; }
-      else { res.className = "res"; res.textContent = "Each chat keeps its files in its own folder; open it from the chat's Files panel. Add your own folders any time from the sidebar."; }
+      else if (x.dataset.scope === "home") { const r = await post("/api/projects", {action: "home"}); S.projects = r.projects; renderSide(); newThread(r.picked); res.className = "res ok"; res.textContent = "meshpool can work anywhere in your home folder. It asks before deleting files, using the internet or installing anything."; }
+      else { res.className = "res"; res.textContent = "Add your own folders any time from the sidebar."; }
       if (mac && x.dataset.scope !== "later") draw({id: "folders"});
     } catch (e) { res.className = "res bad"; res.textContent = e.message; }
   });
@@ -3192,19 +3203,19 @@ function permStep(host) {
   window._permVis = () => { if (!document.hidden && $("#onbPerm")) draw(); };
   document.addEventListener("visibilitychange", window._permVis);
   $("#oDone", card).onclick = () => setupStep(o, card);
-  if (!S.projects.length) { const later = $("[data-scope=later]", card); later.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Each chat keeps its files in its own folder; open it from the chat's Files panel. Add your own folders any time from the sidebar."; }
+  if (!S.projects.length) { const later = $("[data-scope=later]", card); later.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Add your own folders any time from the sidebar."; }
   draw();
 }
 
 function setupStep(o, prev) {
   prev?.remove();
   const card = document.createElement("div"); card.className = "onb-card"; card.id = "onbSetup"; o.appendChild(card);
-  card.innerHTML = `<img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
+  card.innerHTML = `<img class="logo mlogo" src="${logoSrc()}" alt="meshpool">
     ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. You can skip this.</p>
     <div id="oImport"></div>
     <div id="oContext"></div>
     <label class="switchrow" id="oLocalRow" hidden><input type="checkbox" id="oLocal"> <span id="oLocalTxt"></span></label>
-    <div class="onb-go"><button class="bigbtn" id="oFinish">Start using Meshpool</button></div>`;
+    <div class="onb-go"><button class="bigbtn" id="oFinish">Start using meshpool</button></div>`;
   importPanel($("#oImport", card)).then(() => { const b = $("#impGo", card); if (b) b.hidden = true; });
   contextPanel($("#oContext", card));
   let found = {};
@@ -3233,7 +3244,7 @@ async function updStatus() {
   if (c && (!S.upd || !S.upd.ok || (c.checked_at || 0) > (S.upd.checked_at || 0))) S.upd = Object.assign({}, c, {ok: true});
   renderUpdBar(); if ($("#updMore") && !S.updBusy) updatePanel(curUpd());
   const r = S.ust?.last_result;
-  if (r) toast(r.message || (r.ok ? "Meshpool was updated." : "The update did not finish."), r.ok ? 5000 : 12000);
+  if (r) toast(r.message || (r.ok ? "meshpool was updated." : "The update did not finish."), r.ok ? 5000 : 12000);
   clearTimeout(S.ustT); S.ustT = 0;
   // Not while the tab is hidden: the poll stops there, and coming back to the tab starts it again at once.
   const next = () => { S.ustT = 0; if (document.hidden) S.ustOff = true; else updStatus(); };
@@ -3258,7 +3269,7 @@ function renderUpdBar() {
   else if (s?.state === "installing") { bar.hidden = false; bar.dataset.act = "about"; bar.innerHTML = `<span class="dot"></span>Installing update...`; }
   else if (s?.state === "ready") { bar.hidden = false; bar.dataset.act = "apply"; bar.innerHTML = `<span class="dot"></span>Update ready<span class="go">Restart</span>`; }
   else if (["downloading", "verifying", "staging"].includes(s?.state)) { bar.hidden = false; bar.dataset.act = "about"; bar.innerHTML = `<span class="dot"></span>Downloading update${s.state === "downloading" && s.total ? " " + updPct(s) + "%" : "..."}`; }
-  else if (u?.ok && u.newer) { bar.hidden = false; bar.dataset.act = "about"; bar.innerHTML = `<span class="dot"></span>Meshpool ${esc(u.latest || "")} is available<span class="go">Update</span>`; }
+  else if (u?.ok && u.newer) { bar.hidden = false; bar.dataset.act = "about"; bar.innerHTML = `<span class="dot"></span>meshpool ${esc(u.latest || "")} is available<span class="go">Update</span>`; }
   else bar.hidden = true;
 }
 async function bootId() {
@@ -3275,7 +3286,7 @@ function waitForNewServer(oldBoot, out) {
       try { const r = await fetch("/healthz", {cache: "no-store"}); if (r.ok) b = (await r.json()).boot || null; else down = true; } catch (e) { down = true; }
       if (b && (oldBoot ? b !== oldBoot : down)) { location.reload(); resolve(true); return; }
       if (Date.now() - t0 < 90000) setTimeout(tick, 1000);
-      else { say("Meshpool closed. Open it again to use the new version."); resolve(false); }
+      else { say("meshpool closed. Open it again to use the new version."); resolve(false); }
     };
     setTimeout(tick, 1000);
   });
@@ -3284,44 +3295,44 @@ async function applyUpdate() {
   const before = await bootId();
   let r; try { r = await post("/api/update/apply", {}); } catch (e) { r = {ok: false, error: e.message}; }
   if (!r.ok) { toast(r.error || "Could not restart to update.", 8000); return; }
-  if (r.mode === "code") { toast("Restarting Meshpool...", 60000); waitForNewServer(r.boot || before); return; }
-  toast("Updating Meshpool. It reopens in a moment.", 60000);
+  if (r.mode === "code") { toast("Restarting meshpool...", 60000); waitForNewServer(r.boot || before); return; }
+  toast("Updating meshpool. It reopens in a moment.", 60000);
 }
 function updatePanel(u) {
   const res = RES("updRes"), more = $("#updMore"); if (!res || !more) return;
   const s = S.ust || {}, st = s.settings || {};
   const cerr = s.check_error ? `<div><small style="color:var(--ink-3)">The last check for updates did not work: ${esc(s.check_error)}</small></div>` : "";
-  const opts = `<div style="margin-top:12px"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="updAuto" ${st.auto_download === false ? "" : "checked"}> Download updates automatically</label><small style="color:var(--ink-3)">An update that is ready installs when you quit Meshpool, or when you press Restart.</small></div>${cerr}`;
+  const opts = `<div style="margin-top:12px"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="updAuto" ${st.auto_download === false ? "" : "checked"}> Download updates automatically</label><small style="color:var(--ink-3)">An update that is ready installs when you quit meshpool, or when you press Restart.</small></div>${cerr}`;
   const bindOpts = () => { const c = $("#updAuto"); if (c) c.onchange = () => post("/api/update/settings", {auto_download: c.checked}).catch(() => {}); };
   const ver = s.latest || s.tag || u?.latest || "";
   const link = url => url ? `<a class="btn" href="${esc(url)}" target="_blank" rel="noopener">What's new</a>` : "";
-  if (s.state === "installing") { res.className = "res"; res.textContent = `Installing Meshpool ${ver}. Meshpool restarts when it is done.`; more.innerHTML = opts; bindOpts(); return; }
+  if (s.state === "installing") { res.className = "res"; res.textContent = `Installing meshpool ${ver}. meshpool restarts when it is done.`; more.innerHTML = opts; bindOpts(); return; }
   if (s.state === "ready") {
     const err = s.error || s.fail?.error || "";
     if ((s.install_failures || 0) > 0) { res.className = "res bad"; res.textContent = `${err || "The last install did not finish."} It will not install automatically when you quit. Press Restart to try again.`; }
-    else { res.className = "res ok"; res.textContent = s.manual ? `Meshpool ${ver} is ready. It installs when you press Restart.` : `Meshpool ${ver} is ready to install.`; }
-    more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="updGo">Restart to update</button>${link(s.url)}</div>${opts}`;
+    else { res.className = "res ok"; res.textContent = s.manual ? `meshpool ${ver} is ready. It installs when you press Restart.` : `meshpool ${ver} is ready to install.`; }
+    more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn primary" id="updGo">Restart to update</button>${link(s.url)}</div>${opts}`;
     $("#updGo").onclick = applyUpdate; bindOpts(); return; }
-  if (["downloading", "verifying", "staging"].includes(s.state)) { res.className = "res"; res.textContent = s.state === "downloading" ? `Downloading Meshpool ${ver}${s.total ? " (" + updPct(s) + "%)" : ""}. You can keep working.` : `Checking Meshpool ${ver}...`; more.innerHTML = opts; bindOpts(); return; }
+  if (["downloading", "verifying", "staging"].includes(s.state)) { res.className = "res"; res.textContent = s.state === "downloading" ? `Downloading meshpool ${ver}${s.total ? " (" + updPct(s) + "%)" : ""}. You can keep working.` : `Checking meshpool ${ver}...`; more.innerHTML = opts; bindOpts(); return; }
   if (s.state === "failed" || (s.state === "error" && s.error && u?.newer !== false)) {
     const nt = updWhen(s.fail?.next_try || s.next_try);
     res.className = "res bad"; res.textContent = s.error || s.fail?.error || "The update did not finish.";
-    more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn" id="updGo">Try again</button>${s.url ? `<a class="btn" href="${esc(s.url)}" target="_blank" rel="noopener">Release page</a>` : ""}${nt ? `<small id="updNext" style="color:var(--ink-3)">Meshpool tries again at ${esc(nt)}.</small>` : ""}</div>${opts}`;
+    more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn" id="updGo">Try again</button>${s.url ? `<a class="btn" href="${esc(s.url)}" target="_blank" rel="noopener">Release page</a>` : ""}${nt ? `<small id="updNext" style="color:var(--ink-3)">meshpool tries again at ${esc(nt)}.</small>` : ""}</div>${opts}`;
     $("#updGo").onclick = async () => { await post("/api/update/download", {}).catch(() => {}); setTimeout(updStatus, 800); }; bindOpts(); return; }
-  if (s.state === "withdrawn") { res.className = "res bad"; res.textContent = s.error || `Meshpool ${ver} was withdrawn. Stay on your current version.`; more.innerHTML = opts; bindOpts(); return; }
+  if (s.state === "withdrawn") { res.className = "res bad"; res.textContent = s.error || `meshpool ${ver} was withdrawn. Stay on your current version.`; more.innerHTML = opts; bindOpts(); return; }
   if (!u) { res.textContent = ""; more.innerHTML = cerr; return; }
   if (!u.ok) { res.className = "res bad"; res.textContent = u.error; more.innerHTML = cerr; return; }
   if (!u.newer) { res.className = "res ok"; res.textContent = `You have the latest version (${u.current}).`; more.innerHTML = opts; bindOpts(); return; }
   const kind = u.kind || s.kind;
   if (kind === "dev") {
-    res.className = "res"; res.textContent = `Meshpool ${u.latest} is available. This copy runs from a git checkout: run git pull in it to update.`;
-    more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn" id="updCopy">Copy</button>${link(u.url)}</div>${cerr}`;
+    res.className = "res"; res.textContent = `meshpool ${u.latest} is available. This copy runs from a git checkout: run git pull in it to update.`;
+    more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn" id="updCopy">Copy</button>${link(u.url)}</div>${cerr}`;
     $("#updCopy").onclick = () => { try { navigator.clipboard.writeText("git pull").then(() => toast("Copied: git pull"), () => toast("Could not copy.")); } catch (e) { toast("Could not copy."); } };
     return; }
-  res.className = "res"; res.textContent = `Meshpool ${u.latest} is available. You have ${u.current}.`;
+  res.className = "res"; res.textContent = `meshpool ${u.latest} is available. You have ${u.current}.`;
   const how = ["mac-app", "win-app"].includes(kind) ? "Downloads in the background; installs when you restart." : "Installs in place in under a minute, then restarts.";
   const busy = !!S.updBusy;
-  more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="updGo" ${busy ? `disabled title="Wait until the current work finishes."` : ""}>${busy ? "Installing..." : ["mac-app", "win-app"].includes(kind) ? "Download update" : "Update now"}</button>${link(u.url)}<small style="color:var(--ink-3)">${esc(how)}</small></div><div class="res" id="updOut"></div>${["mac-app", "win-app"].includes(kind) ? opts : cerr}`;
+  more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn primary" id="updGo" ${busy ? `disabled title="Wait until the current work finishes."` : ""}>${busy ? "Installing..." : ["mac-app", "win-app"].includes(kind) ? "Download update" : "Update now"}</button>${link(u.url)}<small style="color:var(--ink-3)">${esc(how)}</small></div><div class="res" id="updOut"></div>${["mac-app", "win-app"].includes(kind) ? opts : cerr}`;
   bindOpts();
   const btn = $("#updGo"); if (!btn) return;
   btn.onclick = async () => {
@@ -3331,7 +3342,7 @@ function updatePanel(u) {
     let r; try { r = await post("/api/update/install", {}); } catch (err) { r = {ok: false, error: err.message}; }
     S.updBusy = false;
     if (!r.ok) { btn.disabled = false; btn.textContent = ["mac-app", "win-app"].includes(kind) ? "Download update" : "Update now"; out.className = "res bad"; out.textContent = r.error; return; }
-    out.className = "res ok"; out.textContent = r.message || "Restarting Meshpool...";
+    out.className = "res ok"; out.textContent = r.message || "Restarting meshpool...";
     if (r.action === "restarting") { btn.disabled = true; waitForNewServer(r.boot || before, out); }
     else if (r.action === "downloading" || r.action === "ready") { btn.remove(); updStatus(); }
     else if (r.action === "restart") { btn.disabled = false; btn.textContent = "Restart now"; btn.onclick = () => restartApp(); }
@@ -3340,7 +3351,7 @@ function updatePanel(u) {
   };
 }
 async function restartApp(bootBefore) {
-  const out = RES("updOut"); if (out) { out.className = "res"; out.textContent = "Restarting Meshpool..."; }
+  const out = RES("updOut"); if (out) { out.className = "res"; out.textContent = "Restarting meshpool..."; }
   const before = (typeof bootBefore === "string" && bootBefore) || await bootId();
   let r = {}; try { r = await post("/api/update/restart", {}); } catch (e) {}
   waitForNewServer(before || r.boot, out && out.id ? out : null);
@@ -3362,7 +3373,7 @@ async function restartApp(bootBefore) {
   new MutationObserver(ms => { if (!S.cur?.ready) return; for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1 && n.id !== "working" && !n.classList.contains("hist")) n.classList.add("enter"); })
     .observe($("#col"), {childList: true});
   try { await Promise.all([loadSettings(), loadProjects(), loadHarnesses(), loadSkills(), loadPj()]); }
-  catch (e) { $("#col").innerHTML = `<div class="hero"><h1>Meshpool could not start</h1><p class="sub">${esc(e.message)}</p></div>`; return; }
+  catch (e) { $("#col").innerHTML = `<div class="hero"><h1>meshpool could not start</h1><p class="sub">${esc(e.message)}</p></div>`; return; }
   await loadThreads();
   await loadPj();
   loadAccount(); loadCaps(); loadConnectors(); loadStyles().then(() => renderBar());
@@ -3462,7 +3473,7 @@ async function prLoad(fresh) {
   $$(".prv-item", L).forEach(b => b.onclick = () => { PRV.n = +b.dataset.n; $$(".prv-item", L).forEach(x => x.classList.toggle("on", x === b)); prDetail(); });
   await prDetail();
 }
-function prEmpty(msg) { return `<div class="prv-empty"><h3>Pull requests</h3><p>${esc(msg || "Pull requests Meshpool or you open for this repository show here, with what they change and how their checks are doing.")}</p></div>`; }
+function prEmpty(msg) { return `<div class="prv-empty"><h3>Pull requests</h3><p>${esc(msg || "Pull requests meshpool or you open for this repository show here, with what they change and how their checks are doing.")}</p></div>`; }
 async function prDetail() {
   clearTimeout(PRV.timer);
   const M = $("#prvMain"); if (!M) return; const n = PRV.n;
@@ -3490,8 +3501,8 @@ async function prDetail() {
       <div class="prv-card"><div class="k">Deployments (CD)</div><div class="v">${p.deployments.length ? p.deployments.map(d => `<span class="prv-dep"><span class="cidot ${d.state === "success" || d.state === "active" ? "ok" : d.state === "failure" || d.state === "error" ? "bad" : d.state === "in_progress" || d.state === "pending" || d.state === "queued" ? "run" : ""}"></span>${d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.environment)}</a>` : esc(d.environment)}</span>`).join(" ") : `<span class="stat">None for this commit</span>`}</div></div>
     </section>
     <section class="prv-sec"><h4>Checks <span class="stat">${esc(p.sha.slice(0, 7))}</span></h4>${p.checks.length ? `<ul class="prv-ck">${p.checks.map(c => { const [cl, tx] = ckState(c); return `<li class="${cl}"><span class="cidot ${cl}"></span><span class="cn">${esc(c.name)}${c.summary ? ` <span class="stat">${esc(c.summary)}</span>` : ""}</span><span class="cs">${tx}${c.seconds != null ? ` · ${c.seconds < 90 ? c.seconds + " s" : Math.round(c.seconds / 60) + " min"}` : ""}</span>${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">Details</a>` : ""}</li>`; }).join("")}</ul>` : `<div class="stat">No checks have run on this commit.</div>`}
-      ${p.runs.length ? `<h4 style="margin-top:14px">Workflow runs</h4><ul class="prv-ck">${p.runs.map(r => { const [cl, tx] = ckState(r); return `<li class="${cl}"><span class="cidot ${cl}"></span><span class="cn">${esc(r.name)} <span class="stat">${esc(r.event || "")}${r.attempt > 1 ? ` · attempt ${r.attempt}` : ""}</span></span><span class="cs">${tx}</span><a href="${esc(r.url)}" target="_blank" rel="noopener">Logs</a>${r.conclusion === "failure" && p.connected ? `<button class="linkbtn" data-rerun="${r.id}">Rerun failed jobs</button>` : ""}</li>`; }).join("")}</ul>` : ""}
-      ${fails.length ? `<div class="row" style="margin-top:10px"><button class="btn" id="prvFix">Ask the agent to fix the failing checks</button></div>` : ""}</section>
+      ${p.runs.length ? `<h4 style="margin-top:16px">Workflow runs</h4><ul class="prv-ck">${p.runs.map(r => { const [cl, tx] = ckState(r); return `<li class="${cl}"><span class="cidot ${cl}"></span><span class="cn">${esc(r.name)} <span class="stat">${esc(r.event || "")}${r.attempt > 1 ? ` · attempt ${r.attempt}` : ""}</span></span><span class="cs">${tx}</span><a href="${esc(r.url)}" target="_blank" rel="noopener">Logs</a>${r.conclusion === "failure" && p.connected ? `<button class="linkbtn" data-rerun="${r.id}">Rerun failed jobs</button>` : ""}</li>`; }).join("")}</ul>` : ""}
+      ${fails.length ? `<div class="row" style="margin-top:8px"><button class="btn" id="prvFix">Ask the agent to fix the failing checks</button></div>` : ""}</section>
     <section class="prv-sec"><h4>Conversation <span class="stat">${p.comments.length}</span></h4>
       ${p.body ? `<div class="prv-cm"><div class="stat"><b>${esc(p.author)}</b> opened it</div><div class="prv-cmb">${esc(p.body).slice(0, 4000)}</div></div>` : ""}
       ${p.comments.map(c => `<div class="prv-cm"><div class="stat"><b>${esc(c.user)}</b> · ${agoIso(c.created)}</div><div class="prv-cmb">${esc(c.body)}</div></div>`).join("")}
@@ -3504,7 +3515,7 @@ async function prDetail() {
   $$(".prv-file", M).forEach(d => d.addEventListener("toggle", () => {   // a file's diff is drawn when it is opened
     const fb = $(".prv-fb", d); if (!d.open || fb.dataset.done) return; fb.dataset.done = 1;
     const f = p.files[+d.dataset.i];
-    fb.innerHTML = f.patch ? diffHTML(f.patch) : `<div class="stat" style="padding:10px">${f.binary ? "A binary file: no text to show." : "Too large to show here. Open it on GitHub."}</div>`;
+    fb.innerHTML = f.patch ? diffHTML(f.patch) : `<div class="stat" style="padding:12px">${f.binary ? "A binary file: no text to show." : "Too large to show here. Open it on GitHub."}</div>`;
   }));
   if (p.files.length && p.files.length <= 4) $$(".prv-file", M).forEach(d => d.open = true);
   $$("[data-pv]", M).forEach(b => b.onclick = e => { e.preventDefault(); e.stopPropagation(); prPreview(p, +b.dataset.pv, b.closest(".prv-file")); });
@@ -3540,7 +3551,7 @@ async function prFile(p, path, side) {
 async function prPreview(p, i, det) {
   const f = p.files[i], kind = PRV_KIND(f.path), fb = $(".prv-fb", det);
   det.open = true; fb.dataset.done = 1;
-  fb.innerHTML = `<div class="stat" style="padding:10px">Loading the preview...</div>`;
+  fb.innerHTML = `<div class="stat" style="padding:12px">Loading the preview...</div>`;
   try {
     if (kind === "image") {
       const sides = [["base", "Before"], ["head", "After"]].filter(([sd]) => !(sd === "base" && f.status === "added"));
@@ -3552,6 +3563,6 @@ async function prPreview(p, i, det) {
       else { fb.innerHTML = `<iframe class="prv-html" sandbox title="${esc(f.path)}"></iframe>`; $(".prv-html", fb).srcdoc = text; }
     }
     fb.insertAdjacentHTML("beforeend", `<div class="prv-pvbar"><button class="linkbtn" data-diff="1">Show the diff</button></div>`);
-    $("[data-diff]", fb).onclick = () => { fb.innerHTML = f.patch ? diffHTML(f.patch) : `<div class="stat" style="padding:10px">No text diff.</div>`; };
-  } catch (e) { fb.innerHTML = `<div class="stat" style="padding:10px">${esc(e.message)}</div>`; }
+    $("[data-diff]", fb).onclick = () => { fb.innerHTML = f.patch ? diffHTML(f.patch) : `<div class="stat" style="padding:12px">No text diff.</div>`; };
+  } catch (e) { fb.innerHTML = `<div class="stat" style="padding:12px">${esc(e.message)}</div>`; }
 }
