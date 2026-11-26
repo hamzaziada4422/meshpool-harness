@@ -4,7 +4,8 @@ No Git needed. Content is kept in ONE deduplicated, compressed store per folder 
 ``<runs>/checkpoints/<hash of folder>/objects``, plus a persisted stat cache (``stat.json``) so a restart does not
 re-read unchanged files. Each chat keeps only a small ``turns.json`` listing, per turn, the paths that turn changed
 with their value before (``pre``) and after (``post``). Values: ``"<sha>:<octal mode>"`` for a stored file, a ``"!..."``
-marker for a path that exists but whose contents are not stored (ignored, over 2 MB, a link), ``None`` for absent.
+marker for a path that exists but whose contents are not stored (ignored, a link; a file too big to copy keeps its
+hash, ``"!sha:<sha>:<mode>"``, so Undo can still remove it when a turn made it), ``None`` for absent.
 
 Modes (``Checkpoints(root, store, mode=...)``)
 - ``"scan"`` (default; outside agents such as Codex or Pi): ``begin_turn`` scans the folder, ``end_turn`` scans again
@@ -33,7 +34,8 @@ stay undoable; older turns keep their file list but not their contents (``pruned
 damaged one is quarantined and recovered, never treated as empty.
 
 Skipped: .git and other tool folders, dependency and build folders, anything the project's .gitignore lists (simple
-patterns), files over 2 MB, and projects with more than 20,000 files. Ignored, too-big and unreadable files, links and
+patterns), copies of files over 2 MB beyond MAX_BIG (200 MB) or BIG_BUDGET (1 GB a chat), whose hash alone is kept,
+and projects with more than 20,000 files. Ignored, too-big and unreadable files, links and
 ignored folders are still listed with a "not stored" marker, so a file that only became visible during a turn is never
 mistaken for one the agent created, and Undo never deletes or overwrites a path whose earlier (or current) contents it
 did not store.
@@ -62,7 +64,10 @@ SKIP_DIRS = {".git", ".hg", ".svn", "node_modules", ".venv", "venv", "__pycache_
              ".next", ".nuxt", "dist", "build", ".cache", ".turbo", ".gradle", "target", ".idea", ".DS_Store",
              "Pods", ".terraform", ".tox", "coverage"}
 SKIP_FILES = {".DS_Store"}
-MAX_FILE = 2_000_000
+MAX_FILE = 2_000_000             # files up to this always get a saved copy
+MAX_BIG = int(float(os.environ.get("MH_UNDO_BIG_MB", "200") or 200) * 1_000_000)   # bigger ones too, up to this size,
+BIG_BUDGET = int(float(os.environ.get("MH_UNDO_BIG_BUDGET_MB", "1000") or 1000) * 1_000_000)  # this much per chat;
+MAX_HASH = int(float(os.environ.get("MH_UNDO_HASH_MB", "4000") or 4000) * 1_000_000)  # beyond it only their hash
 MAX_FILES = 20_000
 WRITE_TOOLS = {"write_file", "edit", "notebook_edit"}
 RACY_NS = 2_000_000_000          # a file modified this recently is re-hashed next time (same-size, same-mtime edits)
@@ -113,9 +118,13 @@ def _ignored(rel: str, is_dir: bool, rules) -> bool:
     return False
 
 
-# Manifest values: "<sha>:<octal mode>" for a stored file (old manifests: "<sha>"), or a "!..." marker for a path that
-# exists but whose contents were not stored. Keys ending in "/" are folders that were not walked (ignored or a link):
-# everything under them existed, contents unknown.
+# Manifest values: "<sha>:<octal mode>" for a stored file (old manifests: "<sha>"), "!sha:<sha>:<octal mode>" for a
+# file too big to keep a copy of whose hash is known (Undo can remove it when a turn made it, not put back an earlier
+# version), or a "!..." marker for a path that exists but whose contents are unknown. Keys ending in "/" are folders that
+# were not walked (ignored or a link): everything under them existed, contents unknown.
+HASHED = "!sha:"
+
+
 def _stored(v) -> bool:
     return isinstance(v, str) and not v.startswith("!")
 
@@ -124,19 +133,58 @@ def _sha(v) -> str | None:
     return v.partition(":")[0] if _stored(v) else None
 
 
+def _hashed(v) -> str | None:
+    """The file's hash, stored or not: what tells whether it still holds what the agent left."""
+    if _stored(v):
+        return _sha(v)
+    if isinstance(v, str) and v.startswith(HASHED):
+        return v[len(HASHED):].partition(":")[0] or None
+    return None
+
+
 def _mode(v) -> int | None:
-    m = v.partition(":")[2] if _stored(v) else ""
+    m = v.partition(":")[2] if _stored(v) else v[len(HASHED):].partition(":")[2] if _hashed(v) else ""
     return int(m, 8) if m else None
 
 
 def _same(x, y) -> bool:
-    """Same recorded state. Unstored contents are never "the same" as anything."""
+    """Same recorded state. Unknown contents are never "the same" as anything; a hash is enough to compare."""
     if x is None or y is None:
         return x is None and y is None
-    if not (_stored(x) and _stored(y)):
+    if not (_hashed(x) and _hashed(y)):
         return False
     mx, my = _mode(x), _mode(y)
-    return _sha(x) == _sha(y) and (mx is None or my is None or mx == my)
+    return _hashed(x) == _hashed(y) and (mx is None or my is None or mx == my)
+
+
+def _hash_file(p: Path) -> str:
+    h = hashlib.sha1()
+    with open(p, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _why_untracked(v) -> str:
+    """Why Undo cannot tell what a file holds now, in plain words."""
+    if v == "!ignored":
+        return "your .gitignore leaves it out, so Undo does not track it and left it as is"
+    if v == "!link":
+        return "it is a link, so Undo left it as is"
+    if isinstance(v, str) and v.startswith("!big"):
+        return f"it is over {MAX_HASH // 1_000_000} MB, too large for Undo to track, so it was left as is"
+    return "Undo could not read it, so it was left as is"
+
+
+def _why_unsaved(v) -> str:
+    """Why Undo has no earlier version of a file to put back, in plain words."""
+    if _hashed(v) or (isinstance(v, str) and v.startswith("!big")):
+        return "Undo can't put back its earlier version: the file is too large to keep a copy of, so it was left as is"
+    if v == "!ignored":
+        return "your .gitignore left it out, so Undo kept no earlier version and left it as is"
+    if v == "!link":
+        return "it was a link before, so Undo left it as is"
+    return "its earlier version wasn't saved, so it was left as is"
 
 
 def _unknown(path: str, manifest: dict) -> bool:
@@ -654,7 +702,7 @@ class Checkpoints:
                         return None
                     continue
                 marker = ("!link" if stat.S_ISLNK(st.st_mode) else "!special" if not stat.S_ISREG(st.st_mode)
-                          else "!ignored" if _ignored(rel, False, rules) else _big(st) if st.st_size > MAX_FILE else "")
+                          else "!ignored" if _ignored(rel, False, rules) else _big(st) if st.st_size > MAX_HASH else "")
                 if marker:
                     if not note(rel, marker):
                         return None
@@ -667,10 +715,7 @@ class Checkpoints:
                         return None
                     continue
                 try:
-                    data = p.read_bytes()
-                    sha = hashlib.sha1(data).hexdigest()
-                    if store:
-                        self._put(sha, data)
+                    sha = self._file_sha(p, st.st_size, store)
                 except OSError:
                     sha = ""
                 if not note(rel, sha + mode if sha else "!unreadable"):
@@ -717,24 +762,38 @@ class Checkpoints:
             return "!special"
         if _ignored(rel, False, rules):
             return "!ignored"
-        if st.st_size > MAX_FILE:
+        if st.st_size > MAX_HASH:
             return _big(st)
         mode = f":{stat.S_IMODE(st.st_mode):o}"
         cache = self._load_cache()
         prev = cache.get(rel)
-        if prev and prev[0] == st.st_size and prev[1] == st.st_mtime_ns and (not store or self._has(prev[2])):
+        if prev and prev[0] == st.st_size and prev[1] == st.st_mtime_ns and (
+                not store or str(prev[2]).startswith(HASHED) or self._has(prev[2])):
             return prev[2] + mode
         try:
-            data = p.read_bytes()
+            sha = self._file_sha(p, st.st_size, store, durable=durable)
         except OSError:
             return "!unreadable"
-        sha = hashlib.sha1(data).hexdigest()
         if store:
-            self._put(sha, data, durable=durable)
             if st.st_mtime_ns < time.time_ns() - RACY_NS:
                 cache[rel] = [st.st_size, st.st_mtime_ns, sha]
                 self._cache_dirty = True
         return sha + mode
+
+    def _file_sha(self, p: Path, size: int, store: bool, durable: bool = False) -> str:
+        """What a file's value starts with: its sha, after saving a copy (store) when it is small, or big but within
+        MAX_BIG and this chat's BIG_BUDGET; else "!sha:<sha>", the hash alone (Lina: a 50,000-row workbook the turn
+        made was over 2 MB, untracked, and Undo kept it). Raises OSError when it cannot be read."""
+        big = size > MAX_FILE
+        if big and (not store or size > MAX_BIG or getattr(self, "_big_used", 0) + size > BIG_BUDGET):
+            return HASHED + _hash_file(p)
+        data = p.read_bytes()
+        sha = hashlib.sha1(data).hexdigest()
+        if store:
+            self._put(sha, data, durable=durable)
+            if big:
+                self._big_used = getattr(self, "_big_used", 0) + size
+        return sha
 
     # ---------- windows (scan-mode turns, journal opaque tools) -----------------------------------------------------
     def _begin_window(self) -> dict | None:
@@ -1202,12 +1261,12 @@ class Checkpoints:
                 cur, tgt = now[path], target.get(path)
                 if path in amb:
                     keep(path, AMBIGUOUS_NOTE)
-                elif cur is not None and not _stored(cur):      # can't tell what it holds now
-                    keep(path, "its current contents aren't tracked (ignored, over 2 MB or a link), so it was left as is")
+                elif cur is not None and not _hashed(cur):      # can't tell what it holds now
+                    keep(path, _why_untracked(cur))
                 elif not _same(cur, left):                      # changed after the agent: not ours to undo
                     keep(path, CHANGED_AFTER)
                 elif tgt is not None and not _stored(tgt):      # its earlier state was never stored
-                    keep(path, "its earlier version wasn't saved (ignored or over 2 MB), so it was left as is")
+                    keep(path, _why_unsaved(tgt))
                 elif tgt is not None:
                     if not _same(cur, tgt):
                         writes.append(path)

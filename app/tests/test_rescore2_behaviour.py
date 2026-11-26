@@ -473,3 +473,102 @@ def test_failed_steps_a_later_step_redid_are_marked_retried(chat):
     assert len(marks) == 1 and marks[0]["ids"] == ["b", "c", "d", "e"], marks
     order = [e.get("type") for e in s.events]
     assert order.index("steps_retried") < order.index("turn_end")
+
+
+# ============================================================ 8: review and engine talk in the reply (Lina)
+def test_the_look_step_tells_the_model_to_keep_the_check_to_itself():
+    from meshpool_harness.agent import look as L
+    msg = L.message("doc", {"label": "chart.png", "files": ["chart.png"]}, {"findings": []}, "make a chart", True)
+    body = msg["content"] if isinstance(msg["content"], str) else msg["content"][0]["text"]
+    assert "do not mention it, the reviewer, the pictures, meshpool's measurements or any engine" in body, body
+    assert "say what you changed in plain words" in body and "List what is wrong" not in body
+
+
+FAKE_ENGINE_NAMED = textwrap.dedent("""
+    import json, os, sys
+    out = sys.argv[sys.argv.index("--out") + 1]
+    import openpyxl
+    wb = openpyxl.Workbook(); wb.active.append(["Region", "Orders"]); wb.save(os.path.join(out, "sales_2025_clean.xlsx"))
+    print(json.dumps({"ok": True, "steps": [{"engine": "sheets", "ok": True, "artifacts": [
+        os.path.join(out, "sales_2025_clean.xlsx")], "answer": "Built sales_2025_clean.xlsx from the CSV. The checker "
+        "printed PASS (20 formulas). I did not recalculate the workbook, so the check cells will show their results "
+        "when it is opened in Excel."}]}))
+""")
+
+
+def test_the_engines_own_file_name_and_recalc_notes_stay_out_of_the_tool_result(tmp_path, home, monkeypatch):
+    from meshpool_harness.agent import office_jobs as OJ
+    from meshpool_harness.agent import office_mcp_server as O
+    script = tmp_path / "fake_engine.py"
+    script.write_text(FAKE_ENGINE_NAMED)
+    monkeypatch.setattr(OJ, "_python_m", lambda: [sys.executable, str(script)])
+    monkeypatch.setattr("engines.forge.tools.qa_summary", lambda files: "")
+    proj = tmp_path / "LinaData"
+    proj.mkdir()
+    monkeypatch.setattr(O, "_project", lambda: proj)
+    saved = dict(OJ.JOBS)
+    OJ.JOBS.clear()
+    try:
+        text, failed = O.make_spreadsheet("region summary of the sales", save_as="region_summary.xlsx")
+    finally:
+        OJ.JOBS.clear()
+        OJ.JOBS.update(saved)
+    assert not failed and sorted(x.name for x in proj.iterdir()) == ["region_summary.xlsx"], text
+    assert "sales_2025_clean" not in text and "did not recalculate" not in text and "Engine notes" not in text, text
+    assert "show their results when" not in text, text
+    assert "Built region_summary.xlsx from the CSV" in text and "LinaData/region_summary.xlsx" in text, text
+    assert "Never mention the engine" in text, text
+
+
+# ============================================================ 7: Undo and big files (Lina)
+def _three_mb(seed: bytes) -> bytes:
+    return (seed * (3_000_000 // len(seed) + 1))[:3_000_000]
+
+
+@pytest.mark.parametrize("mode", ["scan", "journal"])
+def test_undo_removes_a_big_file_the_turn_made_and_puts_back_a_big_file_it_changed(tmp_path, home, mode):
+    """Lina: a 50,000-row workbook the turn made was over 2 MB, so its contents were not tracked, and Undo said "No
+    files were put back. Kept as it is: region_summary.xlsx"."""
+    from meshpool_harness import checkpoints as CP
+    from meshpool_harness.ui.agent_api import undo_message
+    root = tmp_path / "LinaData"
+    root.mkdir()
+    old = _three_mb(b"region,orders\nNorth,1\n")
+    (root / "sales.csv").write_bytes(old)
+    cp = CP.Checkpoints(str(root), tmp_path / "store", mode=mode)
+    cp.begin_turn("summary", 1, 0)
+    if mode == "journal":
+        with cp.tool("bash", {"command": "python build.py"}):
+            (root / "region_summary.xlsx").write_bytes(_three_mb(b"PK\x03\x04 rows "))
+            (root / "sales.csv").write_bytes(_three_mb(b"region,orders\nSouth,2\n"))
+    else:
+        (root / "region_summary.xlsx").write_bytes(_three_mb(b"PK\x03\x04 rows "))
+        (root / "sales.csv").write_bytes(_three_mb(b"region,orders\nSouth,2\n"))
+    cp.end_turn()
+    r = cp.revert_to_before(1)
+    assert not (root / "region_summary.xlsx").exists(), r
+    assert (root / "sales.csv").read_bytes() == old, r
+    assert r["deleted"] == ["region_summary.xlsx"] and r["restored"] == ["sales.csv"] and not r["kept"], r
+    msg, _ = undo_message(r)
+    assert msg == "Undone. Restored 1 file (sales.csv) and removed 1 file (region_summary.xlsx).", msg
+
+
+def test_a_file_too_big_to_copy_is_still_removed_and_a_changed_one_is_named_plainly(tmp_path, home, monkeypatch):
+    from meshpool_harness import checkpoints as CP
+    from meshpool_harness.ui.agent_api import undo_message
+    monkeypatch.setattr(CP, "MAX_BIG", 2_500_000)             # over the copy limit: only the hash is kept
+    root = tmp_path / "LinaData"
+    root.mkdir()
+    (root / "sales.csv").write_bytes(_three_mb(b"a,b\n1,2\n"))
+    cp = CP.Checkpoints(str(root), tmp_path / "store", mode="scan")
+    cp.begin_turn("summary", None, 0)
+    (root / "region_summary.xlsx").write_bytes(_three_mb(b"PK\x03\x04 rows "))
+    (root / "sales.csv").write_bytes(_three_mb(b"a,b\n3,4\n"))
+    cp.end_turn()
+    r = cp.revert_to_before(1)
+    assert not (root / "region_summary.xlsx").exists() and r["deleted"] == ["region_summary.xlsx"], r
+    assert r["kept"] == ["sales.csv"], r
+    msg, detail = undo_message(r)
+    assert "removed 1 file (region_summary.xlsx)" in msg.lower() and "sales.csv" in msg, msg
+    assert "sales.csv: Undo can't put back its earlier version: the file is too large to keep a copy of" in detail
+    assert "aren't tracked" not in detail and "2 MB" not in detail, detail

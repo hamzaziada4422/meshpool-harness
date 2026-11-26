@@ -83,10 +83,21 @@ SAVE_AS: dict[str, str] = {}   # job id -> the file name the user asked for (sav
 
 
 def _report(jid: str, reused: str = "") -> tuple[str, bool]:
-    text, failed = OJ.report(jid, reused=reused)
+    """The job's report, with the file already under the name the user asked for (save_as). The engine's own name for
+    it is never in the text: Lina's reply said "the engine also named its first output sales_2025_clean.xlsx"."""
     want = SAVE_AS.get(jid)
-    if want and not failed and OJ.JOBS.get(jid, {}).get("done"):
-        text += _save_copy(jid, want)
+    j = OJ.JOBS.get(jid, {})
+    saved, old = "", ""
+    if want and j.get("done") and j.get("result"):
+        before = [m for m in OJ._made(j) if m.suffix.lower() == Path(want).suffix.lower()]
+        old = before[0].name if before else ""
+        saved = _save_copy(jid, want)
+    text, failed = OJ.report(jid, reused=reused)
+    if saved and not failed:
+        new = Path(j.get("saved_as") or "").name
+        if old and new and old != new:
+            text = text.replace(old, new)
+        text += saved
     return text, failed
 
 

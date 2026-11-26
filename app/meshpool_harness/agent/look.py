@@ -107,9 +107,11 @@ RUBRIC_DOC = (
     "2. Is anything cut off, overlapping, off the page or slide, or unreadable?\n"
     "3. Does it look finished: no placeholder text, no empty pages or slides, consistent fonts and spacing?")
 TAIL = ("The user's explicit choices win over these checks: if the request says something is a placeholder or does "
-        "nothing yet, leave it as it is. List what is wrong or missing in a few short lines, then fix it in the files. If nothing is wrong, say so in "
-        "one line. Do not start servers or open other programs for this: meshpool looks again after your fix. End "
-        "with your answer to the user as before: what you made and where it is.")
+        "nothing yet, leave it as it is. Fix what is wrong or missing in the files. This check is for you, not the "
+        "user: do not mention it, the reviewer, the pictures, meshpool's measurements or any engine in your answer. "
+        "If you changed something, say what you changed in plain words, as part of your answer; if nothing is wrong, "
+        "say nothing about the check. Do not start servers or open other programs for this: meshpool looks again "
+        "after your fix. End with your answer to the user as before: what you made and where it is.")
 SCOPE_RULE = ("Change only what the user's request asked for in this turn. Anything else you notice, in this file or in "
               "any other, you leave as it is: do not fix it, and do not create another copy of a file to change it. If you "
               "think it matters, say it in one line at the end of your answer and ask if they want it fixed.")
