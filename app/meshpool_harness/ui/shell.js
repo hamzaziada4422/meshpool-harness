@@ -433,11 +433,13 @@ function srchDate(t) {
   const d = new Date(t * 1000);
   return d.toLocaleDateString("en", {month: "short", day: "numeric", ...(d.getFullYear() !== new Date().getFullYear() ? {year: "numeric"} : {})});
 }
-// The match in a snippet, marked (the words of the query, in any order).
+// The match in a snippet, marked (the words of the query, in any order). Matched on the text itself and escaped
+// piece by piece: matching the escaped HTML marked inside "&amp;" and "&lt;" for a search for "amp" or "lt".
 function srchMark(text, q) {
+  const t = String(text ?? "");
   const words = String(q || "").toLowerCase().split(/\s+/).filter(w => w.length > 1).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const t = esc(text);
-  return words.length ? t.replace(new RegExp("(" + words.map(esc).join("|") + ")", "gi"), "<mark>$1</mark>") : t;
+  if (!words.length) return esc(t);
+  return t.split(new RegExp("(" + words.join("|") + ")", "gi")).map((part, i) => i % 2 ? `<mark>${esc(part)}</mark>` : esc(part)).join("");
 }
 function openSearch(tab = "all", q0 = "") {
   closePop(); closeCtx(); closeSearch(); $(".scrim:not(.dlg-scrim)")?.remove();
