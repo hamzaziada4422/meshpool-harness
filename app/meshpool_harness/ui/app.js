@@ -1596,8 +1596,11 @@ function applyEv(ev) {
 }
 // "Looking at the result..." must not stay in the thread when no Checked line follows (an error, a stop, a turn that ends)
 function endLook(cur, why) {
-  const n = cur.lookEl; cur.lookEl = null; if (!n) return;
-  if (why) n.textContent = "Could not finish the check: " + why; else n.remove();
+  const n = cur.lookEl; cur.lookEl = null;
+  colEl().querySelectorAll(".note[data-look]").forEach(x => { if (x !== n) x.remove(); });   // an earlier round's line that lost its handle
+  cur.officeEl?.remove(); cur.officeEl = null;      // "Starting the office tools..." is a wait, not history
+  if (!n) return;
+  if (why) { n.textContent = "Could not finish the check: " + why; n.removeAttribute("data-look"); } else n.remove();   // settled: it stays as history
 }
 function applyEvRaw(ev) {
   const cur = S.cur, col = colEl();
@@ -1618,6 +1621,7 @@ function applyEvRaw(ev) {
       if (String(ev.text).trim() === RESUME_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Picking up where it left off</span>`, "goalturn"); break; }
       if (String(ev.text).trim() === GOAL_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Continuing toward the goal</span>`, "goalturn"); break; }
       if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span> <button class="linkbtn" data-takeback title="Take it back before the agent reads it">Take back</button><br><span class="stx">${esc(ev.text)}</span></div>`, "msg-user steer"); $("#queuedChip")?.remove(); break; }
+      cur.officeEl?.remove(); cur.officeEl = null;   // "Starting the office tools..." was the wait before this message
       closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; cur.tpaths = []; cur.lastAi = null; cur.lastText = ""; cur.down = false; cur.downEl = null;
       { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button><button class="iconbtn" data-ma="rewind" data-tip="Rewind to here" data-tip-pos="below" aria-label="Rewind to here">${ICON.undo}</button><button class="iconbtn" data-ma="fork" data-tip="Fork from here" data-tip-pos="below" aria-label="Fork from here">${ICON.branch}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${userBody(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.ei = ev.i; mu._text = String(ev.text ?? ""); cur.turnEi = ev.i; cur.lastFoot = null; }
       break; }
@@ -1627,6 +1631,7 @@ function applyEvRaw(ev) {
     case "stream_reset": if (cur.live) { cur.live.remove(); cur.live = null; cur.liveDirty = false; } break;
     case "retry_ok": clearRetry(); break;
     case "assistant":
+      if (ev.look) endLook(cur, "");                  // the line under the reply says what the look saw: the wait is over
       if (ev.append && ev.merged && cur.lastAi && cur.lastAi.isConnected && cur.lastText) {
         const full = cur.lastText.replace(/\s+$/, "") + "\n\n" + stripGoal(ev.text); mdRender(cur.lastAi, full); cur.lastText = full;
         cur.lookEl?.remove(); cur.lookEl = null;       // "Looking at the result..." is over: the line under the reply says what it saw
@@ -1637,6 +1642,7 @@ function applyEvRaw(ev) {
       cur.lastText = stripGoal(ev.text || "") || cur.lastText;
       break;
     case "review_round": {                               // the reply above was written before the check: fold it away
+      endLook(cur, "");                                  // this look is over: a second round writes its own line
       const el = cur.lastAi;
       if (el && el.isConnected && !el.closest("details")) {
         const d = document.createElement("details"); d.className = "notedet fold";
@@ -1764,7 +1770,7 @@ function applyEvRaw(ev) {
         break; }
       if (ev.look) cur.activity = String(ev.text || "").replace(/\.+$/, "");   // the footer names the wait (agent/look.py)
       if (ev.look && ev.persona && cur.lookEl && cur.lookEl.isConnected) { cur.lookEl.textContent = ev.text; break; }   // the same note says who is checking it
-      { const nn = add(esc(plainStatus(ev.text)) + (ev.detail ? ` <details class="notedet"><summary>Details</summary><div>${esc(ev.detail).replace(/\n/g, "<br>")}</div></details>` : ""), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); if (ev.look) cur.lookEl = nn; } break; }
+      { const nn = add(esc(plainStatus(ev.text)) + (ev.detail ? ` <details class="notedet"><summary>Details</summary><div>${esc(ev.detail).replace(/\n/g, "<br>")}</div></details>` : ""), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); if (ev.look) { endLook(cur, ""); cur.lookEl = nn; nn.dataset.look = "1"; } else if (/^Starting the office tools/.test(ev.text || "")) { cur.officeEl?.remove(); cur.officeEl = nn; } } break; }
     case "gate": {                                      // all model slots busy: say so while it waits, drop the line once it runs
       if (cur.gateEl && !cur.gateEl.isConnected) cur.gateEl = null;
       if (ev.state === "waiting") {
