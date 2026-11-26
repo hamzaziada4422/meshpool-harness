@@ -3274,8 +3274,9 @@ def search(q: str) -> list:
         shown = "\n".join(texts).lower()
         if not all(w in shown for w in words):
             continue
-        hit = next((s for s in texts if q in s.lower()), None) or \
-            max(texts, key=lambda s: sum(w in s.lower() for w in words))
+        body = texts[1:] or texts                         # the words in the messages, not just in the title, make the snippet
+        hit = next((s for s in body if q in s.lower()), None) or \
+            max(body, key=lambda s: sum(w in s.lower() for w in words))
         lo = hit.lower()
         j = lo.find(q) if q in lo else min((lo.find(w) for w in words if w in lo), default=0)
         snippet = " ".join(hit[max(0, j - 60): j + 100].split())

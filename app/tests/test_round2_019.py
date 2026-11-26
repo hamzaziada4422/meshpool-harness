@@ -381,3 +381,28 @@ def test_onboarding_step_two_uses_plain_labels_and_one_control_for_past_chats(ap
     assert page.locator("#onbSetup [data-local]").count() == 0, "an Import button next to the tick box"
     assert page.locator("#oLocal").count() == 1
     assert page.errors == [], page.errors
+
+
+# ------------------------------------------------------------------------------------------------------ item 9
+def test_search_shows_a_snippet_and_no_developer_key_hints_for_chat_users(app, page):
+    """Results had no snippet (the one line was hidden on the marked row), and the footer showed "Compose Tab" and
+    "Actions Alt+Enter" to people who never use Code."""
+    cid = page.evaluate("""async w => { const v = await post('/api/agent', {workdir: w, harness: 'meshpool-work', kind: 'cowork', mode: 'auto', task: 'Order notes'});
+        await post('/api/agent/' + v.id + '/send', {text: 'Please find the brass lantern invoice from March and tell me what it says'}); return v.id; }""", app["work"])
+    page.wait_for_function("""id => api('/api/agent/' + id + '?since=0').then(v => !['starting', 'working', 'waiting'].includes(v.state))""", arg=cid, timeout=60000, polling=500)
+    page.evaluate("() => loadThreads()")
+    page.evaluate("() => openSearch('all', '')")
+    page.wait_for_selector("#srchIn")
+    page.fill("#srchIn", "brass lantern")
+    page.wait_for_selector("#srchList .ssn", timeout=15000)
+    got = page.evaluate("""() => ({snip: document.querySelector('#srchList .ssn').textContent, marked: [...document.querySelectorAll('#srchList .ssn mark')].map(m => m.textContent.toLowerCase()),
+        act: document.querySelector('#srchList .sres.act') === document.querySelector('#srchList .ssn').closest('.sres'), keys: document.querySelector('.srch-keys').textContent})""")
+    assert "brass lantern" in got["snip"].lower() and "brass" in got["marked"] and "lantern" in got["marked"], got
+    assert got["act"], "the snippet stays on the marked row"
+    assert "Compose" not in got["keys"] and "Actions" not in got["keys"] and "Alt" not in got["keys"], got
+    assert "Open" in got["keys"] and "Close" in got["keys"]
+    # a Code user keeps the hints
+    page.evaluate("() => { closeSearch(); S.mode = 'code'; openSearch('all', ''); }")
+    page.wait_for_selector(".srch-keys")
+    assert "Compose" in page.inner_text(".srch-keys")
+    assert page.errors == [], page.errors

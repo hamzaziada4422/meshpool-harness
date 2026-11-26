@@ -233,6 +233,10 @@
 .ssub{color:var(--ink-3);font-size:var(--fs-s);white-space:nowrap;max-width:40%;overflow:hidden;text-overflow:ellipsis}
 .sres .smore,.sres .sret{display:none;color:var(--ink-3)}
 .sres.act .smore,.sres.act .sret{display:inline-grid}.sres.act .ssub{display:none}
+.sres:has(.sbody){height:auto;min-height:52px;padding-top:8px;padding-bottom:8px}
+.sbody{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.ssn{color:var(--ink-3);font-size:var(--fs-s);overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+.ssn mark{background:none;color:var(--ink);font-weight:500}
 .sempty{padding:36px 16px;text-align:center;color:var(--ink-3)}
 .sres.sk{cursor:default}.sk-dot{width:16px;height:16px;border-radius:4px;background:var(--hover);display:block}
 .sk-bar{height:12px;border-radius:6px;background:var(--hover);animation:pulse 2s var(--ease) infinite}
