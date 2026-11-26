@@ -83,7 +83,8 @@ PROJECT_FILES = ("MESHPOOL.md", "AGENTS.md", "CLAUDE.md")
 
 
 SCRATCH_RULE = ("\n\nPut scratch files (check scripts, repro copies, notes) in $TMPDIR, which is private to this task, "
-                "never in a fixed /tmp path that another task could also be using.")
+                "never in a fixed /tmp path that another task could also be using. The user cannot see $TMPDIR: never "
+                "point them to a file there (a backup or a copy); Undo in meshpool takes a change back.")
 
 
 def _lean_work_on() -> bool:
@@ -798,6 +799,33 @@ def _heredoc_title(s: str) -> str:
     return f"Run {step}?"
 
 
+# Office's lock files: "~$Budget.xlsx" (Microsoft Office) and ".~lock.Budget.xlsx#" (LibreOffice).
+_OFFICE_LOCK = re.compile(r"(?:~\$|\.~lock\.)([\w .()-]+?\.(?:docx?|xlsx?|xlsm|pptx?|od[tsp]|csv|rtf))#?(?=['\"\s;&|]|$)",
+                          re.I)
+_SCRATCH_DIR = re.compile(r"^(?:/tmp/|/var/folders/|\$\{?TMPDIR\}?|\$\{?TMP\}?|\$\{?TEMP\}?|[A-Za-z]:\\[^\s]*\\Temp\\)")
+
+
+def _user_steps_text(script: str) -> str:
+    """The script without the steps that only work in a scratch folder: after `cd` into /tmp or $TMPDIR (until a `cd`
+    elsewhere), and steps whose every path is in one. What is left is what touches the user's folder."""
+    masked, out, at, scratch = PR._scan(script)[0], [], 0, False
+    parts = []
+    for m in re.finditer(r"&&|\|\||[;|\n]", masked):
+        parts.append(script[at:m.start()])
+        at = m.end()
+    parts.append(script[at:])
+    for x in parts:
+        w = x.strip().split()
+        if w and w[0] == "cd":
+            scratch = len(w) > 1 and bool(_SCRATCH_DIR.match(w[1].strip("'\"")))
+            continue
+        paths = [t.strip("'\"") for t in w[1:] if "/" in t or t.strip("'\"").startswith("$")]
+        if scratch or (paths and all(_SCRATCH_DIR.match(t) for t in paths)):
+            continue
+        out.append(x)
+    return " ; ".join(out)
+
+
 def _plain_command_title(script: str) -> str:
     """What a command does, in words a person can judge, for the approval card (persona runs, 0.0.18: every card was
     a raw `D=/tmp/...; python3 -I -c "..."` line nobody could judge). The command itself stays below the title.
@@ -807,7 +835,10 @@ def _plain_command_title(script: str) -> str:
     hd = _heredoc_title(s)                            # a heredoc's lines are text for a program, never steps
     if hd:
         return hd
-    files = list(dict.fromkeys(m.group(0).rsplit("/", 1)[-1] for m in _FILE_WORD.finditer(s)))[:3]
+    # Steps that only look at a scratch copy (cd into $TMPDIR or /tmp, then unzip, cat, find) name no file of the user's
+    # (Sara: "rm -f '~$Budget_2026.xlsx' && cd <scratch> && unzip ..." read as "Delete Budget_2026.xlsx?").
+    named = _user_steps_text(s)
+    files = list(dict.fromkeys(m.group(0).rsplit("/", 1)[-1] for m in _FILE_WORD.finditer(named)))[:3]
     on = (" on " + ", ".join(files)) if files else ""
     words = re.findall(r"(?:^|[;&|]\s*|\bdo\s+|\bthen\s+)([A-Za-z][\w.+-]*)", s)
     progs = [os.path.basename(w) for w in words if w not in ("cd", "export", "set", "for", "do", "done", "if", "then",
@@ -841,7 +872,13 @@ def _plain_command_title(script: str) -> str:
     if PR.DELETES.search(s):
         # name only what the deleting steps remove: "sed -i … report.py && rm sample.csv" deletes sample.csv, not both
         dsegs = [x for x in steps if PR.DELETES.search(x)] or [s]
-        gone = list(dict.fromkeys(m.group(0).rsplit("/", 1)[-1] for x in dsegs for m in _FILE_WORD.finditer(x)))[:3]
+        locks = list(dict.fromkeys(m.group(1) for x in dsegs for m in _OFFICE_LOCK.finditer(x)))
+        rest = [_OFFICE_LOCK.sub(" ", x) for x in dsegs]
+        gone = list(dict.fromkeys(m.group(0).rsplit("/", 1)[-1] for x in rest for m in _FILE_WORD.finditer(x)))[:3]
+        if locks and not gone:                    # "~$Budget_2026.xlsx" is Office's lock file, not the workbook
+            return "Remove the Office lock file for " + ", ".join(locks[:3]) + "?"
+        if locks and gone:
+            return "Delete " + ", ".join(gone) + " and the Office lock file for " + ", ".join(locks[:2]) + "?"
         return ("Delete " + ", ".join(gone) + "?") if gone else f"Delete files?{more}"
     lang = next((_PROGRAMS[p] for p in progs if p in _PROGRAMS), "")
     if lang:
@@ -6520,7 +6557,11 @@ class Agent:
             if self._outside_path(t):
                 return f"Change {nm}, outside the project folder ({full[:100]})?"
             if PR.office_lock(full):
-                return f"{nm} is open in Office. Change it anyway? Office may overwrite this change when it saves."
+                # edit_office_file never writes a file Office holds open: it saves a copy (Sara: "Change it anyway?"
+                # and then "Budget_2026 (edited).xlsx" appeared). The card says what will happen.
+                stem, ext = os.path.splitext(nm)
+                copy = f"{stem} (edited){ext}" if office_in_place(args, self.root) else f"{stem} (copy){ext}"
+                return f"{nm} is open in Office. Save your changes as a copy, {copy}?"
             if os.path.exists(full):
                 why = PR.undo_covers(full, self.root)
                 if why:

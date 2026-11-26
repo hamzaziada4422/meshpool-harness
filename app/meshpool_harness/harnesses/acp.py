@@ -291,6 +291,14 @@ def _auth_failure(text: str) -> bool:
         re.search(r"(?i)api.?key|bad key|unauthori[sz]ed|authenticat|forbidden|invalid.{0,20}key", s))
 
 
+def _engine_error(text: str) -> bool:
+    """A short reply that is only the engine's own error for a failed model call (an HTTP 4xx or 5xx, nothing
+    answering), not an answer from the model."""
+    from meshpool_harness.core import errtext as ET
+    s = (text or "").strip()
+    return len(s) < 600 and ET.is_raw(s) and ET.engine_failed(s)
+
+
 def before_turn(agent) -> list:
     """The chat's events before the current turn's user message: status lines emitted since (a model the harness
     kept, say) must not push that message into the history."""
@@ -977,6 +985,7 @@ class ACPAgent:
             self._kill_timer = None
         self._stop = False
         self.start_error = None                          # set when this turn's agent could not start (Session hands off)
+        self.turn_failed = None                          # the engine's own error when the turn failed before any work
         self._before = None                              # taken once the process and its MCP servers run (below)
         if not self.title:
             self.title = text.strip().splitlines()[0][:80] if text.strip() else "Session"  # first line only
@@ -1037,6 +1046,13 @@ class ACPAgent:
                 if not final.strip() and not self._stop and getattr(self, "_turn_tools", 0) == 0:
                     self._emit({"type": "status", "text": f"{self.manifest.get('name', 'The harness')} didn't "
                                                           "answer. Try sending your message again."})
+            if final.strip() and not self._stop and getattr(self, "_turn_tools", 0) == 0 and _engine_error(final):
+                # Codex writes a failed model call as its reply ("unexpected status 404 Not Found: ..., url: ..."):
+                # an error, not an answer. Session.emit says it in plain words; Session may run it on meshpool's agent.
+                self._text, self.turn_failed = [], final.strip()
+                self._emit({"type": "stream_reset"})     # the error text shown as it streamed goes
+                self._emit({"type": "error", "text": final.strip()})
+                final = ""
             self._flush_text()
             stop = r.get("stopReason", "end_turn")
             if _auth_failure(final):
@@ -1057,6 +1073,8 @@ class ACPAgent:
             if self._stop:                               # an error while stopping is just the stop
                 self._emit({"type": "interrupted", "text": "Stopped. Send a message to continue."})
             else:
+                if getattr(self, "_turn_tools", 0) == 0:
+                    self.turn_failed = str(e)            # the engine refused the prompt before doing anything
                 self._emit({"type": "error", "text": str(e)})
         finally:
             self._in_turn = False
