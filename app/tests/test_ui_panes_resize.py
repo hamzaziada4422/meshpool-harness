@@ -197,6 +197,9 @@ def test_a_smaller_window_clamps_the_widths_again_and_a_larger_one_brings_them_b
     # every frame of a resize, not only once it settles: no sideways scroll at any size on the way
     for w in (1500, 1300, 1150, 1000, 990):
         page.set_viewport_size({"width": w, "height": 900})
+        # the first frame drawn at the new size: the browser runs the resize handler before any frame callback, but
+        # set_viewport_size can return before that frame, and a loaded machine measured the old widths (30 px)
+        page.evaluate("() => new Promise(r => requestAnimationFrame(() => r()))")
         assert _boxes(page)["hscroll"] <= 0, w
     assert page.errors == [], page.errors
 
