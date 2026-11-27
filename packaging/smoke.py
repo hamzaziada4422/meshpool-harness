@@ -8,6 +8,8 @@ Checks what a user would hit first, with no network and no paid calls:
   3. Word and PDF files can be made,
   3b. the programs and packages the skills rely on work from the app alone: ffmpeg, pandoc, speech to text (the bundled
       model, offline), a notebook run with the bundled kernel, a chart, HEIC support,
+  3c. browser use: the app's own Chromium starts hidden (it ships without the headless shell) and the browser tool
+      opens, reads, types into, clicks and screenshots a page served on 127.0.0.1; the look review's browser renders it,
   4. the app's server starts, and a Meshpool Code chat gets an answer from a stand-in model (testkit/mock_llm.py).
 Exits non-zero on the first failure, so the release is not published.
 """
@@ -109,6 +111,86 @@ def bundled_media(proj: Path):
     step("notebook, chart and HEIC support work")
 
 
+_PAGE = b"""<!doctype html><html><head><meta charset=utf-8><title>Smoke page</title></head><body>
+<h1>Browser smoke</h1><label>Name <input id=name aria-label=Name></label>
+<button onclick="document.getElementById('out').textContent = 'Hello ' + document.getElementById('name').value">Greet</button>
+<p id=out>nobody yet</p></body></html>"""
+
+
+def browser(proj: Path):
+    """The browser tool and the look review start the app's own Chromium, hidden, and work a local page. Offline: the
+    page is served on 127.0.0.1. The app ships the full Chromium only (no headless shell), so this fails the release
+    on any system where browser use could not start (v0.0.18 on macOS: it looked for chromium_headless_shell)."""
+    import http.server
+    import threading
+    from meshpool_harness import browser_use as BU
+    from meshpool_harness import bundled
+    step("browser use: the app's own Chromium, hidden, on a local page")
+    why = bundled.browser_needs_newer_macos()
+    if why:
+        step(f"browser use skipped: {why}")
+        return
+    exe = BU.find_playwright_chromium()
+    if bundled.packaged():
+        own = bundled.browsers_dir().resolve()
+        if not exe or own not in Path(exe).resolve().parents:
+            raise SystemExit(f"smoke: FAILED, the app's own Chromium is not found in {own} (found {exe!r})")
+        if list(own.glob("chromium_headless_shell-*")):
+            raise SystemExit("smoke: FAILED, the headless shell is in the app; it is meant to be left out (--no-shell)")
+
+    class Page(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(_PAGE)))
+            self.end_headers()
+            self.wfile.write(_PAGE)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Page)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/"
+    os.environ["MH_BROWSER_HEADLESS"] = "1"
+    from meshpool_harness.agent import browser_mcp_server as BM
+    try:
+        snap = BM.browser_open(url)
+        refs = dict(re.findall(r'\[(e\d+)\] (?:input|textbox|button) "(Name|Greet)"', snap))
+        refs = {v: k for k, v in refs.items()}
+        if "Browser smoke" not in snap or "Name" not in refs or "Greet" not in refs:
+            raise SystemExit(f"smoke: FAILED, the browser tool did not read the page: {snap[:400]!r}")
+        BM.browser_type(refs["Name"], "meshpool")
+        after = BM.browser_click(refs["Greet"])
+        if "Hello meshpool" not in after and "Hello meshpool" not in BM.browser_snapshot():
+            raise SystemExit(f"smoke: FAILED, typing and clicking in the browser did not work: {after[:400]!r}")
+        shot = BM.browser_screenshot()
+        if not any(isinstance(p, dict) and p.get("type") == "image" for p in shot):
+            raise SystemExit(f"smoke: FAILED, the browser took no screenshot: {str(shot)[:200]!r}")
+        used = dict(BU.LAST_LAUNCH)
+        step(f"browser tool opened, typed, clicked and took a screenshot ({used})")
+    finally:
+        try:
+            BM.browser_close()
+        except Exception:  # noqa: BLE001
+            pass
+    if bundled.packaged() and Path(used.get("executable_path", "")).resolve() != Path(exe).resolve():
+        raise SystemExit(f"smoke: FAILED, the browser tool started {used}, not the app's own Chromium {exe}")
+    # the look review and page previews (review_interact.launch_browser, ui_audit) start it the same way
+    from playwright.sync_api import sync_playwright
+    from meshpool_harness.review_interact import launch_browser
+    with sync_playwright() as pw:
+        b = launch_browser(pw)
+        try:
+            pg = b.new_page()
+            pg.goto(url)
+            if pg.inner_text("h1") != "Browser smoke":
+                raise SystemExit("smoke: FAILED, the look review's browser did not render the page")
+        finally:
+            b.close()
+    srv.shutdown()
+    step("look review browser rendered the page")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--app", required=True, help="the built app's code folder (holds meshpool_harness)")
@@ -154,6 +236,7 @@ def main():
             raise SystemExit(f"smoke: FAILED, {name}: {out}")
 
     bundled_media(proj)
+    browser(proj)
 
     step("kept LibreOffice session")
     # One LibreOffice for many conversions (meshpool_harness/lo_session.py). It needs LibreOffice's own Python with

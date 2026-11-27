@@ -498,17 +498,11 @@ def apply_choices(findings: list, steps: list, request: str) -> tuple:
 
 
 def _launch(pw):
-    """The headless Chromium meshpool already uses (ui_audit, previews): Playwright's own, else the newest one a
-    Playwright install left on this computer. Never the user's own browser. It resolves no host name but localhost."""
-    from meshpool_harness.review_interact import LAUNCH_ARGS
-    try:
-        return pw.chromium.launch(headless=True, args=LAUNCH_ARGS)
-    except Exception:  # noqa: BLE001
-        from meshpool_harness import browser_use as BU
-        path = os.environ.get("MH_TEST_CHROMIUM") or BU.find_playwright_chromium()
-        if not path:
-            raise
-        return pw.chromium.launch(headless=True, executable_path=path, args=LAUNCH_ARGS)
+    """The headless Chromium meshpool uses everywhere (browser_use.launch_chromium: the app's own, else one a
+    Playwright install left on this computer, never the headless shell). Never the user's own browser. It resolves no
+    host name but localhost."""
+    from meshpool_harness.review_interact import launch_browser
+    return launch_browser(pw)
 
 
 def _secs(name: str, default: float) -> float:

@@ -108,36 +108,153 @@ def find_installed(platform: str | None = None, env: dict | None = None, exists=
     return out
 
 
-def find_playwright_chromium(platform: str | None = None, env: dict | None = None, home: str | None = None,
-                             glob=None) -> str:
-    """The newest Chromium that a Playwright install already left on this computer ("" when none). The Python package
-    wants one exact revision, so a computer that has another revision (a container image, another project's cache)
-    would download a second copy; this finds the one that is there. Arguments exist for tests with fake folders."""
-    import glob as _glob
-    glob = glob or _glob.glob
+# ---------- meshpool's own Chromium ------------------------------------------------------------------------------------
+# Where the full Chromium sits inside a Playwright browsers folder. Playwright 1.49 and later download Chrome for Testing
+# (chrome-mac-arm64 or chrome-mac-x64/Google Chrome for Testing.app, chrome-win64, chrome-linux64, chrome-linux-arm64),
+# older ones Chromium (chrome-mac/Chromium.app, chrome-win, chrome-linux). Both are matched. Only the full browser: the
+# app ships no headless shell (packaging/build_all.py installs with --no-shell), and the full one runs headless too.
+CHROMIUM_PROGRAMS = {
+    "mac": ("chromium-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+            "chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium"),
+    "win": ("chromium-*/chrome-win*/chrome.exe",),
+    "linux": ("chromium-*/chrome-linux*/chrome",),
+}
+
+
+def _system(platform: str) -> str:
+    return "mac" if platform == "darwin" else "win" if platform.startswith("win") else "linux"
+
+
+def playwright_revision() -> str:
+    """The Chromium revision the installed playwright package was made for ("" when unknown). Read from its
+    browsers.json, without importing playwright."""
+    global _REVISION
+    if _REVISION is None:
+        _REVISION = ""
+        try:
+            import importlib.util
+            spec = importlib.util.find_spec("playwright")
+            if spec and spec.origin:
+                f = os.path.join(os.path.dirname(spec.origin), "driver", "package", "browsers.json")
+                with open(f, encoding="utf-8") as fh:
+                    data = json.load(fh)
+                _REVISION = next((str(b.get("revision", "")) for b in data.get("browsers", [])
+                                  if b.get("name") == "chromium"), "")
+        except Exception:  # noqa: BLE001
+            _REVISION = ""
+    return _REVISION
+
+
+_REVISION: str | None = None
+
+
+def _bundled_browsers() -> str:
+    """The app's own browsers folder (app/vendor/browsers) in the packaged app, else ""."""
+    try:
+        from meshpool_harness import bundled
+        return str(bundled.browsers_dir()) if bundled.packaged() else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def chromium_roots(platform: str | None = None, env: dict | None = None, home: str | None = None,
+                   bundled: str | None = None) -> list[str]:
+    """The folders searched for a Chromium, in order: the one inside the app, PLAYWRIGHT_BROWSERS_PATH, then the
+    user's own Playwright cache (and, on Linux, the usual container folders)."""
     platform = platform or sys.platform
     env = os.environ if env is None else env
     home = home or os.path.expanduser("~")
-    roots = []
+    roots = [bundled if bundled is not None else _bundled_browsers()]
     if env.get("PLAYWRIGHT_BROWSERS_PATH") and env["PLAYWRIGHT_BROWSERS_PATH"] != "0":
         roots.append(env["PLAYWRIGHT_BROWSERS_PATH"])
-    if platform == "darwin":
+    sysname = _system(platform)
+    if sysname == "mac":
         roots.append(posixpath.join(home, "Library", "Caches", "ms-playwright"))
-        pats = ["chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium"]
-    elif platform.startswith("win"):
+    elif sysname == "win":
         if env.get("LOCALAPPDATA"):
             roots.append(ntpath.join(env["LOCALAPPDATA"], "ms-playwright"))
-        pats = ["chromium-*/chrome-win*/chrome.exe"]
     else:
+        if env.get("XDG_CACHE_HOME"):
+            roots.append(posixpath.join(env["XDG_CACHE_HOME"], "ms-playwright"))
         roots += [posixpath.join(home, ".cache", "ms-playwright"), "/opt/pw-browsers", "/ms-playwright"]
-        pats = ["chromium-*/chrome-linux*/chrome"]
+    return list(dict.fromkeys(r for r in roots if r))
+
+
+def find_chromium_in(root: str, platform: str | None = None, glob=None) -> str:
+    """The full Chromium inside one Playwright browsers folder ("" when none): the revision the playwright package
+    wants when it is there, else the newest."""
+    import glob as _glob
+    glob = glob or _glob.glob
+    want = playwright_revision()
     hits = []
-    for r in roots:
-        for pat in pats:
-            for path in glob(os.path.join(r, pat)):
-                m = re.search(r"chromium-(\d+)", path)
-                hits.append((int(m.group(1)) if m else 0, path))
-    return max(hits)[1] if hits else ""
+    for pat in CHROMIUM_PROGRAMS[_system(platform or sys.platform)]:
+        for path in glob(os.path.join(root, pat)):
+            revs = re.findall(r"chromium-(\d+)", path.replace("\\", "/"))
+            rev = revs[-1] if revs else "0"
+            hits.append((rev == want, int(rev), path))
+    return max(hits)[2] if hits else ""
+
+
+def chromium_programs(platform: str | None = None, env: dict | None = None, home: str | None = None, glob=None,
+                      bundled: str | None = None) -> list[str]:
+    """Every full Chromium found, best first: one per folder of chromium_roots, in that order."""
+    out = []
+    for r in chromium_roots(platform, env, home, bundled):
+        hit = find_chromium_in(r, platform, glob)
+        if hit and hit not in out:
+            out.append(hit)
+    return out
+
+
+def find_playwright_chromium(platform: str | None = None, env: dict | None = None, home: str | None = None,
+                             glob=None, bundled: str | None = None) -> str:
+    """The full Chromium to use ("" when none): the app's own first, then one a Playwright install left on this
+    computer (any revision: the Python package wants one exact revision, so a computer with another one would
+    otherwise download a second copy). Arguments exist for tests with fake folders."""
+    hits = chromium_programs(platform, env, home, glob, bundled)
+    return hits[0] if hits else ""
+
+
+def chromium_launch_options(env: dict | None = None) -> list[dict]:
+    """How to start Chromium, best first, as keyword arguments for Playwright's launch or launch_persistent_context.
+    Every one is the full browser, never Playwright's separate headless shell, which the app does not ship: a program
+    that was found is started by its path (with headless=True Playwright runs it in Chromium's own headless mode), and
+    last comes channel "chromium", Playwright's own full build of its revision (when that is missing too, the error
+    says "Executable doesn't exist", which is what starts a download in a source install). MH_CHROMIUM_PATH names a
+    program to use first; MH_TEST_CHROMIUM one to try after those found."""
+    env = os.environ if env is None else env
+    paths = [env.get("MH_CHROMIUM_PATH") or "", *chromium_programs(env=env), env.get("MH_TEST_CHROMIUM") or ""]
+    out = [{"executable_path": p} for p in dict.fromkeys(p for p in paths if p and os.path.isfile(p))]
+    return out + [{"channel": "chromium"}]
+
+
+LAST_LAUNCH: dict = {}
+
+
+def launch_chromium(pw, headless: bool = True, user_data_dir=None, **kw):
+    """Start meshpool's Chromium with a Playwright instance (pw): a Browser, or a persistent context when user_data_dir
+    is given. Every launch in the app goes through here, so all of them find the same Chromium the same way and none
+    needs the headless shell. Each option of chromium_launch_options is tried in turn; the error raised is the one of
+    Playwright's own build (or the last one), so "Executable doesn't exist" still reaches the caller."""
+    last = None
+    for opts in chromium_launch_options():
+        try:
+            if user_data_dir is not None:
+                got = pw.chromium.launch_persistent_context(str(user_data_dir), headless=headless, **opts, **kw)
+            else:
+                got = pw.chromium.launch(headless=headless, **opts, **kw)
+            LAST_LAUNCH.clear()
+            LAST_LAUNCH.update(opts)                 # which one started (packaging/smoke.py checks it is the app's own)
+            return got
+        except Exception as e:  # noqa: BLE001 - the next one may work (missing libraries, another revision)
+            last = e
+    if last is not None and "xecutable doesn't exist" not in str(last) and "channel" in str(last).lower():
+        # a Playwright older than the "chromium" channel name: its default is the full browser
+        LAST_LAUNCH.clear()
+        if user_data_dir is not None:
+            return pw.chromium.launch_persistent_context(str(user_data_dir), headless=headless, **kw)
+        return pw.chromium.launch(headless=headless, **kw)
+    raise last
 
 
 def pick_installed(**kw) -> dict | None:

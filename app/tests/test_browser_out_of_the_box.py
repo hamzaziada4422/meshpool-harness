@@ -89,14 +89,20 @@ def test_the_packaged_app_never_installs_anything(monkeypatch):
 
 
 def test_an_existing_chromium_is_used_before_any_download(monkeypatch, tmp_path):
+    exe = tmp_path / "pw" / "chromium-1" / "chrome-linux" / "chrome"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("x")
+    monkeypatch.setattr(BU, "chromium_programs", lambda *a, **k: [str(exe)])
+    monkeypatch.delenv("MH_CHROMIUM_PATH", raising=False)
+    monkeypatch.delenv("MH_BROWSER_CHANNEL", raising=False)
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
+    seen = []
     b = BM.Browser()
-    monkeypatch.setattr(BU, "find_playwright_chromium", lambda *a, **k: "/opt/pw/chromium-1/chrome")
-    seen = {}
-    b._launch = lambda prof, **kw: seen.update(kw) or "ctx"
-    assert b._use_cached_chromium(True) is True
-    assert seen["executable_path"] == "/opt/pw/chromium-1/chrome" and b.ctx == "ctx"
-    monkeypatch.setattr(BU, "find_playwright_chromium", lambda *a, **k: "")
-    assert BM.Browser()._use_cached_chromium(True) is False
+    b.pw = types.SimpleNamespace(chromium=types.SimpleNamespace(
+        launch_persistent_context=lambda prof, **kw: seen.append(kw) or types.SimpleNamespace()))
+    monkeypatch.setattr(b, "_install_chromium", lambda: pytest.fail("downloaded although a Chromium is here"))
+    b._launch_meshpool(True, own=False)
+    assert seen[0]["executable_path"] == str(exe) and seen[0]["headless"] is True
 
 
 def test_the_settings_check_says_it_sets_itself_up(monkeypatch):

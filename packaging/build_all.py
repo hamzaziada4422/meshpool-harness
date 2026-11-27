@@ -167,9 +167,10 @@ def chromium(app_dir: Path, plat: str):
     """Playwright's Chromium into <app>/vendor/browsers, so browser use never downloads an engine nor uses the customer's
     Chrome or Edge. Browser use opens a visible window (sign-ins), so it is the full Chromium; `--no-shell` leaves out the
     headless shell that Playwright installs next to it by default (about 280 MB), and bundled_tools.prune_chromium drops
-    the other languages and Widevine. Uses the target runtime's own playwright package when this host can run it (so
-    the revision matches the bundled package), else the build machine's. NOT YET RUN on a Mac or Windows build host:
-    check the first release's browser use."""
+    the other languages and Widevine. Without the shell, every launch in the app starts this full Chromium, hidden when
+    it should be (browser_use.launch_chromium); packaging/smoke.py starts it from the built app on every system before
+    a release is published. Uses the target runtime's own playwright package when this host can run it (so the revision
+    matches the bundled package), else the build machine's."""
     import subprocess
     dest = app_dir / "vendor" / "browsers"
     exe = RT[plat] / ("python.exe" if plat == "win" else "bin/python3")

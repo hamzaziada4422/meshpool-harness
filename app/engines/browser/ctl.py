@@ -225,15 +225,9 @@ def _serve(outdir: str | None = None):
     port = server.server_address[1]
     from playwright.sync_api import sync_playwright
     pw = sync_playwright().start()
-    kw = {"headless": os.environ.get("MH_HEADLESS", "1") != "0", "args": ["--no-sandbox"]}
-    exe = os.environ.get("MH_CHROMIUM_PATH") or next((p for p in ("/opt/pw-browsers/chromium-1243/chrome-linux64/chrome",)
-                                                      if os.path.exists(p)), None)
-    try:
-        browser = pw.chromium.launch(**kw)
-    except Exception:
-        if not exe:
-            raise
-        browser = pw.chromium.launch(executable_path=exe, **kw)   # preinstalled Chromium when versions differ
+    # meshpool's own Chromium, found and started the way every launch in the app does (MH_CHROMIUM_PATH first)
+    from meshpool_harness import browser_use as BU
+    browser = BU.launch_chromium(pw, headless=os.environ.get("MH_HEADLESS", "1") != "0", args=["--no-sandbox"])
     lock = threading.Lock()
     sessions: dict = {}                           # task id -> {"ctx", "page", "state"}: a task's own cookies, page, folder
 

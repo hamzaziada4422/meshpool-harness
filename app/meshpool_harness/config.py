@@ -751,10 +751,15 @@ def system_check() -> list[dict]:
                      "fix": why})
     else:
         from meshpool_harness import browser_use as BU
-        have = bundled.packaged() or bool(BU.find_playwright_chromium())
-        rows.append({"name": "Browser use", "ok": True,
-                     "detail": ("ready" if pw and have else "sets itself up the first time it is used"),
-                     "fix": "To do it now, run: meshpool install-browser"})
+        have = BU.find_playwright_chromium()
+        if bundled.packaged() and not (pw and have):     # the app never downloads one: it ships inside it
+            rows.append({"name": "Browser use", "optional": True, "ok": False,
+                         "detail": "the browser that ships with meshpool is missing",
+                         "fix": "Missing from this install; reinstall meshpool."})
+        else:
+            rows.append({"name": "Browser use", "ok": True,
+                         "detail": (f"ready ({have})" if pw and have else "sets itself up the first time it is used"),
+                         "fix": "To do it now, run: meshpool install-browser"})
     try:
         from meshpool_harness.agent import computer_mcp_server as CU
         st = CU.computer_status()
