@@ -23,6 +23,8 @@ pytest>=8.0               # a Code chat runs the project's tests without install
 truststore>=0.10          # HTTPS trusts the system's certificates (a company proxy's, in the Keychain or the Windows store)
 cryptography>=41          # meshpool office install: the localhost certificate Office loads the panel over (Windows has no openssl)
 tomli>=2.0; python_version < "3.11"
+ptyprocess==0.7.0; sys_platform != "win32"     # the Terminal panel's shell runs in a real pseudo-terminal (ui/pty_term.py)
+pywinpty>=2.0.15; sys_platform == "win32"      # the same on Windows (ConPTY); without either the panel runs one command at a time
 # Built into the app so no skill has to install anything (docs/plan/0.0.11-bundled.md). Pinned on purpose: these are the
 # versions whose macOS builds were read file by file and need macOS 11 at most (packaging/mac/wheel_minos.py,
 # packaging/mac/verified_minos.json; app/tests/test_macos_floor.py holds this list to it). The same packages' newer

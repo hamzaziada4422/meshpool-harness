@@ -2729,8 +2729,153 @@ async function panelFiles(body) {
   const open = S.fsOpen?.root === root ? S.fsOpen.path : (PVX.open && PVX.root === root ? PVX.path : ""); S.fsOpen = null;
   fsTree($("#tree"), root, {open});
 }
+/* ---------- Terminal: a real shell. xterm.js draws it here; a pseudo-terminal runs it on the computer (pty_term.py) ----------
+   One shell per chat and folder. Your keys go straight to it, as in your own terminal: the agent never types here,
+   and its own commands keep their permission and approval rules. The page asks for new output in a loop: the server
+   waits up to half a second for some, so an idle shell costs two requests a second, and one every 2 s while the tab
+   is not on screen. The panel's size decides the shell's columns and rows, also while the panel is dragged wider.
+   Without ptyprocess (Mac, Linux) or pywinpty (Windows), panelTerm keeps the one-command mode. */
+const PTY = {};                 // chat and folder -> {id, term, fit, since, alive, ...}
+let ptyAssetsP = null;
+function ptyAssets() {
+  if (!ptyAssetsP) {
+    document.head.appendChild(Object.assign(document.createElement("link"), {rel: "stylesheet", href: "/ui/vendor/xterm.css"}));
+    const load = src => new Promise((ok, no) => { const s = Object.assign(document.createElement("script"), {src}); s.onload = ok; s.onerror = () => no(new Error("Could not load the terminal. Reload the window.")); document.head.appendChild(s); });
+    ptyAssetsP = load("/ui/vendor/xterm.min.js").then(() => load("/ui/vendor/xterm-addon-fit.min.js")).catch(e => { ptyAssetsP = null; throw e; });
+  }
+  return ptyAssetsP;
+}
+function ptyTheme() {
+  const de = document.documentElement, cs = getComputedStyle(de), v = n => cs.getPropertyValue(n).trim();
+  const dark = de.dataset.theme === "dark" || (de.dataset.theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+  // ANSI colours that read on the panel's own background: darker ones on light, the usual ones on dark
+  const pal = dark ? ["#2e2e32", "#f0716a", "#5fd38d", "#e6c35c", "#6aa8f0", "#c792ea", "#5cc8d6", "#d6d6d8", "#6e6e74", "#ff8f87", "#7ee2a8", "#f2d57e", "#8dbdf5", "#d8aef2", "#7fd9e4", "#ffffff"]
+    : ["#1f1f1f", "#c4271d", "#18794e", "#8a6100", "#1559b0", "#8e3ab8", "#0b7285", "#6a6a6a", "#5c5c5c", "#d93a2f", "#22915f", "#a87900", "#1f6fd0", "#a64fd1", "#138a9e", "#3a3a3a"];
+  const names = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white", "brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite"];
+  const t = {background: v("--surface") || (dark ? "#19191b" : "#ffffff"), foreground: v("--ink") || (dark ? "#ededed" : "#171717"),
+    cursor: v("--ink") || "#171717", cursorAccent: v("--surface") || "#ffffff", selectionBackground: dark ? "#2b4a70" : "#bcd6f5"};
+  names.forEach((n, i) => { t[n] = pal[i]; });
+  return t;
+}
+const ptyShown = st => S.panel === "term" && st.wrap.isConnected && !document.hidden;
+const ptyNap = (st, ms) => new Promise(ok => { const t = setTimeout(ok, ms); st.wake = () => { clearTimeout(t); ok(); }; });
+function ptyFit(st) {
+  cancelAnimationFrame(st.fitR);
+  st.fitR = requestAnimationFrame(() => { if (st.wrap.isConnected && st.wrap.clientWidth > 20 && st.wrap.clientHeight > 20) { try { st.fit.fit(); } catch (e) { /* not measurable yet */ } } });
+}
+function ptyMake(key, root, owner) {
+  const wrap = Object.assign(document.createElement("div"), {className: "pty-wrap"});
+  const mono = getComputedStyle(document.documentElement).getPropertyValue("--mono").trim() || "ui-monospace, monospace";
+  const term = new window.Terminal({fontFamily: mono, fontSize: 13, lineHeight: 1.15, cursorBlink: true, scrollback: 5000, theme: ptyTheme()});
+  const fit = new window.FitAddon.FitAddon(); term.loadAddon(fit);
+  const st = {key, root, owner, wrap, term, fit, id: null, since: 0, alive: false, starting: false, polling: false, opened: false, out: "", sending: false};
+  term.onData(d => ptyInput(st, d));
+  term.onResize(({cols, rows}) => { clearTimeout(st.rzT); st.rzT = setTimeout(() => { if (st.id && st.alive) post(`/api/pty/${st.id}/resize`, {cols, rows}).catch(() => {}); }, 60); });
+  // Windows and Linux: Ctrl+Shift+C copies, Ctrl+Shift+V pastes, and Ctrl+C copies when text is selected (else it
+  // interrupts, as in any terminal). On a Mac, Cmd+C and Cmd+V do it and Ctrl+C always interrupts.
+  term.attachCustomKeyEventHandler(e => {
+    if (isMac || e.type !== "keydown" || !e.ctrlKey || e.altKey) return true;
+    const k = e.key.toLowerCase();
+    if (k === "v" && e.shiftKey) return false;                       // the browser pastes into the terminal
+    if (k === "c" && (e.shiftKey || term.hasSelection())) {
+      const sel = term.getSelection(); if (sel) { try { navigator.clipboard.writeText(sel); } catch (err) { /* no clipboard here */ } }
+      term.clearSelection(); e.preventDefault(); return false;
+    }
+    return true;
+  });
+  return st;
+}
+async function ptyStart(st, fresh) {
+  if (st.starting) return;
+  st.starting = true; ptyBar(st);
+  const d = (st.opened && st.fit.proposeDimensions()) || {};
+  try {
+    const v = await post("/api/pty", {root: st.root, owner: st.owner, shell: store("term_shell") || S.settings?.shells?.default || "", cols: d.cols || st.term.cols, rows: d.rows || st.term.rows, new: !!fresh});
+    if (v.id !== st.id) { if (st.id || fresh) st.term.reset(); st.id = v.id; st.since = 0; }
+    st.alive = !!v.running;
+  } catch (e) {
+    st.term.write(`\r\n\x1b[2m${e.message}\x1b[0m\r\n`);
+  }
+  st.starting = false; ptyBar(st);
+  if (st.alive) ptyPoll(st);
+}
+async function ptyPoll(st) {
+  if (st.polling || !st.id) return;
+  st.polling = true;
+  let fails = 0;
+  try {
+    while (st.id && PTY[st.key] === st) {
+      const id = st.id, vis = ptyShown(st);
+      let r;
+      try { r = await api(`/api/pty/${id}?since=${st.since}&wait=${vis ? 0.5 : 0}`); fails = 0; }
+      catch (e) {
+        const gone = /not found/i.test(e.message);
+        if (gone || ++fails >= 4) { st.alive = false; st.id = null; st.term.write(`\r\n\x1b[2m[${gone ? "This shell was closed." : e.message} Press Enter to start a new one.]\x1b[0m\r\n`); ptyBar(st); return; }
+        await ptyNap(st, 1000 * fails); continue;
+      }
+      if (id !== st.id) continue;                          // a new shell was started meanwhile
+      if (r.data) st.term.write(r.data);
+      st.since = r.next;
+      if (!r.running) {
+        st.alive = false; ptyBar(st);
+        st.term.write(`\r\n\x1b[2m[The shell ended${r.rc ? ` (exit ${r.rc})` : ""}. Press Enter to start a new one.]\x1b[0m\r\n`);
+        return;
+      }
+      if (!vis) await ptyNap(st, 2000);                   // off screen: read every 2 s, so a dev server costs little
+    }
+  } finally { st.polling = false; }
+}
+function ptyInput(st, d) {
+  if (!st.alive) { if (/\r/.test(d) && !st.starting) ptyStart(st, true); return; }
+  st.out += d;
+  if (!st.sending) ptySend(st);
+}
+async function ptySend(st) {
+  st.sending = true;
+  try {
+    while (st.out && st.id && st.alive) {
+      const d = st.out.slice(0, 60000); st.out = st.out.slice(d.length);
+      await post(`/api/pty/${st.id}/input`, {data: d});
+    }
+  } catch (e) { st.out = ""; }
+  finally { st.sending = false; }
+  if (st.wake) st.wake();
+}
+function ptyBar(st) {
+  if (!st.wrap.isConnected) return;
+  const b = $("#ptyStop"), n = $("#ptyNote");
+  if (b) b.hidden = !st.alive;
+  if (n) n.textContent = st.starting ? "Starting..." : st.alive ? "" : "Not running";
+}
+async function ptyStop(st) {
+  if (!st.id) return;
+  try { await post(`/api/pty/${st.id}/stop`); } catch (e) { /* already gone */ }
+  if (st.wake) st.wake();
+}
+function panelPty(body, root) {
+  const owner = S.cur?.id || "", key = owner + "|" + root;
+  const shs = S.settings?.shells?.shells || {}, one = Object.keys(shs).length < 2;      // one shell: its name; else the picker
+  body.innerHTML = `<div class="pty-bar">${one ? `<span class="pty-shell">${esc(Object.values(shs)[0] || "Shell")}</span>` : termShellPicker()}<span class="pty-note" id="ptyNote"></span><span style="flex:1"></span><button class="btn" id="ptyStop" hidden title="End the shell and everything it started">Stop</button></div><div class="pty-host" id="ptyHost" role="region" aria-label="Terminal in ${esc(shortPath(root))}"></div>`;
+  const host = $("#ptyHost");
+  ptyAssets().then(() => {
+    if (!host.isConnected) return;
+    const st = PTY[key] || (PTY[key] = ptyMake(key, root, owner));
+    host.appendChild(st.wrap);
+    if (!st.opened) { st.term.open(st.wrap); st.opened = true; }
+    st.term.options.theme = ptyTheme();
+    if (st.ro) st.ro.disconnect();
+    st.ro = new ResizeObserver(() => ptyFit(st)); st.ro.observe(host);
+    ptyFit(st);
+    $("#ptyStop").onclick = () => ptyStop(st);
+    const sh = $("#tshell"); if (sh) sh.addEventListener("change", async () => { if (st.alive) await ptyStop(st); setTimeout(() => ptyStart(st, true), 300); });
+    ptyBar(st);
+    if (!st.id) ptyStart(st); else { ptyPoll(st); if (st.wake) st.wake(); }
+    requestAnimationFrame(() => st.term.focus());
+  }).catch(e => { if (host.isConnected) host.innerHTML = `<div class="pnote">${esc(e.message)}</div>`; });
+}
 function panelTerm(body) {
   const root = curRoot(); if (!root) { body.innerHTML = `<div class="pnote">Choose a project folder first.</div>`; return; }
+  if (S.settings?.terminal?.pty) return panelPty(body, root);       // a real shell; else one command at a time, below
   S.term = S.term && S.term.root === root ? S.term : {root, html: "", hist: [], hi: 0, id: null, running: false};
   body.innerHTML = `<pre class="term-out" id="tout">${S.term.html || `<span class="rc">Commands run in ${esc(shortPath(root))}</span>\n`}</pre><div class="term-in">${termShellPicker()}<input id="tin" placeholder="Run a command" spellcheck="false" autocomplete="off"><button class="btn" id="tstop" ${S.term.running ? "" : "hidden"}>Stop</button></div>`;
   const out = $("#tout"), inp = $("#tin"); out.scrollTop = out.scrollHeight; inp.focus();
@@ -2750,7 +2895,7 @@ function panelTerm(body) {
     put(`<span class="cmd">$ ${esc(cmd)}</span>\n`);
     const stopBtn = v => { const b = shown() && $("#tstop"); if (b) b.hidden = !v; };
     try {
-      const t = await post("/api/term", {root, command: cmd, shell: store("term_shell") || S.settings?.shells?.default || ""}); term.id = t.id; term.running = true; stopBtn(true);
+      const t = await post("/api/term", {root, command: cmd, shell: store("term_shell") || S.settings?.shells?.default || "", owner: S.cur?.id || ""}); term.id = t.id; term.running = true; stopBtn(true);
       let since = 0, fails = 0;
       const tick = async () => {
         let r;

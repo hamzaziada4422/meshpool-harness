@@ -2918,9 +2918,17 @@ class Session:
                 "events": evs, "total": since + len(raw) if since <= n else n,
                 "mcp": self.mcp.status() if self.mcp else None, "trust": _trust_note(self.workdir)}
 
-    def close(self):
+    def close(self, end_terminals: bool = True):
+        """The chat is closed: it stops, and its MCP servers, its agent and the shells and commands it ran in the
+        Terminal panel end. end_terminals=False: only this copy of a chat that stays open is dropped."""
         self._closed = True                           # an MCP start still running closes its servers when it finishes
         self.stop()
+        if end_terminals:
+            try:
+                from meshpool_harness.ui import workbench as W
+                W.term_stop_owner(getattr(self, "id", ""))
+            except Exception:  # noqa: BLE001 - a terminal that is already gone is fine
+                pass
         _release(getattr(self, "id", ""))
         if self.mcp:
             self.mcp.close()
@@ -3230,9 +3238,11 @@ def _reap_once(idle_s: float) -> list:
     MCP servers and harness processes end; opening the thread again resumes it from its saved state."""
     now, closed = time.time(), []
     with LOCK:
+        from meshpool_harness.ui import pty_term as PT
         idle = [(sid, s) for sid, s in LIVE.items()
                 if s.state not in ("working", "waiting", "starting") and not s.pendings and not s.queue
-                and now - getattr(s, "touched", now) > idle_s]
+                and now - getattr(s, "touched", now) > idle_s
+                and not PT.owns_live(sid)]          # a shell left open (a dev server in it) keeps its chat open
         for sid, _ in idle:
             LIVE.pop(sid, None)
     for sid, s in idle:
@@ -3341,7 +3351,7 @@ def get(sid: str, no_mcp: bool = False) -> Session:
         with LOCK:
             if LIVE.get(sid) is s:
                 del LIVE[sid]
-        s.close()
+        s.close(end_terminals=False)             # the chat itself stays open: its shells too
         s = None
     if s:
         return s
@@ -3368,7 +3378,7 @@ def get(sid: str, no_mcp: bool = False) -> Session:
             s.close()
             raise KeyError(sid)
         if live is not s:
-            s.close()
+            s.close(end_terminals=False)         # a second copy of an open chat
             _claim(sid)
         return live
 

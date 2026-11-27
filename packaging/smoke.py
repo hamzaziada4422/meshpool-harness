@@ -12,6 +12,8 @@ Checks what a user would hit first, with no network and no paid calls:
       model, offline), a notebook run with the bundled kernel, a chart, HEIC support,
   3c. browser use: the app's own Chromium starts hidden (it ships without the headless shell) and the browser tool
       opens, reads, types into, clicks and screenshots a page served on 127.0.0.1; the look review's browser renders it,
+  3d. the Terminal panel's shell: a pseudo-terminal (ptyprocess on Mac and Linux, pywinpty on Windows) starts the
+      shell, a marker it echoes is read back, a resize is taken, and Stop ends the shell and its children,
   4. the app's server starts, and a Meshpool Code chat gets an answer from a stand-in model (testkit/mock_llm.py).
 Exits non-zero on the first failure, so the release is not published.
 """
@@ -255,6 +257,61 @@ def browser(proj: Path):
     step("look review browser rendered the page")
 
 
+ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>]")
+
+
+def terminal_pty(proj: Path):
+    """The Terminal panel's shell, through the app's own code (ui/pty_term.py), as the panel starts it. No program
+    beyond the shell is needed: the marker comes from the shell's own arithmetic, so seeing it proves the shell ran
+    the line (the echo of what was typed does not contain it). The Windows and Mac paths have not run on a developer's
+    machine: every wait is bounded and every failure says what was read."""
+    step("terminal (pseudo-terminal)")
+    from meshpool_harness.ui import pty_term as PT
+    kind = PT.backend()
+    want = "pywinpty" if os.name == "nt" else "ptyprocess"
+    if kind != want:
+        raise SystemExit(f"smoke: FAILED, the terminal library is missing ({want}): the panel would fall back to one "
+                         "command at a time")
+    p = PT.Pty(str(proj), "smoke", "powershell" if os.name == "nt" else "", 100, 30)
+    seen = {"at": 0, "text": ""}
+
+    def plain() -> str:
+        return ANSI.sub("", seen["text"])
+
+    def read_until(pred, secs: float) -> bool:
+        end = time.time() + secs
+        while time.time() < end:
+            v = p.view(seen["at"], 0.5)
+            seen["at"] = v["next"]
+            seen["text"] += v["data"]
+            if pred(plain()) or pred(re.sub(r"\s+", "", plain())):    # a redraw may break a line anywhere
+                return True
+            if not v["running"]:
+                return False
+        return False
+    pid = p.pid
+    try:
+        if not read_until(lambda t: t.strip() != "", 45):       # the first prompt (PowerShell can take a while)
+            raise SystemExit(f"smoke: FAILED, the terminal's shell printed nothing in 45 s: {seen['text'][-300:]!r}")
+        line = 'Write-Output ("MP_SMOKE_" + (40 + 2))' if os.name == "nt" else "echo MP_SMOKE_$((40 + 2))"
+        p.write(line + "\r")
+        if not read_until(lambda t: "MP_SMOKE_42" in t, 45):
+            raise SystemExit(f"smoke: FAILED, the terminal did not echo its marker: {plain()[-400:]!r}")
+        p.resize(120, 40)
+        if os.name != "nt":                                     # stty comes with every Mac and Linux system
+            p.write("stty size\r")
+            if not read_until(lambda t: "40 120" in t, 20):
+                raise SystemExit(f"smoke: FAILED, the terminal did not take its new size: {plain()[-300:]!r}")
+    finally:
+        p.close()
+    end = time.time() + 15
+    while time.time() < end and PT._alive(pid):
+        time.sleep(0.2)
+    if PT._alive(pid):
+        raise SystemExit(f"smoke: FAILED, Stop left the terminal's shell running (pid {pid})")
+    step(f"terminal: {kind} ran the shell, read back its marker and ended it")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--app", required=True, help="the built app's code folder (holds meshpool_harness)")
@@ -269,7 +326,8 @@ def main():
     step("imports")
     import importlib
     for mod in ("meshpool_harness", "pptx", "docx", "openpyxl", "reportlab", "pypdf", "pypdfium2", "pdfminer",
-                "PIL", "lxml", "yaml", "pandas", "playwright"):
+                "PIL", "lxml", "yaml", "pandas", "playwright",
+                "winpty" if os.name == "nt" else "ptyprocess"):
         importlib.import_module(mod)
     import meshpool_harness as MH
     if MH.__version__ != a.version:
@@ -302,6 +360,7 @@ def main():
     bundled_programs()
     bundled_media(proj)
     browser(proj)
+    terminal_pty(proj)
 
     step("kept LibreOffice session")
     # One LibreOffice for many conversions (meshpool_harness/lo_session.py). It needs LibreOffice's own Python with
