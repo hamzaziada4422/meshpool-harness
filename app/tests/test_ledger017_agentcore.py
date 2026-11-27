@@ -243,17 +243,14 @@ def test_pa_agent_08_long_non_ascii_paste_is_not_corrupted():
 
 
 def test_pa_agent_09_windows_multiline_paste_arrives_as_one_paste(monkeypatch):
-    """PA-agent-09: on Windows a pasted 3-line block (a burst msvcrt reports with kbhit) is one ("paste", text), not
-    three Enter presses; a single key is still a key. msvcrt is faked: this is not run on Windows."""
-    from meshpool_harness.agent import tui_input as K
-    burst = list("one\r\ntwo\r\nthree")
-    fake = types.SimpleNamespace(getwch=lambda: burst.pop(0), kbhit=lambda: bool(burst))
-    monkeypatch.setitem(sys.modules, "msvcrt", fake)
-    keys = K.RawKeys.__new__(K.RawKeys)
-    keys.pending, keys.win, keys._dec = [], True, codecs.getincrementaldecoder("utf-8")()
-    assert keys.read() == ("paste", "one\ntwo\nthree")
-    burst[:] = ["\r"]
-    assert keys.read() == "enter"
+    """PA-agent-09: on Windows a pasted 3-line block (one burst of key records) is one ("paste", text), not three
+    Enter presses; a single key is still a key. The console is faked (tests/win_console.py): not run on Windows."""
+    from tests import win_console as WC
+    r, k = WC.raw_keys(monkeypatch)
+    burst = [WC.key(c, 0x0D if c == "\r" else 0x41) for c in "one\rtwo\rthree"]
+    with r:
+        assert WC.read_all(r, k, [burst]) == [("paste", "one\ntwo\nthree")]
+        assert WC.read_all(r, k, [[WC.key("\r", 0x0D)]]) == ["enter"]
 
 
 # ================================================================================================ PA-agent-11/12

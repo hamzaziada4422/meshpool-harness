@@ -39,6 +39,7 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | Selawik font, Regular and Bold, compiled unmodified from source (`app/engines/forge/fonts`): measures slides set in Segoe UI | SIL Open Font License 1.1 (`Selawik-LICENSE.txt` beside it) | https://github.com/microsoft/Selawik |
 | Mermaid 11.17.2 (`app/meshpool_harness/ui/vendor/mermaid.min.js`, `LICENSE-mermaid.txt`): diagrams in chat | MIT | https://mermaid.js.org |
 | KaTeX 0.16.11 (`app/meshpool_harness/ui/vendor/katex.min.js`, CSS and fonts, `LICENSE-katex.txt`): maths in chat | MIT | https://katex.org |
+| xterm.js 6.0.0 and its fit addon 0.11.0 (`app/meshpool_harness/ui/vendor/xterm.min.js`, `xterm.css`, `xterm-addon-fit.min.js`, `LICENSE-xterm.txt`, `LICENSE-xterm-addon-fit.txt`; npm @xterm/xterm and @xterm/addon-fit, unmodified but for the source map line): the Terminal panel | MIT | https://xtermjs.org |
 | 7-Zip 25.01 (`7zr.exe`, inside the Windows installer: unpacks the program files appended to it) | LGPL-2.1-or-later (the unRAR code is not used) | https://www.7-zip.org |
 | Taste Skill, method for building and reviewing user interfaces (`app/defaults/skills/build-ui`, `ui-review`; adapted, not copied), Copyright (c) 2026 Leonxlnx | MIT | https://github.com/Leonxlnx/taste-skill |
 | Anthropic knowledge-work plugins: finance, legal, sales and customer-support skills (`app/defaults/skills`) | Apache-2.0 | https://github.com/anthropics/knowledge-work-plugins |
@@ -126,7 +127,7 @@ names them and how they were worked out; `app/tests/test_fix_pass2_open_engines.
 | playwright | 1.65.1 | Apache-2.0 |
 | pluggy (a pytest dependency) | 1.7.0 | MIT |
 | portalocker | 4.4.2 | BSD-3-Clause |
-| prompt_toolkit | 3.0.52 | BSD License |
+| prompt_toolkit | 3.0.53 | BSD License |
 | protobuf | 7.36.2 (Mac: 6.33.5) | 3-Clause BSD License |
 | proxy_tools | 0.1.0 | MIT License |
 | psutil | 7.2.2 | BSD-3-Clause |

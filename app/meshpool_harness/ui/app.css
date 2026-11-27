@@ -389,6 +389,13 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .term-out{flex:1;margin:0;padding:12px;font:var(--fs-xs)/1.5 var(--mono);white-space:pre-wrap;word-break:break-all;background:var(--surface);overflow:auto}
 .term-out .cmd{color:var(--pool-text)}
 .term-out .rc{color:var(--ink-3)}
+.pty-bar{display:flex;gap:8px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--line-2);min-height:40px}
+.pty-note{color:var(--ink-3);font-size:var(--fs-xs)}
+.pty-host{flex:1;position:relative;min-height:160px;background:var(--surface)}
+.pty-wrap{position:absolute;inset:8px 4px 4px 12px}
+.pty-shell{font:var(--fs-xs) var(--mono);color:var(--ink-2)}
+.pty-wrap .xterm{height:100%}
+.pty-wrap .xterm .xterm-viewport{background-color:var(--surface)}
 .term-in{display:flex;gap:8px;padding:8px 12px;border-top:1px solid var(--line-2);align-items:center}
 .term-in input{flex:1;border:1px solid var(--line-3);border-radius:var(--r-s);padding:8px 12px;font:var(--fs-s) var(--mono);background:var(--surface)}
 #tshell{border:1px solid var(--line-3);border-radius:var(--r-s);background:var(--surface);color:var(--ink-2);font-size:var(--fs-xs);padding:4px}

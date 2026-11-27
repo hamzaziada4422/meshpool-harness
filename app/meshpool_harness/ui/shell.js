@@ -125,6 +125,7 @@ function globalKeys(e) {
     if (!open && !typing && e.target?.id !== "input" && cfg().busy) { e.preventDefault(); stopNow(); }
   }
   if (!m) return;
+  if (!isMac && e.target?.closest?.(".xterm")) return;      // Ctrl+K, Ctrl+U, Ctrl+E... belong to the shell in the Terminal tab
   const k = e.key.toLowerCase();
   if (k === "n" && !e.shiftKey) { e.preventDefault(); newThread(); }
   else if (k === "k") { e.preventDefault(); openSearch(); }

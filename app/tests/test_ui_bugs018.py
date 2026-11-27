@@ -228,9 +228,10 @@ def test_a_step_cut_short_by_stop_is_not_counted_as_failed(page):
 # ---------------------------------------------------------------------------------------------------- UI-05
 def test_terminal_output_keeps_coming_after_a_tab_switch(page):
     """UI-05: run a command in the Terminal tab, look at Files, come back. The command wrote into the old, detached
-    terminal, so nothing it printed after the switch showed, and its Stop button was gone while it still ran."""
+    terminal, so nothing it printed after the switch showed, and its Stop button was gone while it still ran. This is
+    the one-command mode, the panel's fallback without a PTY library (test_ui_terminal_pty.py has the real shell)."""
     _code_chat(page, page.app["work"])
-    page.evaluate("() => togglePanel('term', true)")
+    page.evaluate("() => { S.settings.terminal = {pty: null}; togglePanel('term', true); }")
     page.wait_for_selector("#tin")
     page.fill("#tin", "for i in 1 2 3 4 5; do echo tick$i; sleep 0.4; done")
     page.press("#tin", "Enter")
@@ -247,9 +248,10 @@ def test_terminal_output_keeps_coming_after_a_tab_switch(page):
 # ---------------------------------------------------------------------------------------------------- UI-06
 def test_a_long_terminal_command_is_polled_slowly_once_its_panel_is_closed(page):
     """UI-06: a command that keeps running (a dev server) was read four times a second for as long as it ran, with
-    the panel closed and the chat left. With its output off screen it is read every 2 s."""
+    the panel closed and the chat left. With its output off screen it is read every 2 s. (The one-command mode; the
+    real shell's polling has its own test in test_ui_terminal_pty.py.)"""
     _code_chat(page, page.app["work"])
-    page.evaluate("() => togglePanel('term', true)")
+    page.evaluate("() => { S.settings.terminal = {pty: null}; togglePanel('term', true); }")
     page.wait_for_selector("#tin")
     page.fill("#tin", "sleep 6")
     page.press("#tin", "Enter")

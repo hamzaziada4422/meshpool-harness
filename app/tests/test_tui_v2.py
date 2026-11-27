@@ -387,3 +387,37 @@ def test_ctrl_c_while_the_prompt_redraws_is_not_a_crash(tmp_path):
     t.read_input = read_input
     sess.loop()                                  # returns at the end of input: no exception
     assert "Model" in S.screen(out).text()       # the /status after the Ctrl+C still ran
+
+
+# ---- 0.0.20: keys come through prompt_toolkit (create_pipe_input and its parser), the line is a prompt_toolkit Buffer
+def test_keys_go_through_prompt_toolkit_pipe_input():
+    from prompt_toolkit.input.base import PipeInput
+    ks = FakeKeys("a")
+    assert ks.read() == "a" and isinstance(ks._pipe, PipeInput)
+    ks.close()
+
+
+def test_utf8_split_across_pipe_writes_and_esc_and_ctrl_c():
+    t, out, clk = S.make_terminal()
+    word = "é漢" * 5000                                    # over 8 KB: the pipe gets it in pieces, mid-character
+    t.keys_factory = lambda: FakeKeys(word, "\r")
+    assert t.read_input() == word
+    t.keys_factory = lambda: FakeKeys("drop this", "\x1b", "keep", "\r")     # Esc clears the line
+    assert t.read_input() == "keep"
+    t.keys_factory = lambda: FakeKeys("x", "\x03", "\x03", "\x03")           # Ctrl+C clears, then twice leaves
+    assert t.read_input() is None
+
+
+def test_multiline_moves_up_and_down_before_history():
+    t, out, clk = S.make_terminal()
+    t.history = ["older"]
+    t.keys_factory = lambda: FakeKeys("abc\x1b\rde", "\x1b[A", "X", "\x1b[B", "Y", "\r")
+    assert t.read_input() == "abXc\ndeY"
+    t.keys_factory = lambda: FakeKeys("\x1b[A", "\r")                       # one line: Up walks the history
+    assert t.read_input() == "abXc\ndeY"
+
+
+def test_slash_menu_completes_tips():
+    t, out, clk = S.make_terminal()
+    t.keys_factory = lambda: FakeKeys("/ti", "\r", "\r")       # Enter fills in "/tips " (it takes on|off), Enter runs it
+    assert t.read_input() == "/tips"
