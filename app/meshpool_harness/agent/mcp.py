@@ -391,6 +391,16 @@ def child_env() -> dict:
         env = merged
         for k in ("MESHPOOL_RESOLVING_ENV", "PWD", "OLDPWD", "SHLVL", "_"):
             env.pop(k, None)
+        try:
+            # The packaged app's own Node, Git and tools stay first: the login PATH went ahead of them, so the bundled
+            # npx (#!/usr/bin/env node) ran on an older system Node from /usr/local/bin or Homebrew and failed
+            from meshpool_harness import bundled as _B
+            front = [p for p in _B.front_dirs() if p]
+        except Exception:  # noqa: BLE001
+            front = []
+        if front:
+            rest = [p for p in env.get("PATH", "").split(os.pathsep) if p and p not in front]
+            env["PATH"] = os.pathsep.join(front + rest)
     # PA-toplevel-23: a server outlives the turn it was started in; with the turn's MH_CHECK_RUN it would record every
     # later turn's checks into that first one. Without it, it follows checks.current() (the pointer file).
     env.pop("MH_CHECK_RUN", None)

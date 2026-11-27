@@ -517,9 +517,33 @@ def search(query: str, n: int = 8, recency: str = "", region: str = "", site: st
                     seen.add(k)
                     out.append(r)
     if not out and errors:
-        raise WebError("search failed: " + "; ".join(errors) + ". The free search engines are limiting this "
-                       "computer. Add a search key in Settings, Web search, or try again in a minute.")
+        raise WebError("search failed: " + "; ".join(errors) + ". " + _search_failed_hint(errors))
     return out[:n]
+
+
+_NET_FAIL = re.compile(r"certificate|CERTIFICATE_VERIFY|SSL|TLS|could not reach|Name or service not known|"
+                       r"nodename nor servname|getaddrinfo|Temporary failure in name resolution|No address associated|"
+                       r"Network is unreachable|Connection refused|Connection reset|timed out|error sending request|"
+                       r"No route to host", re.I)
+_LIMITED = re.compile(r"\b(?:429|403)\b|rate limit|resting after|too many requests|captcha|check", re.I)
+
+
+def _search_failed_hint(errors: list) -> str:
+    """What to tell the agent (and so the user) when every engine failed. When none of them could even connect (a
+    certificate that is not trusted, no network, a name that does not resolve) the cause is this computer's connection,
+    and a search key would not help: first-hour run, 0.0.18, a network that intercepts HTTPS was told to add a key."""
+    errs = [str(e) for e in errors]
+    certs = [e for e in errs if re.search(r"certificate|CERTIFICATE_VERIFY|SSL|TLS", e)]
+    if errs and all(_NET_FAIL.search(e) and not _LIMITED.search(e.split(":", 1)[-1]) for e in errs):
+        if certs:
+            return ("This computer could not open secure connections to the search engines: their certificates were "
+                    "not trusted. A firewall, proxy or security program on this network is probably intercepting web "
+                    "traffic. A search key would not help; the web works again once this network's certificate is "
+                    "trusted by this computer, or on another network.")
+        return ("This computer could not reach the search engines: it looks offline, or a firewall is blocking web "
+                "access. A search key would not help; try again once the connection works.")
+    return ("The free search engines are limiting this computer. Add a search key in Settings, Web search, or try "
+            "again in a minute.")
 
 
 def format_results(rows: list[dict]) -> str:

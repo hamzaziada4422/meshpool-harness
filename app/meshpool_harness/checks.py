@@ -248,10 +248,34 @@ def _checked_rows(run_id: str) -> list[dict]:
     return [r for r in _rows(run_id) if r.get("kind") not in ("stage", "detail", "fact")]
 
 
+def _latest_details(run_id: str) -> list[dict]:
+    """The detail rows that still hold: a detail counts only when no later run of the same check on the same file
+    came after it. A deck fixed in three passes wrote the failures of every pass; first-hour run, 0.0.18: the line
+    under a finished deck named "an empty box is left on slide 4" from a middle pass the final file no longer had."""
+    rows = _rows(run_id)
+    last: dict = {}
+    for r in rows:
+        if r.get("kind") not in ("stage", "detail", "fact"):
+            k = (r.get("kind"), r.get("subject", ""))
+            last[k] = max(last.get(k, 0.0), float(r.get("ts") or 0))
+    out = []
+    for r in rows:
+        if r.get("kind") != "detail":
+            continue
+        try:
+            d = json.loads(r.get("subject") or "{}")
+        except ValueError:
+            d = {}
+        end = last.get((d.get("kind") or r.get("label"), d.get("subject", "")))
+        if end is None or float(r.get("ts") or 0) >= end - 1.0:
+            out.append(r)
+    return out
+
+
 def _details(run_id: str) -> list[str]:
     """What did not pass, by name: one line per failing check, for those who want to know."""
     out: list = []
-    for r in _rows(run_id):
+    for r in _latest_details(run_id):
         if r.get("kind") == "detail":
             try:
                 d = json.loads(r.get("subject") or "{}")
@@ -301,7 +325,7 @@ def _problems(run_id: str, kinds: dict) -> list[str]:
     def add(s):
         if s not in out:
             out.append(s)
-    for r in _rows(run_id):
+    for r in _latest_details(run_id):
         if r.get("kind") != "detail":
             continue
         try:
