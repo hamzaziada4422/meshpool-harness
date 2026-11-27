@@ -240,10 +240,113 @@ def test_nothing_in_the_chat_moves_but_its_width_while_a_handle_is_dragged(app, 
             moved = dx * i / 10
             _close(b["panel"]["w"] if sel == "#rzRight" else b["side"]["w"], w0 - moved if sel == "#rzRight" else w0 + moved,
                    "the pane follows the pointer on every frame, no jump")
-            edge, handle = (b["main"]["r"], b["hr"]) if sel == "#rzRight" else (b["side"]["w"], b["hs"])
-            _close(handle["x"] + handle["w"] / 2, edge, "the handle stays on the edge")
+            edge, handle = (b["main"]["r"], b["hr"]) if sel == "#rzRight" else (b["side"]["w"] - 1, b["hs"])
+            _close(handle["x"], edge, "the handle starts on the edge")
         page.mouse.up()
         page.wait_for_timeout(60)
+    assert page.errors == [], page.errors
+
+
+# The reading position: the deepest block (a paragraph, a list item) at the top of the chat, and how far into it the top is.
+READING = """() => { const c = document.querySelector('#conv'), top = c.getBoundingClientRect().top;
+  let el = null;
+  for (let kids = document.querySelector('#col').children, d = 0; kids.length && d < 8; d++) {
+    let hit = null;
+    for (const k of kids) { const r = k.getBoundingClientRect(); if (r.height && r.bottom > top && !/^inline/.test(getComputedStyle(k).display)) { hit = k; break; } }
+    if (!hit) break; el = hit; kids = hit.children; }
+  if (!window._readEl) window._readEl = el;
+  const r = window._readEl.getBoundingClientRect();
+  return {same: el === window._readEl, tag: el.tagName, frac: (top - r.top) / r.height, h: r.height, text: el.textContent.slice(0, 40),
+          colw: document.querySelector('#col').getBoundingClientRect().width}; }"""
+
+
+def _reading_chat(app, page, width, panel=True):
+    ids = _chats(app, page, 1)
+    _size(page, width, 800)
+    page.evaluate("id => openThread(id)", ids[0])
+    page.wait_for_selector("#col .msg-ai")
+    page.wait_for_function("() => !document.querySelector('#col .rv')", timeout=30000)
+    page.wait_for_timeout(300)
+    if panel:
+        page.evaluate("() => togglePanel('progress', true)")
+        page.wait_for_selector("#panel:not([hidden])")
+        page.wait_for_timeout(500)
+    # a place in the middle of the reply, a few lines into a paragraph
+    page.evaluate("""() => { const c = document.querySelector('#conv'), ps = [...document.querySelectorAll('#col .msg-ai p')];
+        const p = ps[Math.floor(ps.length / 2)], r = p.getBoundingClientRect();
+        c.scrollTop += r.top - c.getBoundingClientRect().top + Math.min(40, r.height / 3); window._readEl = null; }""")
+    page.wait_for_timeout(250)
+    return page.evaluate(READING)
+
+
+def test_a_drag_that_wraps_the_text_again_keeps_the_line_being_read_at_the_top(app, page):
+    """T3 #322: a width change made the chat jump. The chat here is narrower than its text column, so every frame of the
+    drag wraps the text again; the paragraph being read stays at the top, at the same place in it."""
+    start = _reading_chat(app, page, 1366)
+    assert start["same"] and start["tag"] in ("P", "LI"), start
+    widths = set()
+    for sel, dx in (("#rzRight", -150), ("#rzRight", 150), ("#rzSide", 80), ("#rzSide", -80)):
+        x, y = _grab(page, sel)
+        page.mouse.move(x, y)
+        page.mouse.down()
+        for i in range(1, 9):
+            page.mouse.move(x + dx * i / 8, y)
+            page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+            now = page.evaluate(READING)
+            widths.add(round(now["colw"]))
+            assert now["same"], (sel, i, start, now)                       # the same paragraph is at the top
+            assert abs(now["frac"] - start["frac"]) * now["h"] <= 3, (sel, i, start, now)      # the same place in it, to a few px
+        page.mouse.up()
+        page.wait_for_timeout(60)
+    assert len(widths) > 4, widths                                  # the text column did change width: the text wrapped again
+    assert page.errors == [], page.errors
+
+
+def test_a_window_resize_keeps_the_line_being_read_at_the_top(app, page):
+    """T3 #322: resizing the window made the chat jump. A sidebar dragged wide is clamped again as the window narrows and
+    the text wraps again; the paragraph being read stays at the top."""
+    _size(page, 1600, 800)
+    _drag(page, "#rzSide", 160)                                     # 448
+    start = _reading_chat(app, page, 1600, panel=False)
+    assert start["same"], start
+    widths = set()
+    for w in (1400, 1200, 1050, 900, 1000, 1300, 1600):
+        page.set_viewport_size({"width": w, "height": 800})
+        page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+        now = page.evaluate(READING)
+        widths.add(round(now["colw"]))
+        assert now["same"], (w, start, now)
+        assert abs(now["frac"] - start["frac"]) * now["h"] <= 3, (w, start, now)
+        assert _boxes(page)["hscroll"] <= 0, w
+    assert len(widths) > 1, widths                                  # the text did wrap again on the way
+    _close(_boxes(page)["side"]["w"], 448, "the dragged sidebar is back at 1600")
+    assert page.errors == [], page.errors
+
+
+def test_the_handles_stay_clear_of_the_scrollbars_and_out_of_the_scrolling_chat(app, page):
+    """T3 #958 and #42836: a drag rail took the chat's scrolling, or covered its scrollbar."""
+    _reading_chat(app, page, 1366)
+    page.evaluate("() => { const l = document.querySelector('#sideList'); for (let i = 0; i < 60; i++) { const d = document.createElement('div'); d.style.height = '24px'; d.textContent = 'row ' + i; l.appendChild(d); } }")
+    got = page.evaluate("""() => { const c = document.querySelector('#conv'), cr = c.getBoundingClientRect(), l = document.querySelector('#sideList'), lr = l.getBoundingClientRect();
+        const hs = document.querySelector('#rzSide'), hr = document.querySelector('#rzRight'), a = hs.getBoundingClientRect(), b = hr.getBoundingClientRect(), y = cr.top + cr.height / 2;
+        return {inside: [hs, hr].some(h => c.contains(h) || l.contains(h) || h.closest('#main, #side, #panel, #pvp')),
+          convBar: cr.right - cr.left - c.clientWidth, listBar: lr.width - l.clientWidth,
+          hrLeft: b.left, convRight: cr.right, hsLeft: a.left, listRight: lr.right,
+          atConvBar: document.elementFromPoint(cr.right - 3, y).closest('#conv') === c,
+          atListBar: document.elementFromPoint(lr.right - 3, lr.top + lr.height / 2).closest('#sideList') === l}; }""")
+    assert not got["inside"], got                                    # the handles are not in a scrolling box
+    assert got["convBar"] > 0 and got["listBar"] > 0, got           # both have a scrollbar here
+    assert got["hrLeft"] >= got["convRight"] - 0.5, got             # the right handle starts where the chat's scrollbar ends
+    assert got["hsLeft"] >= got["listRight"] - 0.5, got             # the sidebar handle starts where the list's scrollbar ends
+    assert got["atConvBar"] and got["atListBar"], got               # a click on either scrollbar reaches the scrollbar
+    # the wheel right next to each handle still scrolls the chat and the list
+    for sel, box in (("#conv", "#conv"), ("#sideList", "#sideList")):
+        r = page.locator(box).bounding_box()
+        before = page.evaluate(f"() => document.querySelector('{sel}').scrollTop")
+        page.mouse.move(r["x"] + r["width"] - 4, r["y"] + r["height"] / 2)
+        page.mouse.wheel(0, 200 if sel == "#sideList" else -200)
+        page.wait_for_timeout(300)
+        assert page.evaluate(f"() => document.querySelector('{sel}').scrollTop") != before, sel
     assert page.errors == [], page.errors
 
 

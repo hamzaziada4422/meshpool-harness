@@ -2389,22 +2389,41 @@ function paneLayout() {
   { const pw = Number(store("pw")); if (pw > 0) st.setProperty("--pw", pw + "px"); else st.removeProperty("--pw"); }   // the overlay panel under 981px
   const hs = $("#rzSide"), hr = $("#rzRight");
   if (hs) {
-    hs.hidden = !z.side; hs.style.left = z.s + "px";
+    hs.hidden = !z.side; hs.style.left = (z.s - 1) + "px";      // from the sidebar's 1px border into the chat: clear of the sidebar list's scrollbar
     hs.setAttribute("aria-valuenow", z.s); hs.setAttribute("aria-valuemin", PANE_SIDE[0]); hs.setAttribute("aria-valuemax", z.sMax);
   }
   if (hr) {
-    hr.hidden = !z.key; hr.style.left = (z.vw - z.p) + "px";
+    hr.hidden = !z.key; hr.style.left = (z.vw - z.p) + "px";     // from the pane's border inward: clear of the chat's scrollbar
     if (z.key) {
       hr.setAttribute("aria-label", PANE_LABEL[z.key]); hr.setAttribute("aria-controls", z.key === "pvw" ? "pvp" : "panel");
       hr.setAttribute("aria-valuenow", z.p); hr.setAttribute("aria-valuemin", PANE_RIGHT_MIN); hr.setAttribute("aria-valuemax", z.pMax);
     }
   }
 }
+// The reading position: the deepest block at the top of the chat (a paragraph, a list item) and how far into it the top of
+// the view is. When a width change wraps the text again, the same line stays at the top, during a drag and while the
+// window is resized (the browser's own scroll anchoring keeps a whole message in place, not the line inside it).
+function paneAnchor() {
+  const c = $("#conv"), col = $("#col");
+  if (!c || !col || !c.isConnected || c.scrollHeight <= c.clientHeight + 1) return () => {};
+  if (c.scrollHeight - c.scrollTop - c.clientHeight < 2) return () => { c.scrollTop = c.scrollHeight; };    // at the end: stay there
+  const top = c.getBoundingClientRect().top;
+  let el = null;
+  for (let kids = col.children, depth = 0; kids.length && depth < 8; depth++) {
+    let hit = null;
+    for (const k of kids) { const r = k.getBoundingClientRect(); if (r.height && r.bottom > top && !/^inline/.test(getComputedStyle(k).display)) { hit = k; break; } if (r.top > top) break; }
+    if (!hit) break;
+    el = hit; kids = hit.children;
+  }
+  if (!el) return () => {};
+  const r = el.getBoundingClientRect(), frac = r.height ? (top - r.top) / r.height : 0;
+  return () => { if (!el.isConnected) return; const b = el.getBoundingClientRect(); const d = b.top + frac * b.height - c.getBoundingClientRect().top; if (Math.abs(d) >= 0.5) c.scrollTop += d; };
+}
 function paneSet(key, w) {      // keep a width, clamped to the window as it is now, so the stored number is one that was on screen
   PANE.drag = {key, w}; const z = paneSizes(); PANE.drag = null;
-  store(key, key === "sw" ? z.s : z.p); paneLayout();
+  const keep = paneAnchor(); store(key, key === "sw" ? z.s : z.p); paneLayout(); keep();
 }
-function paneReset(key) { try { localStorage.removeItem("mp_" + key); } catch (e) { /* storage is off: the default shows anyway */ } paneLayout(); }
+function paneReset(key) { const keep = paneAnchor(); try { localStorage.removeItem("mp_" + key); } catch (e) { /* storage is off: the default shows anyway */ } paneLayout(); keep(); }
 function paneHandle(id, isSide) {
   const h = document.createElement("div");
   Object.assign(h, {id, className: "pane-rz", tabIndex: 0, hidden: true});
@@ -2416,11 +2435,11 @@ function paneHandle(id, isSide) {
   h.addEventListener("pointerdown", e => {
     const key = keyOf(); if (e.button !== 0 || !key || PANE.drag) return;
     e.preventDefault();          // no text selection, and the focus stays where it was (the message box keeps it)
-    const x0 = e.clientX, w0 = widthOf(paneSizes()), app = $("#app");
+    const x0 = e.clientX, w0 = widthOf(paneSizes()), app = $("#app"), keep = paneAnchor();
     let x = x0, raf = 0, done = false;
     try { h.setPointerCapture(e.pointerId); } catch (err) { /* the pointer is already gone */ }
     PANE.drag = {key, w: w0}; app.classList.add("pane-drag"); h.classList.add("on");
-    const frame = () => { raf = 0; if (PANE.drag) { PANE.drag.w = w0 + (isSide ? x - x0 : x0 - x); paneLayout(); } };
+    const frame = () => { raf = 0; if (PANE.drag) { PANE.drag.w = w0 + (isSide ? x - x0 : x0 - x); paneLayout(); keep(); } };
     const move = ev => { x = ev.clientX; if (!raf) raf = requestAnimationFrame(frame); };
     const end = () => {
       if (done) return; done = true;
@@ -2452,7 +2471,11 @@ function paneHandle(id, isSide) {
 function setupPanes() {
   paneHandle("rzSide", true); paneHandle("rzRight", false);
   paneLayout();
-  window.addEventListener("resize", paneLayout);      // every frame of a window resize, not only after it settles (fitPanel)
+  // Every frame of a window resize, not only after it settles (fitPanel). By then the page has its new size, so the reading
+  // position is the one taken at the last scroll (PANE.read), kept up to date while the person reads.
+  const conv = $("#conv"); let rt = 0;
+  if (conv) conv.addEventListener("scroll", () => { if (!rt) rt = requestAnimationFrame(() => { rt = 0; PANE.read = paneAnchor(); }); }, {passive: true});
+  window.addEventListener("resize", () => { paneLayout(); if (PANE.read) PANE.read(); });
 }
 // The room the chat would have with the sidebar kept and the side panel (or the preview) open: the sidebar folds only
 // when that drops under about 640px, not at a fixed window width (priya018). The panel widths are the default ones
