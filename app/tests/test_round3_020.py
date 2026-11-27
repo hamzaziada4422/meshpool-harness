@@ -196,6 +196,9 @@ def test_a_picture_shown_large_is_not_also_a_card(app, page):
     # of the reply (preview.js pvBigImages, onerror), so with no file the count below raced the 404 on a busy computer
     from PIL import Image
     Image.new("RGB", (64, 40), "steelblue").save(Path(app["work"]) / "chart.png")
+    # a folder the page may show files from (a real chat's folder is; this chat has no server behind it): alone, the
+    # picture was refused and dropped, and the test passed only on the timing above
+    page.evaluate("w => post('/api/projects', {action: 'add', path: w})", app["work"])
     _chat_view(page, app["work"])
     _ev(page, {"type": "user", "text": "Make a chart of revenue and show it here", "i": 0})
     page.evaluate("""() => { S.cur.tpaths = ['chart.png']; applyEv({type: 'turn_end', turn: {}}); }""")
