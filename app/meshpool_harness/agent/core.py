@@ -327,6 +327,11 @@ _CAP_ASK = (r"\b(?:install|add|connect|set ?up|hook up|integrate|enable|get)\b[^
             r"integration|plugin|connector|skill|extension|capability)s?\b|\b(?:no|missing|don'?t have a|lack(?:s|ing)?"
             r"(?: a| the)?) (?:tool|integration|connector|capability)\b|\bmcp\b")
 
+# Tools that show text the agent asked to see (a file, a search hit, a page, a skill's instructions): a missing-command
+# message inside it is not a failure of the agent's own (Agent._cap_signal).
+_CAP_READERS = {"read_file", "grep", "glob", "fetch_url", "web_search", "web_research", "use_skill", "diagnostics",
+                "get_capability", "find_skill", "todo_write", "update_plan", "ask_user"}
+
 
 def _cap_mode() -> str:
     return os.environ.get("MH_GET_CAPABILITY", "1").strip().lower()
@@ -4094,10 +4099,14 @@ class Agent:
             msg += " Later chats find it with find_skill."
         return msg
 
-    def _cap_signal(self, text: str, kind: str) -> str:
+    def _cap_signal(self, text: str, kind: str, tool: str = "") -> str:
         """A missing-capability signal in a tool result or a reply (capability_get.missing_signal) turns the capability
-        tools on from the next model step. A reply counts while the task is open: no plan, or a plan step not done."""
+        tools on from the next model step. A reply counts while the task is open: no plan, or a plan step not done.
+        tool: the tool whose result it is. What a reading tool shows (a log, a source file, a web page that mentions
+        "command not found") is text the agent looked at, not a failure of its own: it never counts."""
         if getattr(self, "capability_on", False) or _cap_mode() in ("0", "off", "false", "no"):
+            return ""
+        if kind == "tool" and tool in _CAP_READERS:
             return ""
         try:
             from meshpool_harness import capability_get as CG
@@ -5005,7 +5014,7 @@ class Agent:
                     step_out += outs
                     for c, out in zip(batch, outs):
                         self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": clean(out)})
-                        self._cap_signal(str(out), "tool")      # "command not found": the capability tools join
+                        self._cap_signal(str(out), "tool", (c.get("function") or {}).get("name") or "")   # "command not found"
                         if _engine_tool((c.get("function") or {}).get("name") or ""):   # the file an office job made
                             made = _job_file(str(out), self.root)
                             if made:

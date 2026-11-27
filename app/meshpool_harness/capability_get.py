@@ -32,6 +32,30 @@ HTTP_TIMEOUT = 8
 MARK = "Added by get_capability."             # starts the mcp.json description of every server added here
 _EXACT = re.compile(r"^v?\d+(\.\d+){0,3}([-+][0-9A-Za-z.-]+)?$")   # 1.2.3, 2026.11.11, 1.0.0-beta.1; never a range
 TIERS = ("enabled", "library", "registry", "package", "write")
+# What a registry or npm says is data from the internet: a package name must be a plain name, never an option such as
+# "--registry=..." that npx or uvx would read as its own; a header name must be a plain token.
+_NPM_NAME = re.compile(r"^(?:@[a-z0-9][a-z0-9._~-]*/)?[a-z0-9][a-z0-9._~-]*$")
+_PYPI_NAME = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")
+_HEADER = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$")
+
+
+def _d(x) -> dict:
+    return x if isinstance(x, dict) else {}
+
+
+def _l(x) -> list:
+    return x if isinstance(x, list) else []
+
+
+def _s(x) -> str:
+    return x if isinstance(x, str) else ""
+
+
+def reserved(name: str) -> bool:
+    """meshpool's own settings (its model key and address, MH_* settings, the keys it keeps for its tools): a tool found
+    online never gets one of these filled in, whatever it asks for."""
+    n = str(name or "").upper()
+    return n.startswith(("MH_", "MESHPOOL_")) or n in C.SECRET or n in C.ENDPOINT_NAMES
 
 
 class Offline(Exception):
@@ -176,15 +200,24 @@ def publisher(name: str) -> str:
     return ".".join(reversed(parts)) if len(parts) >= 2 else ns
 
 
-def _placeholders(text: str) -> tuple[str, list]:
-    """"Bearer {api_key}" -> ("Bearer ${API_KEY}", ["API_KEY"])."""
+def _placeholders(text: str, prefix: str = "") -> tuple[str, list]:
+    """"Bearer {api_key}" -> ("Bearer ${API_KEY}", ["API_KEY"]). prefix: put before each name (a remote service's
+    names are its own, so a value already saved for something else is never sent to it). Any "$" in the text is
+    dropped, so a literal "${NAME}" cannot reach a saved value either."""
     names = []
 
     def sub(m):
         n = re.sub(r"[^A-Za-z0-9_]", "_", m.group(1)).upper()
+        n = ("MCP_" + n) if prefix and n.startswith(prefix[4:]) else prefix + n    # MCP_ZORB_ + ZORB_TOKEN: MCP_ZORB_TOKEN
         names.append(n)
         return "${" + n + "}"
-    return re.sub(r"\{([A-Za-z0-9_.-]+)\}", sub, str(text or "")), names
+    return re.sub(r"\{([A-Za-z0-9_.-]+)\}", sub, str(text or "").replace("$", "")), names
+
+
+def _prefix(name: str) -> str:
+    """The settings prefix of a remote service: com.acme/weather-mcp -> MCP_WEATHER_MCP_."""
+    base = re.sub(r"[^A-Z0-9]+", "_", str(name or "").split("/")[-1].upper()).strip("_")[:40] or "SERVER"
+    return f"MCP_{base}_"
 
 
 def _env_spec(vars_: list) -> tuple[dict, list, list]:
@@ -204,32 +237,36 @@ def parse_registry(doc: dict) -> list[dict]:
     version, stdio) or else one hosted remote per server. Deprecated and deleted entries, and packages without an exact
     version, are left out."""
     out = []
-    for item in (doc or {}).get("servers") or []:
+    for item in _l(_d(doc).get("servers")):
         if not isinstance(item, dict):
             continue
-        srv = item.get("server") if isinstance(item.get("server"), dict) else item
-        meta = (item.get("_meta") or {}).get(OFFICIAL) or (srv.get("_meta") or {}).get(OFFICIAL) or {}
+        srv = _d(item.get("server")) or item
+        meta = _d(_d(item.get("_meta")).get(OFFICIAL)) or _d(_d(srv.get("_meta")).get(OFFICIAL))
         if str(meta.get("status") or "active").lower() != "active":
             continue
-        name = str(srv.get("name") or "")
-        if not name:
+        name = _s(srv.get("name")).strip()[:200]
+        if not re.fullmatch(r"[\w.-]+/[\w.-]+", name):
             continue
-        base = {"tier": "registry", "name": name, "title": srv.get("title") or name.split("/")[-1],
-                "description": str(srv.get("description") or "")[:300], "publisher": publisher(name),
+        base = {"tier": "registry", "name": name, "title": _s(srv.get("title"))[:120] or name.split("/")[-1],
+                "description": _s(srv.get("description"))[:300], "publisher": publisher(name),
                 "verified": "Yes: the MCP Registry verified the publisher's namespace and package. It does not "
                             "review the code.",
-                "docs": ((srv.get("repository") or {}).get("url") or srv.get("websiteUrl") or "")}
+                "docs": (_s(_d(srv.get("repository")).get("url")) or _s(srv.get("websiteUrl")))[:300]}
         cand = None
-        for p in srv.get("packages") or []:
+        for p in _l(srv.get("packages")):
             if not isinstance(p, dict):
                 continue
-            kind, ident, ver = p.get("registryType"), str(p.get("identifier") or ""), str(p.get("version") or "")
-            transport = (p.get("transport") or {}).get("type", "stdio")
-            if kind not in ("npm", "pypi") or transport != "stdio" or not ident or not exact(ver):
+            kind, ident, ver = p.get("registryType"), _s(p.get("identifier")), _s(p.get("version"))
+            transport = _d(p.get("transport")).get("type", "stdio")
+            if kind not in ("npm", "pypi") or transport != "stdio" or not exact(ver) \
+                    or not (_NPM_NAME if kind == "npm" else _PYPI_NAME).match(ident):
                 continue
-            env, secrets, other = _env_spec(p.get("environmentVariables"))
-            extra = [str(a.get("value") or a.get("default") or "") for a in p.get("packageArguments") or []
-                     if isinstance(a, dict) and a.get("type") == "positional" and (a.get("value") or a.get("default"))]
+            env, secrets, other = _env_spec(_l(p.get("environmentVariables")))
+            if any(reserved(n) for n in env):
+                continue                         # it asks for one of meshpool's own keys: never offered
+            extra = [_s(a.get("value")) or _s(a.get("default")) for a in _l(p.get("packageArguments"))
+                     if isinstance(a, dict) and a.get("type") == "positional"
+                     and (_s(a.get("value")) or _s(a.get("default")))]
             if kind == "npm":
                 run = {"command": "npx", "args": ["-y", f"{ident}@{ver}", *extra]}
             else:
@@ -240,22 +277,30 @@ def parse_registry(doc: dict) -> list[dict]:
                         package=f"{kind} {ident}", secrets=secrets, settings=other)
             break
         if cand is None:
-            for r in srv.get("remotes") or []:
-                url = str((r or {}).get("url") or "")
-                if (r or {}).get("type") not in ("streamable-http", "sse") or not url.startswith("https://") \
-                        or "{" in url:
+            for r in _l(srv.get("remotes")):
+                r = _d(r)
+                url = _s(r.get("url"))
+                if r.get("type") not in ("streamable-http", "sse") or not url.startswith("https://") \
+                        or "{" in url or "$" in url or any(c.isspace() for c in url) or not _host(url):
                     continue
-                headers, secrets, other = {}, [], []
-                for h in r.get("headers") or []:
-                    if not isinstance(h, dict) or not h.get("name"):
+                headers, secrets, other, bad = {}, [], [], False
+                for h in _l(r.get("headers")):
+                    h = _d(h)
+                    hn = _s(h.get("name"))
+                    if not hn:
                         continue
-                    val, names = _placeholders(h.get("value") or "{" + h["name"] + "}")
-                    headers[h["name"]] = val
-                    (secrets if h.get("isSecret") else other).extend(names)
+                    val, names = _placeholders(_s(h.get("value")) or "{" + hn + "}", _prefix(name))
+                    if not _HEADER.match(hn) or "\n" in val or "\r" in val:
+                        bad = True                       # a header that could split the request: not offered
+                        break
+                    headers[hn] = val
+                    (secrets if h.get("isSecret") else other).extend(n for n in names if n not in secrets + other)
+                if bad:
+                    continue
                 run = {"url": url, **({"headers": headers} if headers else {}),
                        **({"transport": "sse"} if r.get("type") == "sse" else {})}
                 cand = dict(base, id=f"registry:{name}", remote=True, addable=True, run=run,
-                            version=str(srv.get("version") or "") + " (hosted service)", company=_company(url),
+                            version=_s(srv.get("version"))[:40] + " (hosted service)", company=_company(url),
                             secrets=secrets, settings=other)
                 break
         if cand is not None:
@@ -287,20 +332,20 @@ def _packages(need: str, q: set, http, notes: list) -> list[dict]:
     unverified = "No: it is not in the MCP Registry or on meshpool's list. Nobody has checked who publishes it."
     try:
         doc = http(f"{NPM_SEARCH}?text={urllib.parse.quote(_query(need) + ' keywords:mcp')}&size=5")
-        for o in doc.get("objects") or []:
-            p = (o or {}).get("package") or {}
-            name, ver = str(p.get("name") or ""), str(p.get("version") or "")
-            if not name or not exact(ver):
+        for o in _l(_d(doc).get("objects")):
+            p = _d(_d(o).get("package"))
+            name, ver = _s(p.get("name")), _s(p.get("version"))
+            if not _NPM_NAME.match(name) or not exact(ver):
                 continue
-            pub = ((p.get("publisher") or {}).get("username") or (p.get("maintainers") or [{}])[0].get("username")
-                   or "unknown")
-            out.append({"id": f"npm:{name}", "tier": "package", "name": name, "description": str(p.get("description")
-                                                                                                    or "")[:300],
+            pub = (_s(_d(p.get("publisher")).get("username"))
+                   or _s(_d((_l(p.get("maintainers")) or [{}])[0]).get("username")) or "unknown")[:80]
+            out.append({"id": f"npm:{name}", "tier": "package", "name": name,
+                        "description": _s(p.get("description"))[:300],
                         "publisher": f"{pub} (npm)", "verified": unverified, "version": ver, "remote": False,
                         "addable": True, "package": f"npm {name}", "secrets": [], "settings": [],
                         "run": {"command": "npx", "args": ["-y", f"{name}@{ver}"]},
-                        "docs": (p.get("links") or {}).get("npm", ""),
-                        "score": _score(q, name, str(p.get("description") or "")) or 1, "hits": 0})
+                        "docs": _s(_d(p.get("links")).get("npm"))[:300],
+                        "score": _score(q, name, _s(p.get("description"))) or 1, "hits": 0})
     except Offline as e:
         notes.append(f"npm could not be reached ({e}), so it was skipped.")
     slug = "-".join(_query(need).split()[:2])
@@ -309,15 +354,15 @@ def _packages(need: str, q: set, http, notes: list) -> list[dict]:
             doc = http(PYPI_JSON.format(name=urllib.parse.quote(guess)))
         except Offline:
             continue
-        info = (doc or {}).get("info") or {}
-        ver, summary = str(info.get("version") or ""), str(info.get("summary") or "")
-        if not exact(ver) or not re.search(r"\bmcp\b|model context protocol", summary + " " + guess, re.I):
+        info = _d(_d(doc).get("info"))
+        ver, summary = _s(info.get("version")), _s(info.get("summary"))
+        if not exact(ver) or not _PYPI_NAME.match(guess) or not re.search(r"\bmcp\b|model context protocol", summary + " " + guess, re.I):
             continue
         out.append({"id": f"pypi:{guess}", "tier": "package", "name": guess, "description": summary[:300],
-                    "publisher": f"{info.get('author') or info.get('maintainer') or 'unknown'} (PyPI)",
+                    "publisher": f"{(_s(info.get('author')) or _s(info.get('maintainer')) or 'unknown')[:80]} (PyPI)",
                     "verified": unverified, "version": ver, "remote": False, "addable": True,
                     "package": f"pypi {guess}", "secrets": [], "settings": [],
-                    "run": {"command": "uvx", "args": [f"{guess}=={ver}"]}, "docs": info.get("project_url", ""),
+                    "run": {"command": "uvx", "args": [f"{guess}=={ver}"]}, "docs": _s(info.get("project_url"))[:300],
                     "score": _score(q, guess, summary) or 1, "hits": 0})
     return out
 

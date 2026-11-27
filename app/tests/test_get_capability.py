@@ -154,7 +154,7 @@ def test_registry_parsing_keeps_active_pinned_entries_only():
     assert got["com.example/py"]["publisher"] == "example.com"
     rem = got["com.zorbcorp/zorb"]
     assert rem["remote"] and rem["company"] == "zorbcorp.com"
-    assert rem["run"]["headers"] == {"Authorization": "Bearer ${ZORB_TOKEN}"} and rem["secrets"] == ["ZORB_TOKEN"]
+    assert rem["run"]["headers"] == {"Authorization": "Bearer ${MCP_ZORB_TOKEN}"} and rem["secrets"] == ["MCP_ZORB_TOKEN"]
 
 
 def test_versions_are_exact_and_never_latest():
@@ -240,7 +240,7 @@ def test_secrets_go_to_the_settings_store_never_into_mcp_json(tmp_path, monkeypa
     assert "sk-secret-value-123" not in M.config_file().read_text()
     rem = CG.parse_registry({"servers": [REMOTE]})[0]
     s = CG.spec(rem)
-    assert s["headers"] == {"Authorization": "Bearer ${ZORB_TOKEN}"} and "Needs: ZORB_TOKEN" in s["description"]
+    assert s["headers"] == {"Authorization": "Bearer ${MCP_ZORB_TOKEN}"} and "Needs: MCP_ZORB_TOKEN" in s["description"]
 
 
 # ---------- save_tool -----------------------------------------------------------------------------------------------

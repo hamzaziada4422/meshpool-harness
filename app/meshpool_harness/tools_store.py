@@ -274,8 +274,9 @@ def run_tests(root, timeout: int = TEST_TIMEOUT_S) -> dict:
         work = Path(tmp) / src.name
         shutil.copytree(src, work, ignore=shutil.ignore_patterns("__pycache__", "provenance.json"))
         argv = test_command(work)
-        boxed = SB.available()
-        run = SB.wrap(argv, work, mode="ask", offline=True) if boxed else argv
+        # always in the sandbox when this computer has one, even with MH_SANDBOX off for the user's own commands
+        run = SB.wrap(argv, work, mode="ask", offline=True, force=True) if SB.available() else argv
+        boxed = run != argv
         env = C.scrub_env(dict(os.environ))
         env.update(PYTHONDONTWRITEBYTECODE="1", PYTHONPATH=str(work), MESHPOOL_TOOL_DIR=str(work))
         try:

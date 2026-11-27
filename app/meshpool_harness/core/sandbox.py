@@ -307,10 +307,12 @@ def _office_profile() -> str | None:
 
 
 def wrap(argv: list[str], root, platform: str | None = None, which=None, cwd=None, mode: str | None = None,
-         offline: bool = False) -> list[str]:
+         offline: bool = False, force: bool = False) -> list[str]:
     """argv, wrapped so it can only write where it should. Unchanged when the sandbox is off or unavailable (with a
-    notice, once, when it was wanted). offline: no network for this command (one that ran without a question)."""
-    if not requested(mode):
+    notice, once, when it was wanted). offline: no network for this command (one that ran without a question).
+    force: sandboxed whenever this computer can, whatever MH_SANDBOX says (code meshpool runs on its own, such as a
+    saved tool's tests, never needs the user's own commands to be unsandboxed)."""
+    if not force and not requested(mode):
         return argv
     plat = platform or sys.platform
     root = Path(root).resolve()
