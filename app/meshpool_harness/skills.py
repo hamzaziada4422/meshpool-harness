@@ -364,10 +364,28 @@ def for_path(rel: str, seen: set) -> str:
 
 def get(name: str) -> dict | None:
     key = slug(name)
-    for s in load_all():
+    for s in load_all() + _saved():
         if s["id"] == key or slug(s["name"]) == key:
             return s
     return None
+
+
+def _saved() -> list[dict]:
+    """Skill and script tools the agent saved (tools_store): found by find_skill and use_skill, never listed in the
+    prompt."""
+    try:
+        from meshpool_harness import tools_store as TS
+        return TS.skill_rows()
+    except Exception:  # noqa: BLE001 - a damaged tools folder never breaks skills
+        return []
+
+
+def saved_any() -> bool:
+    try:
+        from meshpool_harness import tools_store as TS
+        return bool(TS.names())
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _with_arguments(text: str, arguments: str) -> str:
@@ -433,7 +451,7 @@ def search(query: str, k: int = 8, rows: list | None = None, min_score: int = 1,
     q = set(_terms(query))
     if not q:
         return []
-    rows = for_model() if rows is None else rows
+    rows = (for_model() + _saved()) if rows is None else rows
     scored = []
     for s in rows:
         name, desc = set(_terms(s["name"].replace("-", " "))), set(_terms(_desc(s)))
@@ -449,7 +467,8 @@ def search_text(query: str) -> str:
     if not hits:
         return "No skill matches. Try other words, or go ahead without a skill."
     return "Best matching skills (load one with use_skill):\n" + "\n".join(
-        f"- {s['name']}: {_desc(s, 300)}" for s in hits)
+        f"- {s['name']}" + (" (saved tool, FAILING: " + (s.get("why") or "it failed") + ")" if s.get("status") == "failing"
+                            else " (saved tool)" if s.get("saved") else "") + f": {_desc(s, 300)}" for s in hits)
 
 
 def catalog_text(task: str = "", searchable: bool = True) -> str:
@@ -457,8 +476,15 @@ def catalog_text(task: str = "", searchable: bool = True) -> str:
     ones that match the task the chat started with."""
     import os
     rows = for_model() if os.environ.get("MH_NO_COMMANDS") != "1" else []
+    tools = ("\n\nSaved tools: tools kept from earlier chats, not listed here. Search them with find_skill or "
+             "get_capability (skills and scripts) or mcp_find_tools (tool servers).") \
+        if searchable and os.environ.get("MH_NO_COMMANDS") != "1" and saved_any() else ""
     if not rows:
-        return ""
+        return tools
+    return _catalog(rows, task, searchable) + tools
+
+
+def _catalog(rows: list, task: str, searchable: bool) -> str:
     if not on_demand():
         lines = [f"- {s['name']}: {_desc(s)}" for s in rows]
         return ("\n\nSkills you can use (call use_skill with the name to load full instructions before doing a task "

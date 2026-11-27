@@ -175,7 +175,7 @@ def test_ffmpeg_and_pandoc_pins_are_the_files_that_were_read():
 
 def test_every_mac_program_needs_macos_11_except_the_one_exemption():
     progs = RECORD["programs"]
-    for name in ("ffmpeg", "pandoc"):
+    for name in ("ffmpeg", "pandoc", "uv"):
         for key in ("mac-arm64", "mac-x64"):
             rec = progs[name][key]
             limit = (12, 0) if (name, key) == ("ffmpeg", "mac-arm64") else (11, 0)

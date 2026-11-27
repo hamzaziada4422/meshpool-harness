@@ -52,7 +52,8 @@ SESSIONS = C.runs_dir() / "sessions"
 DEFAULT_MODEL = "deepseek-v4.1-flash"
 
 READ_ONLY = {"bash_output", "bash_stop", "read_file", "grep", "glob", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
-             "ask_user", "diagnostics", "find_skill", "update_plan", "mcp_find_tools"}
+             "ask_user", "diagnostics", "find_skill", "update_plan", "mcp_find_tools",
+             "get_capability", "save_tool"}     # these two ask the user with their own card (capability_get, tools_store)
 # Run without asking, yet they write files into the chat's folder: the turn's checkpoint books them (office_task's
 # engine saves the finished deck or workbook there), so Undo of the turn takes those files back.
 WRITES_FILES = {"office_task"}
@@ -297,6 +298,40 @@ T.SCHEMAS.setdefault("use_skill", T._fn(
     "a task that matches a skill, and whenever the user writes $skill-name.",
     {"name": T.S, "arguments": {"type": "string", "description": "Optional: what to run the skill on, for skills "
                                                                   "that take arguments"}}, ["name"]))
+# Get a capability mid-task (capability_get.py, tools_store.py). Offered once a message or a goal check needs one
+# (Agent.capability_on), appended at the end of the tool list so the earlier tools never move. MH_GET_CAPABILITY=0
+# turns them off; =always offers them from the start.
+CAP_TOOLS = ["get_capability", "save_tool"]
+T.SCHEMAS.setdefault("get_capability", T._fn(
+    "get_capability", "When the task needs a tool or skill you do not have: search for one. The search looks at what "
+    "is already here, meshpool's curated MCP list, the official MCP Registry, then npm and PyPI, and returns ranked "
+    "candidates with ids. Call again with `add` set to a candidate id to ask the user to add it (they see a card and "
+    "decide). If nothing fits, write the tool and keep it with save_tool.",
+    {"need": {"type": "string", "description": "What you need to do, in a few plain words"},
+     "add": {"type": "string", "description": "Optional: the id of a candidate from the last search, to add it"},
+     "deep": {"type": "boolean", "description": "Optional: search every source even after a good match"}}, ["need"]))
+T.SCHEMAS.setdefault("save_tool", T._fn(
+    "save_tool", "Keep a tool you wrote for later chats: a skill (SKILL.md), a script (scripts/ plus SKILL.md) or a "
+    "small local MCP server (server.py or server.js). Give its files and its tests; the tests run in the sandbox and "
+    "must pass, and a scan refuses risky code. The user approves keeping it once.",
+    {"name": {"type": "string", "description": "lowercase-name-with-dashes"},
+     "kind": {"type": "string", "enum": ["skill", "script", "mcp"]},
+     "description": {"type": "string", "description": "One line: what it does and when to use it"},
+     "files": {"type": "object", "additionalProperties": {"type": "string"},
+               "description": "{relative path: file text}, e.g. {\"SKILL.md\": \"...\", \"scripts/run.py\": \"...\"}"},
+     "tests": {"type": "object", "additionalProperties": {"type": "string"},
+               "description": "{\"tests/test_x.py\": \"...\"} (pytest or unittest) or {\"tests/x.test.js\": \"...\"}"},
+     "overwrite": {"type": "boolean", "description": "Replace a saved tool with the same name"}},
+    ["name", "kind", "description", "files", "tests"]))
+_CAP_ASK = (r"\b(?:install|add|connect|set ?up|hook up|integrate|enable|get)\b[^.?!\n]{0,40}\b(?:tool|mcp|server|"
+            r"integration|plugin|connector|skill|extension|capability)s?\b|\b(?:no|missing|don'?t have a|lack(?:s|ing)?"
+            r"(?: a| the)?) (?:tool|integration|connector|capability)\b|\bmcp\b")
+
+
+def _cap_mode() -> str:
+    return os.environ.get("MH_GET_CAPABILITY", "1").strip().lower()
+
+
 _REC = {"type": "string", "enum": ["", "day", "week", "month", "year"], "description": "Only recent results"}
 T.SCHEMAS["fetch_url"] = T._fn(
     "fetch_url", "Read a web page, PDF or Office file from a URL as clean text (title, date, main content). Long pages "
@@ -3401,6 +3436,8 @@ class Agent:
     office_on = False      # a message in this chat asked for an office file: Codex style shows the office tools too
     browser_on = False     # a message in this chat is about a web page or app UI: Codex style shows the browser tools
     web_on = False         # a message in this chat looks something up online: a Codex-style Code chat gets web_research
+    capability_on = False  # a message or a goal check needs a missing capability: get_capability and save_tool join
+    cap_pending = ""       # a get_capability card the user has not answered (the goal loop pauses on it)
     office_engines = False  # MH_OFFICE_DIRECT=1: a message asked for a new deck, report or model (engine tools shown)
     office_c171 = False  # MH_WORK_OFFICE_STYLE=c171: this Work chat's office job sends Codex 0.171's request
     office_revisions = False  # MH_OFFICE_DIRECT=1: a message asked for tracked changes or comments (edit_office_file shown)
@@ -3831,7 +3868,7 @@ class Agent:
             # A quick question carries the tools it can need (look, change, run, search), not the 19 of a long job:
             # 2k tokens less on every call. Once a message asks for more, the whole set stays for the chat, so the
             # prompt prefix does not flip back and forth.
-            names = [n for n in names if n in _CHAT_TOOLS]
+            names = [n for n in names if n in _CHAT_TOOLS or n in CAP_TOOLS]
         elif self.profile == "work" and os.environ.get("MH_LITE_WORK_TOOLS", "0") == "1":
             # MH_LITE_WORK_TOOLS=1 (off by default, unmeasured): a Work chat carries the 14 tools a document or data job
             # uses, not the 20 of a long coding job (background shells, notebooks, sub-agents): 1.5k tokens a call.
@@ -3897,7 +3934,20 @@ class Agent:
             return []
         return ["web_research", "fetch_url"]
 
+    def _cap_offered(self) -> bool:
+        mode = _cap_mode()
+        if mode in ("0", "off", "false", "no") or self.plan or getattr(self, "_delegate_depth", 0) > 0:
+            return False
+        return mode == "always" or bool(getattr(self, "capability_on", False))
+
     def _tool_names(self) -> list:
+        names = self._tool_names_base()
+        if self._cap_offered() and not (self._codex() and self._c171()):
+            drop = self._dropped()
+            names = names + [n for n in CAP_TOOLS if n not in names and n not in drop]
+        return names
+
+    def _tool_names_base(self) -> list:
         if self._codex():
             if self._c171():
                 return ["exec_command"] + self._web_tools()
@@ -3917,7 +3967,7 @@ class Agent:
             extra += [t for t in route_tools(route) if t not in names]
         try:
             from meshpool_harness import skills as SK
-            if SK.on_demand() and "find_skill" not in names:
+            if (SK.on_demand() or SK.saved_any()) and "find_skill" not in names:   # saved tools: found, not listed
                 extra.append("find_skill")
         except Exception:  # noqa: BLE001
             pass
@@ -3940,6 +3990,144 @@ class Agent:
         if getattr(self, "_delegations", None):          # the sub-agents it is running
             from meshpool_harness.agent import delegate as DL
             DL.stop_all(self)
+
+    # ---------- get a capability mid-task (capability_get.py, tools_store.py) --------------------------------------
+    def _cap_ask(self, title: str, detail: str) -> tuple[str, str]:
+        """One card for adding or keeping a tool. Always asked, whatever the mode or the chat's grants: scope "once"
+        offers only Allow and Deny, so nothing is remembered. ("no answer", note) when the card was not answered (Stop,
+        or the wait ran out): cap_pending then holds it, and the goal loop pauses."""
+        if not self.approve or getattr(self, "_delegate_depth", 0) > 0:
+            return "no", ("Nobody can approve adding a tool here. Tell the user what you found; they can add it in "
+                          "Settings.")
+        self.cap_pending = title
+        decision, note = PR.approve_with_scope(self.approve, "mcp", title, detail, "once")
+        if self._stop or "No answer within" in str(note or ""):
+            return "no answer", note or ""
+        self.cap_pending = ""
+        return ("yes" if decision in ("yes", "always", "save") else "no"), note or ""
+
+    def _cap_visible_tools(self) -> list:
+        """The chat's connected tools (all of them, also those the lazy index hides), for the first search tier."""
+        ms = list(getattr(self, "_lazy_all", None) or [])
+        if not ms and self.mcp:
+            try:
+                ms = self.mcp.schemas()
+            except Exception:  # noqa: BLE001
+                ms = []
+        return ms
+
+    def _get_capability(self, args: dict) -> str:
+        from meshpool_harness import capability_get as CG
+        found = self.__dict__.setdefault("_cap_found", {})
+        add = str(args.get("add") or "").strip()
+        if not add:
+            res = self._wait(CG.find, str(args.get("need") or ""), self._cap_visible_tools(), None,
+                             bool(args.get("deep")))
+            found.update({c["id"]: c for c in res["candidates"]})
+            return CG.render(res)
+        c = found.get(add)
+        if c is None:
+            return (f"No candidate {add!r} from a search in this chat. Search first with get_capability(need), then "
+                    "pass one of the ids it lists.")
+        if c["tier"] in ("enabled", "write") or not c.get("addable"):
+            return c.get("how") or f"{c['name']} cannot be added from here."
+        cd = CG.card(c)
+        decision, note = self._cap_ask(cd["title"], cd["detail"])
+        if decision == "no answer":
+            return ("The card is still waiting for the user, so nothing was added. Stop here and say what you are "
+                    "waiting for; do not retry the card." + (f" ({note})" if note else ""))
+        if decision != "yes":
+            return f"The user said no, so {c['name']} was not added." + (f" Their note: {note}" if note else "") + \
+                " Do not ask again for it in this task; go on another way."
+        try:
+            r = CG.install(c)
+        except (ValueError, OSError) as e:
+            return f"Not added: {e}"
+        if r["missing"]:
+            return (f"Added {c['name']} as the MCP server {r['server']}, switched off until the user fills in "
+                    f"{', '.join(r['missing'])} in Settings, MCP servers (the values go into meshpool's settings, never "
+                    "into this chat). Ask the user to do that; never ask them to paste a key here.")
+        msg = f"Added {c['name']} as the MCP server {r['server']} and switched it on."
+        if self.mcp:
+            try:
+                self._wait(self.mcp.add, r["server"], r["spec"])
+                msg += " Its tools are available now; look them up with mcp_find_tools."
+            except Exception as e:  # noqa: BLE001 - the entry stays; the next chat starts it
+                msg += f" It did not start here ({str(e)[:200]}); it starts in the next chat."
+        self.emit({"type": "status", "text": f"Added {c['name']} ({'remote service' if c.get('remote') else 'local'})."})
+        return msg
+
+    def _save_tool(self, args: dict) -> str:
+        from meshpool_harness import tools_store as TS
+        try:
+            name = TS.check_name(args.get("name"))
+        except TS.ToolRefused as e:
+            return f"Not saved: {e}"
+        kind = str(args.get("kind") or "")
+        files, tests = args.get("files") or {}, args.get("tests") or {}
+        listed = ", ".join(sorted(list(files)[:12] + [f"tests: {t}" for t in list(tests)[:6]]))
+        detail = (f"Name: {name}\nKind: {kind}\nWhat it does: {args.get('description', '')}\nSource: written by the "
+                  f"agent in this chat\nFiles: {listed}\nWhere it goes: {TS.folder() / name}\n"
+                  "Before it is kept, its tests run in the sandbox and must pass, and a scan refuses risky code."
+                  + ("\nIt runs as a local MCP server, added to mcp.json." if kind == "mcp" else ""))
+        decision, note = self._cap_ask(f"Keep the new tool {name} for later chats?", detail)
+        if decision == "no answer":
+            return "The card is still waiting for the user, so the tool was not kept. Stop here; do not retry the card."
+        if decision != "yes":
+            return f"The user said no, so {name} was not kept." + (f" Their note: {note}" if note else "")
+        try:
+            prov = self._wait(TS.save, name, kind, str(args.get("description") or ""), files, tests,
+                              "written by the agent", "1", bool(args.get("overwrite")))
+        except (TS.ToolRefused, OSError) as e:
+            return f"{e}"
+        msg = (f"Kept {name} (sha256 {prov['sha256'][:12]}). Its tests passed"
+               + (" in the sandbox." if prov["tests"]["sandboxed"] else " (this computer has no sandbox).")
+               + (" Scan notes: " + "; ".join(prov["caution"]) if prov["caution"] else ""))
+        if kind == "mcp" and self.mcp and prov.get("server"):
+            try:
+                from meshpool_harness.agent import mcp as M
+                self._wait(self.mcp.add, prov["server"], M.load_config().get(prov["server"]) or {})
+                msg += " Its tools are available now through mcp_find_tools."
+            except Exception as e:  # noqa: BLE001
+                msg += f" It did not start here ({str(e)[:200]}); it starts in the next chat."
+        else:
+            msg += " Later chats find it with find_skill."
+        return msg
+
+    def _cap_signal(self, text: str, kind: str) -> str:
+        """A missing-capability signal in a tool result or a reply (capability_get.missing_signal) turns the capability
+        tools on from the next model step. A reply counts while the task is open: no plan, or a plan step not done."""
+        if getattr(self, "capability_on", False) or _cap_mode() in ("0", "off", "false", "no"):
+            return ""
+        try:
+            from meshpool_harness import capability_get as CG
+            todos = getattr(self, "_todos", None) or []
+            task_open = not todos or any(i.get("status") != "completed" for i in todos)
+            hit = CG.missing_signal(text, kind, task_open)
+        except Exception:  # noqa: BLE001 - never breaks a step
+            return ""
+        if hit:
+            self.capability_on = True
+        return hit
+
+    def _saved_tool_result(self, name: str, ok: bool, out: str) -> None:
+        """A saved MCP tool that fails is marked failing and the user is told; a later success clears it. Never
+        removed."""
+        try:
+            server = (getattr(self.mcp, "map", {}) or {}).get(name, ("",))[0]
+            if not server:
+                return
+            from meshpool_harness import tools_store as TS
+            tool = TS.server_tool(server)
+            if not tool:
+                return
+            if not ok and TS.mark_failing(tool, out[:200]):
+                self.emit({"type": "status", "text": f"The saved tool {tool} failed and is marked failing. It stays "
+                                                     "installed; fix it or remove it in Settings."})
+            elif ok:
+                TS.mark_ok(tool)
+        except Exception:  # noqa: BLE001 - bookkeeping never breaks a tool call
+            pass
 
     def _run_subtasks(self, name: str, args: dict):
         """Sub-agents for this chat run here, in the app's own process, with what only this chat knows: its model,
@@ -4123,6 +4311,7 @@ class Agent:
         """Run one user request to the end of the agent's turn. Returns the final reply text.
         images: [{"mime": "image/png", "data": base64, "name": ...}] attached by the user."""
         self._stop = False
+        self.cap_pending = ""                                 # a new message or Resume answers an open capability card
         self._partial_text, self.last_request_id = "", ""     # nothing from an earlier turn's failures
         self._skill_block = {}                                # skill tool limits last one turn
         for m in re.findall(r"(?<![\w$])\$([A-Za-z0-9][\w-]{1,63})", str(text or "")):
@@ -4183,6 +4372,8 @@ class Agent:
                 self.browser_on = True
             if re.search(_WEB_ASK, own, re.I) or re.search(_WEB_LOOKUP, own, re.I):
                 self.web_on = True                          # news, a site, "look it up": web_research and fetch_url join
+            if re.search(_CAP_ASK, own, re.I):              # "add a tool for X", "connect Y": the capability tools join
+                self.capability_on = True
         except Exception:  # noqa: BLE001
             pass
         if self._office_direct_raw() and not self.office_engines:   # decided here, before the turn: fixed for the turn
@@ -4779,6 +4970,7 @@ class Agent:
                     again, final = self._grade_gate(g, turn, final)   # independent check of a big task (agent/grader.py)
                     if again:
                         continue
+                    self._cap_signal(final, "reply")          # "I don't have a tool for that": offered next step
                     final = self._without_trailing_promise(final)
                     final = self._without_false_sourcing(final, g)
                     break
@@ -4813,6 +5005,7 @@ class Agent:
                     step_out += outs
                     for c, out in zip(batch, outs):
                         self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": clean(out)})
+                        self._cap_signal(str(out), "tool")      # "command not found": the capability tools join
                         if _engine_tool((c.get("function") or {}).get("name") or ""):   # the file an office job made
                             made = _job_file(str(out), self.root)
                             if made:
@@ -8047,6 +8240,7 @@ class Agent:
                 out, err = self._wait(self.mcp.call, name, args, on_stop=getattr(self.mcp, "abort_calls", None))
                 paged = self.__dict__.setdefault("_paged", set())
                 pre, post, ok = MA.classify(str(out), bool(err), name in paged)
+                self._saved_tool_result(name, ok, str(out))
                 post += self._repeat_note(name, args, ok)
                 if ok and MA.assist_on():
                     note, replace = MA.same_result(self.__dict__.setdefault("_same_out", {}), name, str(out))
@@ -8085,6 +8279,10 @@ class Agent:
             elif name == "find_skill":
                 from meshpool_harness import skills as SK
                 out = SK.search_text(str(args.get("query", "")))
+            elif name == "get_capability":
+                out = self._get_capability(args)
+            elif name == "save_tool":
+                out = self._save_tool(args)
             elif name == "diagnostics":
                 out = self._wait(_PACKS.diagnostics, self.ws, args.get("paths"), args.get("language"),
                                  bool(args.get("deep")))

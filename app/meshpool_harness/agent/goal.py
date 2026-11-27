@@ -675,6 +675,9 @@ def decide(st: dict, out: dict, check: dict | None = None) -> dict:
         return {"action": "paused", "reason": "the rubric was changed outside meshpool", "question": "", "findings": {}}
     if out.get("interrupted"):
         return {"action": "paused", "reason": "you stopped it", "question": "", "findings": {}}
+    if out.get("approval_pending"):              # a get_capability card nobody answered: wait for the user
+        return {"action": "paused", "reason": "it is waiting for your approval",
+                "question": f"Answer the card: {str(out['approval_pending'])[:300]}", "findings": {}}
     err = out.get("error") or ""
     if err == "auth":
         return {"action": "paused", "reason": "the model's key was refused", "question": "", "findings": {}}
@@ -866,6 +869,13 @@ def away_line(st: dict) -> str:
     return f"Goal {_STATUS_WORDS.get(status, status)}: {g}. {s}."
 
 
+def missing_capabilities(st: dict) -> list[str]:
+    """What the last check said open criteria need and meshpool lacks (grader item "missing_capability")."""
+    items = ((st or {}).get("findings") or {}).get("items") or []
+    return [f"{i.get('id')}: {i['missing_capability']}" for i in items
+            if i.get("status") != "met" and str(i.get("missing_capability") or "").strip()]
+
+
 def note(st: dict) -> str:
     """The note on each goal turn (hidden in the chat): the goal, the frozen rubric, the last findings, and how to end
     the reply. The agent sees the rubric; it cannot change it."""
@@ -890,6 +900,9 @@ def note(st: dict) -> str:
                                                                                 else ""))
         for x in (f.get("fix") or [])[:8]:
             lines.append(f"- fix: {x}")
+        for x in missing_capabilities(st)[:4]:
+            lines.append(f"- needs a capability meshpool lacks ({x}). You may call get_capability to find a tool "
+                         "and ask the user to add it, or write one and keep it with save_tool.")
     lines.append("Work toward the bar. End your reply with one last line: \"GOAL: READY\" when you believe every "
                  "criterion is met (an independent check will verify it), \"GOAL: CONTINUE\" and the next step if work "
                  "remains, \"GOAL: NEEDS YOU: <one plain question>\" if only the user can unblock it, or "

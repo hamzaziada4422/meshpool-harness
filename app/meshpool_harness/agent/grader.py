@@ -541,10 +541,12 @@ Missing evidence counts as NOT met. Use "unverified" only when your tools truly 
 Rules: you may only read and run checks. You must not create, change or delete any file, install anything or send anything anywhere. Be efficient: a few targeted looks are better than reading everything.
 
 Finish with ONE JSON object and nothing else (no code fence):
-{"items": [{"id": "c1", "status": "met" | "not_met" | "unverified", "evidence": "what you saw, with a file name or command"}],
+{"items": [{"id": "c1", "status": "met" | "not_met" | "unverified", "evidence": "what you saw, with a file name or command", "missing_capability": ""}],
  "fix": ["one clear instruction per open criterion, for the agent"],
  "blockers": ["something outside the agent's control that stops a criterion"],
- "needs_user": "one plain question for the user, or an empty string"}"""
+ "needs_user": "one plain question for the user, or an empty string"}
+
+Set "missing_capability" on an open criterion only when the agent cannot meet it with the tools it has (for example it needs a service, a file format or an API it has no tool for): name that capability in a few words. Otherwise leave it empty."""
 
 GOAL_CHECK = ("The agent is working toward the goal. Score the current result against the frozen rubric now. Look at "
               "the real result, then reply with the JSON object only.")
@@ -596,7 +598,11 @@ def normalise_goal(raw: dict | None, rubric: list) -> dict | None:
             ev = "the check gave no answer for this criterion"
         if st == "met" and not ev:
             st = "unverified"
-        items.append({"id": c["id"], "text": c["text"], "must": bool(c.get("must")), "status": st, "evidence": ev})
+        row = {"id": c["id"], "text": c["text"], "must": bool(c.get("must")), "status": st, "evidence": ev}
+        mc = it.get("missing_capability")
+        if isinstance(mc, str) and mc.strip() and st != "met":
+            row["missing_capability"] = " ".join(mc.split())[:120]
+        items.append(row)
     nu = raw.get("needs_user")
     nu = str(nu).strip() if isinstance(nu, str) else ""
     return {"items": items, "fix": _no_second_write(_strs(raw.get("fix"))),

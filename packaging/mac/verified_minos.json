@@ -788,6 +788,44 @@
     "sha256": "946666388eb79b307d7f497b3b33045ef807750f8e5ef3440e0ba3bbab698044",
     "wheel": "pypandoc_binary-1.13-py3-none-macosx_10_9_x86_64.whl"
    }
+  },
+  "uv": {
+   "mac-arm64": {
+    "libs": [
+     "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+     "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+     "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+     "/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration",
+     "/usr/lib/libSystem.B.dylib",
+     "/usr/lib/libiconv.2.dylib",
+     "/usr/lib/libobjc.A.dylib"
+    ],
+    "member": "uv-0.13.7.data/scripts/uv",
+    "minos": [
+     11,
+     0
+    ],
+    "sha256": "f91a229093163eefca89ea1b220a221d64c3beade05d03519a6584d1797a5a5f",
+    "wheel": "uv-0.13.7-py3-none-macosx_11_0_arm64.whl"
+   },
+   "mac-x64": {
+    "libs": [
+     "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+     "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+     "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+     "/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration",
+     "/usr/lib/libSystem.B.dylib",
+     "/usr/lib/libiconv.2.dylib",
+     "/usr/lib/libobjc.A.dylib"
+    ],
+    "member": "uv-0.13.7.data/scripts/uv",
+    "minos": [
+     10,
+     12
+    ],
+    "sha256": "fd04bf01ba5f2829f4f94ca8f0c24a743f21e73d75045613ed6fc2fd66fc7bda",
+    "wheel": "uv-0.13.7-py3-none-macosx_10_12_x86_64.whl"
+   }
   }
  },
  "x86_64": {

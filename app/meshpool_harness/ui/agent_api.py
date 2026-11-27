@@ -2881,6 +2881,8 @@ class Session:
         percent of a budget (once)."""
         st = self.gs
         text = "\n\n​" + GL.note(st)
+        if GL.missing_capabilities(st) and getattr(self, "agent", None) is not None:
+            self.agent.capability_on = True          # the check found a criterion that needs a tool meshpool lacks
         if GL.converge_due(st):
             st["converged"] = True
             self._goal_save()
@@ -2901,9 +2903,11 @@ class Session:
             if tail.endswith("?"):                   # no GOAL line, a question: the agent asks the user (the old rule)
                 needs = tail[-400:]
         blocker = rest if word == GL.BLOCKED else ((out["error"] or {}).get("text") or "") if err == "other" else ""
+        pending = str(getattr(getattr(self, "agent", None), "cap_pending", "") or "")
         return {"interrupted": out["interrupted"], "error": err, "acted": out["acted"],
                 "ready": word == GL.READY and not err and not out["interrupted"], "needs": needs, "blocker": blocker,
-                "loop": loop, "changed": self._goal_files_changed(out["acted"]), "word": word}
+                "loop": loop, "changed": self._goal_files_changed(out["acted"]), "word": word,
+                "approval_pending": pending}
 
     def _goal_files_changed(self, acted: bool) -> bool:
         """Did this turn change any file? From the checkpoints (what the turn really wrote), else from its steps."""
