@@ -167,6 +167,31 @@ def test_the_linux_bundle_builds_and_carries_bubblewrap():
     assert 'h.check("command sandbox (bubblewrap)"' in health and "skill_programs, sandbox)" in health
 
 
+def test_the_release_health_check_passes_when_the_sandbox_confines_the_command(tmp_path, monkeypatch):
+    """The check's command ended with `touch /usr/... && echo escaped`: confined, that touch fails, so the command
+    exited 1 and the check failed exactly when the sandbox worked (a release built where namespaces are allowed would
+    have stopped). The command exits 0 when confined now."""
+    if os.name == "nt" or not sys.platform.startswith("linux"):
+        pytest.skip("the sandbox check runs on Linux only")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("tool_health_t", ROOT / "packaging" / "tool_health.py")
+    TH = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(TH)
+    stub = tmp_path / "stubs"
+    stub.mkdir()
+    (stub / "touch").write_text("#!/bin/sh\necho \"touch: cannot touch '$1': Read-only file system\" >&2\nexit 1\n")
+    (stub / "touch").chmod(0o755)
+    fake = tmp_path / "bwrap"                     # confines the way bubblewrap's read-only root does: writes outside fail
+    fake.write_text(f"#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done; shift\nPATH='{stub}':\"$PATH\" exec \"$@\"\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(SB, "bwrap_program", lambda: str(fake))
+    monkeypatch.setattr(SB, "wrap", lambda argv, root, mode="ask", **k: [str(fake), "--", *argv])
+    h = TH.Health(tmp_path / "app", [])
+    TH.sandbox(h)
+    tool, status, detail = TH.RESULTS[-1]
+    assert tool == "command sandbox (bubblewrap)" and status == "ok", (status, detail)
+
+
 @pytest.mark.skipif(not sys.platform.startswith("linux") or not shutil.which("gcc") or not shutil.which("make")
                     or os.environ.get("MH_BUILD_BWRAP") != "1",
                     reason="builds bubblewrap from source (network, gcc): set MH_BUILD_BWRAP=1")

@@ -721,8 +721,9 @@ def sandbox(h: Health):
             said = "; ".join(f"{p}: {SBX.bwrap_starts(p)[1]}" for p in dict.fromkeys(filter(None, (shutil.which("bwrap"), own))))
             raise Skip("this computer does not let programs make user namespaces, so commands run without the sandbox "
                        f"and the app asks before risky steps ({said[:200] or 'no bubblewrap'})")
-        argv = SBX.wrap(["bash", "-c", "echo inside > sandbox-health.txt; touch /usr/meshpool-health 2>/dev/null && echo escaped"],
-                        h.proj, mode="ask")
+        # exits 0 when confined: a refused write outside the folder is the expected result, not the command's failure
+        argv = SBX.wrap(["bash", "-c", "echo inside > sandbox-health.txt; if touch /usr/meshpool-health 2>/dev/null; "
+                         "then echo escaped; fi"], h.proj, mode="ask")
         if argv[0] != bw:
             raise Fail(f"the command was not wrapped: {argv[:3]}")
         r = subprocess.run(argv, cwd=str(h.proj), capture_output=True, text=True, timeout=60)
