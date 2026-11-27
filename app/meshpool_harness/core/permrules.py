@@ -319,11 +319,39 @@ def _arg_paths(a: str) -> list[str]:
     return [v for v in out if v]
 
 
+_CD_FIRST = re.compile(r"""\s*cd\s+("[^"$`\\]*"|'[^']*'|[^\s;&|<>()$`"'\\]+)\s*&&\s*(?=\S)""")
+
+
+def _peel_cd(cmd: str, root, cwd=None):
+    """(rest, folder) for `cd FOLDER && rest` when FOLDER is a plain path inside the project, else None. Models write
+    `cd /path/to/project && git status` all the time; the cd alone made a plain read ask for approval
+    (anthropics/claude-code#28240)."""
+    m = _CD_FIRST.match(cmd or "")
+    if not m:
+        return None
+    d = m.group(1)
+    d = d[1:-1] if d[:1] in "\"'" else d
+    if not d or d.startswith(("~", "-")):
+        return None
+    if re.match(r"^[A-Za-z]:(?![\\/])", d):
+        return None                                  # C:x is relative to that drive's own folder: never followed
+    p = d if os.path.isabs(d) else os.path.join(str(cwd if cwd is not None else root), d)
+    if not _inside(p, root) or not os.path.isdir(p):
+        return None
+    return cmd[m.end():], os.path.realpath(p)
+
+
 def safe_read(cmd: str, root, cwd=None) -> bool:
     """H-15: a single plain read-only command (tools.read_only, which already refuses writes and unknown programs)
-    whose paths stay inside the project. Compound commands, substitutions and `$` never qualify. cwd: the folder the
-    command runs in (a shell call's workdir); it must be inside the project too, and relative paths start there."""
+    whose paths stay inside the project. Compound commands, substitutions and `$` never qualify, except a leading
+    `cd FOLDER &&` into a folder of the project (the read is then checked from there). cwd: the folder the command
+    runs in (a shell call's workdir); it must be inside the project too, and relative paths start there."""
     from meshpool_harness.core import tools as T
+    if cwd is not None and not _inside(str(cwd), root):
+        return False
+    peeled = _peel_cd(cmd, root, cwd)
+    if peeled:
+        return safe_read(peeled[0], root, peeled[1])
     if not cmd or "$" in cmd or compound(cmd) or writes(cmd) or not T.read_only(cmd):
         return False
     if cwd is not None and not _inside(str(cwd), root):

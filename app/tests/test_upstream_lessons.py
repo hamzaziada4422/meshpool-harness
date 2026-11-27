@@ -101,6 +101,23 @@ def test_approval_check_before_git_stash_leaves_the_index_alone(tmp_path):
     assert _index(r) == before
 
 
+# ------------------------------------------------------------------ 2b. `cd FOLDER && read` needs no approval
+def test_a_read_after_cd_into_the_project_does_not_ask(tmp_path):
+    from meshpool_harness.core import permrules as PR
+    root = tmp_path / "proj"
+    (root / "src").mkdir(parents=True)
+    out = tmp_path / "elsewhere"
+    out.mkdir()
+    (root / "away").symlink_to(out, target_is_directory=True)
+    for c in ("cd src && ls -la", f"cd {root} && git log --oneline -5", 'cd "src" && grep -rn foo .',
+              "cd src && cd .. && cat README.md"):
+        assert PR.safe_read(c, root), c
+    for c in ("cd .. && ls", "cd ~ && ls", "cd /etc && cat passwd", "cd away && ls", "cd src && cat ../../x",
+              "cd src && ls && rm -rf .", "cd src && rm -rf .", "cd src && ls > f", "cd $HOME && ls",
+              "cd src; cat a.txt", "cd missing && ls"):
+        assert not PR.safe_read(c, root), c
+
+
 # ------------------------------------------------------------------ 3. errors in plain words
 def test_openrouter_provider_error_shows_the_provider_words_not_json():
     inner = {"error": {"message": "This model's maximum context length is 128000 tokens."}}
