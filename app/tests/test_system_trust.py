@@ -136,6 +136,16 @@ def _calls(url):
     return out
 
 
+def _uses_truststore_itself(mod: str) -> bool:
+    """The installed httpx / httpx2 builds its default context from truststore (httpx2 2.14 does, 2.16 does not)."""
+    import importlib
+    import inspect
+    try:
+        return "truststore.SSLContext" in inspect.getsource(importlib.import_module(mod + "._config"))
+    except (ImportError, OSError, TypeError):
+        return False
+
+
 @pytest.mark.skipif(not sys.platform.startswith("linux"),
                     reason="the stand-in system store is truststore's Linux one; macOS and Windows ask their own store")
 def test_a_certificate_only_in_the_system_store_is_trusted_everywhere(system_trust, monkeypatch, tmp_path):
@@ -152,7 +162,14 @@ def test_a_certificate_only_in_the_system_store_is_trusted_everywhere(system_tru
     monkeypatch.setattr(_api, "_configure_context", system_store)
     with _https_server(cert, key) as url:
         before = _calls(url)
-        assert before and all("CERTIFICATE_VERIFY_FAILED" in v or "certificate" in v.lower() for v in before.values()), before
+        # a client that asks the system's store by itself already works: httpx2 before 2.16 (the newest one for
+        # Python 3.10, so the CI's 3.10 job installs it) builds truststore.SSLContext on its own; every other path,
+        # meshpool's own first, fails until use_system_trust runs
+        native = {m for m in ("httpx", "httpx2") if m in before and _uses_truststore_itself(m)}
+        assert {"web tools", "model call", "urllib"} <= set(before), before
+        assert all("CERTIFICATE_VERIFY_FAILED" in v or "certificate" in v.lower()
+                   for k, v in before.items() if k not in native), before
+        assert all(before[k] == "ok" for k in native), before
         assert H.use_system_trust() is True and H.system_trust_on()
         after = _calls(url)
     assert after == {k: "ok" for k in before}, after
