@@ -1,6 +1,6 @@
 """The programs Meshpool ships inside its installers, and how the installed app finds them.
 
-Rule: in the packaged app (config.packaged(), or a frozen build) Meshpool uses ONLY its own copy of Node.js, uv, Git, Pi,
+Rule: in the packaged app (config.packaged(), or a frozen build) meshpool uses ONLY its own copy of Node.js, uv, Git, Pi,
 Chromium, LibreOffice (office_runtime.py), ffmpeg, pandoc and the speech-to-text model. It never falls back to PATH, npx or a download. Codex and OpenCode are not
 shipped at all (harnesses.NOT_SHIPPED). In a source checkout or command-line install nothing changes: PATH and npx
 still work.
