@@ -4,7 +4,10 @@ On by default where the computer has the tool, except in Full access (MH_SANDBOX
 Commands can read everything but write only inside the project folder, the temporary folders and the usual tool caches
 (pip, npm, cargo), so a mistaken or hostile command - including a shell redirection - cannot damage the rest of the
 computer. MH_SANDBOX_NETWORK=0 (Settings, or `meshpool --no-network`) also cuts the network.
-Linux uses bubblewrap (bwrap --ro-bind / / plus writable binds, --unshare-net) and macOS uses sandbox-exec with a
+Linux uses bubblewrap (bwrap --ro-bind / / plus writable binds, --unshare-net): the system's when it can start here,
+else the copy the Linux app carries (vendor/bwrap, built by packaging/linux/build_bwrap.sh). bubblewrap needs
+unprivileged user namespaces; where the kernel refuses them (or, on Ubuntu 23.10 and later, AppArmor refuses them to a
+copy without a profile) neither starts, and commands run without it, as on Windows. macOS uses sandbox-exec with a
 Seatbelt profile in the same shape Codex's (openai/codex, Apache-2.0) uses: allow default, deny file-write*, then allow
 the listed folders; see THIRD_PARTY_NOTICES.md. Windows has neither, and says so once.
 """
@@ -12,6 +15,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -49,25 +53,110 @@ def network_allowed() -> bool:
     return _setting("MH_SANDBOX_NETWORK") not in _OFF
 
 
-def available(platform: str | None = None, which=shutil.which) -> bool:
+_STARTS: dict = {}                   # bubblewrap program -> (it starts a sandbox here, what it said when it did not)
+
+
+def _bundled_bwrap() -> str | None:
+    """The bubblewrap the Linux app carries (<app>/vendor/bwrap/bwrap), when this build has it."""
+    try:
+        from meshpool_harness import bundled
+        return bundled.bundled_program("bwrap")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def bwrap_starts(path: str) -> tuple[bool, str]:
+    """(bubblewrap at `path` can make its sandbox on this computer, its error when it cannot). Asked once per program:
+    it needs unprivileged user namespaces, which some kernels turn off, and which Ubuntu 23.10 and later allow only to
+    programs with an AppArmor profile (the distribution's /usr/bin/bwrap has one, a copy elsewhere does not)."""
+    hit = _STARTS.get(path)
+    if hit is None:
+        try:
+            r = subprocess.run([path, "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--unshare-pid",
+                                "--unshare-net", "--die-with-parent", "--", "true"], capture_output=True, text=True, timeout=15,
+                               stdin=subprocess.DEVNULL)
+            hit = (r.returncode == 0, " ".join((r.stderr or "").split())[:300])
+        except (OSError, subprocess.SubprocessError) as e:
+            hit = (False, str(e)[:300])
+        _STARTS[path] = hit
+    return hit
+
+
+def bwrap_program(which=None) -> str:
+    """The bubblewrap commands run in: "bwrap" (the system's, on PATH) or the full path of the app's own copy,
+    whichever starts a sandbox here, the system's first (on Ubuntu its AppArmor profile lets it start where a copy
+    cannot); "" when none can. A `which` given by the caller (tests) is taken at its word, without starting it."""
+    real = which is None
+    system = (which or shutil.which)("bwrap")
+    cands = [("bwrap", system)] if system else []
+    own = _bundled_bwrap() if real else None
+    if own and not (system and os.path.realpath(own) == os.path.realpath(system)):
+        cands.append((own, own))
+    for name, path in cands:
+        if not real or bwrap_starts(path)[0]:
+            return name
+    return ""
+
+
+def available(platform: str | None = None, which=None) -> bool:
     plat = platform or sys.platform
-    return (plat.startswith("linux") and bool(which("bwrap"))) or (plat == "darwin" and bool(which("sandbox-exec")))
+    return (plat.startswith("linux") and bool(bwrap_program(which))) or \
+        (plat == "darwin" and bool((which or shutil.which)("sandbox-exec")))
 
 
 def _say(key: str, msg: str) -> None:
     if key not in _SAID:
         _SAID.add(key)
-        print(f"[Meshpool] {msg}", file=sys.stderr)
+        print(f"[meshpool] {msg}", file=sys.stderr)
 
 
-def unavailable_notice(platform: str | None = None) -> str:
+def install_command(os_release: str | None = None) -> str:
+    """The command that installs bubblewrap on this Linux, from /etc/os-release (ID and ID_LIKE); "" when unknown."""
+    if os_release is None:
+        try:
+            os_release = Path("/etc/os-release").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            os_release = ""
+    ids = []
+    for line in os_release.splitlines():
+        k, _, v = line.partition("=")
+        if k.strip() in ("ID", "ID_LIKE"):
+            ids += v.strip().strip('"').lower().split()
+    for keys, cmd in ((("debian", "ubuntu", "linuxmint", "pop", "elementary", "raspbian"), "sudo apt install bubblewrap"),
+                      (("fedora", "rhel", "centos", "rocky", "almalinux"), "sudo dnf install bubblewrap"),
+                      (("arch", "manjaro", "endeavouros"), "sudo pacman -S bubblewrap"),
+                      (("opensuse", "suse", "opensuse-leap", "opensuse-tumbleweed"), "sudo zypper install bubblewrap"),
+                      (("alpine",), "sudo apk add bubblewrap"), (("void",), "sudo xbps-install bubblewrap"),
+                      (("gentoo",), "sudo emerge sys-apps/bubblewrap"), (("nixos",), "add bubblewrap to your system packages")):
+        if any(i in keys for i in ids):
+            return cmd
+    return ""
+
+
+_ASKS = ("meshpool asks once before it runs ordinary commands in your folder without it, then only before risky steps, "
+         "such as deleting files, using the internet or installing something. Undo covers the changes.")
+
+
+def unavailable_notice(platform: str | None = None, which=None, os_release: str | None = None) -> str:
+    """Why commands run without the sandbox, in plain words, with the one command that fixes it where there is one."""
     plat = platform or sys.platform
     if plat.startswith("win"):
-        return "The command sandbox is not available on Windows; commands run with your full access."
+        return "The command sandbox is not available on Windows. " + _ASKS
     if plat == "darwin":
-        return "The command sandbox needs sandbox-exec, which this Mac does not have; commands run without it."
-    return ("The command sandbox needs bubblewrap (install the bwrap package); until then commands run without it "
-            "and can write anywhere you can.")
+        return "The command sandbox needs sandbox-exec, which this Mac does not have, so commands run without it."
+    cmd = install_command(os_release)
+    system = (which or shutil.which)("bwrap")
+    if system or _bundled_bwrap():
+        why = ("The command sandbox (bubblewrap) cannot start on this computer: the system does not let programs make "
+               "the user namespaces it needs. ")
+        # Ubuntu 23.10 and later allow them only to programs with an AppArmor profile; the distribution's package has
+        # one, so installing it helps there. Where the kernel turns them off for everyone, nothing short of a system
+        # setting does, and that is not asked of anyone.
+        fix = f" To turn the sandbox on, run: {cmd}" if cmd and not system else ""
+    else:
+        why = "The command sandbox needs bubblewrap, which this computer does not have. "
+        fix = f" To turn the sandbox on, run: {cmd}" if cmd else ""
+    return why + _ASKS + fix
 
 
 _GIT_DIRS: dict = {}                 # root -> (what the answer depends on, the answer): one git process per folder
@@ -217,7 +306,7 @@ def _office_profile() -> str | None:
     return str(d)
 
 
-def wrap(argv: list[str], root, platform: str | None = None, which=shutil.which, cwd=None, mode: str | None = None,
+def wrap(argv: list[str], root, platform: str | None = None, which=None, cwd=None, mode: str | None = None,
          offline: bool = False) -> list[str]:
     """argv, wrapped so it can only write where it should. Unchanged when the sandbox is off or unavailable (with a
     notice, once, when it was wanted). offline: no network for this command (one that ran without a question)."""
@@ -226,8 +315,9 @@ def wrap(argv: list[str], root, platform: str | None = None, which=shutil.which,
     plat = platform or sys.platform
     root = Path(root).resolve()
     net = network_allowed() and not offline
-    if plat.startswith("linux") and which("bwrap"):
-        out = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--die-with-parent", "--unshare-pid"]
+    bw = bwrap_program(which) if plat.startswith("linux") else ""
+    if bw:
+        out = [bw, "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--die-with-parent", "--unshare-pid"]
         if not net:
             out.append("--unshare-net")
         ws = _writable(root, True) if offline else _writable(root)
@@ -262,7 +352,7 @@ def wrap(argv: list[str], root, platform: str | None = None, which=shutil.which,
             for p in _locked(root):
                 out += ["--ro-bind", p, p]
         return out + ["--chdir", str(Path(cwd).resolve() if cwd else root), "--"] + argv
-    if plat == "darwin" and which("sandbox-exec"):
+    if plat == "darwin" and (which or shutil.which)("sandbox-exec"):
         ws = _writable(root, True) if offline else _writable(root)
         allow = "".join(f'(subpath "{p}")' for p in ws + ["/private/tmp", "/private/var/folders"])
         profile = ('(version 1)(allow default)(deny file-write*)' + ("" if net else "(deny network*)") +

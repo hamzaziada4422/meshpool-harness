@@ -2596,6 +2596,10 @@ def _norm_text(t: str) -> str:
     return " ".join(t.lower().split())
 
 
+_FOLDER_OK = "folder:ordinary-work"         # in Agent.always: the chat's one yes for ordinary work without a sandbox
+_NOTICED: set = set()                      # notices said once per app run
+
+
 def _sandbox_auto_on() -> bool:
     """MH_SANDBOX_AUTO (Settings, Permissions: "Ask before every command and change" sets 0), read from the
     environment or the settings file at call time, so a change in Settings reaches open chats."""
@@ -7156,12 +7160,25 @@ class Agent:
         except Exception:  # noqa: BLE001
             return False
 
+    def _say_no_sandbox(self) -> None:
+        """Once per app run, in the chat: commands run without the OS sandbox here, why, and the command that turns it
+        on (the distribution's bubblewrap) where one does. It used to be one line in the server log only."""
+        if "no-sandbox" in _NOTICED:
+            return
+        _NOTICED.add("no-sandbox")
+        try:
+            from meshpool_harness.core import sandbox as SBX
+            self.emit({"type": "status", "text": SBX.unavailable_notice()})
+        except Exception:  # noqa: BLE001 - a notice never blocks the question
+            pass
+
     def _work_without_asking(self) -> bool:
         """Ordinary work in the folder runs without a question: in the sandbox, or after the user's one yes for the
         chat where there is none. MH_SANDBOX_AUTO=0 asks as before 0.0.18."""
         if not _sandbox_auto_on():
             return False
-        return self._sandboxed() or bool(getattr(self, "_folder_ok", False))
+        # the one yes is kept in the chat's saved "allow" set too, so it outlives the reaper, a restart and a handoff
+        return self._sandboxed() or bool(getattr(self, "_folder_ok", False)) or _FOLDER_OK in (self.always or ())
 
     def _edit_inside(self, name: str, args: dict) -> bool:
         """Every file this edit touches is inside the chat's folder (or one the user added)."""
@@ -7699,6 +7716,8 @@ class Agent:
                   and not self._sandboxed() and (group == "edit" or office_w or
                                                  (cmds and all(PR.sandbox_auto_ok(c, self.root, wd, self._chat_made(), self._chat_touched()) for c in cmds))))
         folder = folder and not outside_edit
+        if folder:                                 # why this asks: said once in the app, with the fix where there is one
+            self._say_no_sandbox()
         scope = ("once" if risky == "destructive" or _destructive(args, self.root) or orisk or outside_edit else   # a destructive command: this once only
                  # no sandbox: one yes for the chat. Said plainly (review, 0.0.18): nothing isolates these commands
                  "ordinary commands and edits in this folder (not isolated: this computer has no sandbox)" if folder else
@@ -7721,6 +7740,7 @@ class Agent:
                 c.strip() for c in PR.commands_of(name, args) if c.strip())
         if decision == "always" and folder:
             self._folder_ok = True                 # what _work_without_asking reads for the rest of this chat
+            self.always.add(_FOLDER_OK)
         if decision == "always" and scope != "once":
             if group == "bash":
                 self.always.update("bash:" + p for p in pats)   # no pattern (a chain, a redirect): this once only

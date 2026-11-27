@@ -701,6 +701,38 @@ def skill_programs(h: Health):
     h.check("skill program: OCR (read_file on a picture)", ocr)
 
 
+# ---------- the command sandbox (Linux: the bubblewrap the app carries, or the system's) ---------------------------
+
+def sandbox(h: Health):
+    """Commands in Ask mode run in the sandbox without a question: it must start, and confine a command to the folder.
+    Where the computer refuses user namespaces (a container, some kernels) the app runs commands without it and asks
+    before risky steps instead: a skip that says so, not a failure."""
+    if not sys.platform.startswith("linux"):
+        return
+    from meshpool_harness import bundled
+    from meshpool_harness.core import sandbox as SBX
+
+    def run():
+        own = bundled.bundled_program("bwrap")
+        if bundled.packaged() and not own:
+            raise Fail("bubblewrap is not in the app (vendor/bwrap): packaging/build_all.py bwrap_linux")
+        bw = SBX.bwrap_program()
+        if not bw:
+            said = "; ".join(f"{p}: {SBX.bwrap_starts(p)[1]}" for p in dict.fromkeys(filter(None, (shutil.which("bwrap"), own))))
+            raise Skip("this computer does not let programs make user namespaces, so commands run without the sandbox "
+                       f"and the app asks before risky steps ({said[:200] or 'no bubblewrap'})")
+        argv = SBX.wrap(["bash", "-c", "echo inside > sandbox-health.txt; touch /usr/meshpool-health 2>/dev/null && echo escaped"],
+                        h.proj, mode="ask")
+        if argv[0] != bw:
+            raise Fail(f"the command was not wrapped: {argv[:3]}")
+        r = subprocess.run(argv, cwd=str(h.proj), capture_output=True, text=True, timeout=60)
+        if r.returncode or "escaped" in r.stdout or not (h.proj / "sandbox-health.txt").is_file():
+            raise Fail(f"exit {r.returncode}: {(r.stdout + r.stderr)[-300:]}")
+        (h.proj / "sandbox-health.txt").unlink()
+        return f"{'the app' if bw == own else 'the system'}'s bubblewrap: writes in the folder, not outside it"
+    h.check("command sandbox (bubblewrap)", run)
+
+
 # ---------- main ---------------------------------------------------------------------------------------------------
 
 def every_tool(h: Health) -> list[str]:
@@ -730,7 +762,7 @@ def main() -> int:
         h.start_servers()
         h.make_agent()
         for part in (core_tools, office, web_server, assistant, tools_server, resources, browser, computer,
-                     skill_programs):
+                     skill_programs, sandbox):
             try:
                 part(h)
             except Exception as e:  # noqa: BLE001

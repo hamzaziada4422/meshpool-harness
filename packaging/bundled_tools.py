@@ -62,6 +62,19 @@ GIT_VERSION = "2.56.1"
 GIT_SOURCE_SHA256 = "f0b0bf89264b9bd2e1c640363e7529643989da76281600473c50745cd34a607f"   # from kernel.org sha256sums.asc
 GIT_SOURCE_URL = f"https://mirrors.edge.kernel.org/pub/software/scm/git/git-{GIT_VERSION}.tar.xz"
 
+# Linux: bubblewrap, the command sandbox (core/sandbox.py), built static from source with libcap by
+# packaging/linux/build_bwrap.sh into <app>/vendor/bwrap. A desktop without the distribution's bwrap package then still
+# runs ordinary commands in the sandbox instead of asking. bubblewrap is LGPL-2.0-or-later; libcap is BSD-3-Clause or
+# GPL-2.0 (BSD used here). Both are built unmodified; the source is at these URLs (THIRD_PARTY_NOTICES.md).
+BWRAP_VERSION = "0.11.0"
+BWRAP_SOURCE_SHA256 = "988fd6b232dafa04b8b8198723efeaccdb3c6aa9c1c7936219d5791a8b7a8646"   # the GitHub release tarball
+BWRAP_SOURCE_URL = (f"https://github.com/containers/bubblewrap/releases/download/v{BWRAP_VERSION}/"
+                    f"bubblewrap-{BWRAP_VERSION}.tar.xz")
+LIBCAP_VERSION = "2.76"
+LIBCAP_SOURCE_SHA256 = "629da4ab29900d0f7fcc36227073743119925fd711c99a1689bbf5c9b40c8e6f"  # from kernel.org sha256sums.asc
+LIBCAP_SOURCE_URL = (f"https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/"
+                     f"libcap-{LIBCAP_VERSION}.tar.xz")
+
 
 # ------------------------------------------------------------------------------------------------ ffmpeg and pandoc
 # Programs that ship inside two PyPI wheels (their publishers build the binaries and attach them to the wheel), so each
