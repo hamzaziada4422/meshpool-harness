@@ -58,17 +58,22 @@ def test_settings_page_saves_show_window_across_a_restart():
 # ---------- which browser is launched --------------------------------------------------------------------------------
 
 class _FakeChromium:
+    """fail: the channels that are missing here ("chromium" is meshpool's own Chromium, started by Playwright)."""
+
     def __init__(self, fail=()):
         self.calls, self.fail = [], set(fail)
 
     def launch_persistent_context(self, prof, **kw):
         self.calls.append(kw)
-        if kw.get("channel") in self.fail or (not kw.get("channel") and "" in self.fail):
-            raise RuntimeError("Executable doesn't exist at /x" if not kw.get("channel") else "no such channel")
+        if kw.get("channel") in self.fail:
+            raise RuntimeError("Executable doesn't exist at /x" if kw.get("channel") == "chromium" else "no such channel")
         return SimpleNamespace(set_default_timeout=lambda *_: None)
 
 
-def _browser(chromium):
+def _browser(chromium, monkeypatch):
+    monkeypatch.setattr(BU, "chromium_programs", lambda *a, **k: [])     # no Chromium found on disk: Playwright's own
+    monkeypatch.delenv("MH_TEST_CHROMIUM", raising=False)
+    monkeypatch.delenv("MH_CHROMIUM_PATH", raising=False)
     b = BS.Browser()
     b.pw = SimpleNamespace(chromium=chromium)
     return b
@@ -77,29 +82,29 @@ def _browser(chromium):
 def test_default_launch_is_bundled_chromium_headless_never_a_system_channel(monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")                 # where Chrome and Edge used to come first
     ch = _FakeChromium()
-    b = _browser(ch)
+    b = _browser(ch, monkeypatch)
     b._launch_meshpool(BU.headless(), own=False)
-    assert len(ch.calls) == 1 and ch.calls[0]["headless"] is True and ch.calls[0]["channel"] is None
+    # the full Chromium (channel "chromium"), hidden: never the headless shell, never a system browser
+    assert len(ch.calls) == 1 and ch.calls[0]["headless"] is True and ch.calls[0]["channel"] == "chromium"
     assert b.channel == "chromium" and not b.notice
 
 
 def test_system_chrome_is_only_a_last_resort_and_is_said(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
-    ch = _FakeChromium(fail={""})
-    b = _browser(ch)
-    monkeypatch.setattr(b, "_use_cached_chromium", lambda h: False)
+    ch = _FakeChromium(fail={"chromium"})
+    b = _browser(ch, monkeypatch)
     monkeypatch.setattr(b, "_install_chromium", lambda: (_ for _ in ()).throw(BS.ToolFailed("offline")))
     b._launch_meshpool(True, own=False)
-    assert [c.get("channel") for c in ch.calls] == [None, "chrome"] and all(c["headless"] for c in ch.calls)
+    assert [c.get("channel") for c in ch.calls] == ["chromium", "chrome"] and all(c["headless"] for c in ch.calls)
     assert "Google Chrome" in b.notice and b.channel == "chrome"
 
 
-def test_packaged_app_never_falls_back_to_a_system_browser():
-    ch = _FakeChromium(fail={""})
-    b = _browser(ch)
+def test_packaged_app_never_falls_back_to_a_system_browser(monkeypatch):
+    ch = _FakeChromium(fail={"chromium"})
+    b = _browser(ch, monkeypatch)
     with pytest.raises(BS.ToolFailed):
         b._launch_meshpool(True, own=True)
-    assert [c.get("channel") for c in ch.calls] == [None, None][:len(ch.calls)] and all(not c.get("channel") for c in ch.calls)
+    assert ch.calls and all(c.get("channel") == "chromium" for c in ch.calls)
 
 
 # ---------- the app window ---------------------------------------------------------------------------------------------
@@ -123,7 +128,8 @@ def test_app_window_macos_uses_the_bundled_app_and_skips_it_on_macos_11(monkeypa
     from meshpool_harness import bundled
     from meshpool_harness.ui import desktop as D
     app = tmp_path / "browsers" / "chromium-1200" / "chrome-mac" / "Chromium.app"
-    app.mkdir(parents=True)
+    (app / "Contents" / "MacOS").mkdir(parents=True)
+    (app / "Contents" / "MacOS" / "Chromium").write_text("x")     # the program inside, as Playwright installs it
     monkeypatch.setattr(bundled, "browsers_dir", lambda: tmp_path / "browsers")
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr(bundled, "browser_needs_newer_macos", lambda: "")

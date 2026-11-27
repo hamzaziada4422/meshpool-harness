@@ -46,13 +46,15 @@ def _bundled_chromium() -> list[list[str]]:
         root = bundled.browsers_dir()
         if bundled.browser_needs_newer_macos() or not root.is_dir():
             return []
+        from meshpool_harness import browser_use as BU
         flags = _APP_FLAGS
+        exe = BU.find_chromium_in(str(root))     # the same lookup as browser use: Chromium or Chrome for Testing names
+        if not exe:
+            return []
         if sys.platform == "darwin":
-            apps = sorted(root.glob("chromium-*/chrome-mac*/Chromium.app"))
-            return [["open", "-na", str(apps[-1]), "--args", *flags]] if apps else []
-        pat = "chromium-*/chrome-win*/chrome.exe" if os.name == "nt" else "chromium-*/chrome-linux*/chrome"
-        own = sorted(root.glob(pat))
-        return [[str(own[-1]), *flags]] if own else []
+            app = next((p for p in Path(exe).parents if p.suffix == ".app"), None)
+            return [["open", "-na", str(app), "--args", *flags]] if app else []
+        return [[exe, *flags]]
     except Exception:  # noqa: BLE001  the installed browsers below still work
         return []
 

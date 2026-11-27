@@ -208,19 +208,6 @@ class Browser:
         return box["r"]
 
     # ---------- start ----------------------------------------------------------------------------------------------
-    def _use_cached_chromium(self, headless: bool) -> bool:
-        """A Chromium already on this computer (any revision): used instead of downloading a second copy."""
-        path = BU.find_playwright_chromium()
-        if not path:
-            return False
-        try:
-            self.ctx = self._launch(_home() / "browser-profile" / "chromium-cached", headless=headless, executable_path=path)
-        except Exception:  # noqa: BLE001 - it may be unusable (missing system libraries): fall through to the download
-            self.ctx = None
-            return False
-        self.channel = "chromium:cached"
-        return True
-
     def _install_chromium(self):
         # Installs where the Playwright driver looks (the process's PLAYWRIGHT_BROWSERS_PATH, else its default
         # cache): the driver reads that variable once, at start.
@@ -345,45 +332,54 @@ class Browser:
         self.lock = lk
 
     def _launch(self, prof: Path, **kw):
+        """A persistent context in the profile folder prof. With a channel or executable_path, exactly that browser;
+        without, meshpool's own Chromium found the way every launch in the app finds it (browser_use.launch_chromium:
+        the full browser, also when hidden, since the app ships no headless shell)."""
         prof.mkdir(parents=True, exist_ok=True)
         if getattr(self, "lock", None) is None or self.lock.path != prof.with_name(prof.name + ".lock"):
             if getattr(self, "lock", None) is not None:
                 self.lock.release()
                 self.lock = None
             self._lock_profile(prof)
-        return self.pw.chromium.launch_persistent_context(
-            str(prof), headless=kw.pop("headless"), no_viewport=True,
-            args=["--no-first-run", "--no-default-browser-check", "--window-size=1280,900"], **kw)
+        headless = kw.pop("headless")
+        args = ["--no-first-run", "--no-default-browser-check", "--window-size=1280,900"]
+        if kw.get("channel") or kw.get("executable_path"):
+            return self.pw.chromium.launch_persistent_context(str(prof), headless=headless, no_viewport=True,
+                                                              args=args, **kw)
+        return BU.launch_chromium(self.pw, headless=headless, user_data_dir=prof, no_viewport=True, args=args)
 
     def _launch_meshpool(self, headless: bool, own: bool):
-        explicit = os.environ.get("MH_BROWSER_CHANNEL") if not own else None
-        channels = [explicit] if explicit is not None else [""]     # Meshpool's Chromium: never a system browser first
+        explicit = (os.environ.get("MH_BROWSER_CHANNEL") or "") if not own else ""   # e.g. "chrome": exactly that one
         last = None
         for attempt in range(2):
-            for ch in channels:
-                try:
-                    self.ctx = self._launch(_home() / "browser-profile" / (self.profile or ch or "chromium"),
-                                            headless=headless, channel=ch or None)
-                    self.channel = ch or "chromium"
-                    return
-                except Exception as e:  # noqa: BLE001
-                    last = e
-            # Download Chromium only when it is missing (never when the profile is merely in use), and never in the
-            # packaged app: Chromium ships inside it.
+            try:
+                self.ctx = self._launch(_home() / "browser-profile" / (self.profile or explicit or "chromium"),
+                                        headless=headless, channel=explicit or None)
+                self.channel = explicit or "chromium"
+                return
+            except Exception as e:  # noqa: BLE001
+                last = e
+            # Download Chromium only when none is on this computer (never when the profile is merely in use), and
+            # never in the packaged app: Chromium ships inside it.
             if attempt == 0 and not own and "xecutable doesn't exist" in str(last):
-                if self._use_cached_chromium(headless):     # one is already here: no download
-                    return
                 try:
                     self._install_chromium()
                 except ToolFailed as e:
-                    last = e
+                    last = ToolFailed(f"{last}\nThe download did not work either: {e}")
                     break
-                channels = [""]
+                explicit = ""
             else:
                 break
-        if not own and explicit is None and self._launch_system_fallback(headless):
+        chosen = "MH_BROWSER_CHANNEL" in os.environ     # a channel chosen on purpose ("" too) never falls back
+        if not own and not chosen and self._launch_system_fallback(headless):
             return
-        raise ToolFailed(f"Could not start a browser: {last}")
+        if isinstance(last, (BU.ChromiumNotStarted, ToolFailed)):
+            raise ToolFailed(str(last))                 # it names every program tried and what to do
+        if explicit:
+            raise ToolFailed(f"Could not start the browser chosen with MH_BROWSER_CHANNEL={explicit}: {BU._why(last)}. "
+                             "Install that browser, or remove MH_BROWSER_CHANNEL to use meshpool's own browser.")
+        raise ToolFailed(f"Could not start meshpool's browser: {BU._why(last)}. Close any other window that uses its "
+                         "profile folder and try again; if it still fails, run `meshpool check`.")
 
     def _launch_system_fallback(self, headless: bool) -> bool:
         """The last resort, source and terminal installs only: no Chromium could be found or installed, so a Chrome or

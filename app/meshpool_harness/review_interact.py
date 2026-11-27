@@ -565,23 +565,10 @@ LAUNCH_ARGS = ["--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE localhost , EXCL
 
 
 def launch_browser(pw):
-    """Headless Chromium the way meshpool opens it for previews (ui_audit.launcher): Playwright's own build first, else
-    MH_TEST_CHROMIUM, else any Chromium a Playwright install left on this computer (PLAYWRIGHT_BROWSERS_PATH first)."""
-    try:
-        return pw.chromium.launch(headless=True, args=LAUNCH_ARGS)
-    except Exception as first:  # noqa: BLE001
-        cands = [os.environ.get("MH_TEST_CHROMIUM") or ""]
-        try:
-            from meshpool_harness import browser_use as BU
-            cands.append(BU.find_playwright_chromium())
-        except Exception:  # noqa: BLE001
-            pass
-        for exe in dict.fromkeys(c for c in cands if c):
-            try:
-                return pw.chromium.launch(headless=True, executable_path=exe, args=LAUNCH_ARGS)
-            except Exception:  # noqa: BLE001
-                continue
-        raise first
+    """Headless Chromium the way meshpool opens it everywhere (browser_use.launch_chromium: the app's own full Chromium
+    first, then one a Playwright install left on this computer, never the headless shell), with LAUNCH_ARGS."""
+    from meshpool_harness import browser_use as BU
+    return BU.launch_chromium(pw, headless=True, args=LAUNCH_ARGS)
 
 
 def _tree(pids) -> list:
