@@ -264,8 +264,12 @@ def test_soffice_cannot_run_inside_codex_s_sandbox_but_meshpool_s_converter_can(
             codex = next(iter(sorted(npx.glob("*/node_modules/@openai/codex-linux-x64/vendor/*/bin/codex"))), None)
         except OSError:
             codex = None
-    if not codex or not _soffice() or not shutil.which("bwrap"):
-        pytest.skip("Codex, LibreOffice or bwrap is not here")
+    if not codex:                     # CI installs LibreOffice but not Codex: say only what is missing
+        pytest.skip("Codex CLI not installed")
+    if not shutil.which("bwrap"):
+        pytest.skip("bwrap is not here")
+    if not _soffice():
+        pytest.skip("no usable LibreOffice here")
     import subprocess
     (tmp_path / "t.txt").write_text("hello")
     env = dict(os.environ, CODEX_HOME=str(tmp_path / "ch"))
