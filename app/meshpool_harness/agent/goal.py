@@ -161,13 +161,31 @@ def load(sdir) -> dict | None:
         st = json.loads(path(sdir).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if not isinstance(st, dict) or not st.get("goal"):
+    if not isinstance(st, dict) or not st.get("goal") or not isinstance(st["goal"], str):
         return None
-    base = new(st["goal"], st.get("mode", "code"))
-    for k, v in base.items():
-        st.setdefault(k, v)
-    if st.get("rubric_hash") and rubric_hash(st.get("rubric") or []) != st["rubric_hash"]:
-        st["tampered"] = True
+    try:
+        base = new(st["goal"], st.get("mode", "code"))
+        for k, v in base.items():
+            st.setdefault(k, v)
+        # a damaged file (hand edited, cut short by a full disk) is never trusted: wrong types mean no goal, not a crash
+        if not isinstance(st["budgets"], dict) or not isinstance(st["history"], list) \
+                or not isinstance(st["findings"], dict) or not isinstance(st["rubric"], list) \
+                or not all(isinstance(c, dict) and isinstance(c.get("id"), str) and isinstance(c.get("text"), str)
+                           for c in st["rubric"]) or not all(isinstance(h, dict) for h in st["history"]):
+            return None
+        for k, v in base["budgets"].items():
+            st["budgets"].setdefault(k, v)
+        for k in ("turns", "checks"):
+            st[k] = int(st[k])
+        for k in ("bar", "spent", "elapsed", "resume_at", "draft_until", "frozen_at", "started", "created"):
+            st[k] = float(st[k] or 0)
+        if st.get("rubric_hash") and rubric_hash(st["rubric"]) != st["rubric_hash"]:
+            st["tampered"] = True
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return None
+    if st.get("tampered") and st.get("status") in ACTIVE:
+        # never one more turn or check against a rubric nobody agreed to: paused, and the card says why
+        st.update(status="paused", reason="the rubric was changed outside meshpool", resume_at=0.0)
     return st
 
 
@@ -686,6 +704,9 @@ def decide(st: dict, out: dict, check: dict | None = None) -> dict:
     if err == "model":
         return {"action": "paused", "reason": "the model is not available", "question": "", "findings": {}}
     if err == "net":
+        hit = exhausted(st)                      # an outage is waited out, but never past a budget
+        if hit:
+            return {"action": "stopped", "reason": "budget", "budget": hit, "question": "", "findings": {}}
         return {"action": "wait", "reason": "the model connection failed", "question": "", "findings": {}}
     findings = (check if check is not None else st.get("findings")) or {}
     if check is not None and met_bar(check, bar):

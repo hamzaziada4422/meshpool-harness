@@ -2304,6 +2304,8 @@ class Session:
             waiting = bool(self._after_stop) or bool(self.queue)
         if stopped and self.gs is not None and getattr(self, "_goal_turn", False):
             guard(self._goal_stopped, ev0)           # Stop in a goal turn: counted, and the goal pauses
+        elif stopped and self.gs is not None and self.gs.get("status") in ("working", "checking"):
+            guard(self._goal_stopped, ev0, False)    # a goal frozen while this turn ran: it pauses, nothing is counted
         if waiting or stopped:
             return None
         if self.goal or (self.gs is not None and self.gs.get("status") in ("working", "checking")):
@@ -2817,7 +2819,10 @@ class Session:
             self._goal_ping()
             return None
         if op == "cancel_resume":
-            st.update(resume_at=0.0, status="paused", reason="you cancelled the automatic resume")
+            with self._goal_lock():
+                if st.get("status") != "working" or not st.get("resume_at"):
+                    raise ValueError("The goal is not waiting to resume.")    # a late click: the countdown is over
+                st.update(resume_at=0.0, status="paused", reason="you cancelled the automatic resume")
             self._goal_save()
             self._goal_hold(False)
             self._goal_ping()
@@ -2924,13 +2929,15 @@ class Session:
         except Exception:  # noqa: BLE001
             return bool(acted)
 
-    def _goal_stopped(self, ev0: int):
-        """Stop was pressed during a goal turn: count the turn and pause the goal. A message or Resume carries it on."""
+    def _goal_stopped(self, ev0: int, count: bool = True):
+        """Stop was pressed during a goal turn: count the turn and pause the goal. A message or Resume carries it on.
+        count=False: the turn did not carry the goal (it started before the goal was frozen), so it is not counted."""
         st = self.gs
         if st is None or st.get("status") not in ("working", "checking"):
             return
-        GL.record_turn(st, {"acted": True}, secs=time.time() - getattr(self, "t_turn", time.time()),
-                       spent=self._goal_spent())
+        if count:
+            GL.record_turn(st, {"acted": True}, secs=time.time() - getattr(self, "t_turn", time.time()),
+                           spent=self._goal_spent())
         GL.apply(st, {"action": "paused", "reason": "you stopped it"})
         self._goal_save()
         self._goal_hold(False)
@@ -2952,7 +2959,7 @@ class Session:
         if getattr(getattr(self, "agent", None), "budget_stopped", False):
             out["error"], st["budget_hit"] = "budget", "usd"
         GL.record_turn(st, out, secs=time.time() - getattr(self, "t_turn", time.time()), spent=self._goal_spent())
-        if out["error"] == "net" and not out["interrupted"]:
+        if out["error"] == "net" and not out["interrupted"] and not GL.exhausted(st):
             # An outage, not the task: never give up on the goal for it. The turn already waited for the endpoint;
             # pause a little longer each time (30 s up to 5 min) so a long outage is waited out without hammering
             # the gateway, then pick the goal up. Stop, or clearing the goal, ends the wait.
