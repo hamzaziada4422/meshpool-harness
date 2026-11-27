@@ -96,3 +96,21 @@ def test_a_picture_without_ocr_says_so_plainly(tmp_path, monkeypatch):
     Image.new("RGB", (40, 20), "white").save(tmp_path / "shot.png")
     out = Workspace(str(tmp_path), str(tmp_path / "run")).read_file("shot.png")
     assert "failed" not in out and "no OCR" in out and "view_output" in out
+
+
+# ---------- the release runs the check: a step limit it cannot meet fails the release ---------------------------------
+
+def test_each_release_step_that_runs_the_check_has_time_for_it():
+    """The Windows smoke step kept its 15-minute limit ("normally about 2 minutes") when the tool health check (every
+    tool once, LibreOffice and Chromium started cold), the browser step and the bundled programs joined it: a slow
+    runner would time the step out and fail the release. Every step that runs it now has at least 30 minutes."""
+    from pathlib import Path
+
+    import yaml
+    wf = yaml.safe_load((Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml").read_text())
+    steps = [(job, s) for job, j in wf["jobs"].items() for s in j.get("steps") or []
+             if "packaging/tool_health.py" in str(s.get("run") or "")]
+    assert {job for job, _ in steps} >= {"mac", "windows", "linux"}, steps
+    for job, s in steps:
+        limit = s.get("timeout-minutes", wf["jobs"][job].get("timeout-minutes", 360))
+        assert limit >= 30, (job, s.get("name"), limit)
