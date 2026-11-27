@@ -17,6 +17,7 @@ xlrd>=2.0
 olefile>=0.47
 truststore>=0.10     # HTTPS trusts the system's certificates (a company proxy's)
 tomli>=2.0; python_version < "3.11"
+prompt-toolkit>=3.0.36   # the terminal UI's keys and input line
 ptyprocess>=0.7; sys_platform != "win32"      # the Terminal panel's shell (ui/pty_term.py)
 pywinpty>=2.0.15; sys_platform == "win32"
 # tests

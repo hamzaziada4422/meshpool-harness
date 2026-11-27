@@ -326,7 +326,7 @@ def main():
     step("imports")
     import importlib
     for mod in ("meshpool_harness", "pptx", "docx", "openpyxl", "reportlab", "pypdf", "pypdfium2", "pdfminer",
-                "PIL", "lxml", "yaml", "pandas", "playwright",
+                "PIL", "lxml", "yaml", "pandas", "playwright", "prompt_toolkit",
                 "winpty" if os.name == "nt" else "ptyprocess"):
         importlib.import_module(mod)
     import meshpool_harness as MH
