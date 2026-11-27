@@ -1,6 +1,6 @@
-# meshpool 0.0.19 bug ledger
+# meshpool 0.0.20 bug ledger
 
-0.0.19 fixes what a user hit in the released 0.0.18 app, and what an independent review found in those fixes.
+0.0.20 includes the fixes planned for 0.0.19 (never published): what a user hit in the released 0.0.18 app, and what an independent review found in those fixes.
 Each row names the test that checks it. Each fix's test was seen to fail on the old code and pass on the new.
 
 ## Summary
@@ -67,7 +67,7 @@ Each row names the test that checks it. Each fix's test was seen to fail on the 
 | FL-05 | Page helpers returned before start-up finished. | test_first_hour_ui_points.py, test_robust_waits.py |
 | FL-06 | A fake chat's 404 drew "This chat is gone." under the test's chat. | test_first_hour_ui_points.py |
 
-## Still open for 0.0.20
+## Still open
 
 - The right pane's 8 px handle covers the left edge of the preview's text editor.
 - If a picture shown large fails to load, no file card is shown in its place.
