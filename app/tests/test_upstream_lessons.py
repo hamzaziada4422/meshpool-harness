@@ -297,6 +297,61 @@ def test_a_server_switched_to_read_only_is_read_only_from_the_saved_list(mcp_hom
     assert _lazy(mcp_home, read_only=True) == ["read_page"]
 
 
+_OFFICE_SRV = r'''
+import json, sys
+TOOLS = [{"name": "analyze_data", "inputSchema": {"type": "object", "properties": {
+    "request": {"type": "string"}, "files": {"type": "array", "items": {"type": "string"}}}}}]
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg:
+        continue
+    m = msg["method"]
+    if m == "initialize":
+        res = {"protocolVersion": "2025-06-18", "capabilities": {}, "serverInfo": {"name": "office"}}
+    elif m == "tools/list":
+        res = {"tools": TOOLS}
+    else:
+        res = {"content": [{"type": "text", "text": "READ " + json.dumps(msg["params"]["arguments"].get("files"))}]}
+    print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": res}), flush=True)
+'''
+
+
+def test_a_list_sent_as_text_to_an_mcp_tool_is_judged_as_the_list_it_becomes(tmp_path, monkeypatch):
+    """The MCP server is sent '["~/.ssh/id_rsa"]' as the list it means (coerce_args), but the approval check saw one
+    string: a relative path inside the project, so the office tools read an SSH key without asking. The agent now
+    types the arguments before it judges the call."""
+    from meshpool_harness.agent import mcp as M
+    from meshpool_harness.agent.core import Agent
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "mh"))
+    monkeypatch.setenv("MH_RUNS_DIR", str(tmp_path / "runs"))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    srv = tmp_path / "office_srv.py"
+    srv.write_text(_OFFICE_SRV, encoding="utf-8")
+    m = M.Manager(roots=[str(proj)])
+    m.add("meshpool-office", {"command": sys.executable, "args": [str(srv)]}, 20)
+    asked = []
+
+    def ap(kind, title, detail, scope=""):
+        asked.append(title)
+        return ("no", "") if "outside the project" in title else ("yes", "")     # the write in the folder: yes
+    try:
+        name = next(x["function"]["name"] for x in m.schemas() if x["function"]["name"].endswith("analyze_data"))
+        assert name.replace("-", "_") == "mcp__meshpool_office__analyze_data", name
+        a = Agent(str(proj), mode="ask", approve=ap, mcp=m)
+        out = a._run_tool({"id": "c1", "type": "function", "function": {"name": name, "arguments": json.dumps(
+            {"request": "summarise", "files": '["~/.ssh/id_rsa"]'})}})
+        assert asked and "outside the project" in asked[0], (asked, out)
+        assert "READ" not in out, out                                     # denied: the server never read it
+        asked.clear()
+        out = a._run_tool({"id": "c2", "type": "function", "function": {"name": name, "arguments": json.dumps(
+            {"request": "summarise", "files": '["data.csv"]'})}})
+        assert 'READ ["data.csv"]' in out, (asked, out)                  # inside the project: runs, typed
+    finally:
+        m.close()
+        M.stop_all()
+
+
 def test_bad_tool_lists_in_the_settings_never_widen_what_is_offered():
     from meshpool_harness.agent import mcp as M
     tools = [{"name": n} for n in ("a", "b", "c")]

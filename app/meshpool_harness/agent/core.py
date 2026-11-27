@@ -7789,6 +7789,8 @@ class Agent:
         except ValueError:
             args = {}
         is_mcp = bool(self.mcp and self.mcp.has(name))
+        if is_mcp and hasattr(self.mcp, "coerce"):
+            args = self.mcp.coerce(name, args)         # typed as the server gets them: the approval judges what runs
         T._LIVE.cid = cid                              # a command's output shows under this step as it comes
         self.ws.on_output = self._live_output
         if E2E and name not in ("bash", "bash_many", "bash_start", "bash_output", "bash_stop", "todo_write", "update_plan",

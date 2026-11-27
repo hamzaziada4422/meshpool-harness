@@ -293,6 +293,9 @@ class ChildMcp:
     def has(self, name: str) -> bool:
         return self._ok(name) and self.m.has(name)
 
+    def coerce(self, name: str, args: dict) -> dict:
+        return self.m.coerce(name, args) if hasattr(self.m, "coerce") else args
+
     def schemas(self) -> list:
         return [s for s in self.m.schemas() if self._ok(s["function"]["name"])]
 

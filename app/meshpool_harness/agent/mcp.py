@@ -1423,7 +1423,7 @@ class Server:
                 args["_model"] = str(model)                  # the chat's model, for engines that call one
             if self.spec.get("chat_id"):
                 args["_chat"] = str(self.spec["chat_id"])    # the chat it serves (one process serves every chat)
-        schema = next((t.get("inputSchema") for t in self.tools if t.get("name") == tool), None)
+        schema = next((t.get("inputSchema") for t in getattr(self, "tools", None) or [] if t.get("name") == tool), None)
         args = coerce_args(schema, args)
         r = self._rpc("tools/call", {"name": tool, "arguments": args}, float(self.spec.get("timeout", 120)))
         images: list[dict] = []
@@ -1612,6 +1612,17 @@ class Manager:
 
     def has(self, name: str) -> bool:
         return name in self.map or (name in (RES_LIST, RES_READ) and bool(self._resource_servers()))
+
+    def coerce(self, name: str, args: dict) -> dict:
+        """The arguments as the server will be sent them (coerce_args with the tool's input schema). The agent judges
+        a call by these, before it is approved: a list sent as JSON text ('["~/.ssh/id_rsa"]') was one odd relative
+        path to the check that keeps the office tools inside the project, and a real list to the server."""
+        hit = self.map.get(name)
+        s = self.servers.get(hit[0]) if hit else None
+        if not s or not isinstance(args, dict):
+            return args
+        tools = getattr(s, "tools", None) or []
+        return coerce_args(next((t.get("inputSchema") for t in tools if t.get("name") == hit[1]), None), args)
 
     # ---- prompts (ready-made requests a server offers, used as /mcp__server__prompt) ------------------------------
     def prompts(self) -> list[dict]:
