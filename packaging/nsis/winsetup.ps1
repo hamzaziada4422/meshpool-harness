@@ -14,7 +14,7 @@ function Norm([string]$p) { $p.Trim().TrimEnd("\") }
 if ($Stop) {
   # Only Meshpool's own programs: the install folder may be one the user shares with other software.
   $root = (Norm $Stop) + "\"
-  $ours = @("runtime\", "node\", "git\", "app\", "bin\") | ForEach-Object { $root + $_ }
+  $ours = @("runtime\", "node\", "git\", "app\", "bin\", "uv\") | ForEach-Object { $root + $_ }
   $procs = @(Get-CimInstance Win32_Process | Where-Object {
       $exe = $_.ExecutablePath
       $exe -and (($exe -ieq ($root + "Meshpool.exe")) -or

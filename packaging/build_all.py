@@ -240,6 +240,42 @@ def git_win(root: Path):
         if not (ub / "sh.exe").is_file():
             sys.exit("build_all: MinGit has neither usr/bin/bash.exe nor usr/bin/sh.exe; the agents would have no bash")
         shutil.copy2(ub / "sh.exe", ub / "bash.exe")
+    # MinGit has no sleep.exe either, so `sleep 2` failed in every bash command on a computer without Git for Windows.
+    # A small script stands in for it (bash runs a file with a #! line, with or without an extension).
+    if not (ub / "sleep.exe").exists() and not (ub / "sleep").exists():
+        (ub / "sleep").write_bytes(SLEEP_SHIM.encode("ascii"))     # LF line ends: bash reads CR as part of a word
+
+
+# The `sleep` the Windows app's bash finds in git/usr/bin (git_win). It takes what GNU sleep takes (numbers with an
+# optional s, m, h or d, added up; "infinity") and Windows PowerShell, on every Windows the app supports, does the wait.
+# Only digits, dots, "+" and "*" reach the PowerShell command line.
+SLEEP_SHIM = r"""#!/bin/sh
+# sleep for meshpool's bundled MinGit, which has no sleep.exe (written by packaging/build_all.py).
+[ $# -gt 0 ] || { echo "sleep: missing operand" >&2; exit 1; }
+ps="${SYSTEMROOT:-${SystemRoot:-C:/Windows}}/System32/WindowsPowerShell/v1.0/powershell.exe"
+[ -f "$ps" ] || ps=powershell.exe
+sum=0
+for a in "$@"; do
+  case "$a" in
+    inf|infinity) exec "$ps" -NoLogo -NoProfile -NonInteractive -Command "while (1) { Start-Sleep -Seconds 86400 }" ;;
+  esac
+  case "$a" in
+    *s) n=${a%s}; f=1 ;;
+    *m) n=${a%m}; f=60 ;;
+    *h) n=${a%h}; f=3600 ;;
+    *d) n=${a%d}; f=86400 ;;
+    *) n=$a; f=1 ;;
+  esac
+  case "$n" in
+    ""|.|*[!0-9.]*|*.*.*) echo "sleep: invalid time interval '$a'" >&2; exit 1 ;;
+  esac
+  case "$n" in .*) n="0$n" ;; esac
+  case "$n" in *.) n="${n}0" ;; esac
+  sum="$sum+$n*$f"
+done
+exec "$ps" -NoLogo -NoProfile -NonInteractive -Command \
+  "Start-Sleep -Milliseconds ([int][Math]::Min(2147483647, [Math]::Round(1000 * ($sum))))"
+"""
 
 
 def git_mac(root: Path, arch: str):
