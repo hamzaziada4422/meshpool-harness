@@ -179,8 +179,12 @@ def load(sdir) -> dict | None:
             st[k] = int(st[k])
         for k in ("bar", "spent", "elapsed", "resume_at", "draft_until", "frozen_at", "started", "created"):
             st[k] = float(st[k] or 0)
-        if st.get("rubric_hash") and rubric_hash(st["rubric"]) != st["rubric_hash"]:
-            st["tampered"] = True
+        if st.get("rubric_hash"):
+            kept = _FROZEN.get(_key(sdir))
+            if contract_hash(st) != st["rubric_hash"] or (kept and kept != st["rubric_hash"]):
+                st["tampered"] = True
+            elif st.get("frozen_at") and not kept:
+                _FROZEN[_key(sdir)] = st["rubric_hash"]      # the first load after a restart (see _FROZEN)
     except (TypeError, ValueError, KeyError, AttributeError):
         return None
     if st.get("tampered") and st.get("status") in ACTIVE:
@@ -254,11 +258,62 @@ def normalise_rubric(raw, goal: str = "", mode: str = "code") -> list[dict]:
     return rows
 
 
-def rubric_hash(rubric: list) -> str:
-    """The frozen rubric's fingerprint: the same criteria always give the same hash, any change gives another."""
-    canon = [[str(c.get("id", "")), str(c.get("text", "")), str(c.get("check", "")), int(c.get("weight", 1) or 1),
-              bool(c.get("must")), bool(c.get("needs_user"))] for c in rubric or []]
+CONTRACT_BUDGETS = ("usd", "hours", "turns", "checks")      # the budgets the frozen contract holds to
+
+
+def rubric_hash(rubric: list, bar=None, budgets: dict | None = None) -> str:
+    """The frozen contract's fingerprint: the same criteria (and, when given, the same bar and budgets) always give
+    the same hash, any change gives another."""
+    canon: list = [[str(c.get("id", "")), str(c.get("text", "")), str(c.get("check", "")), int(c.get("weight", 1) or 1),
+                    bool(c.get("must")), bool(c.get("needs_user"))] for c in rubric or []]
+    if bar is not None:
+        canon.append(["bar", float(bar)])
+    if budgets is not None:
+        canon.append(["budgets", [float((budgets or {}).get(k) or 0) for k in CONTRACT_BUDGETS]])
     return hashlib.sha256(json.dumps(canon, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def contract_hash(st: dict) -> str:
+    """The hash freeze() stores: the rubric, the bar and the budgets together."""
+    return rubric_hash(st.get("rubric") or [], st.get("bar", DEFAULTS["bar"]), st.get("budgets") or {})
+
+
+# The hash of each frozen goal, kept in this process when its rubric freezes (and when a budget is raised on Resume),
+# by goal.json's folder. A goal.json rewritten from outside with a matching hash (an agent that can write files can
+# compute a sha256) still differs from this one, so load() and disk_changed() catch it. The limit: after a restart this
+# process has no value yet, and the first load() takes the one in the file. A file rewritten while meshpool was not
+# running is caught only if its hash no longer matches its own content.
+_FROZEN: dict = {}
+
+
+def _key(sdir) -> str:
+    try:
+        return str(Path(sdir).resolve())
+    except OSError:
+        return str(sdir)
+
+
+def remember(sdir, st: dict) -> None:
+    """Keep the frozen goal's hash in this process (see _FROZEN)."""
+    if st.get("frozen_at") and st.get("rubric_hash"):
+        _FROZEN[_key(sdir)] = st["rubric_hash"]
+
+
+def forget(sdir) -> None:
+    _FROZEN.pop(_key(sdir), None)
+
+
+def disk_changed(sdir) -> bool:
+    """Was the frozen goal's file changed outside meshpool since this process froze or first read it? Its content
+    must match its hash, and its hash the one kept here. A missing or unreadable file is not a change."""
+    want = _FROZEN.get(_key(sdir))
+    if not want:
+        return False
+    try:
+        raw = json.loads(path(sdir).read_text(encoding="utf-8"))
+        return raw.get("rubric_hash") != want or contract_hash(raw) != want
+    except (OSError, ValueError, AttributeError, TypeError):
+        return False
 
 
 def review(st: dict, rubric, freeze_s: float | None = None, now: float | None = None) -> dict:
@@ -288,7 +343,7 @@ def freeze(st: dict, rubric=None, now: float | None = None) -> dict:
         st["rubric"] = normalise_rubric(rubric, st["goal"], st["mode"])
     elif not st.get("rubric"):
         st["rubric"] = normalise_rubric([], st["goal"], st["mode"])
-    st["rubric_hash"] = rubric_hash(st["rubric"])
+    st["rubric_hash"] = contract_hash(st)
     st["frozen_at"] = now
     st["started"] = st.get("started") or now
     st["status"], st["reason"], st["question"] = "working", "", ""

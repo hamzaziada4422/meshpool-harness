@@ -59,11 +59,11 @@ def test_frozen_rubric_is_hashed_and_cannot_be_changed(tmp_path):
     assert st["status"] == "review" and not st["rubric_hash"]
     G.freeze(st)
     h = st["rubric_hash"]
-    assert st["status"] == "working" and len(h) == 64 and h == G.rubric_hash(st["rubric"])
-    assert G.rubric_hash(json.loads(json.dumps(st["rubric"]))) == h            # the same criteria: the same hash
+    assert st["status"] == "working" and len(h) == 64 and h == G.contract_hash(st)
+    assert G.rubric_hash(json.loads(json.dumps(st["rubric"])), st["bar"], st["budgets"]) == h  # same input, same hash
     other = json.loads(json.dumps(st["rubric"]))
     other[0]["weight"] = 1
-    assert G.rubric_hash(other) != h                                          # any change: another hash
+    assert G.rubric_hash(other, st["bar"], st["budgets"]) != h    # any change: another hash
     with pytest.raises(ValueError):
         G.edit(st, ["anything"])                                              # frozen: edits are refused
     G.freeze(st, ["replaced"])                                                # a second freeze changes nothing
@@ -531,6 +531,7 @@ def test_a_goal_goes_from_rubric_to_work_to_a_check_below_the_bar_to_more_work_t
     assert scores[0] < 10 and scores[-1] == 10 and s.gs["checks"] == 2 and s.gs["turns"] == 2
     checks = [e for e in s.events if e.get("type") == "goal_check"]
     assert len(checks) == 2 and "Below the bar of 10" in checks[0]["text"] and checks[1]["met"]
+    _until(lambda: any(e.get("goal_report") for e in s.events), what="the report")   # emitted just after the status
     report = [e for e in s.events if e.get("goal_report")][-1]["text"]
     assert report.startswith("Met: 10/10 after 2 checks.")
     assert s.goal == "" and A.read_meta(s.id).get("goal") == ""
@@ -544,7 +545,7 @@ def test_a_goal_goes_from_rubric_to_work_to_a_check_below_the_bar_to_more_work_t
     v = s.view(0)
     assert v["goal_state"]["status"] == "met" and v["goal_state"]["history"][-1]["score"] == 10
     on_disk = G.load(chat.sessions / s.id)
-    assert on_disk["status"] == "met" and on_disk["rubric_hash"] == G.rubric_hash(on_disk["rubric"])
+    assert on_disk["status"] == "met" and on_disk["rubric_hash"] == G.contract_hash(on_disk)
 
 
 def test_the_rubric_freezes_by_itself_after_its_countdown(chat):

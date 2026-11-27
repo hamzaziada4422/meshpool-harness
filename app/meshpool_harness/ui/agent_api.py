@@ -2575,6 +2575,8 @@ class Session:
     def _goal_save(self):
         if self.gs is not None and getattr(self, "id", None):
             GL.save(SESSIONS / self.id, self.gs)
+            if not self.gs.get("tampered"):
+                GL.remember(SESSIONS / self.id, self.gs)   # the frozen contract's hash, kept in this process
 
     def _goal_ping(self):
         """A live event for the goal card (it also reads goal_state from every view). Not saved in the transcript."""
@@ -2847,6 +2849,7 @@ class Session:
             st.pop("budget_hit", None)
             if GL.exhausted(st):
                 raise ValueError("The goal is at its budget. Raise the budget in Settings, then resume it.")
+            st["rubric_hash"] = GL.contract_hash(st)   # the budgets are part of the contract: the user raised one
             st.update(status="working", reason="", question="", idle=0, blocker="", blocker_n=0, ended=0.0,
                       converged=False)
             self.goal = st["goal"]
@@ -2959,7 +2962,9 @@ class Session:
         if getattr(getattr(self, "agent", None), "budget_stopped", False):
             out["error"], st["budget_hit"] = "budget", "usd"
         GL.record_turn(st, out, secs=time.time() - getattr(self, "t_turn", time.time()), spent=self._goal_spent())
-        if out["error"] == "net" and not out["interrupted"] and not GL.exhausted(st):
+        if not st.get("tampered") and GL.disk_changed(SESSIONS / self.id):
+            st["tampered"] = True                    # goal.json was rewritten during the turn: no check, the goal pauses
+        if out["error"] == "net" and not out["interrupted"] and not GL.exhausted(st) and not st.get("tampered"):
             # An outage, not the task: never give up on the goal for it. The turn already waited for the endpoint;
             # pause a little longer each time (30 s up to 5 min) so a long outage is waited out without hammering
             # the gateway, then pick the goal up. Stop, or clearing the goal, ends the wait.

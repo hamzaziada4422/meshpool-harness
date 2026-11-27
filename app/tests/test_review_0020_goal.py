@@ -75,3 +75,77 @@ def test_a_rubric_changed_on_disk_pauses_the_goal_before_any_turn(tmp_path):
     (tmp_path / "goal.json").write_text(json.dumps(raw))
     got = G.load(tmp_path)
     assert got["tampered"] and got["status"] == "paused" and "outside meshpool" in got["reason"]
+
+
+
+# ---------- the rubric lock: the bar and the budgets are in the hash, and the app keeps the hash in memory ------------
+def _rewrite(sdir, **change):
+    """What an agent with file tools can do: change goal.json and write a matching hash into it."""
+    raw = json.loads((sdir / "goal.json").read_text())
+    for k, v in change.items():
+        if k == "text":
+            raw["rubric"][0]["text"] = v
+        elif k in G.CONTRACT_BUDGETS:
+            raw["budgets"][k] = v
+        else:
+            raw[k] = v
+    raw["rubric_hash"] = G.contract_hash(raw)
+    (sdir / "goal.json").write_text(json.dumps(raw))
+
+
+def test_the_bar_and_the_budgets_are_part_of_the_hash():
+    st = _st()
+    h = st["rubric_hash"]
+    assert h == G.contract_hash(st)
+    for k, v in (("bar", 6.0), ("turns", 500), ("usd", 99.0), ("hours", 100.0), ("checks", 150)):
+        other = json.loads(json.dumps(st))
+        (other["budgets"] if k != "bar" else other)[k] = v
+        assert G.contract_hash(other) != h, k
+
+
+@pytest.mark.parametrize("change", [{"text": "Anything is fine"}, {"bar": 3.0}, {"turns": 900}])
+def test_a_goal_json_rewritten_with_a_matching_hash_is_caught(tmp_path, change):
+    st = _st()
+    G.save(tmp_path, st)
+    G.remember(tmp_path, st)                                   # the rubric froze in this process
+    assert not G.disk_changed(tmp_path) and not G.load(tmp_path).get("tampered")
+    _rewrite(tmp_path, **change)
+    assert G.disk_changed(tmp_path)
+    got = G.load(tmp_path)
+    assert got["tampered"] and got["status"] == "paused" and "outside meshpool" in got["reason"]
+    G.forget(tmp_path)
+
+
+def test_after_a_restart_the_first_load_sets_the_kept_hash(tmp_path):
+    G.save(tmp_path, _st())
+    G.forget(tmp_path)                                         # a new process: nothing kept yet
+    assert not G.load(tmp_path).get("tampered")               # the first load takes the file's hash (the limit)
+    _rewrite(tmp_path, bar=2.0)
+    assert G.load(tmp_path)["tampered"] and G.disk_changed(tmp_path)
+    G.forget(tmp_path)
+
+
+def test_a_goal_json_rewritten_during_a_turn_pauses_the_goal_without_a_check(chat, monkeypatch):
+    s = chat()
+    s.gs, s.goal, s._goal_turn = _st(turns=1), "ship the report", True
+    s._goal_save()                                             # frozen in this process: its hash is kept
+    _rewrite(chat.sessions / s.id, bar=1.0)
+    monkeypatch.setattr(s, "_goal_outcome", lambda evs: dict(_out(ready=True), changed=False, word="READY"))
+    checks = []
+    s.goal_checker = lambda s_, st, why: checks.append(why) or {}
+    assert s._goal_next(len(s.events)) is None
+    assert checks == [] and s.gs["status"] == "paused" and "outside meshpool" in s.gs["reason"]
+    assert s.gs["bar"] == 10.0                                 # the app's own contract, never the rewritten one
+    with pytest.raises(ValueError):
+        s.goal_action("resume")
+
+
+def test_resume_with_a_raised_budget_keeps_the_lock(chat, monkeypatch):
+    s = chat()
+    s.gs, s.goal = _st(turns=30, status="stopped", reason="budget", budget_hit="turns"), "ship the report"
+    s._goal_save()
+    monkeypatch.setenv("MH_GOAL_TURNS", "40")                  # the user raised the turn budget in Settings
+    monkeypatch.setattr(s, "_goal_kick", lambda: False)
+    s.goal_action("resume")
+    sdir = chat.sessions / s.id
+    assert s.gs["budgets"]["turns"] == 40 and not G.disk_changed(sdir) and not G.load(sdir).get("tampered")
