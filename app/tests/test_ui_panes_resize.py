@@ -400,6 +400,14 @@ def test_the_breakpoints_keep_their_layout_with_the_handles(app, page, width):
         assert getComputedStyle_position(page, "#panel") == "fixed"
         if width <= 760:
             assert b["hs"] is None, b
+        # the handles are in the page, only put away: nothing on an overlay is draggable (the panel had its own strip before)
+        got = page.evaluate("""() => ({there: !!document.querySelector('#rzSide') && !!document.querySelector('#rzRight'),
+            shown: [...document.querySelectorAll('.pane-rz, .rz, [role=separator]')].filter(e => e.offsetParent).map(e => e.id || e.className)})""")
+        assert got["there"], got
+        assert got["shown"] == ([] if width <= 760 or b["fold"] else ["rzSide"]), (got, b)    # at most the docked sidebar's
+        if width <= 760:                             # and a window back over 980 px brings the handle with the docked panel
+            _size(page, 1280, 768)
+            assert _boxes(page)["hr"], "no handle once the panel docks again"
     assert b["hscroll"] <= 0, b
     assert page.errors == [], page.errors
 
