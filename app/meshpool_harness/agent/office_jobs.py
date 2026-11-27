@@ -508,6 +508,10 @@ def report(jid: str, rel_to: Path | None = None, reused: str = "") -> tuple[str,
                  "neither do the engine, its notes, its checker or other names it gave the file: describe the file "
                  "itself. meshpool stores the calculated values in the file after the turn, so the values are not "
                  "missing. The file is in their folder under the name above: nothing else to copy, move or delete.")
+    if _UNSOURCED.search(notes + "\n" + qa):
+        lines.append("Some figures in this file are not from the user's files or a cited source (illustrative, or "
+                     "flagged as found in neither): say so and name the slides. Never write that you made none up, "
+                     "invented nothing, or that every figure is sourced.")
     n = j.get("build_no", 1)
     if checks != "passed" and n < REBUILD_LIMIT:
         lines.append("Deliver this file: the flagged items are listed for the user; rebuilding the same request "
@@ -525,6 +529,10 @@ def report(jid: str, rel_to: Path | None = None, reused: str = "") -> tuple[str,
 _RECALC = re.compile(r"[^.\n]*\b(?:did not|didn't|not|without|could not|couldn't) (?:re)?calculat[^.\n]*\.?[ \t]*"
                      r"|[^.\n]*\bwill show (?:their|its|the) (?:results?|values?) when [^.\n]*opened[^.\n]*\.?[ \t]*",
                      re.I)
+
+
+# A build whose figures are not all sourced: forge's illustrative slides, or P29 ("nothing invented") still failing.
+UNSOURCED = _UNSOURCED = re.compile(r"(?i)\bare illustrative\b|\brules failing:[^\n]*\bP29\b|\bP29\b[^\n]*\bfail")
 
 
 def _plain_notes(notes: str) -> str:

@@ -2600,6 +2600,17 @@ def _norm_text(t: str) -> str:
     return " ".join(t.lower().split())
 
 
+# "I made none up", "nothing is invented", "none of the figures were made up": one sentence that says so
+_NONE_MADE_UP = re.compile(
+    r"[^.!?\n]*\b(?:made (?:none|nothing|no(?: \w+){0,2}?) up|made up (?:none|nothing|no)\b|"
+    r"did(?: not|n't) (?:make|invent) (?:up )?(?:any|anything|a single)|"
+    r"(?:nothing|none)(?: of (?:it|them|the (?:figures|numbers|data|statistics)))? (?:is|was|were|are|has been|have "
+    r"been) (?:made up|invented|fabricated)|no (?:figures?|numbers?|data|statistics?) (?:is|are|was|were) (?:made up|"
+    r"invented|fabricated)|invented (?:nothing|no (?:figures?|numbers?|data)))\b[^.!?\n]*[.!?]?", re.I)
+_FOLDER_OK = "folder:ordinary-work"        # in Agent.always: the chat's one yes for ordinary work without a sandbox
+_NOTICED: set = set()                      # notices said once per app run
+
+
 def _sandbox_auto_on() -> bool:
     """MH_SANDBOX_AUTO (Settings, Permissions: "Ask before every command and change" sets 0), read from the
     environment or the settings file at call time, so a change in Settings reaches open chats."""
@@ -4754,6 +4765,7 @@ class Agent:
                     if again:
                         continue
                     final = self._without_trailing_promise(final)
+                    final = self._without_false_sourcing(final, g)
                     break
                 if tools_off and os.environ.get("MH_REPEAT_STOP", "8") != "0":
                     g["off_calls"] = g.get("off_calls", 0) + 1     # tools were off for this reply, yet it asked for some
@@ -5968,6 +5980,41 @@ class Agent:
             check += "  \n**Independent check:** " + GR.receipt_line(rv)
         return f"**Changed:** {', '.join(parts)}{more}  \n**Checked:** {check}"
 
+    def _without_false_sourcing(self, final: str, g: dict) -> str:
+        """A deck or file built this turn holds figures that no file of the user's and no cited source gives (the
+        slides engine labelled them illustrative, or its "nothing invented" check still fails), yet the reply says
+        none were made up (first-hour run, 0.0.18: "I made none up" over a "Market Research Report 2034" nobody
+        gave). That sentence is replaced with what is true; the full reply stays in the run's turn.log."""
+        if not _NONE_MADE_UP.search(str(final or "")):
+            return final
+        try:
+            from meshpool_harness.agent import office_jobs as _OJ
+            said = "\n".join(str(m.get("content") or "") for m in self.messages[g.get("msg0", 0):]
+                             if m.get("role") == "tool")
+            if not _OJ.UNSOURCED.search(said):
+                return final
+        except Exception:  # noqa: BLE001 - when in doubt the reply stays as written
+            return final
+        m = re.search(r"(?i)figures on slides? ([\d][\d, and]*?) are illustrative", said)
+        where = re.sub(r",\s*(\d+)$", r" and \1", m.group(1).strip()) if m else ""
+        true = (f"Some figures are illustrative, not from your files or a cited source: slide{'s' if ',' in where or ' and ' in where else ''} "
+                f"{where} {'say' if ',' in where or ' and ' in where else 'says'} so." if where else
+                "Some figures are not from your files or a cited source, so check them before you use them.")
+        fixed = _NONE_MADE_UP.sub(lambda _: true + " ", str(final), count=1)
+        fixed = _NONE_MADE_UP.sub("", fixed).replace("  ", " ").strip()
+        try:
+            with (self.ws.run_dir / "turn.log").open("a", encoding="utf-8", errors="replace") as f:
+                f.write("\n[replaced a claim that no figure was made up]\n" + str(final) + "\n")
+        except (OSError, AttributeError):
+            pass
+        for msg in reversed(self.messages):
+            if msg.get("role") == "assistant" and not msg.get("tool_calls"):
+                if isinstance(msg.get("content"), str) and msg["content"].strip() == str(final).strip():
+                    msg["content"] = fixed
+                break
+        self.emit({"type": "reply_trim", "text": fixed})
+        return fixed
+
     def _without_trailing_promise(self, final: str) -> str:
         """The turn ended with no tool call, and its last paragraph still promises an action ("I'll retry the commit
         as before..."), after the promise nudge fired or when it did not apply. The answer above it says what
@@ -7160,12 +7207,25 @@ class Agent:
         except Exception:  # noqa: BLE001
             return False
 
+    def _say_no_sandbox(self) -> None:
+        """Once per app run, in the chat: commands run without the OS sandbox here, why, and the command that turns it
+        on (the distribution's bubblewrap) where one does. It used to be one line in the server log only."""
+        if "no-sandbox" in _NOTICED:
+            return
+        _NOTICED.add("no-sandbox")
+        try:
+            from meshpool_harness.core import sandbox as SBX
+            self.emit({"type": "status", "text": SBX.unavailable_notice()})
+        except Exception:  # noqa: BLE001 - a notice never blocks the question
+            pass
+
     def _work_without_asking(self) -> bool:
         """Ordinary work in the folder runs without a question: in the sandbox, or after the user's one yes for the
         chat where there is none. MH_SANDBOX_AUTO=0 asks as before 0.0.18."""
         if not _sandbox_auto_on():
             return False
-        return self._sandboxed() or bool(getattr(self, "_folder_ok", False))
+        # the one yes is kept in the chat's saved "allow" set too, so it outlives the reaper, a restart and a handoff
+        return self._sandboxed() or bool(getattr(self, "_folder_ok", False)) or _FOLDER_OK in (self.always or ())
 
     def _edit_inside(self, name: str, args: dict) -> bool:
         """Every file this edit touches is inside the chat's folder (or one the user added)."""
@@ -7703,6 +7763,8 @@ class Agent:
                   and not self._sandboxed() and (group == "edit" or office_w or
                                                  (cmds and all(PR.sandbox_auto_ok(c, self.root, wd, self._chat_made(), self._chat_touched()) for c in cmds))))
         folder = folder and not outside_edit
+        if folder:                                 # why this asks: said once in the app, with the fix where there is one
+            self._say_no_sandbox()
         scope = ("once" if risky == "destructive" or _destructive(args, self.root) or orisk or outside_edit else   # a destructive command: this once only
                  # no sandbox: one yes for the chat. Said plainly (review, 0.0.18): nothing isolates these commands
                  "ordinary commands and edits in this folder (not isolated: this computer has no sandbox)" if folder else
@@ -7725,6 +7787,7 @@ class Agent:
                 c.strip() for c in PR.commands_of(name, args) if c.strip())
         if decision == "always" and folder:
             self._folder_ok = True                 # what _work_without_asking reads for the rest of this chat
+            self.always.add(_FOLDER_OK)
         if decision == "always" and scope != "once":
             if group == "bash":
                 self.always.update("bash:" + p for p in pats)   # no pattern (a chain, a redirect): this once only

@@ -3114,6 +3114,8 @@ def _create(body: dict, made: list) -> dict:
             pass
     write_meta(s.id, project_id=pid or "", scratch=bool(scratch),
                code_mode=(kind_given == "code") if kind == "code" else None)     # made from the Code tab, or only in a folder
+    if body.get("terminal"):                        # started in the terminal: the app's first start still onboards
+        write_meta(s.id, terminal=True)
     if body.get("memory_exclude"):                  # facts left out before the first message (the context X-ray)
         write_meta(s.id, memory_exclude=[str(i) for i in body["memory_exclude"]][:200])
     if body.get("incognito"):                       # no memory read or written, no learning, nothing logged for insights
@@ -3136,7 +3138,9 @@ def _create(body: dict, made: list) -> dict:
         LIVE[s.id] = s
     _claim(s.id)
     _start_reaper()
-    if not scratch and not pid:
+    if not scratch and not pid and not body.get("terminal"):
+        # The app's folder list is folders the user chose in the app. First-hour run, 0.0.18: the terminal's folder
+        # (~/work, where the command was typed) went on it, and the app's next start made it a pinned project.
         try:
             from meshpool_harness.ui import workbench as W
             W.add_project(wt["source"] if wt else s.workdir)
@@ -3509,6 +3513,7 @@ def _decorate(r: dict, m: dict, legacy: dict, live_pids: set) -> dict:
     _list_project(r, m, legacy, live_pids)
     r["_m"] = m                                   # kept for the cached rows: projects are re-resolved on every call
     r["scratch"] = bool(m.get("scratch"))
+    r["terminal"] = bool(m.get("terminal"))        # started in the terminal (the app's onboarding ignores these)
     r["code_mode"] = m.get("code_mode")           # False: a chat in a folder that was never started from the Code tab
     r["kind"] = m.get("kind") or r.get("kind") or "code"
     if m.get("worktree"):                         # a chat in an isolated copy is listed under the folder it came from

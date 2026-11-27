@@ -1958,6 +1958,7 @@ function applyEvRaw(ev) {
       if (/ is ready\. ?/.test(ev.text || "") && !cur.turn) break;
       if (ev.down !== undefined) {                     // the model service is down: one line, updated at each check
         if (cur.downEl && !cur.downEl.isConnected) cur.downEl = null;
+        if (!ev.down && !cur.downEl) break;              // "answering again" belongs to the chat that showed it was down
         if (ev.down) $("#waitNote")?.remove();
         const dw = downWords(ev);                         // one plain line, updated in place, with Stop while it is down
         if (cur.downEl) { setTxt($(".dn", cur.downEl), dw); if (!ev.down) { $("[data-dstop]", cur.downEl)?.remove(); cur.downEl.className = cur.downEl.className.replace(" retry", ""); } }
@@ -3910,7 +3911,8 @@ async function restartApp(bootBefore) {
   if (!S.settings.ready) showOnboarding();
   else {
     loadModels().then(renderBar);
-    if (!store("onbDone") && get0("MH_ONBOARDED") !== "1" && !S.threads.length) { if (store("onbStep") === 3 || store("onbStep") === 2) { if (store("onbStep") === 2) { permStep(); } else { const o = Object.assign(document.createElement("div"), {className: "onb", id: "onb"}); document.body.appendChild(o); setupStep(o); } } else if (!store("permsAsked")) permStep(); }
+    // chats started in the terminal do not count: the app's first start still offers its folder and permission steps
+    if (!store("onbDone") && get0("MH_ONBOARDED") !== "1" && !S.threads.some(t => !t.terminal)) { if (store("onbStep") === 3 || store("onbStep") === 2) { if (store("onbStep") === 2) { permStep(); } else { const o = Object.assign(document.createElement("div"), {className: "onb", id: "onb"}); document.body.appendChild(o); setupStep(o); } } else if (!store("permsAsked")) permStep(); }
     // 21. a thread waiting for the user's OK opens straight away after a restart
     const waiting = S.threads.find(t => t.state === "waiting" && !t.archived);
     const last = store("last_chat");

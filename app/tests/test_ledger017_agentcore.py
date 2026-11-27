@@ -2,6 +2,7 @@
 the code can run here. The row id is the first words of each docstring."""
 import codecs
 import importlib
+import importlib.util
 import io
 import json
 import os
@@ -87,10 +88,101 @@ def _money_close(shown: str, value: float) -> bool:
     return abs(float(s) - value) <= 0.5 * 10 ** -places + 1e-9
 
 
+# README "How it compares with Codex": suite -> (version, meshpool arm, meshpool raw files, codex raw files or None for
+# the same files). The 0.0.16 code rows pair the c171 run with the codex rows of the same round's core run, as
+# docs/results/release016/verify.md does.
+_R16, _R18 = "docs/results/release016", "docs/results/release018"
+_README_SUITES = {
+    "SWE-bench Verified (SymPy)": ("0.0.16", "MP", [f"{_R16}/swe_sympy/results.jsonl"], None),
+    "Coding tasks, dev set": ("0.0.16", "MP", [f"{_R16}/v2_dev_c171/results.jsonl"],
+                              [f"{_R16}/v2_dev_core/results.jsonl"]),
+    "Coding tasks, eval set": ("0.0.16", "MP", [f"{_R16}/final22_c171/results.jsonl"],
+                               [f"{_R16}/final22_core/results.jsonl"]),
+    "Data analysis (DABench)": ("0.0.16", "MP", [f"{_R16}/work/results.jsonl"], None),
+    "Office-7: Word, Excel, PowerPoint, PDF": ("0.0.16", "mp-work", [f"{_R16}/office_final6/O7/mp-work.results.jsonl"],
+                                              [f"{_R16}/office_final6/O7/codex.results.jsonl"]),
+    "Decks: read, edit, add, reorder": ("0.0.18", "mp-work", [f"{_R18}/decks018/results.jsonl"], None),
+    "SpreadsheetBench (public sample)": ("0.0.18", "mp-work", [f"{_R18}/sb018/results.jsonl"], None),
+    "OfficeBench (public sample)": ("0.0.18", "mp-work", [f"{_R18}/ob018/results.jsonl"], None),
+}
+# the same suite's row in packaging/release-notes.md's 0.0.16 table, and in docs/results/release018/README.md
+_NOTES16 = {"SWE-bench Verified (SymPy)": "SWE-bench Verified, SymPy", "Coding tasks, dev set": "v2_dev code",
+            "Coding tasks, eval set": "v2_eval + build", "Data analysis (DABench)": "Work: DABench",
+            "Office-7: Word, Excel, PowerPoint, PDF": "Office-7 (decks"}
+_NOTES18 = {"SpreadsheetBench (public sample)": "SpreadsheetBench (sb018",
+            "OfficeBench (public sample)": "OfficeBench (ob018"}
+
+
+def _raw_point(arm, a_files, b_files):
+    """Solved counts, cost per solved task vs Codex and the median per-task time ratio, from the raw rows, with
+    testkit/verify_paired.py's own code."""
+    spec = importlib.util.spec_from_file_location("verify_paired", REPO / "testkit" / "verify_paired.py")
+    VP = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(VP)
+    rows = [r for r in VP.load([str(REPO / f) for f in a_files]) if r["arm"] == arm]
+    rows += [r for r in VP.load([str(REPO / f) for f in (b_files or a_files)]) if r["arm"] == "codex"]
+    by = {}
+    for r in rows:
+        by.setdefault((r["arm"], r["task"]), []).append(r)
+    tasks = sorted({t for (x, t) in by if x == arm} & {t for (x, t) in by if x == "codex"})
+    assert len(tasks) == len({t for (_, t) in by}), "a task ran in one arm only"
+    solved = {x: sum(VP.passed(r) for t in tasks for r in by[(x, t)]) for x in (arm, "codex")}
+    runs = {x: sum(len(by[(x, t)]) for t in tasks) for x in (arm, "codex")}
+    assert runs[arm] == runs["codex"], (a_files, runs)
+    _, cps, time_ratio = VP.paired_point(by, tasks, arm, "codex")
+    return solved[arm], solved["codex"], runs[arm], f"{cps:.2f}x", f"{time_ratio:.2f}x"
+
+
+def _readme_codex_table_matches_the_raw_rows(readme):
+    """The README's Codex table, its headline and its "where Codex is ahead" line, recomputed from the raw rows."""
+    sec = readme.split("## How it compares with Codex", 1)[1].split("\n## ", 1)[0]
+    shown = {}
+    for line in sec.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) == 5 and " vs " in cells[2] and cells[2][0].isdigit():
+            shown[cells[1]] = cells[2:]
+    assert set(shown) == set(_README_SUITES), shown
+    notes16 = (REPO / "packaging" / "release-notes.md").read_text(encoding="utf-8").split("**New in 0.0.16**", 1)[1]
+    r18 = (REPO / _R18 / "README.md").read_text(encoding="utf-8")
+    sum_a = sum_b = total = 0
+    costs, losses, slower = [], [], []
+    for suite, (version, arm, a_files, b_files) in _README_SUITES.items():
+        solved, cost_cell, time_cell = shown[suite]
+        sa, sb, n, cps, tr = _raw_point(arm, a_files, b_files)
+        assert solved == f"{sa} vs {sb} of {n}", (suite, solved, sa, sb, n)
+        assert cost_cell == f"**{cps}**", (suite, cost_cell, cps)
+        assert time_cell == tr, (suite, time_cell, tr)
+        if version == "0.0.16":                    # the README row is the 0.0.16 release notes' row
+            row = next(ln for ln in notes16.splitlines() if ln.strip().startswith(f"| {_NOTES16[suite]}"))
+            assert f"| {sa} vs {sb} |" in row and f"| {cps} (" in row and f"| {tr} |" in row, (suite, row)
+        elif suite in _NOTES18:                    # and the 0.0.18 results page says the same
+            row = next(ln for ln in r18.splitlines() if ln.strip().startswith(f"| {_NOTES18[suite]}"))
+            assert [c.strip() for c in row.split("|")[2:6]] == [f"{sa}/{n}", f"{sb}/{n}", cps, tr], (suite, row)
+        else:                                      # decks: the 0.0.18 page gives the solved counts
+            assert f"| meshpool 0.0.18 (decks018) | {sa}/{n} |" in r18, suite
+            assert f"| Codex 0.171 (decks018) | {sb}/{n} |" in r18, suite
+        sum_a, sum_b, total = sum_a + sa, sum_b + sb, total + n
+        costs.append(float(cps[:-1]))
+        if sa < sb:
+            losses.append((suite, sa, sb))
+        if float(tr[:-1]) > 1.0:
+            slower.append((suite, tr))
+    head = f"**{sum_a} vs {sum_b} of {total} tasks solved, at {min(costs):.2f}x to {max(costs):.2f}x of Codex's cost**"
+    assert head in sec, head
+    assert "costs less per solved task on every suite" not in sec or max(costs) < 1.0
+    assert "solves as many tasks as Codex" not in sec or sum_a >= sum_b
+    ahead = next(ln for ln in sec.splitlines() if ln.startswith("- **Where Codex is ahead.**"))
+    for suite, sa, sb in losses:                   # every loss is named with its numbers, not only the wins
+        assert f"({sb} vs {sa})" in ahead, (suite, ahead)
+    for suite, tr in slower:                       # and so is every suite where meshpool was slower
+        assert tr in ahead, (suite, tr, ahead)
+
+
 @pytest.mark.skipif(not (REPO / "docs" / "results" / "v4" / "final-office").is_dir(), reason="docs not in this copy")
 def test_k04_benchmark_claims_match_the_raw_rows():
-    """K-04: every number in the BENCHMARKS.md office table and the README office line comes from the raw rows in
-    docs/results/v4, and neither page claims "all 7 passed" or "cheapest on every run"."""
+    """K-04: every number in the BENCHMARKS.md office table comes from the raw rows in docs/results/v4; every number in
+    the README's Codex table, its headline and its losses comes from the raw rows in docs/results/release016 and
+    release018; and neither page claims "all 7 passed" or "cheapest on every run"."""
     sec, rows = _bench_table()
     assert set(rows) == {"pi", "codex", "mp-on-codex", "mp-on-pi", "mp-cli", "mp-work"}, rows
     now, old = _measured("final-office"), _measured("baseline-0.0.12-flash")
@@ -108,15 +200,7 @@ def test_k04_benchmark_claims_match_the_raw_rows():
     assert round(per["mp-on-codex"] / per["codex"], 1) == float(m.group(1))
     assert round(per["mp-on-codex"] / per["pi"]) == float(m.group(2))
     readme = (REPO / "README.md").read_text(encoding="utf-8")
-    work = next(line for line in readme.splitlines() if line.startswith("| **Meshpool Work**"))
-    # the README now quotes the 0.0.16 measurements: every "N vs M ... at R" pair must be a row of that table
-    notes = (REPO / "packaging" / "release-notes.md").read_text(encoding="utf-8")
-    table = [ln for ln in notes.splitlines() if ln.strip().startswith("|") and " vs " in ln]
-    pairs = re.findall(r"(\d+) vs (\d+)(?: solved)? at (\d\.\d+)x", work)
-    assert len(pairs) >= 4, work
-    for a, b, r in pairs:
-        assert any(f"| {a} vs {b} |" in ln and f"| {r}x" in ln for ln in table), (a, b, r)
-    assert "fewer SpreadsheetBench and OfficeBench" in work      # the losses are said, not only the wins
+    _readme_codex_table_matches_the_raw_rows(readme)
     for page in (readme, (REPO / "docs" / "BENCHMARKS.md").read_text(encoding="utf-8")):
         assert "all 7 passed" not in page.lower() and "cheapest on every" not in page.lower()
     v2 = (REPO / "docs" / "BENCHMARKS_V2.md").read_text(encoding="utf-8")

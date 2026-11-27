@@ -1766,7 +1766,8 @@ def _start_office() -> str:
     if not cp or not (OF.folder() / "manifest.xml").exists():     # only once the add-in was set up here
         return ""
     try:
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        from meshpool_harness.core import http as _mhttp
+        ctx = _mhttp.server_context()            # ssl's own class: truststore's would check the browser's certificate
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         ctx.load_cert_chain(str(cp[0]), str(cp[1]))
     except (OSError, ssl.SSLError) as e:

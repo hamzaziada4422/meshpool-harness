@@ -228,6 +228,11 @@
    "minos": null,
    "worst": null
   },
+  "iniconfig==2.3.1": {
+   "file": "iniconfig-2.3.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
   "ipykernel==7.4.0": {
    "file": "ipykernel-7.4.0-py3-none-any.whl",
    "minos": null,
@@ -376,6 +381,11 @@
    "minos": null,
    "worst": null
   },
+  "packaging==26.4": {
+   "file": "packaging-26.4-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
   "pandas==3.1.1": {
    "file": "pandas-3.1.1-cp312-cp312-macosx_11_0_arm64.whl",
    "minos": [
@@ -432,6 +442,11 @@
     5
    ],
    "worst": "playwright/driver/node"
+  },
+  "pluggy==1.7.0": {
+   "file": "pluggy-1.7.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
   },
   "primp==2.0.1": {
    "file": "primp-2.0.1-cp310-abi3-macosx_11_0_arm64.whl",
@@ -499,6 +514,11 @@
     0
    ],
    "worst": "pypdfium2_raw/libpdfium.dylib"
+  },
+  "pytest==9.2.0": {
+   "file": "pytest-9.2.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
   },
   "python-dateutil==4.0.0": {
    "file": "python_dateutil-4.0.0-py3-none-any.whl",
@@ -999,6 +1019,11 @@
    "minos": null,
    "worst": null
   },
+  "iniconfig==2.3.1": {
+   "file": "iniconfig-2.3.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
   "ipykernel==7.4.0": {
    "file": "ipykernel-7.4.0-py3-none-any.whl",
    "minos": null,
@@ -1147,6 +1172,11 @@
    "minos": null,
    "worst": null
   },
+  "packaging==26.4": {
+   "file": "packaging-26.4-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
   "pandas==3.1.1": {
    "file": "pandas-3.1.1-cp312-cp312-macosx_10_13_x86_64.whl",
    "minos": [
@@ -1203,6 +1233,11 @@
     5
    ],
    "worst": "playwright/driver/node"
+  },
+  "pluggy==1.7.0": {
+   "file": "pluggy-1.7.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
   },
   "primp==2.0.1": {
    "file": "primp-2.0.1-cp310-abi3-macosx_10_12_x86_64.whl",
@@ -1270,6 +1305,11 @@
     13
    ],
    "worst": "pypdfium2_raw/libpdfium.dylib"
+  },
+  "pytest==9.2.0": {
+   "file": "pytest-9.2.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
   },
   "python-dateutil==4.0.0": {
    "file": "python_dateutil-4.0.0-py3-none-any.whl",

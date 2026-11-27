@@ -205,7 +205,9 @@ CONSULTING = """House style (always, whatever the brief says about look):
   edges: never a column that stops short of the one beside it.
 - The last slide is the decision and the next steps. An owner, a date, a target or a meeting appears only where
   the brief or the facts give it; never invent one.
-- Source lines name the report's title or the file's name, never "fact base", "dossier" or fact ids.
+- Source lines name the report's title, the file's name or the cited web page, never "fact base", "dossier" or fact ids,
+  and never a report, survey or study the facts do not give. With no file and no fact for a figure, make the point
+  without the figure (an illustrative figure is labelled so on the slide).
 - Never write about the evidence on the page ("not stated", "the sources do not say", "not a stated fact"): a gap in
   a table is left out (no row or column of N/A); what a number rests on goes in one short footnote or in the notes.
 - At most four big numbers on a slide; the most important one comes first and the rest support it. Two figures
@@ -2273,6 +2275,7 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
 
     from engines.forge import grounded as GR
     grounded_log: list[str] = []
+    illustrative: list[int] = []                  # slides whose figures nothing gives (a deck with no source file)
 
     def tidy():
         """What the brief did not ask for never reaches the page: a "Preliminary" or "Draft" stamp the brief does not
@@ -2283,6 +2286,11 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             grounded_log[:] = GR.ground(slides, GR.sources(brief, facts), GR.request_of(brief), _today())
         except Exception as e:  # noqa: BLE001 - the check after rendering still reports what is left
             grounded_log[:] = [f"grounding skipped: {type(e).__name__}"]
+        if not GR.has_sources(brief):         # no source file: a figure nothing gives is labelled illustrative
+            try:
+                illustrative[:] = GR.label_unsourced(slides, GR.sources(brief, facts), GR.request_of(brief), _today())
+            except Exception as e:  # noqa: BLE001 - P29 after rendering still flags what is left
+                grounded_log.append(f"illustrative labels skipped: {type(e).__name__}")
         try:
             from engines.forge.render import plain_sources
             plain_sources(slides, brief)
@@ -2668,7 +2676,9 @@ choice or the number of items; never layout. Keep node and keep the point of the
     (out / "qa.json").write_text(json.dumps(qa, indent=1, default=str))
     return {"pptx": str(pptx), "calls": calls, "rounds": rounds, "rules": res["rules"], "density": density,
             "unresolved": {k: v for k, v in left.items()}, "review": verdict, "panel": panel,
-            "slides": len(slides), "design": dz,
+            "slides": len(slides), "design": dz, "illustrative": list(illustrative),
+            "source_files": GR.has_sources(brief), "web_sources": any("http" in str(f.get("text") or "") for f in facts
+                                                                 if isinstance(f, dict)),
             "content_failed": [f"slide {c['node']} ({c['title']}): the model's answer could not be used, so it is a "
                                "title-only slide" for c in content_failed]}
 

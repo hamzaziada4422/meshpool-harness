@@ -1433,7 +1433,8 @@ class Server:
                 args["_model"] = str(model)                  # the chat's model, for engines that call one
             if self.spec.get("chat_id"):
                 args["_chat"] = str(self.spec["chat_id"])    # the chat it serves (one process serves every chat)
-        schema = next((t.get("inputSchema") for t in getattr(self, "tools", None) or [] if t.get("name") == tool), None)
+        schema = next((t.get("inputSchema") for t in (getattr(self, "tools", None) or [])
+                       if isinstance(t, dict) and t.get("name") == tool), None)   # a server not listed yet: no schema
         args = coerce_args(schema, args)
         r = self._rpc("tools/call", {"name": tool, "arguments": args}, float(self.spec.get("timeout", 120)))
         images: list[dict] = []

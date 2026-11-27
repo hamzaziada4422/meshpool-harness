@@ -39,12 +39,15 @@ one slow model call.
 | Suite | meshpool 0.0.18 | Codex, same hour | Cost per solved vs Codex | Median time per task vs Codex |
 |---|---|---|---|---|
 | Office-7 (o7_018, 7 x 3) | 21/21 | (0.0.17 run: 41/42) | | |
-| OfficeBench (ob018, 4 x 3) | 11/12 | 12/12 | 0.84x | 1.27x |
+| OfficeBench (ob018, 4 x 3) | 11/12 | 12/12 | 0.84x | 1.20x |
 | SpreadsheetBench (sb018, 6 x 2) | 10/12 | 9/12 | 0.76x | 0.98x |
 
 OfficeBench's miss is ob-1-15-2 (1 of 3 runs), the added-text task the 0.0.17 check addressed (12/12 in its own
 run); SpreadsheetBench sb-374-31 failed for both, and Codex also missed sb-269-43 once. Small samples: the time
 ratios move with the hour (0.0.17's same-hour runs gave 1.22x and 1.07x).
+The ratios are testkit/verify_paired.py's: cost per solved task, and the median over tasks of the time ratio of
+each task's mean time over its runs. An earlier version of this table gave 1.27x for OfficeBench, the median of run-by-run
+ratios.
 
 ## Office panel (no model spend)
 

@@ -2107,7 +2107,8 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
     body = {"workdir": wd, "kind": _KINDS[mode_kind] or "",
             "mode": "auto" if auto else (pm if pm in ("ask", "edits") else None),
             "plan": True if plan_mode else None, "incognito": incognito, "project_id": project or "",
-            "no_mcp": no_mcp, "model": model or os.environ.get("MH_MODEL") or None, "task": prompt or first or "", "effort": effort or ""}
+            "no_mcp": no_mcp, "model": model or os.environ.get("MH_MODEL") or None, "task": prompt or first or "", "effort": effort or "",
+            "terminal": True}
     if mode_kind == "auto":
         body["harness"] = "meshpool-auto"
     elif agent:

@@ -110,7 +110,10 @@ def _chats(cutoff: float) -> list[dict]:
                     tools.append(n)
         if not users:
             continue
-        out.append({"id": sid, "title": d.get("title") or "", "updated": upd, "users": users, "tools": tools,
+        # the title the sidebar shows: the user's or the work's name, else the cleaned first message. First-hour run,
+        # 0.0.18: this page showed the saved first line as typed, and a suggested schedule was named after it
+        title = meta.get("title") or A.nice_title(d.get("title") or users[0])
+        out.append({"id": sid, "title": title, "updated": upd, "users": users, "tools": tools,
                     "harness": d.get("harness") or "", "model": d.get("model") or "",
                     "project_id": meta.get("project_id") or "", "workdir": d.get("workdir") or "",
                     "kind": d.get("kind") or "cowork"})

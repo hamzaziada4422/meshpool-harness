@@ -10,7 +10,8 @@ Everything the app needs ships inside the installer; the installed app uses none
 nothing (docs/plan/BUNDLED_TOOLS.md). This script therefore also puts in the bundle, each pinned and verified by
 packaging/bundled_tools.py: LibreOffice (<app>/vendor/libreoffice, pruned to headless conversion by
 packaging/lo_prune.py), Chromium (<app>/vendor/browsers, English only, no headless shell), Git (Windows: MinGit;
-macOS: packaging/mac/build_git.sh), ffmpeg and pandoc (<app>/vendor/ffmpeg and vendor/pandoc), the speech-to-text model
+macOS: packaging/mac/build_git.sh), bubblewrap for Linux (<app>/vendor/bwrap, packaging/linux/build_bwrap.sh), ffmpeg and
+pandoc (<app>/vendor/ffmpeg and vendor/pandoc), the speech-to-text model
 (<app>/vendor/whisper), and Hermes without its tests, website and apps, next to the Node runtime and Pi it
 already carried. Codex and OpenCode are NOT shipped (Meshpool's own agent is the product; the benchmark in testkit/
 runs them with npx). MH_BUNDLE_LIBREOFFICE=0 builds a slim test app without LibreOffice on a developer machine only:
@@ -259,6 +260,8 @@ def check_pins():
                 got = f"unreachable ({e})"
         print(f"{key:10s} {name}\n  pinned {sha}\n  TDF    {got}  {'OK' if got == sha else 'DIFFERENT, check the .asc signature'}")
     print(f"git source {bt.GIT_VERSION}: pinned {bt.GIT_SOURCE_SHA256}")
+    print(f"bubblewrap source {bt.BWRAP_VERSION}: pinned {bt.BWRAP_SOURCE_SHA256}; libcap {bt.LIBCAP_VERSION}: pinned "
+          f"{bt.LIBCAP_SOURCE_SHA256}")
     print(f"MinGit: {bt.MINGIT_URL} {bt.MINGIT_SHA256}")
 
 
@@ -312,6 +315,7 @@ def mac_app(arch: str):
     shutil.copy2(PKG / "mac/meshpool", root / "Resources/meshpool")
     shutil.copy2(PKG / "icons/Meshpool.icns", root / "Resources/Meshpool.icns")
     shutil.copytree(RT[arch], root / "Resources/python", symlinks=True, ignore=IGN)
+    _bt().relocatable_scripts(root / "Resources/python/bin", RT[arch] / "bin")     # pytest, ruff...: no build path
     app_code(root / "Resources/app")
     pi_and_node(root / "Resources/app", root / "Resources/node", arch)
     libreoffice(root / "Resources/app", arch)
@@ -336,6 +340,19 @@ def git_linux(root: Path):
     shutil.copytree(src, root / "git", symlinks=True)
 
 
+def bwrap_linux(app_dir: Path):
+    """bubblewrap for Linux into <app>/vendor/bwrap (bwrap and its licences): the command sandbox where the computer has
+    no bwrap of its own. deps/bwrap-linux if present, else built static from the pinned sources by
+    packaging/linux/build_bwrap.sh (on a Linux build host)."""
+    src = DEPS / "bwrap-linux"
+    if not src.is_dir():
+        import subprocess
+        if not sys.platform.startswith("linux"):
+            sys.exit(f"build_all: {src} is missing. Build it on Linux: packaging/linux/build_bwrap.sh {src}")
+        subprocess.run(["bash", str(PKG / "linux/build_bwrap.sh"), str(src)], check=True)
+    shutil.copytree(src, app_dir / "vendor" / "bwrap")
+
+
 def linux_app():
     """Linux x64: one folder, Meshpool/, packed as Meshpool-Linux-x64.tar.gz. The `meshpool` command and the
     `Meshpool` app launcher sit at its top with install.sh (a menu entry and the command on PATH); the runtime, app
@@ -348,12 +365,14 @@ def linux_app():
     stamp(PKG / "linux/meshpool.desktop", root / "meshpool.desktop")
     shutil.copy2(PKG / "icons/icon-256.png", root / "meshpool.png")
     shutil.copytree(RT["linux"], root / "python", symlinks=True, ignore=IGN)
+    _bt().relocatable_scripts(root / "python" / "bin", RT["linux"] / "bin")    # pytest, ruff...: no build path
     git_linux(root)
     app_code(root / "app")
     pi_and_node(root / "app", root / "node", "linux")
     libreoffice(root / "app", "linux")
     chromium(root / "app", "linux")
     media_tools(root / "app", "linux")
+    bwrap_linux(root / "app")
     speech_model(root / "app")
     docs(root / "harness-docs")
     # Playwright's own Node needs libatomic, which a desktop may lack: it runs on the app's Node 22 instead (as on macOS)
@@ -368,6 +387,7 @@ def win_runtime(root: Path):
     skills and models type python3, which on Windows otherwise opens the Microsoft Store stub."""
     shutil.copytree(RT["win"], root / "runtime", ignore=IGN)
     _bt().add_python_aliases(root / "runtime")
+    _bt().relocatable_launchers(root / "runtime" / "Scripts")                 # pytest.exe...: no build path
 
 
 def win_app():

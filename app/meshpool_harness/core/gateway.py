@@ -468,6 +468,7 @@ class Health:
         caller probes once at once, whatever the backoff, so a past outage never blocks the app. True when it is
         up. Stop works throughout (sleep and check_stop raise)."""
         t0, told, first, tries = time.time(), False, True, 0
+        said_down = False                           # this chat was told the endpoint is down
         while True:
             check_stop()
             with self.cond:
@@ -483,11 +484,11 @@ class Health:
             first = False
             if not lead:                            # another caller is probing, or it is not time yet
                 if not told and prober:
-                    told = True
+                    told = said_down = True
                     emit({"type": "status", "down": True, "text": "The model endpoint isn't answering. Another chat "
                                                                   "is already checking it; this one carries on when it is back."})
                 elif not told:
-                    told = True
+                    told = said_down = True
                     emit({"type": "status", "down": True, "text": "The model endpoint isn't answering. Checking again "
                                                                   f"in {max(1, int(self.next_probe - time.time()))} s."})
                 sleep(min(1.0, max(0.05, budget_s - (time.time() - t0))))
@@ -511,12 +512,17 @@ class Health:
                     self.prober = False
                     self.cond.notify_all()
             if got == "ok":
-                emit({"type": "status", "down": False,
-                      "text": "The model endpoint is answering again. Picking up where it left off."})
+                # First-hour run, 0.0.18: a new chat whose first probe found the endpoint up (an outage another chat
+                # saw, or one before a restart) said "answering again" for an outage it never showed. Only the chat
+                # that said it was down says it is back.
+                if said_down:
+                    emit({"type": "status", "down": False,
+                          "text": "The model endpoint is answering again. Picking up where it left off."})
                 return True
             if time.time() - t0 + wait < budget_s:
                 from meshpool_harness.core import errtext as _ET
                 # one line the page updates in place ("down", "attempt"): it was a new line every check, 7 of them
+                said_down = True
                 emit({"type": "status", "down": True, "attempt": tries,
                       "text": f"The model endpoint isn't answering ({_ET.reason(got)}). Checking again in {wait:.0f} s, "
                               f"attempt {tries + 1}, for up to {max(1, int(budget_s // 60))} min. Press Stop to end."})

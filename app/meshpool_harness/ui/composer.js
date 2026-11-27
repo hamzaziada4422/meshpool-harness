@@ -231,9 +231,20 @@ function repoSelector(anchor) {
 /* ================================== home ================================== */
 const CARDS = () => [
   {id: "key", show: S.settings && !S.settings.has_key && !S.settings.ready, title: "Add your " + lowBrand(S.settings?.key_name || "meshpool") + " key", text: "meshpool needs a key to talk to a model. It takes a minute.", cta: "Add key", fn: () => openSettings("general")},
-  {id: "github", show: (S.connCache || []).some(c => /github/i.test(c.id || c.name) && !c.connected), title: "Connect GitHub", text: "Let meshpool work on your repositories and pull requests.", cta: "Connect", fn: () => openSettings("connectors")},
+  {id: "github", show: draftIsRepo() && (S.connCache || []).some(c => /github/i.test(c.id || c.name) && !c.connected), title: "Connect GitHub", text: "Let meshpool work on your repositories and pull requests.", cta: "Connect", fn: () => openSettings("connectors")},
   {id: "project", show: !!S.settings?.ready && !(S.pj || []).length, title: "Keep related work together", text: "A project gives its chats shared instructions, files and memory.", cta: "New project", fn: () => newProjectFlow()},
 ];
+// The chat's folder is a Git repository: the GitHub card is for those only. First-hour run, 0.0.18: it showed on a
+// plain folder of documents. Asked once per folder (the answer is kept), and the page is drawn again when it comes.
+function draftIsRepo() {
+  const f = S.draft?.project; if (!f) return false;
+  S.repoOf = S.repoOf || {};
+  if (!(f in S.repoOf)) {
+    S.repoOf[f] = false;
+    api("/api/git?root=" + encodeURIComponent(f)).then(g => { S.repoOf[f] = !!(g && g.repo); if (S.repoOf[f] && S.draft?.project === f && !S.cur) renderHero(); }, () => {});
+  }
+  return S.repoOf[f];
+}
 function waitingList() { return chatList().filter(t => isCodeThread(t) && t.state === "waiting").slice(0, 3); }
 function renderHero() {
   const col = $("#col"); if (!col || S.view !== "chat" || S.cur) return;

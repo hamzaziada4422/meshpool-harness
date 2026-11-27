@@ -112,7 +112,9 @@ class _State:
                 self.events = [{k: v for k, v in e.items() if k != "i"} for e in session.events]
             self.messages = None if self.outside else list(session.agent.messages)
             self.cp = session.cp
-            self.title = session.agent.title or A.read_meta(sid).get("title") or ""
+            # the chat's name as the sidebar shows it: a rename or the work's name, else the cleaned first message
+            # (the agent keeps the first line as typed, up to 240 characters, and a fork was named after it)
+            self.title = A.read_meta(sid).get("title") or A.nice_title(session.agent.title or "")
             return
         data = A._saved(sid)
         if not data:
@@ -122,7 +124,7 @@ class _State:
         self.harness = data.get("harness") or "meshpool-code"
         self.outside = "messages" not in data and _outside_type(self.harness)
         self.kind = data.get("kind") or A.read_meta(sid).get("kind") or "code"
-        self.title = A.read_meta(sid).get("title") or data.get("title") or ""
+        self.title = A.read_meta(sid).get("title") or A.nice_title(data.get("title") or "")
         tr = A._transcript(sid)
         if self.outside:
             self.messages = None
@@ -423,7 +425,7 @@ def _fork_state(st: _State, message_index, before: bool = False) -> str:
     d = A.SESSIONS / sid
     d.mkdir(parents=True, exist_ok=True)
     meta_old = A.read_meta(st.sid)
-    title = "Fork of " + (st.title or "chat")
+    title = "Fork of " + (st.title if st.title and st.title != "New chat" else "chat")
     now = time.time()
     snap = {"id": sid, "workdir": st.workdir, "title": title, "created": now, "updated": now, "harness": harness,
             "kind": kind, "usage": {"in": 0, "cached": 0, "out": 0, "calls": 0}, "unfinished": False, "messages": msgs}
