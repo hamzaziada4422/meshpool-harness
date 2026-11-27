@@ -207,6 +207,15 @@ def media_tools(app_dir: Path, plat: str):
         print(f"build_all: {name} for {plat}: {mb} MB ({bt.WHEEL_PROGRAMS[name]['version']})")
 
 
+def uv_tool(dst: Path, plat: str):
+    """uv and uvx beside the app (dst = <root>/uv, next to node/), from the pinned, hash-checked PyPI wheel
+    (bundled_tools.WHEEL_PROGRAMS["uv"]), so the MCP library's uvx entries run in the packaged app. bundled.py puts the
+    folder on PATH, as it does for Node."""
+    bt = _bt()
+    exe = bt.fetch_wheel_program("uv", LO_KEY[plat], CACHE, dst)
+    print(f"build_all: uv for {plat}: {exe.stat().st_size // 1_000_000} MB ({bt.WHEEL_PROGRAMS['uv']['version']})")
+
+
 def speech_model(app_dir: Path):
     """The speech-to-text model (Whisper base, CTranslate2 format) into <app>/vendor/whisper, from the pinned revision
     with each file's SHA-256 checked. faster-whisper (in the runtime's packages) loads it from there, offline."""
@@ -263,6 +272,9 @@ def check_pins():
     print(f"bubblewrap source {bt.BWRAP_VERSION}: pinned {bt.BWRAP_SOURCE_SHA256}; libcap {bt.LIBCAP_VERSION}: pinned "
           f"{bt.LIBCAP_SOURCE_SHA256}")
     print(f"MinGit: {bt.MINGIT_URL} {bt.MINGIT_SHA256}")
+    for key, (url, sha, _size) in bt.WHEEL_PROGRAMS["uv"]["pins"].items():
+        print(f"uv {bt.UV_VERSION} {key}: {url.rsplit('/', 1)[1]} {sha} "
+              f"(compare: https://pypi.org/project/uv/{bt.UV_VERSION}/#files)")
 
 
 def pi_and_node(app_dir: Path, node_dst: Path, plat: str):
@@ -318,6 +330,7 @@ def mac_app(arch: str):
     _bt().relocatable_scripts(root / "Resources/python/bin", RT[arch] / "bin")     # pytest, ruff...: no build path
     app_code(root / "Resources/app")
     pi_and_node(root / "Resources/app", root / "Resources/node", arch)
+    uv_tool(root / "Resources/uv", arch)
     libreoffice(root / "Resources/app", arch)
     chromium(root / "Resources/app", arch)
     media_tools(root / "Resources/app", arch)
@@ -369,6 +382,7 @@ def linux_app():
     git_linux(root)
     app_code(root / "app")
     pi_and_node(root / "app", root / "node", "linux")
+    uv_tool(root / "uv", "linux")
     libreoffice(root / "app", "linux")
     chromium(root / "app", "linux")
     media_tools(root / "app", "linux")
@@ -403,6 +417,7 @@ def win_app():
     git_win(root)
     app_code(root / "app")
     pi_and_node(root / "app", root / "node", "win")
+    uv_tool(root / "uv", "win")
     libreoffice(root / "app", "win")
     chromium(root / "app", "win")
     media_tools(root / "app", "win")

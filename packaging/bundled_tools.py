@@ -125,6 +125,28 @@ WHEEL_PROGRAMS = {
         },
     },
 }
+# uv (Astral, MIT or Apache-2.0): runs the MCP library's uvx entries (Python MCP servers) in the packaged app. Taken from
+# the official PyPI wheels of one exact release, like ffmpeg and pandoc; `also` lists the other program in the same wheel.
+# It goes beside the app as uv/ (like node/), and bundled.front_dirs puts it on PATH.
+UV_VERSION = "0.13.7"
+WHEEL_PROGRAMS["uv"] = {
+    "version": f"uv {UV_VERSION}",
+    "license": "MIT or Apache-2.0",
+    "source": f"https://github.com/astral-sh/uv/releases/tag/{UV_VERSION}",
+    "member": rf"uv-{re.escape(UV_VERSION)}\.data/scripts/uv(?:\.exe)?",
+    "also": {"uvx": rf"uv-{re.escape(UV_VERSION)}\.data/scripts/uvx(?:\.exe)?"},
+    "exe": {"win-x64": "uv.exe"},
+    "pins": {
+        "mac-arm64": (_PYPI + "40/a5/8756c38ace102fa13fd4e653e8bc40e1f65924f1c0a0d23350339dac97e5/uv-0.13.7-py3-none-macosx_11_0_arm64.whl",
+                      "f91a229093163eefca89ea1b220a221d64c3beade05d03519a6584d1797a5a5f", 14454941),
+        "mac-x64": (_PYPI + "3d/5b/e0379e7b172659420b1ec99a8e8229830aa85ea59684847c80b1c959a056/uv-0.13.7-py3-none-macosx_10_12_x86_64.whl",
+                    "fd04bf01ba5f2829f4f94ca8f0c24a743f21e73d75045613ed6fc2fd66fc7bda", 17194673),
+        "win-x64": (_PYPI + "8e/4f/041b59d2a38807a3e31ef41064cf3e45d2752fe0409d89040d52778049ae/uv-0.13.7-py3-none-win_amd64.whl",
+                    "2835e2ab397d0db86323b9975dce75ecd76aa9cfa0d6a2aea84734aae7f8c9b3", 15330939),
+        "linux-x64": (_PYPI + "b9/93/0e053a2ca4523ee9825ccbedeb7121470d0a188933f11688b6d90d7f5c08/uv-0.13.7-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+                      "2c9bdc4a872b60a93c5f26c0791089ea11585a4f9d3b3c017d78eb8487505e25", 17202345),
+    },
+}
 # The Apple silicon ffmpeg needs macOS 12 (read from the file); the app promises 11, so it is exempt from the macOS 11
 # check up to 12.0 and the app says so on an older Mac (bundled.ffmpeg_needs_newer_macos). Nothing else depends on it:
 # speech to text decodes audio with PyAV, whose Apple silicon build needs 11.
@@ -531,8 +553,8 @@ def fetch_mingit(cache: Path, dest: Path) -> Path:
 
 # ------------------------------------------------------------------------------------------------ ffmpeg, pandoc, speech model
 def fetch_wheel_program(name: str, key: str, cache: Path, dest: Path) -> Path:
-    """Download the pinned wheel (cached, SHA-256 checked), take its program out and put it in dest as ffmpeg or pandoc
-    (.exe on Windows), executable, with MESHPOOL-<NAME>.json beside it. Returns the program's path."""
+    """Download the pinned wheel (cached, SHA-256 checked), take its program out and put it in dest as ffmpeg, pandoc or
+    uv (.exe on Windows, with uvx beside uv), executable, with MESHPOOL-<NAME>.json beside it. Returns the program's path."""
     import zipfile
     spec = WHEEL_PROGRAMS[name]
     if key not in spec["pins"]:
@@ -550,6 +572,14 @@ def fetch_wheel_program(name: str, key: str, cache: Path, dest: Path) -> Path:
             raise BundleError(f"{archive.name} should hold exactly one {name} program, found {[h.filename for h in hits]}")
         with z.open(hits[0]) as src, open(dest / exe, "wb") as out:
             shutil.copyfileobj(src, out, 1 << 20)
+        for other, rx in spec.get("also", {}).items():     # uvx beside uv: the same wheel, one program each
+            more = [i for i in z.infolist() if re.fullmatch(rx, i.filename)]
+            if len(more) != 1:
+                raise BundleError(f"{archive.name} should hold exactly one {other} program, found {[h.filename for h in more]}")
+            target = dest / (other + (".exe" if exe.endswith(".exe") else ""))
+            with z.open(more[0]) as src, open(target, "wb") as out:
+                shutil.copyfileobj(src, out, 1 << 20)
+            target.chmod(0o755)
     (dest / exe).chmod(0o755)
     (dest / f"MESHPOOL-{name.upper()}.json").write_text(
         json.dumps({"program": name, "from": spec["version"], "member": hits[0].filename, "wheel": archive.name,

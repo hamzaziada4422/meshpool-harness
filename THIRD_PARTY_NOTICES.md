@@ -10,6 +10,7 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | Pi coding agent (Mario Zechner) | MIT | https://www.npmjs.com/package/@earendil-works/pi-coding-agent |
 | Ponytail skills (ponytail, ponytail-review), commit ebd8654 (Dietrich Gebert) | MIT | https://github.com/DietrichGebert/ponytail (app/defaults/skills/ponytail*) |
 | Node.js 22 | MIT and bundled licenses | https://nodejs.org |
+| uv 0.13.7 (Astral), `uv` and `uvx` taken unmodified from the official PyPI wheels, SHA-256 checked (`uv/` beside the app; pins in `packaging/bundled_tools.py`), runs the uvx MCP servers | MIT or Apache-2.0 | https://github.com/astral-sh/uv |
 | Python 3.12 (python-build-standalone) | PSF License and bundled licenses | https://github.com/astral-sh/python-build-standalone |
 | Git for Windows, MinGit (Windows) | GPL-2.0 | Source: https://github.com/git-for-windows/git |
 | Git 2.56.1, built unmodified from the official source (macOS: `git/`; build script `packaging/mac/build_git.sh`, licence `git/COPYING-git-GPL-2.0.txt`) | GPL-2.0 | Source: https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.56.1.tar.xz |
@@ -42,6 +43,7 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | 7-Zip 25.01 (`7zr.exe`, inside the Windows installer: unpacks the program files appended to it) | LGPL-2.1-or-later (the unRAR code is not used) | https://www.7-zip.org |
 | Taste Skill, method for building and reviewing user interfaces (`app/defaults/skills/build-ui`, `ui-review`; adapted, not copied), Copyright (c) 2026 Leonxlnx | MIT | https://github.com/Leonxlnx/taste-skill |
 | Anthropic knowledge-work plugins: finance, legal, sales and customer-support skills (`app/defaults/skills`) | Apache-2.0 | https://github.com/anthropics/knowledge-work-plugins |
+| Hermes Agent (Nous Research), Copyright (c) 2025 Nous Research: the skill folder rules of `tools/skill_manager_tool.py` (name pattern, size limits) and a subset of the scan rules and trust policy of `tools/skills_guard.py`, ported to `app/meshpool_harness/tools_store.py` (rules adapted, no Hermes code imported) | MIT | https://github.com/NousResearch/hermes-agent |
 
 ## Designs followed (no code copied)
 
