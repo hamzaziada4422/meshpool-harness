@@ -163,6 +163,17 @@ def test_a_command_in_the_chats_own_folder_is_not_outside_it():
     assert "outside this folder" in T("cd /home/u/Documents/Q4work && ls -la")    # no folder known: as before
 
 
+def test_a_path_that_climbs_out_of_the_chats_folder_still_says_outside():
+    """Writing the chat's folder as "." made `cat /home/u/proj/../.ssh/id_rsa` (and `cd /home/u/proj && cat
+    ../.ssh/id_rsa`) read "Look at files in this folder?" on the card: milder than the command, which reads an SSH key."""
+    from meshpool_harness.agent.core import _plain_command_title as T
+    root = "/home/u/proj"
+    for c in ("cat /home/u/proj/../.ssh/id_rsa", "cd /home/u/proj && cat ../.ssh/id_rsa",
+              "cp /home/u/proj/a /home/u/proj/../../x"):
+        assert "outside this folder" in T(c, root), (c, T(c, root))
+    assert "outside this folder" not in T("cat /home/u/proj/notes.txt", root)
+
+
 def test_a_multi_line_command_reads_as_one_line_on_the_card():
     """"Use the internet? (python3 -I -c ")": only the first line of the command was kept, an open quote."""
     from meshpool_harness.agent.core import _plain_command_title as T

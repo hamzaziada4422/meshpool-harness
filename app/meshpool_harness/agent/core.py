@@ -901,8 +901,12 @@ def _step_name(step: str) -> str:
 def _in_root(s: str, root) -> str:
     """The command with the chat's own folder written as "." (and its files as ./name): a path inside the folder the
     chat works in is not "outside this folder" (first-hour run, 0.0.18: `cd /home/u/Documents/Q4work && ls` in a
-    chat in Q4work asked "Use files outside this folder, in your home folder?")."""
-    try:                     # the files the user attached to a chat are kept in runs/_uploads/chat-<id>: theirs, given
+    chat in Q4work asked "Use files outside this folder, in your home folder?"). A command with a `..` step is left as
+    it is: `cat /home/u/proj/../.ssh/id_rsa` or `cd /home/u/proj && cat ../.ssh/id_rsa` leaves the folder, and its
+    card must not read "Look at files in this folder?"."""
+    if re.search(r"(?:^|[\s/\\'\"=(])\.\.(?:[/\\\s'\";&|)]|$)", str(s or "")):
+        return s
+    try:                   # the files the user attached to a chat are kept in runs/_uploads/chat-<id>: theirs, given
         from meshpool_harness import config as _C           # to this chat (a PDF read asked about "your home folder")
         ups = str(_C.runs_dir() / "_uploads")
         s = re.sub(re.escape(ups) + r"[/\\][^/\\\s'\";&|)]+", "./attachments", s)
