@@ -140,6 +140,15 @@ def test_a_chat_message_stops_on_the_limit(serve, monkeypatch, tmp_path):
     assert s.agent.budget_stopped is True
 
 
+def _own_sessions(monkeypatch, tmp_path):
+    """Goal chats keep their goal.json in a test folder, never in the machine's own data folder."""
+    from meshpool_harness.agent import core as K
+    d = tmp_path / "sessions"
+    d.mkdir(exist_ok=True)
+    for mod in (K, A):
+        monkeypatch.setattr(mod, "SESSIONS", d)
+
+
 def _goal_fakes(s, status):
     """Goal mode (0.0.20) without extra model calls: the fallback rubric, and a check that gives every criterion
     `status`. The score is still computed by agent/goal.py."""
@@ -150,6 +159,7 @@ def _goal_fakes(s, status):
 
 def test_a_goal_stops_on_the_limit(serve, monkeypatch, tmp_path):
     monkeypatch.setenv("MH_BUDGET_USD", "0.10")
+    _own_sessions(monkeypatch, tmp_path)
     srv = serve()
     s = _session(tmp_path)
     _goal_fakes(s, "not_met")
@@ -162,7 +172,8 @@ def test_a_goal_stops_on_the_limit(serve, monkeypatch, tmp_path):
     assert report and report[-1].startswith("Stopped at the budget: 0/10.")
 
 
-def test_goal_continuations_share_the_task_and_a_new_message_gets_a_new_one(serve, tmp_path):
+def test_goal_continuations_share_the_task_and_a_new_message_gets_a_new_one(serve, tmp_path, monkeypatch):
+    _own_sessions(monkeypatch, tmp_path)
     texts = iter(["Part one.\nGOAL: CONTINUE", "Part two.\nGOAL: CONTINUE", "All done.\nGOAL: DONE"])
     # each turn acts once (a tool call), then answers: the goal loop sees progress
     serve(reply=lambda n, body: _call(n) if n % 2 else {"role": "assistant", "content": next(texts)}, prompt=100)

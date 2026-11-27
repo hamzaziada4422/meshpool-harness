@@ -841,7 +841,8 @@ def run(parent, info: dict, commands: list, *, on_event=None, rubric: list | Non
             snap = _snapshot(root)
         except Exception:  # noqa: BLE001
             snap = {}
-        a = holder["a"] = make_agent(parent, emit, parent_stop, system=GOAL_SYSTEM if rubric else None)
+        a = holder["a"] = (make_agent(parent, emit, parent_stop, system=GOAL_SYSTEM) if rubric
+                           else make_agent(parent, emit, parent_stop))
         usage_total = used
         timer = threading.Timer(lim["seconds"], lambda: (flags.__setitem__("over", True), a.stop()))
         timer.daemon = True

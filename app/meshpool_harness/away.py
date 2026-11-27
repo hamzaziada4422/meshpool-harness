@@ -67,8 +67,7 @@ def goal_runs(since: float) -> list[dict]:
     out = []
     try:
         from meshpool_harness.agent import goal as G
-        from meshpool_harness.agent.core import SESSIONS
-        files = list(SESSIONS.glob("*/goal.json"))
+        files = list((C.runs_dir() / "sessions").glob("*/goal.json"))     # this data folder's chats
     except Exception:  # noqa: BLE001
         return out
     for f in files:

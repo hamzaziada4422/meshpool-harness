@@ -108,7 +108,7 @@ def test_the_rubric_is_open_for_edits_with_a_countdown_and_typing_is_never_redra
     assert req["op"] == "start"
     rub = req["rubric"]
     assert rub[1]["text"] == "plan.md has the launch date, owner and budget"
-    assert rub[4] == {"text": "The plan fits on one page", "check": "", "must": True, "weight": 1}
+    assert rub[4] == {"text": "The plan fits on one page", "check": "", "needs_user": False, "must": True, "weight": 1}
 
 
 def test_after_a_restart_the_goal_resumes_after_a_countdown_with_a_cancel_button(make_page):  # noqa: F811

@@ -54,7 +54,8 @@
       <ol class="gc-edit">${rows}</ol><button class="linkbtn gc-add" type="button">Add a criterion</button>`;
   }
   function read(card) {
-    return [...card.querySelectorAll(".gc-edit li")].map(li => ({text: li.querySelector(".gc-in").value.trim(), check: (window._gcChecks || {})[li.dataset.i] || "",
+    return [...card.querySelectorAll(".gc-edit li")].map(li => ({text: li.querySelector(".gc-in").value.trim(), check: ((window._gcChecks || {})[li.dataset.i] || {}).check || "",
+      needs_user: !!((window._gcChecks || {})[li.dataset.i] || {}).needs_user,
       must: li.querySelector(".gc-mustc").checked, weight: Number(li.querySelector(".gc-w").value) || 1})).filter(c => c.text);
   }
   async function op(cur, name, body) {
@@ -93,7 +94,7 @@
       g.spent, Math.floor((g.elapsed || 0) / 60), g.history, g.findings && g.findings.items, g.resume_at, g.rubric_hash]);
     card.className = `goalcard gc-s-${g.status}`;
     if (card.dataset.key !== key) {
-      window._gcChecks = Object.fromEntries((g.rubric || []).map((c, i) => [i, c.check || ""]));
+      window._gcChecks = Object.fromEntries((g.rubric || []).map((c, i) => [i, {check: c.check || "", needs_user: !!c.needs_user}]));
       const resuming = g.status === "working" && g.resume_at && left(g.resume_at, g) > 0;
       const acts = [];
       if (g.status === "review" || g.status === "drafting") acts.push(`<button class="btn sm primary" data-gc="start"${g.status === "drafting" ? " disabled" : ""}>Start</button>`);

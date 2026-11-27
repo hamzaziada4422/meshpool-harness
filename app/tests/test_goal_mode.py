@@ -192,6 +192,16 @@ def test_decide_pauses_for_the_user_and_on_errors_only_the_user_can_fix():
     assert d["action"] == "paused" and d["question"].startswith("Which of the two logos")
     d = G.decide(st, _out(ready=True), _check(st, "not_met", needs_user="Please attach the 2025 figures."))
     assert d["action"] == "paused" and "2025 figures" in d["question"]
+    st2 = _st()
+    st2["rubric"][2]["needs_user"] = True                     # a "needs you" criterion
+    open_ = _check(st2, "met")
+    open_["items"][2]["status"] = "not_met"
+    sc = G.score(st2["rubric"], {i["id"]: i["status"] for i in open_["items"]}, st2["bar"])
+    open_.update(score=sc["score"], must_open=sc["must_open"])
+    d = G.decide(st2, _out(ready=True), open_)
+    assert d["action"] == "paused" and d["question"] == (f"This needs you: {st2['rubric'][2]['text']}. Can you "
+                                                         "provide it or decide it?")
+    assert G.decide(st2, _out(ready=True), _check(st2, "met"))["action"] == "met"
     assert G.decide(st, _out(error="auth"))["reason"] == "the model's key was refused"
     assert G.decide(st, _out(error="quota"))["reason"].startswith("the key's quota")
     assert G.decide(st, _out(error="model"))["reason"] == "the model is not available"
@@ -754,14 +764,16 @@ def test_terminal_goal_command_shows_a_plain_status_line_and_runs_the_same_engin
     assert did == [("op", "start"), ("op", "resume"), ("set", ""), ("set", "make it a 10/10")]
 
 
-def test_while_you_were_away_has_one_line_per_goal(chat, monkeypatch):
+def test_while_you_were_away_has_one_line_per_goal():
     from meshpool_harness import away
-    s = chat()
+    from meshpool_harness import config as C
+    d = C.runs_dir() / "sessions" / "goal-away-test"
+    d.mkdir(parents=True, exist_ok=True)
     st = _st()
     G.record_check(st, _check(st))
     G.apply(st, {"action": "met"})
-    G.save(chat.sessions / s.id, st)
+    G.save(d, st)
     rows = away.goal_runs(0)
-    assert len(rows) == 1 and rows[0]["chat_id"] == s.id
+    assert len(rows) == 1 and rows[0]["chat_id"] == "goal-away-test"
     assert rows[0]["line"] == "Goal met: ship the report. 10/10 after 1 check."
     assert away.goal_runs(time.time() + 60) == []

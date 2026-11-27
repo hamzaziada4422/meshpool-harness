@@ -690,6 +690,11 @@ def decide(st: dict, out: dict, check: dict | None = None) -> dict:
     q = (out.get("needs") or "").strip()
     if not q and check is not None:
         q = str(check.get("needs_user") or "").strip()
+    if not q and check is not None:              # a "needs you" criterion still open: only the user can close it
+        open_ids = {i.get("id") for i in check.get("items") or [] if i.get("status") != "met"}
+        c = next((c for c in st.get("rubric") or [] if c.get("needs_user") and c.get("id") in open_ids), None)
+        if c:
+            q = f"This needs you: {c['text']}. Can you provide it or decide it?"
     if q:
         return {"action": "paused", "reason": "it needs you", "question": q[:400], "findings": findings}
     hit = exhausted(st) or ("usd" if err == "budget" else "")
