@@ -336,6 +336,48 @@ def test_undo_keeps_a_commit_that_was_already_pushed(tmp_path):
     assert "already sent to the remote" in undo_message(r)[0]
 
 
+def test_undo_keeps_the_commits_when_only_the_first_of_them_was_pushed(tmp_path):
+    """Only the last commit was looked up on the remote branches: a reply that committed twice and pushed the first
+    one lost that pushed commit from the branch on Undo (the next pull or push then fought the remote)."""
+    from meshpool_harness.checkpoints import Checkpoints
+    root, git = _repo(tmp_path)
+    cp = Checkpoints(str(root), tmp_path / "store")
+    cp.begin_turn("two commits, push the first")
+    (root / "calc.py").write_text("def mean(xs):\n    return 0\n")
+    git("commit", "-q", "-am", "Change mean")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")       # the first one pushed
+    (root / "notes.txt").write_text("later\n")
+    git("add", "notes.txt")
+    git("commit", "-q", "-m", "Add notes")
+    head = git("rev-parse", "HEAD").strip()
+    cp.end_turn()
+    r = cp.revert_to_before(1)
+    assert git("rev-parse", "HEAD").strip() == head and r.get("commits_kept"), r
+    assert "remote" in r.get("commits_why", ""), r
+
+
+def test_undo_runs_none_of_the_repositorys_own_programs(tmp_path):
+    """Undo's git calls (on every reply's start and end too) ran the repository's hooks and fsmonitor: git reset runs
+    the reference-transaction hook."""
+    import os
+    import stat
+    from meshpool_harness.checkpoints import Checkpoints
+    root, git = _repo(tmp_path)
+    mark = tmp_path / "hook-ran"
+    hook = root / ".git" / "hooks" / "reference-transaction"
+    hook.write_text(f"#!/bin/sh\necho ran >> '{mark}'\n")
+    hook.chmod(hook.stat().st_mode | stat.S_IEXEC)
+    before = git("rev-parse", "HEAD").strip()
+    cp = Checkpoints(str(root), tmp_path / "store")
+    cp.begin_turn("commit")
+    (root / "calc.py").write_text("def mean(xs):\n    return 1\n")
+    git("-c", "core.hooksPath=" + os.devnull, "commit", "-q", "-am", "Change mean")
+    cp.end_turn()
+    r = cp.revert_to_before(1)
+    assert r.get("commits_undone") and git("rev-parse", "HEAD").strip() == before, r
+    assert not mark.exists(), mark.read_text()
+
+
 # ---------- the terminal UI's context share uses the same window as the chat -----------------------------------------------
 def test_the_terminal_footer_uses_the_chats_context_window(monkeypatch):
     """The footer said "4.9%/128k" while the line above it said "context 1,049k (from the model table)"."""

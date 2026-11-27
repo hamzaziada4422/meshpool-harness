@@ -102,7 +102,9 @@ def _git(root, *args, timeout: float = 10) -> tuple[int, str]:
     if not exe:
         return 127, ""
     try:
-        r = subprocess.run([exe, "-C", str(root), *args], capture_output=True, text=True, timeout=timeout,
+        # never the repository's own programs (hooks, fsmonitor, a pager), and no optional index lock for a look
+        safe = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", f"core.hooksPath={os.devnull}", "--no-pager"]
+        r = subprocess.run([exe, *safe, "-C", str(root), *args], capture_output=True, text=True, timeout=timeout,
                            stdin=subprocess.DEVNULL, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         return r.returncode, (r.stdout or "").strip()
     except (OSError, subprocess.SubprocessError, ValueError):
@@ -127,6 +129,14 @@ def _git_head(root) -> dict | None:
     return {"sha": sha, "ref": ref if rc == 0 else ""}
 
 
+def _pushed(root, old: str, new: str) -> bool:
+    """Any commit of old..new is on a remote branch (or git cannot tell). Every one is checked, not only the last: a
+    push of the first of two commits must keep them both."""
+    a = _git(root, "rev-list", "--count", f"{old}..{new}")
+    b = _git(root, "rev-list", "--count", f"{old}..{new}", "--not", "--remotes")
+    return bool(a[0] or b[0] or a[1] != b[1])
+
+
 def _undo_commits(root, turns: list, kept: list) -> dict:
     """After Undo put the files of `turns` back: take back the commits they made with `git reset --mixed` to where
     the branch was before the first of them (the files already hold that state; nothing in the working tree changes).
@@ -149,7 +159,7 @@ def _undo_commits(root, turns: list, kept: list) -> dict:
             why = "the branch moved after this reply"
         elif _git(root, "merge-base", "--is-ancestor", first["sha"], now["sha"])[0] != 0:
             why = "the history was rewritten after this reply"
-        elif _git(root, "for-each-ref", "--contains", now["sha"], "--format=%(refname)", "refs/remotes")[1].strip():
+        elif _pushed(root, first["sha"], now["sha"]):
             why = "it was already sent to the remote repository"
         elif kept:
             why = "some files changed after this reply, so they were kept"
