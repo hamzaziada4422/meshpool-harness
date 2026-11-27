@@ -36,10 +36,39 @@ _ALT: dict = {}               # Alt (Esc first) and a key: word moves and delete
 _IGNORED: set = set()
 if Keys is not None:
     _NAMES.update({getattr(Keys, "Control" + c.upper()): "ctrl_" + c for c in _CTRL})
+    _NAMES.update({Keys.ControlDelete: "delete", Keys.ControlShiftLeft: "left", Keys.ControlShiftRight: "right",
+                   Keys.ControlShiftUp: "up", Keys.ControlShiftDown: "down", Keys.ControlShiftHome: "home",
+                   Keys.ControlShiftEnd: "end"})     # what the old parser read them as
     _ALT.update({"b": "word_left", "f": "word_right", "d": "word_delete", Keys.ControlH: "ctrl_w", Keys.Left: "word_left",
                  Keys.Right: "word_right", Keys.ControlM: "alt_enter", Keys.ControlJ: "alt_enter"})
     _IGNORED.update({Keys.CPRResponse, Keys.Vt100MouseEvent, Keys.WindowsMouseEvent, Keys.Ignore, Keys.ScrollUp,
                      Keys.ScrollDown})
+
+
+_CSI_FINAL = {"A": "up", "B": "down", "C": "right", "D": "left", "H": "home", "F": "end", "Z": "shift_tab"}
+_TILDE = {"1": "home", "7": "home", "4": "end", "8": "end", "3": "delete", "5": "pageup", "6": "pagedown"}
+
+
+def _char(k) -> bool:
+    return isinstance(k, str) and not (Keys is not None and isinstance(k, Keys)) and len(k) == 1
+
+
+def _csi(ps: list, i: int):
+    """ps[i] is a "[" right after the Esc key's own "\\x1b": an escape sequence prompt_toolkit has no name for
+    ("\\x1b[1;10D", "\\x1b[1;5Z"), read the way the old parser read it. (name, index after it), or None."""
+    j, body = i + 1, ""
+    while j < len(ps) and _char(ps[j].key) and (ps[j].key.isdigit() or ps[j].key == ";"):
+        body += ps[j].key
+        j += 1
+    if j >= len(ps) or not _char(ps[j].key) or not ("\x40" <= ps[j].key <= "\x7e") \
+            or not (body or ps[j].key in _CSI_FINAL):
+        return None
+    f = ps[j].key
+    if f == "~":
+        return _TILDE.get(body.split(";")[0], "unknown"), j + 1
+    if f in "CD" and body.endswith((";3", ";5", ";9")):           # Alt or Ctrl with an arrow: a word
+        return ("word_right" if f == "C" else "word_left"), j + 1
+    return _CSI_FINAL.get(f, "unknown"), j + 1
 
 
 def _paste(text: str) -> tuple:
@@ -58,11 +87,22 @@ def names(presses) -> list:
             out.append(_paste(ps[i - 1].data))
         elif k == Keys.Escape and i < len(ps) and ps[i].key != Keys.Escape and ps[i].key not in _IGNORED:
             nxt = ps[i].key
-            if nxt in _ALT:
+            # Alt held with a key: prompt_toolkit gives an Escape whose data is the whole sequence ("\x1b[1;3A" for
+            # Alt+Up), or "" on Windows (the console's Alt flag). Only data "\x1b" is the Esc key itself. Read as
+            # "esc", Alt+Up cleared the typed line and stopped a running turn.
+            mod = ps[i - 1].data != "\x1b"
+            csi = None if mod or nxt != "[" else _csi(ps, i)
+            if csi:                               # a sequence prompt_toolkit does not know: one key, not its letters
+                out.append(csi[0])
+                i = csi[1]
+            elif nxt in _ALT:
                 out.append(_ALT[nxt])
                 i += 1
-            elif isinstance(nxt, str) and not isinstance(nxt, Keys) and nxt >= " ":
+            elif _char(nxt) and nxt >= " ":
                 out.append("unknown")             # any other Alt+letter: not Esc and then a letter
+                i += 1
+            elif mod:                             # Alt with an arrow, Home, Delete...: the key itself
+                out.append(_NAMES.get(nxt, "unknown") if isinstance(nxt, Keys) else "unknown")
                 i += 1
             else:
                 out.append("esc")                 # Esc, then a key of its own (an arrow, Enter on its own...)
