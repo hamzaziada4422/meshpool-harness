@@ -4094,6 +4094,22 @@ class Agent:
             msg += " Later chats find it with find_skill."
         return msg
 
+    def _cap_signal(self, text: str, kind: str) -> str:
+        """A missing-capability signal in a tool result or a reply (capability_get.missing_signal) turns the capability
+        tools on from the next model step. A reply counts while the task is open: no plan, or a plan step not done."""
+        if getattr(self, "capability_on", False) or _cap_mode() in ("0", "off", "false", "no"):
+            return ""
+        try:
+            from meshpool_harness import capability_get as CG
+            todos = getattr(self, "_todos", None) or []
+            task_open = not todos or any(i.get("status") != "completed" for i in todos)
+            hit = CG.missing_signal(text, kind, task_open)
+        except Exception:  # noqa: BLE001 - never breaks a step
+            return ""
+        if hit:
+            self.capability_on = True
+        return hit
+
     def _saved_tool_result(self, name: str, ok: bool, out: str) -> None:
         """A saved MCP tool that fails is marked failing and the user is told; a later success clears it. Never
         removed."""
@@ -4954,6 +4970,7 @@ class Agent:
                     again, final = self._grade_gate(g, turn, final)   # independent check of a big task (agent/grader.py)
                     if again:
                         continue
+                    self._cap_signal(final, "reply")          # "I don't have a tool for that": offered next step
                     final = self._without_trailing_promise(final)
                     final = self._without_false_sourcing(final, g)
                     break
@@ -4988,6 +5005,7 @@ class Agent:
                     step_out += outs
                     for c, out in zip(batch, outs):
                         self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": clean(out)})
+                        self._cap_signal(str(out), "tool")      # "command not found": the capability tools join
                         if _engine_tool((c.get("function") or {}).get("name") or ""):   # the file an office job made
                             made = _job_file(str(out), self.root)
                             if made:

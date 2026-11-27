@@ -475,3 +475,31 @@ def save_settings(c: dict, values: dict) -> list[str]:
         C.write(vals)
         C.load_into_env(override=True)
     return sorted(vals)
+
+
+# ---------- noticing a missing capability mid-task ------------------------------------------------------------------
+# A tool result or a reply that shows the agent lacks something: get_capability and save_tool join from the next model
+# step on (Agent.capability_on). Ordinary failures (a failing test, a syntax error, a missing file) do not count.
+_TOOL_SIGNALS = re.compile(
+    r"command not found|is not recognized as (?:an internal or external command|the name of a cmdlet)"
+    r"|ModuleNotFoundError|No module named\b|unknown tool ['\"]|tool not loaded|no such tool\b"
+    r"|tool ['\"][^'\"]+['\"] (?:does not exist|not found)", re.I)
+_REPLY_SIGNALS = re.compile(
+    r"\bI (?:do not|don't) have (?:a |any )?(?:tool|integration|connector|access to (?:a |an )?(?:tool|API))\b"
+    r"|\bno (?:tool|integration|connector) (?:available |here )?(?:for|to|that)\b"
+    r"|\bI (?:cannot|can't|am unable to|am not able to) [^.\n]{0,80}(?:without (?:a|an|the) (?:tool|integration|"
+    r"connector|API)|(?:because|since|as) I (?:do not|don't) have (?:a |any )?(?:tool|integration|access))", re.I)
+_DONE = re.compile(r"GOAL:\s*(?:READY|DONE)\b", re.I)
+
+
+def missing_signal(text: str, kind: str = "tool", task_open: bool = True) -> str:
+    """The signal a tool result (kind "tool") or a reply (kind "reply") gives that a capability is missing, or "".
+    A reply counts only while the task is still open (the caller says work remains, and no GOAL: READY)."""
+    t = str(text or "")
+    if kind == "tool":
+        m = _TOOL_SIGNALS.search(t[-6000:])
+        return m.group(0) if m else ""
+    if not task_open or _DONE.search(t):
+        return ""
+    m = _REPLY_SIGNALS.search(t[-3000:])
+    return m.group(0) if m else ""

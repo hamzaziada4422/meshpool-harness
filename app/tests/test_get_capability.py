@@ -418,3 +418,65 @@ def test_the_packaged_app_puts_its_uv_on_path(tmp_path, monkeypatch):
     bundled.use_bundled_tools()
     assert os.environ["PATH"].split(os.pathsep)[0] == str(uv.parent)
     assert os.environ["UV_PYTHON"] == sys.executable and os.environ["UV_PYTHON_DOWNLOADS"] == "never"
+
+
+# ---------- the missing-capability detector -------------------------------------------------------------------------
+@pytest.mark.parametrize("out", [
+    "bash: jq: command not found\n[exit 127]",
+    "'ffprobe' is not recognized as an internal or external command,\noperable program or batch file.",
+    "Traceback (most recent call last):\nModuleNotFoundError: No module named 'pdfplumber'",
+    "ImportError: No module named yaml",
+    "ERROR: unknown tool 'mcp__jira__create_issue'. Available: read_file, grep",
+    "tool 'linear_search' does not exist",
+])
+def test_each_tool_signal_triggers(out):
+    assert CG.missing_signal(out, "tool")
+
+
+@pytest.mark.parametrize("out", [
+    "FAILED tests/test_parser.py::test_empty - AssertionError: assert 1 == 2",
+    "SyntaxError: invalid syntax",
+    "cat: notes.txt: No such file or directory",
+    "error: pathspec 'main2' did not match any file(s) known to git",
+    "npm ERR! 404 Not Found - GET https://registry.npmjs.org/x",
+    "ImportError: cannot import name 'foo' from 'bar'",
+])
+def test_normal_failures_do_not_trigger(out):
+    assert not CG.missing_signal(out, "tool")
+
+
+@pytest.mark.parametrize("reply", [
+    "I don't have a tool for Jira, so I could not file the tickets.",
+    "There is no integration for Salesforce here.",
+    "I can't send the Slack message because I don't have access to Slack.",
+    "I am unable to read the calendar without an API to call.",
+])
+def test_a_reply_that_says_it_lacks_a_tool_triggers_while_the_task_is_open(reply):
+    assert CG.missing_signal(reply, "reply")
+    assert not CG.missing_signal(reply, "reply", task_open=False)
+    assert not CG.missing_signal(reply + "\nGOAL: READY", "reply")
+
+
+@pytest.mark.parametrize("reply", [
+    "Done: the parser now handles empty input and the tests pass.",
+    "I can't reproduce the bug on this branch; the test passes.",
+    "I don't have enough information about the expected format. Which one do you want?",
+])
+def test_ordinary_replies_do_not_trigger(reply):
+    assert not CG.missing_signal(reply, "reply")
+
+
+def test_a_signal_offers_the_tools_from_the_next_step(tmp_path, monkeypatch):
+    a = Agent(str(tmp_path), mode="auto")
+    base = a._tool_names()
+    assert not a._cap_signal("FAILED: assert 1 == 2", "tool") and a._tool_names() == base
+    assert a._cap_signal("zsh: command not found: gh", "tool")
+    assert a._tool_names() == base + CAP_TOOLS                       # appended: the earlier tools never move
+    b = Agent(str(tmp_path), mode="auto")
+    b._todos = [{"content": "file tickets", "status": "completed"}]
+    assert not b._cap_signal("I don't have a tool for Jira.", "reply")   # the task is done: no offer
+    b._todos[0]["status"] = "in_progress"
+    assert b._cap_signal("I don't have a tool for Jira.", "reply") and b.capability_on
+    monkeypatch.setenv("MH_GET_CAPABILITY", "0")
+    c = Agent(str(tmp_path), mode="auto")
+    assert not c._cap_signal("bash: jq: command not found", "tool") and not c.capability_on
