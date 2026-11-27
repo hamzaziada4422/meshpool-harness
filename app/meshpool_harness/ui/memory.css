@@ -184,3 +184,48 @@
 .rev010 .rv-s{display:inline-block;min-width:8em;font-weight:600;color:var(--ink-2)}
 .rev010 li.not_met .rv-s{color:var(--warn)}
 @media (max-width:520px){.rev010 .rv-s{display:block}}
+
+/* Goal mode (goal.js): a compact card above the thread. One surface, one hairline, the score in tabular figures. */
+.goalcard{flex:none;box-sizing:border-box;width:calc(100% - 32px);max-width:var(--colw,656px);margin:12px auto 0;padding:12px 16px;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r-l);font-size:var(--fs-s);color:var(--ink-2);
+  max-height:45vh;overflow:auto}
+.goalcard .gc-head{display:flex;align-items:baseline;gap:8px;min-width:0}
+.goalcard .gc-label{font-weight:600;color:var(--ink);flex:none}
+.goalcard .gc-text{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.goalcard .gc-score{flex:none;font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink-2)}
+.goalcard .gc-score b{font-size:var(--fs-l);font-weight:500;color:var(--ink)}
+.goalcard .gc-score small{color:var(--ink-3);font-size:var(--fs-xs);margin-left:4px}
+.goalcard .gc-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;margin-top:4px}
+.goalcard .gc-state{font-weight:500;color:var(--ink-2)}
+.goalcard.gc-s-working .gc-state,.goalcard.gc-s-checking .gc-state{color:var(--pool-text)}
+.goalcard.gc-s-paused .gc-state,.goalcard.gc-s-review .gc-state{color:var(--warn)}
+.goalcard.gc-s-met .gc-state{color:var(--add)}
+.goalcard.gc-s-stopped .gc-state{color:var(--del)}
+.goalcard .gc-meta,.goalcard .gc-hist{font-family:var(--mono);font-size:var(--fs-xs);font-variant-numeric:tabular-nums;color:var(--ink-3)}
+.goalcard .gc-q,.goalcard .gc-rs,.goalcard .gc-help{margin:8px 0 0;color:var(--ink-2)}
+.goalcard .gc-q{color:var(--ink)}
+.goalcard .gc-crit{margin-top:8px}
+.goalcard .gc-crit summary{cursor:pointer;color:var(--ink-2);min-height:24px;display:flex;align-items:center}
+.goalcard .gc-crit summary:focus-visible{outline:2px solid var(--pool-text);outline-offset:2px;border-radius:4px}
+.goalcard .gc-list{list-style:none;margin:4px 0 0;padding:0;display:flex;flex-direction:column;gap:4px}
+.goalcard .gc-list li{display:grid;grid-template-columns:8.5em minmax(0,1fr);column-gap:8px;line-height:1.4;overflow-wrap:anywhere}
+.goalcard .gc-list small{display:block;color:var(--ink-3);font-size:var(--fs-xs)}
+.goalcard .gc-mark{font-weight:500;color:var(--ink-3)}
+.goalcard li.gc-met .gc-mark{color:var(--add)}
+.goalcard li.gc-not_met .gc-mark{color:var(--del)}
+.goalcard li.gc-unverified .gc-mark{color:var(--warn)}
+.goalcard .gc-must{font-size:var(--fs-xs);color:var(--ink-3);border:1px solid var(--line-3);border-radius:var(--r-s);padding:0 4px}
+.goalcard .gc-edit{margin:8px 0 0;padding-left:24px;display:flex;flex-direction:column;gap:8px}
+.goalcard .gc-edit li{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.goalcard .gc-in{flex:1 1 20ch;min-width:0;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line-3);
+  border-radius:var(--r-s);padding:4px 8px;min-height:32px}
+.goalcard .gc-in:focus-visible,.goalcard .gc-w:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+.goalcard .gc-w{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line-3);border-radius:var(--r-s);min-height:32px}
+.goalcard .gc-mustl{display:inline-flex;align-items:center;gap:4px;color:var(--ink-2)}
+.goalcard .gc-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.goalcard .gc-acts:empty{display:none}
+.goalcard .gc-acts .btn{min-height:32px;padding:4px 12px;font-size:var(--fs-s)}
+.col .note.goalcheck{display:flex;align-items:flex-start;gap:8px;font-size:var(--fs-s)}
+.col .note.goalcheck svg{width:16px;height:16px;flex:none;color:var(--warn);margin-top:2px}
+.col .note.goalcheck.gc-ok svg{color:var(--add)}
+@media (max-width:520px){.goalcard{width:calc(100% - 16px);padding:12px}.goalcard .gc-list li{grid-template-columns:minmax(0,1fr)}}

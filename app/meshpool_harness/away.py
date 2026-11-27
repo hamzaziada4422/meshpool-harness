@@ -1,6 +1,6 @@
 """While you were away: what finished since the user last looked, and nothing else.
 
-Finished scheduled runs get one line each. A task with "Only tell me when something changed" is reported only when
+Finished scheduled runs get one line each, and so does a goal that was met, stopped or paused. A task with "Only tell me when something changed" is reported only when
 its result differs from the previous run's. Insight cards (within budget) follow. Everything is read from data Meshpool
 already keeps; no model call. The last time the user looked is kept in <Meshpool data folder>/insights/away.json.
 """
@@ -62,6 +62,35 @@ def mark_seen(now: float | None = None) -> None:
     _save(s)
 
 
+def goal_runs(since: float) -> list[dict]:
+    """One line for each goal (agent/goal.py) that was met, stopped or paused since the user last looked."""
+    out = []
+    try:
+        from meshpool_harness.agent import goal as G
+        from meshpool_harness.agent.core import SESSIONS
+        files = list(SESSIONS.glob("*/goal.json"))
+    except Exception:  # noqa: BLE001
+        return out
+    for f in files:
+        st = G.load(f.parent)
+        if not st or st.get("status") not in ("met", "stopped", "paused") or st.get("dismissed"):
+            continue
+        ts = float(st.get("ended") or st.get("updated") or 0)
+        if ts <= since:
+            continue
+        sid = f.parent.name
+        try:
+            from meshpool_harness.ui import agent_api as AG
+            meta = AG.read_meta(sid)
+            if meta.get("incognito") or meta.get("deleted"):
+                continue
+        except Exception:  # noqa: BLE001
+            pass
+        out.append({"task_id": "goal:" + sid, "name": "Goal", "ts": ts, "line": G.away_line(st)[:240],
+                    "chat_id": sid, "changed": True, "goal": st.get("status")})
+    return out
+
+
 def report(now: float | None = None, with_cards: bool = True) -> dict:
     """{runs: [{task_id, name, ts, line, chat_id, changed}], quiet: [names of tasks that did not change],
     cards: [...], since}. Empty runs and cards: nothing to show."""
@@ -94,6 +123,7 @@ def report(now: float | None = None, with_cards: bool = True) -> dict:
                          "chat_id": sid, "changed": True})
         else:
             quiet.append(t.get("name", ""))
+    runs += goal_runs(since)                 # a goal met, stopped or paused while the user was away: one line each
     runs.sort(key=lambda r: -r["ts"])
     cards = []
     if with_cards:

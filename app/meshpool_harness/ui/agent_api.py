@@ -16,6 +16,7 @@ from meshpool_harness import session_store as SS
 from meshpool_harness.agent.history_repair import repair_tool_pairs
 from meshpool_harness.agent import mcp as M
 from meshpool_harness.agent.core import SESSIONS, Agent
+from meshpool_harness.agent import goal as GL
 from meshpool_harness import harnesses as HR
 from meshpool_harness.core import usage
 from meshpool_harness.harnesses.acp import ACPAgent
@@ -50,7 +51,8 @@ def _claim_working(sess) -> None:
             raise ValueError(_GATE_MSG)
         sess.state = "working"
 LOCK = threading.Lock()
-_SKIP = {"text_delta", "stream_reset", "model_start", "model_end", "usage", "context", "queued", "tool_output"}
+_SKIP = {"text_delta", "stream_reset", "model_start", "model_end", "usage", "context", "queued", "tool_output",
+         "goal"}                    # "goal": a live ping for the goal card, which reads goal_state from every view
 # A text_delta of a finished reply (Session._fold_deltas): one shared, never-mutated marker in place of each, so event
 # positions stay put. It has no "i"; outward views (Session.view, the event stream) leave it out.
 _DELTA_GONE = {"type": "text_delta", "text": "", "gone": True}
@@ -68,13 +70,29 @@ def run_mcp_spec() -> str:
     if "MH_MCP_CONFIG" in os.environ:
         _RUN_MCP_SPEC[:] = [os.environ.pop("MH_MCP_CONFIG")]
     return _RUN_MCP_SPEC[0] if _RUN_MCP_SPEC else ""
-# /goal: the agent keeps taking turns until it says the goal is met. The note is hidden in the chat (after \u200b).
-GOAL_NOTE = ("\n\n\u200b[Meshpool] The goal of this chat: {goal}\nKeep working until it is fully done and checked. End your "
-             "reply with one last line: \"GOAL: DONE\" once the goal is met and verified, or \"GOAL: CONTINUE\" and "
-             "the next step if work remains. If you need the user to decide or provide something, ask, and leave the "
-             "GOAL line out.")
+# /goal: goal mode (agent/goal.py). The agent keeps taking turns until an independent check says the bar is met, a
+# budget runs out, it is stuck or it needs the user. Each goal turn carries goal.note() (hidden in the chat, after \u200b).
 GOAL_NEXT = "Continue working toward the goal."
 GOAL_NET_WAIT_S = 30                                 # first pause before a goal picks up after an outage (doubles, 5 min max)
+
+
+class _GoalParent:
+    """Who the goal's grader works for when the chat runs an outside agent (Codex, Pi, Hermes): the chat's folder,
+    its MCP tools and a model meshpool can call. Stop on the chat stops the check."""
+    profile = "code"
+
+    def __init__(self, s):
+        self._s = s
+        self.root = Path(s.workdir)
+        self.id = s.id
+        self.mcp = getattr(s, "mcp", None)
+
+    @property
+    def _stop(self) -> bool:
+        return bool(getattr(self._s, "_stop_req", False))
+
+    def current_model(self) -> str:
+        return os.environ.get("MH_MODEL") or ""
 
 
 def agent_token(agent) -> int:
@@ -82,7 +100,6 @@ def agent_token(agent) -> int:
     return f() if callable(f) else 0
 
 
-_GOAL_RE = re.compile(r"^\W*GOAL:\s*(DONE|CONTINUE)\b", re.I | re.M)
 _NET_RE = re.compile(r"Couldn't reach the model|model service had a problem|model is busy|HTTP 0|HTTP 5\d\d|HTTP 429|"
                      r"rate.?limit|too many requests|(?:code|status)\W{0,3}429\b|overloaded",
                      re.I)                          # an outage or a key whose slots are full: wait it out
@@ -113,7 +130,7 @@ RESUME_TRIES = 5
 
 _KEEP = {"user", "assistant", "offer", "tool_end", "interrupted", "error", "turn_end", "approval", "approval_done",
          "checkpoint", "status", "plan", "check", "checks_line", "task_receipt", "insight", "review", "retry_ok",
-         "review_round", "steps_retried"}
+         "review_round", "steps_retried", "goal_check", "goal_rubric"}
 # A step's files, for "a later step redid it" (Session._mark_retried_steps): names with an extension in its summary.
 _STEP_FILE = re.compile(r"[\w][\w ()+-]*\.(?:xlsx|xlsm|xls|csv|tsv|docx|doc|pptx|ppt|pdf|md|txt|html?|json|png|jpe?g|"
                         r"svg|py|js|ts)\b", re.I)
@@ -657,6 +674,10 @@ class Session:
     _undo_token = None         # the turn an Undo / Rewind holds: a message sent meanwhile waits in the queue
     _open_deltas = ()          # positions in self.events of the text_delta events of the reply still streaming
     _open_thoughts = ()        # positions in self.events of the streamed reasoning pieces not folded yet (FL-R6a)
+    gs = None                  # goal mode: the goal's state (agent/goal.py, sessions/<id>/goal.json), None without one
+    goal_checker = None        # tests: fn(session, state, why) -> check result, in place of the gates and the grader
+    goal_drafter = None        # tests: fn(session, state) -> criteria, in place of grader.draft_rubric
+    _goal_turn = None          # the running turn carries the goal (None: not known, an older caller)
 
     def __init__(self, workdir: str | None = None, resume_id: str | None = None, mode: str | None = None,
                  harness: str | None = None, kind: str = "code", model: str | None = None, plan: bool = False,
@@ -670,7 +691,7 @@ class Session:
         self.epoch = int(time.time() * 1000)      # a resumed thread is a new event list: pages reset on change
         self.plan = bool(plan)
         self.effort = ""                        # /effort: this chat's reasoning effort ("" = the setting)
-        self.goal, self._goal_idle, self._goal_net = "", 0, 0   # /goal: see GOAL_NOTE
+        self.goal, self._goal_idle, self._goal_net = "", 0, 0   # /goal: goal mode, see agent/goal.py and set_goal
         self.cp = None
         self.lock = threading.RLock()          # re-entrant: a steer taken under it emits an event
         self.changed = threading.Condition(self.lock)    # notified by emit(): event streams wait on it, not sleep
@@ -808,6 +829,11 @@ class Session:
             else:
                 threading.Thread(target=self._start_mcp, daemon=True).start()
         self._mark_saved()
+        if resume_id:
+            try:                                     # goal mode: the saved goal, and a countdown when it was working
+                self._goal_load()
+            except Exception:  # noqa: BLE001 - a damaged goal file never stops a chat from opening
+                self.gs = None
 
     def _mark_saved(self):
         """Remember when session.json was last written by this Session, to notice another front end's writes."""
@@ -2022,7 +2048,13 @@ class Session:
             token = self._claim_turn()
             if token is None:
                 return
-        if not (cont and getattr(self, "_usage_task", None)):
+        try:
+            goal_on = self._goal_turn_start(text)    # goal mode: this turn works toward the goal under its budgets
+        except Exception:  # noqa: BLE001 - a goal problem never blocks a message
+            goal_on = self._goal_turn = False
+        if goal_on:
+            self._usage_task = self._goal_task_for(self.gs)   # one task, and its money limit, for the whole goal
+        elif not (cont and getattr(self, "_usage_task", None)):
             self._usage_task = usage.start_task(chat=self.id, label="scheduled" if self.scheduled else "task")
         if hasattr(self.agent, "usage_task"):
             self.agent.usage_task = self._usage_task          # the agent (or harness) records its calls in this task
@@ -2087,7 +2119,7 @@ class Session:
                     body += CAP.note(caps, self.harness, direct=self._office_direct(text))
                 from meshpool_harness import pace as PACE
                 quick = (not self.plan and not self.scheduled and not self.goal
-                         and PACE.classify(text, bool(images)) == "quick")
+                         and PACE.classify(text, bool(images), goal=goal_on) == "quick")   # goal turns: deep work
                 self._turn_route = None
                 try:                                    # per message: the lane (and, on Auto, the fast model)
                     from meshpool_harness import hrouter as HRR
@@ -2103,8 +2135,8 @@ class Session:
                 except Exception:  # noqa: BLE001 - routing never blocks a message
                     pass
                 u0 = dict(getattr(self.agent, "usage", {}) or {})
-                if self.goal:
-                    body += GOAL_NOTE.format(goal=self.goal)
+                if goal_on:
+                    body += self._goal_body()           # the goal, the frozen rubric, the last findings
                 if quick:
                     body += PACE.NOTE                   # hidden in the chat; a small budget for a quick request
                     if hasattr(self.agent, "pace_deadline"):
@@ -2270,9 +2302,11 @@ class Session:
         stopped = getattr(self.agent, "_stop", False) or self._stop_req
         with self.lock:                              # a message waiting to run: it goes first, the goal waits
             waiting = bool(self._after_stop) or bool(self.queue)
+        if stopped and self.gs is not None and getattr(self, "_goal_turn", False):
+            guard(self._goal_stopped, ev0)           # Stop in a goal turn: counted, and the goal pauses
         if waiting or stopped:
             return None
-        if self.goal:
+        if self.goal or (self.gs is not None and self.gs.get("status") in ("working", "checking")):
             return guard(self._goal_next, ev0)       # these take self.lock themselves: never called under it
         return guard(self._resume_next, ev0)
 
@@ -2525,61 +2559,535 @@ class Session:
             self.agent.model = model or None
         write_meta(self.id, model=model)
 
-    def set_goal(self, text: str):
-        """/goal: keep working until this is done. An empty text clears it."""
-        had = self.goal
+    # ---- goal mode (agent/goal.py): a goal and a bar, a rubric frozen before turn 1, an independent check that scores
+    # the work, and budgets and stop rules enforced here, in code. The user always wins: a message, Stop or clearing
+    # the goal takes effect even mid-turn.
+    def _goal_mode(self) -> str:
+        """code or chat: the Code tab's chats are scored by their tests, build and lint; the rest by the office checks."""
+        try:
+            cm = read_meta(self.id).get("code_mode")
+        except Exception:  # noqa: BLE001
+            cm = None
+        return "code" if cm is True or (cm is None and getattr(self, "kind", "") == "code") else "chat"
+
+    def _goal_save(self):
+        if self.gs is not None and getattr(self, "id", None):
+            GL.save(SESSIONS / self.id, self.gs)
+
+    def _goal_ping(self):
+        """A live event for the goal card (it also reads goal_state from every view). Not saved in the transcript."""
+        try:
+            self.emit({"type": "goal", "state": self._goal_public()})
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _goal_public(self):
+        st = self.gs
+        if not st or st.get("dismissed"):
+            return None
+        return GL.public(st)
+
+    def _goal_hold(self, on: bool):
+        """The computer stays awake for the whole goal, not only while a turn runs (awake.py)."""
+        try:
+            from meshpool_harness import awake as AW
+            if on and not getattr(self, "_goal_awake", False):
+                AW.hold()
+                self._goal_awake = True
+            elif not on and getattr(self, "_goal_awake", False):
+                AW.release()
+                self._goal_awake = False
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _goal_lock(self):
+        lk = self.__dict__.get("_glock")
+        if lk is None:
+            lk = self.__dict__.setdefault("_glock", threading.RLock())
+        return lk
+
+    def _goal_ensure(self):
+        """The goal's state. A goal from an older meshpool (only its text, in the chat's meta) or one set directly gets
+        a contract with the fallback rubric, frozen, so it keeps working under the same rules."""
+        if self.gs is None and getattr(self, "goal", ""):
+            self.gs = GL.freeze(GL.new(self.goal, self._goal_mode()))
+            self._goal_save()
+        return self.gs
+
+    def _goal_load(self):
+        """A reopened chat: its saved goal, and what a restart means for it. A goal that was working resumes by itself
+        after a countdown the user can cancel; a rubric still open for edits gets a fresh countdown."""
+        st = GL.load(SESSIONS / self.id)
+        if st is None and self.goal:
+            st = GL.freeze(GL.new(self.goal, self._goal_mode()))
+        self.gs = st
+        if st is None:
+            return
+        self.goal = st["goal"] if st.get("status") in GL.OPEN else ""
+        if st.get("status") == "checking":
+            st["status"] = "working"                 # the check was cut off: the next one runs again
+        if st.get("status") == "working":
+            self._goal_save()
+            self._goal_resume_later()
+        elif st.get("status") in ("drafting", "review"):
+            if not st.get("rubric"):
+                st["rubric"] = GL.normalise_rubric([], st["goal"], st["mode"])
+            GL.review(st, st["rubric"])
+            self._goal_save()
+            threading.Thread(target=self._goal_wait_freeze, args=(st,), daemon=True, name="meshpool-goal-freeze").start()
+        else:
+            self._goal_save()
+
+    def _goal_resume_later(self, secs: float | None = None):
+        st = self.gs
+        secs = float(st["budgets"].get("resume_s", GL.DEFAULTS["resume_s"]) if secs is None else secs)
+        at = st["resume_at"] = time.time() + secs
+        self._goal_save()
+        self.emit({"type": "status", "goal": True, "text": f"The goal resumes by itself in {secs:.0f} s. Press Cancel on "
+                                                           "the goal card to keep it paused."})
+        threading.Thread(target=self._goal_resume_wait, args=(st, at), daemon=True, name="meshpool-goal-resume").start()
+
+    def _goal_resume_wait(self, st: dict, at: float):
+        while time.time() < at:
+            if self.gs is not st or st.get("resume_at") != at or st.get("status") != "working" \
+                    or getattr(self, "_closed", False):
+                return
+            time.sleep(0.2)
+        with self._goal_lock():
+            if self.gs is not st or st.get("resume_at") != at or st.get("status") != "working":
+                return
+            st["resume_at"] = 0.0
+            self._goal_save()
+        self._goal_hold(True)
+        self._goal_ping()
+        self._goal_kick()
+
+    def set_goal(self, text: str, bar=None, **budgets):
+        """/goal: a goal and a bar. A rubric is drafted first and shown for edits; it freezes on its own after 60 s
+        or when the user presses Start, then meshpool works turn after turn until an independent check says the bar
+        is met, a budget runs out, it is stuck, or it needs the user. An empty text clears the goal, even mid-turn."""
+        text = (text or "").strip()[:2000]
+        old = self.gs
+        had = bool(getattr(self, "goal", "")) or bool(old and old.get("status") in GL.OPEN)
         self._goal_t = time.time()
-        self.goal, self._goal_idle, self._goal_net = (text or "").strip()[:2000], 0, 0
-        write_meta(self.id, goal=self.goal)
-        if not self.goal and not had:
-            return                                   # nothing was set: no "Goal cleared." line
-        self.emit({"type": "status", "text": f"Goal set: {self.goal}. The agent keeps going until it is done; press "
-                                             "Stop or clear the goal to end it." if self.goal else "Goal cleared."})
+        self._goal_idle, self._goal_net = 0, 0
+        goal_turn_running = getattr(self, "state", "idle") in _BUSY and bool(getattr(self, "_goal_turn", False))
+        if not text:
+            self.goal = ""
+            write_meta(self.id, goal="")
+            if old is not None and old.get("status") in GL.OPEN:
+                old.update(status="cleared", reason="you cleared it", resume_at=0.0, ended=time.time())
+                self._goal_save()
+            self._goal_hold(False)
+            if goal_turn_running:
+                self.stop()                          # the user wins, even in the middle of a goal turn
+            if had:
+                self._goal_ping()
+                self.emit({"type": "status", "goal": True, "text": "Goal cleared."})
+            return
+        st = GL.new(text, self._goal_mode(), bar=bar, **budgets)
+        self.gs, self.goal = st, text
+        write_meta(self.id, goal=text)
+        self._goal_save()
+        if goal_turn_running:
+            self.stop()                              # the old goal's turn ends: the new goal starts from its rubric
+        self._goal_ping()
+        self.emit({"type": "status", "goal": True,
+                   "text": f"Goal set: {text}. meshpool writes a rubric to check the work against first; work starts "
+                           f"when it is frozen (in {st['budgets']['freeze_s']} s, or press Start). Press Stop or clear "
+                           "the goal to end it."})
+        threading.Thread(target=self._goal_draft, args=(st,), daemon=True, name="meshpool-goal-draft").start()
+
+    def _goal_task_for(self, st: dict):
+        """The goal's usage task: every goal turn, the rubric and the checks record into it, and its limit is what is
+        left of the goal's money budget. A restart makes a new one; the spend before it is kept in spent_base."""
+        t = getattr(self, "_goal_task", None)
+        if t is not None and getattr(self, "_goal_task_of", None) is st:
+            return t
+        st["spent_base"] = float(st.get("spent", 0.0))
+        usd = float(st["budgets"].get("usd") or 0)
+        left = max(0.000001, usd - st["spent_base"]) if usd > 0 else 0.0
+        t = usage.start_task(chat=self.id, budget_usd=left, label="goal")
+        self._goal_task, self._goal_task_of = t, st
+        return t
+
+    def _goal_spent(self):
+        st, t = self.gs, getattr(self, "_goal_task", None)
+        if st is None:
+            return None
+        try:
+            return float(st.get("spent_base", 0.0)) + (float(t.spent()) if t is not None and
+                                                       getattr(self, "_goal_task_of", None) is st else 0.0)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _goal_parent(self):
+        """Who the grader works for: meshpool's own agent, or for an outside agent (Codex, Pi, Hermes) a stand-in with
+        the chat's folder, tools and model."""
+        a = getattr(self, "agent", None)
+        if a is not None and hasattr(a, "grade_now"):
+            return a
+        return _GoalParent(self)
+
+    def _goal_draft(self, st: dict):
+        """Write the rubric before turn 1 (grader.draft_rubric), then open it for edits until it freezes."""
+        err = ""
+        try:
+            if self.goal_drafter:
+                crit = self.goal_drafter(self, st)
+            else:
+                from meshpool_harness.agent import grader as GR
+                task = self._goal_task_for(st)
+                with usage.bind(task, "chat"):
+                    r = GR.draft_rubric(self._goal_parent(), st["goal"], st["mode"], st["bar"])
+                crit, err = r.get("criteria") or [], r.get("error") or ""
+        except Exception as e:  # noqa: BLE001 - a failed draft falls back to the general criteria
+            crit, err = GL.fallback_rubric(st["goal"], st["mode"]), str(e)[:120]
+        with self._goal_lock():
+            if self.gs is not st or st.get("status") != "drafting":
+                return                               # cleared, replaced or started meanwhile
+            GL.review(st, crit)
+            st["draft_note"] = err
+            st["spent"] = max(float(st.get("spent", 0.0)), self._goal_spent() or 0.0)
+            self._goal_save()
+        self.emit({"type": "goal_rubric", "rubric": st["rubric"], "until": st["draft_until"], "note": err})
+        self._goal_ping()
+        self._goal_wait_freeze(st)
+
+    def _goal_wait_freeze(self, st: dict):
+        while time.time() < float(st.get("draft_until") or 0):
+            if self.gs is not st or st.get("status") != "review" or getattr(self, "_closed", False):
+                return
+            time.sleep(0.2)
+        try:
+            self.goal_start(_st=st)
+        except ValueError:
+            pass
+
+    def goal_start(self, rubric=None, _st=None):
+        """Freeze the rubric (Start, or the countdown ran out) and start the first goal turn."""
+        with self._goal_lock():
+            st = self.gs
+            if st is None or (_st is not None and st is not _st):
+                raise ValueError("There is no goal waiting to start.")
+            if st.get("status") not in ("drafting", "review"):
+                raise ValueError("The goal has already started.")
+            GL.freeze(st, rubric)
+            self._goal_save()
+        self._goal_hold(True)
+        self._goal_ping()
+        self.emit({"type": "status", "goal": True, "text": f"Rubric frozen: {len(st['rubric'])} criteria. Working toward "
+                                                           f"{GL.fmt(st['bar'])}/10."})
+        self._goal_kick()
+
+    def _goal_kick(self) -> bool:
+        """Start a goal turn now when the chat is free; when a turn runs, its end picks the goal up (_goal_next)."""
+        st = self.gs
+        if not st or st.get("status") != "working" or getattr(self, "_closed", False):
+            return False
+        try:
+            token = self._claim_turn()
+        except ValueError:                           # an update is being installed: the goal waits for the restart
+            return False
+        if token is None:
+            return False
+        try:
+            self._start_turn(st["goal"] if not st.get("turns") else GOAL_NEXT, None, token, cont=bool(st.get("turns")))
+        except Exception:  # noqa: BLE001
+            self._end_turn(token, True)
+            return False
+        return True
+
+    def goal_action(self, op: str, b: dict | None = None):
+        """The goal card's buttons: start (with the edited rubric), edit, resume, cancel_resume, clear, dismiss."""
+        b = b or {}
+        st = self.gs
+        if op == "clear":
+            return self.set_goal("")
+        if st is None:
+            raise ValueError("This chat has no goal.")
+        if op == "start":
+            return self.goal_start(b.get("rubric"))
+        if op == "edit":
+            with self._goal_lock():
+                if st.get("status") not in ("drafting", "review"):
+                    raise ValueError("The rubric is frozen. Clear the goal and set a new one to change it.")
+                GL.edit(st, b.get("rubric") or [])
+                self._goal_save()
+            self._goal_ping()
+            return None
+        if op == "cancel_resume":
+            st.update(resume_at=0.0, status="paused", reason="you cancelled the automatic resume")
+            self._goal_save()
+            self._goal_hold(False)
+            self._goal_ping()
+            return None
+        if op == "dismiss":
+            if st.get("status") in GL.ACTIVE:
+                raise ValueError("Clear the goal first.")
+            st["dismissed"] = True
+            self._goal_save()
+            self._goal_ping()
+            return None
+        if op == "resume":
+            if st.get("status") not in ("paused", "stopped") or st.get("tampered"):
+                raise ValueError("This goal cannot be resumed. Set a new one.")
+            fresh = GL.budgets()                     # a budget raised in Settings since: the larger one counts
+            for k in ("usd", "hours", "turns", "checks"):
+                cur, new = float(st["budgets"].get(k) or 0), float(fresh.get(k) or 0)
+                if k == "usd":
+                    st["budgets"][k] = 0.0 if cur == 0 or new == 0 else max(cur, new)   # 0: no money limit
+                else:
+                    st["budgets"][k] = type(st["budgets"][k])(max(cur, new))
+            st.pop("budget_hit", None)
+            if GL.exhausted(st):
+                raise ValueError("The goal is at its budget. Raise the budget in Settings, then resume it.")
+            st.update(status="working", reason="", question="", idle=0, blocker="", blocker_n=0, ended=0.0,
+                      converged=False)
+            self.goal = st["goal"]
+            write_meta(self.id, goal=self.goal)
+            self._goal_save()
+            self._goal_hold(True)
+            self._goal_ping()
+            self._goal_kick()
+            return None
+        raise ValueError("Unknown goal action.")
+
+    def _goal_turn_start(self, text: str) -> bool:
+        """At the start of a turn: whether it runs under the goal, and the goal's settings for the agent."""
+        st = self._goal_ensure()
+        if st is not None and st.get("status") == "paused" and text != GOAL_NEXT and not st.get("tampered"):
+            st.update(status="working", reason="", question="")      # the user's reply carries the goal on
+            self._goal_save()
+            self._goal_hold(True)
+            self._goal_ping()
+        on = bool(st and st.get("status") in ("working", "checking"))
+        self._goal_turn = on
+        if on and st.get("resume_at"):
+            st["resume_at"] = 0.0                    # the user sent a message during the countdown: it runs now
+            self._goal_save()
+        a = getattr(self, "agent", None)
+        if a is not None and hasattr(a, "goal_active"):
+            a.goal_active = on
+            a.goal_brief = (lambda: GL.brief(self.gs)) if on else ""
+            hours = float(st["budgets"].get("hours") or 0) if on else 0.0
+            a.wrap_deadline = time.time() + max(1.0, hours * 3600 - float(st.get("elapsed", 0.0))) if on and hours else 0.0
+            a.wrap_text = ("[meshpool] The goal's time budget is used up. Do not call more tools. Write the report: "
+                           "what is done and what is not. End with GOAL: READY or GOAL: CONTINUE.") if on else ""
+        return on
+
+    def _goal_body(self) -> str:
+        """The hidden note for a goal turn: the goal, the frozen rubric, the last findings, the converge line at 80
+        percent of a budget (once)."""
+        st = self.gs
+        text = "\n\n​" + GL.note(st)
+        if GL.converge_due(st):
+            st["converged"] = True
+            self._goal_save()
+        return text
+
+    def _goal_outcome(self, evs: list) -> dict:
+        """How a goal turn ended, for goal.decide()."""
+        out = _turn_outcome(evs)
+        word, rest = GL.parse_line(out["reply"])
+        loop = any(e.get("type") == "error" and e.get("loop") for e in evs)
+        err = ""
+        if out["error"] is not None and not loop:
+            err = "net" if out["net"] else GL.error_kind(out["error"].get("text") or "")
+        needs = rest or "What should I do next?" if word == GL.NEEDS else ""
+        reply = out["reply"].strip()
+        if not word and not err and not out["interrupted"] and not loop and reply:
+            tail = reply.split("\n\n")[-1].strip()
+            if tail.endswith("?"):                   # no GOAL line, a question: the agent asks the user (the old rule)
+                needs = tail[-400:]
+        blocker = rest if word == GL.BLOCKED else ((out["error"] or {}).get("text") or "") if err == "other" else ""
+        return {"interrupted": out["interrupted"], "error": err, "acted": out["acted"],
+                "ready": word == GL.READY and not err and not out["interrupted"], "needs": needs, "blocker": blocker,
+                "loop": loop, "changed": self._goal_files_changed(out["acted"]), "word": word}
+
+    def _goal_files_changed(self, acted: bool) -> bool:
+        """Did this turn change any file? From the checkpoints (what the turn really wrote), else from its steps."""
+        cp = getattr(self, "cp", None)
+        if cp is None:
+            return bool(acted)
+        try:
+            turns = cp.turns()
+            n = getattr(self, "_turn_n", None)
+            last = turns[-1] if turns else None
+            if last is None or (n is not None and int(last.get("n") or 0) != int(n)):
+                return False
+            return bool(last.get("changed"))
+        except Exception:  # noqa: BLE001
+            return bool(acted)
+
+    def _goal_stopped(self, ev0: int):
+        """Stop was pressed during a goal turn: count the turn and pause the goal. A message or Resume carries it on."""
+        st = self.gs
+        if st is None or st.get("status") not in ("working", "checking"):
+            return
+        GL.record_turn(st, {"acted": True}, secs=time.time() - getattr(self, "t_turn", time.time()),
+                       spent=self._goal_spent())
+        GL.apply(st, {"action": "paused", "reason": "you stopped it"})
+        self._goal_save()
+        self._goal_hold(False)
+        self._goal_ping()
+        self.emit({"type": "status", "goal": True, "text": "Goal paused: you stopped it. Send a message or press "
+                                                           "Resume on the goal card to carry on."})
 
     def _goal_next(self, ev0: int):
-        """After a turn with a goal: the next turn's message, or None when the goal is met or the user is needed."""
+        """After a turn under a goal: the next turn's message, or None when the goal is met, stopped or paused."""
         with self.lock:
             evs = self.events[ev0:]
-        out = _turn_outcome(evs)
-        reply = next((e.get("text") or "" for e in reversed(evs) if e.get("type") == "assistant"), "")
+        st = self._goal_ensure()
+        if st is None or st.get("status") not in ("working", "checking"):
+            return None
+        if getattr(self, "_goal_turn", None) is False:
+            # set or frozen while this turn ran: that turn never saw the goal, so the goal starts now
+            return (st["goal"] if not st.get("turns") else GOAL_NEXT, [])
+        out = self._goal_outcome(evs)
         if getattr(getattr(self, "agent", None), "budget_stopped", False):
-            self.emit({"type": "status", "text": "Goal paused: the spending limit for this task was reached. Raise it "
-                                                 "in Settings or send a message to continue."})
-            return None                 # the goal stays set; a new message starts a new task with a fresh limit
-        if getattr(self, "_goal_t", 0) > getattr(self, "t_turn", 0):
-            return (GOAL_NEXT, [])      # set while this turn ran: that turn never saw the goal, so it cannot judge it
-        found = _GOAL_RE.findall(reply)
-        verdict = found[-1].upper() if found else ""
-        acted = out["acted"]
-        failed = bool(out["error"]) or out["interrupted"]      # ended on an error (not one it recovered from)
-        if out["net"] and not out["interrupted"]:
+            out["error"], st["budget_hit"] = "budget", "usd"
+        GL.record_turn(st, out, secs=time.time() - getattr(self, "t_turn", time.time()), spent=self._goal_spent())
+        if out["error"] == "net" and not out["interrupted"]:
             # An outage, not the task: never give up on the goal for it. The turn already waited for the endpoint;
             # pause a little longer each time (30 s up to 5 min) so a long outage is waited out without hammering
             # the gateway, then pick the goal up. Stop, or clearing the goal, ends the wait.
+            self._goal_save()
             n = self._goal_net = getattr(self, "_goal_net", 0) + 1
             wait = min(10 * GOAL_NET_WAIT_S, GOAL_NET_WAIT_S * 2 ** (n - 1))
             self.emit({"type": "status", "text": f"Goal: the model connection failed. Picking the goal up again in "
                                                  f"{wait:.0f} s (try {n}). Press Stop or clear the goal to end it."})
-            return self._pause(wait, GOAL_NEXT, lambda: bool(self.goal))
-        if not failed:
+            return self._pause(wait, GOAL_NEXT, lambda: bool(self.goal) and self.gs is st
+                               and st.get("status") == "working")
+        if not out["error"]:
             self._goal_net = 0
-        if verdict == "DONE" and not out["interrupted"] and not out["error"]:
-            done, self.goal = self.goal, ""
+        check = None
+        if out["error"] in ("", "budget") and not out["interrupted"] and not st.get("tampered"):
+            why = GL.check_due(st, out)
+            if why:
+                check = self._goal_check(why)
+                if check is None:                    # Stop was pressed during the check
+                    out["interrupted"] = True
+        d = GL.decide(st, out, check)
+        return self._goal_apply(d, check)
+
+    def _goal_apply(self, d: dict, check):
+        st = self.gs
+        GL.apply(st, d)
+        act = d.get("action")
+        if act in ("continue", "wait"):
+            self._goal_save()
+            self._goal_ping()
+            return (GOAL_NEXT, [])
+        st["report"] = GL.report(st, check)
+        self._goal_save()
+        self._goal_hold(False)
+        if act in ("met", "stopped"):
+            self.goal = ""
             write_meta(self.id, goal="")
-            self.emit({"type": "status", "text": f"Goal met: {done}"})
+        self._goal_ping()
+        if act == "paused" and d.get("reason") == "you stopped it":
+            self.emit({"type": "status", "goal": True, "text": "Goal paused: you stopped it. Send a message or press "
+                                                               "Resume on the goal card to carry on."})
+        else:
+            self.emit({"type": "assistant", "text": st["report"], "goal_report": True, "streamed": False})
+        return None
+
+    def _goal_check(self, why: str):
+        """One independent check: the gates first, then the grader with the frozen rubric. The score is computed
+        here from the grader's statuses. None when Stop was pressed during it."""
+        from meshpool_harness.agent import core as K
+        st = self.gs
+        st["status"] = "checking"
+        self._goal_save()
+        self._goal_ping()
+        t0 = time.time()
+        try:
+            if self.goal_checker:
+                check = dict(self.goal_checker(self, st, why) or {})
+            else:
+                check = self._goal_run_check(st, why)
+        except (K.Interrupted, KeyboardInterrupt):
+            st["status"] = "working"
             return None
-        if failed or verdict != "CONTINUE":
-            self.emit({"type": "status", "text": "Goal paused: the agent needs you. Reply to carry on; the goal stays "
-                                                 "set." if not failed else "Goal paused after an error. Reply to "
-                                                 "carry on; the goal stays set."})
+        except Exception as e:  # noqa: BLE001 - a broken check is reported, it never ends the goal by itself
+            check = {"error": f"the check failed: {str(e)[:120]}", "items": [], "gates": []}
+        if getattr(self, "_stop_req", False):
+            st["status"] = "working"
             return None
-        self._goal_idle = 0 if acted else self._goal_idle + 1
-        if self._goal_idle >= 2:
-            self._goal_idle = 0
-            self.emit({"type": "status", "text": "Goal paused: two turns in a row without doing anything. Reply "
-                                                 "with what to try next; the goal stays set."})
-            return None
-        return (GOAL_NEXT, [])
+        items = {i.get("id"): i for i in check.get("items") or [] if isinstance(i, dict)}
+        check["items"] = [dict(items.get(c["id"]) or {"status": "unverified", "evidence": "the check gave no answer"},
+                               id=c["id"], text=c["text"], must=bool(c.get("must"))) for c in st["rubric"]]
+        sc = GL.score(st["rubric"], {i["id"]: i.get("status") for i in check["items"]}, float(st["bar"]))
+        check.update(score=sc["score"], raw=sc["raw"], must_open=sc["must_open"],
+                     gates_ok=GL.gates_ok(check.get("gates") or []))
+        GL.record_check(st, check, secs=time.time() - t0, spent=self._goal_spent(), why=why)
+        st["status"] = "working"
+        self._goal_save()
+        bar = float(st["bar"])
+        met = GL.met_bar(check, bar)
+        names = {"not_met": [], "unverified": []}
+        for i in check["items"]:
+            if i["status"] in names:
+                names[i["status"]].append(i["text"])
+        bad_gates = [g.get("name") for g in check.get("gates") or [] if g.get("ok") is False]
+        text = (f"Check {st['checks']}: {GL.fmt(check['score'])}/{GL.fmt(bar)}. "
+                + ("It meets the bar." if met else f"Below the bar of {GL.fmt(bar)}.")
+                + (f" Not met: {'; '.join(names['not_met'][:4])}." if names["not_met"] else "")
+                + (f" Could not check: {'; '.join(names['unverified'][:3])}." if names["unverified"] else "")
+                + (f" Gates failed: {', '.join(bad_gates[:3])}." if bad_gates else "")
+                + (f" The check had a problem: {check['error'][:120]}." if check.get("error") else ""))
+        self.emit({"type": "goal_check", "n": st["checks"], "score": check["score"], "bar": bar, "met": met,
+                   "why": why, "items": check["items"], "gates": check.get("gates") or [], "error": check.get("error", ""),
+                   "history": [h.get("score") for h in st.get("history") or []], "text": text})
+        return check
+
+    def _goal_info(self, st: dict) -> dict:
+        """What the goal check sees of the work: the goal and what the user added, the last reply, the files changed
+        since the goal started, the plan."""
+        from meshpool_harness.agent import grader as GR
+        root = Path(self.workdir)
+        with self.lock:
+            evs = list(self.events)
+        said = [str(e.get("text") or "").split("​")[0].strip() for e in evs if e.get("type") == "user"
+                and str(e.get("text") or "").strip() not in ("", GOAL_NEXT, RESUME_NEXT)]
+        extra = [s for s in said if s and s != st["goal"]][-4:]
+        final = next((str(e.get("text") or "") for e in reversed(evs) if e.get("type") == "assistant"
+                      and not e.get("goal_report") and str(e.get("text") or "").strip()), "")
+        a = getattr(self, "agent", None)
+        return {"requests": ["The goal: " + st["goal"]] + [f"(added by the user) {x[:1500]}" for x in extra],
+                "request": st["goal"], "final": GL.strip_line(final), "root": str(root),
+                "files": GR.files_changed(root, float(st.get("started") or st.get("created") or 0)),
+                "todos": [t for t in getattr(a, "_todos", []) or [] if isinstance(t, dict)], "calls": 0, "actions": []}
+
+    def _goal_run_check(self, st: dict, why: str) -> dict:
+        from meshpool_harness.agent import core as K
+        from meshpool_harness.agent import grader as GR
+        root = Path(self.workdir)
+        lim = int(st["budgets"].get("gate_seconds") or GL.DEFAULTS["gate_seconds"])
+
+        def stop():
+            return bool(getattr(self, "_stop_req", False))
+        if st.get("mode") == "chat":
+            gates = GL.chat_gates(root, GL.office_files(root, float(st.get("started") or st.get("created") or 0)), lim)
+        else:
+            gates = GL.run_code_gates(root, lim, stop=stop)
+        if stop():
+            raise K.Interrupted()
+        parent = self._goal_parent()
+        ws = getattr(parent, "ws", None)
+        cmds = [c for c in (getattr(ws, "commands", None) or []) if c.get("kind") != "read"][-14:]
+        task = self._goal_task_for(st)
+        old = task.budget
+        task.budget = 0.0                            # a check always runs, even at the money limit; its cost counts
+        try:
+            with usage.bind(task, "chat"):
+                res = GR.run(parent, self._goal_info(st), cmds, rubric=st["rubric"], gates=gates)
+        finally:
+            task.budget = old
+        return {"items": res.get("items") or [], "gates": gates, "fix": res.get("fix") or [],
+                "blockers": res.get("blockers") or [], "needs_user": res.get("needs_user") or "",
+                "error": res.get("error") or ""}
 
     def _pause(self, wait: float, then: str, keep=lambda: True):
         """Wait out an outage or a rate limit before the next turn. Returns (message, images) to send next: `then`
@@ -2910,6 +3418,7 @@ class Session:
                 "model": (a.current_model() if hasattr(a, "current_model") else
                           getattr(a, "model", None) or a.agent_info.get("name", self.harness["name"])),
                 "harness_models": getattr(a, "available_models", None), "plan": self.plan, "goal": self.goal,
+                "goal_state": self._goal_public(),
                 "effort": self.effort,
                 "style": self.style_id() or _default_style(), "incognito": bool(self.incognito),
                 "worktree": meta.get("worktree") or None, "versions": meta.get("versions") or {},
@@ -2920,6 +3429,7 @@ class Session:
 
     def close(self):
         self._closed = True                           # an MCP start still running closes its servers when it finishes
+        self._goal_hold(False)                        # goal.json keeps the goal; reopening the chat picks it up
         self.stop()
         _release(getattr(self, "id", ""))
         if self.mcp:
@@ -3409,7 +3919,10 @@ def session_action(sid: str, act: str, b: dict) -> dict:
     elif act == "plan":
         s.set_plan(bool(b.get("on")))
     elif act == "goal":
-        s.set_goal(b.get("text", ""))
+        if b.get("op"):                             # the goal card: start, edit, resume, cancel_resume, clear, dismiss
+            s.goal_action(str(b["op"]), b)
+        else:
+            s.set_goal(b.get("text", ""), bar=b.get("bar"))
     elif act == "style":
         s.set_style(b.get("style", ""))
     elif act == "effort":
@@ -4194,3 +4707,28 @@ def harness_change(body: dict) -> dict:
         C.write({f"MH_HARNESS_{body['default_mode'].upper()}": hid})
         C.load_into_env(override=True)
     return harness_info()
+
+
+def resume_goals() -> list:
+    """After a restart: open each chat whose goal was still running, so it resumes by itself after its countdown (the
+    page shows a Cancel button). MH_GOAL_RESUME=0 turns it off. Returns the chat ids opened."""
+    if os.environ.get("MH_GOAL_RESUME", "1") == "0":
+        return []
+    opened = []
+    try:
+        dirs = [p.parent for p in SESSIONS.glob("*/goal.json")]
+    except OSError:
+        return []
+    for d in dirs:
+        st = GL.load(d)
+        sid = d.name
+        if not st or st.get("status") not in ("working", "checking", "drafting", "review") or sid in DELETED:
+            continue
+        try:
+            if read_meta(sid).get("deleted"):
+                continue
+            get(sid)
+            opened.append(sid)
+        except Exception:  # noqa: BLE001 - a chat that cannot open (its folder is gone, another process has it)
+            continue
+    return opened

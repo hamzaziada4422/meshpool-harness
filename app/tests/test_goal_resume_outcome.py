@@ -48,17 +48,20 @@ def test_turn_ending_on_net_error_still_resumes():
 
 
 def test_goal_done_after_recovered_error():
+    # 0.0.20: "GOAL: DONE" asks for the independent check; the check (faked here: all met) ends the goal
     s = _session("ship it")
+    s.goal_checker = lambda s_, st, why: {"items": [{"id": c["id"], "status": "met", "evidence": "seen"}
+                                                    for c in st["rubric"]], "gates": []}
     n = _turn(s, BUSY, {"type": "tool_end"}, {"type": "assistant", "text": "All set.\nGOAL: DONE"})
     assert s._goal_next(n) is None and s.goal == ""
-    assert s.events[-1]["text"].startswith("Goal met")
+    assert s.events[-1]["text"].startswith("Met: 10/10")
 
 
 def test_goal_done_is_not_trusted_after_an_unrecovered_error():
     s = _session("ship it")
     n = _turn(s, {"type": "assistant", "text": "GOAL: DONE"}, {"type": "error", "text": "Something broke."})
     assert s._goal_next(n) is None and s.goal == "ship it"
-    assert "paused after an error" in s.events[-1]["text"]
+    assert "an error stopped the turn" in s.events[-1]["text"]
 
 
 def test_goal_continue_after_recovered_error_continues():
