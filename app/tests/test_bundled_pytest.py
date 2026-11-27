@@ -7,7 +7,6 @@ python next to them (packaging/bundled_tools.relocatable_scripts; Windows: reloc
 import io
 import json
 import os
-import shutil
 import sys
 import zipfile
 from pathlib import Path
