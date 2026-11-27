@@ -18,13 +18,12 @@ Meshpool runs on your own computer. It does research, writing, analysis, spreads
 > [!NOTE]
 > **Meshpool is a beta (currently 0.0.18).** Some things will break. When one does, Meshpool shows what went wrong in the chat, and **Report this** (or the **Beta** badge) opens a GitHub issue with your version and system filled in. Your chats and files are never included.
 
-## Why Meshpool
+## What Meshpool does
 
-- **Every strong agent in one app.** Meshpool Code, Meshpool Work, Pi, Hermes, Codex and OpenCode, switchable per chat, with the same files, skills and connectors. Add any other agent that speaks the Agent Client Protocol in Settings.
-- **Meshpool Auto picks the agent for you.** For each task it takes the best measured quality for that kind of work, then the lowest cost, then the fastest. It never trades quality for price: an agent is only a cheaper choice when it scores as well (see [ROUTING.md](docs/ROUTING.md)).
-- **Any model on one key.** One Meshpool key reaches every model on the Meshpool endpoint. Any OpenAI-compatible endpoint works too, and so does signing in with your ChatGPT plan.
-- **Office files that open clean.** Real Word, Excel (with live formulas) and PowerPoint. Every deck is checked against 20 design rules, every workbook against 13, and every file against the Office file schemas before it reaches you.
-- **Local by design.** Your files stay on your computer, and connector sign-ins go straight from your computer to the app, with no Meshpool server in between.
+1. **Writes and fixes code in your project.** It reads the code, makes the change, runs the tests and shows every edit as a diff you can undo, like Codex or Claude Code.
+2. **Does real office work.** It reads, edits and creates Word documents, Excel workbooks with live formulas, PowerPoint decks and PDFs. It edits your existing files in place and checks every file before you get it.
+3. **Analyses data and researches the web.** It turns CSV and Excel files into answers and charts, and researches a question across the web with sources.
+4. **Runs any agent on any model, on your computer.** Meshpool's own agents, Codex, Pi and others in one app, on the Meshpool endpoint, your own OpenAI-compatible key or your ChatGPT plan. Your files stay on your computer, and it asks before anything risky, such as deleting files or using the internet.
 
 <p align="center">
   <picture>
@@ -38,15 +37,34 @@ Meshpool runs on your own computer. It does research, writing, analysis, spreads
 | <img src="docs/screenshots/chat.png" alt="An approval card: meshpool asks before a step and shows the change"> | <img src="docs/screenshots/agents.png" alt="The agent picker: Meshpool Auto, Meshpool Code, Codex, Meshpool Work and more, each with what it does best"> |
 | Every change shows up as a diff. meshpool asks before risky steps, such as deleting files or using the internet, and does ordinary work in your folder on its own. Undo reverses any reply. | Each agent says what it does best. Meshpool Auto picks per task from the benchmarks. |
 
-### Measured, not claimed
+## How it compares with Codex
 
-Each agent ran on the same model (DeepSeek V4.1 Flash), on the same tasks with the same graders, at the same time. The full tables are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+Meshpool solves as many tasks as Codex and costs less per solved task on every suite: **326 vs 322 of 357 tasks solved, at 0.51x to 0.94x of Codex's cost**.
 
-| Agent | Best at | Result |
-|---|---|---|
-| **Meshpool Code** | Coding in your project | Against Codex CLI 0.171 on the same model, gateway and hour (0.0.16): SWE-bench Verified (SymPy) 22 vs 22 solved at 0.76x Codex's cost per solved task; 144 vs 145 on 156 coding runs at 0.71x; 39 vs 38 on v2_dev at 0.79x. |
-| **Meshpool Work** | Word, Excel, PowerPoint and PDF work, data tasks | Data tasks: 45 vs 44 solved at 0.51x Codex's cost per solved task. Office (0.0.16): Office-7 42 vs 41 at 0.94x; SpreadsheetBench 31 vs 35 at 0.90x; OfficeBench 21 vs 24 at 0.83x. Cheaper than Codex on every suite, but it still solves fewer SpreadsheetBench and OfficeBench tasks; see [BENCHMARKS.md](docs/BENCHMARKS.md). |
-| **Meshpool's agent loop, browser use** | Web forms and web apps | MiniWoB++: 97 of 102 at $0.0027 and 17 s per solved task. In a same-time round, $0.0009 per solved task against $0.0025 for Codex CLI. |
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/benchmarks/headline-dark.png">
+    <img src="docs/benchmarks/headline-light.png" alt="Bar charts: tasks solved by Meshpool and Codex on eight coding, data and office suites, and Meshpool's cost per solved task relative to Codex, between 0.51x and 0.94x" width="900">
+  </picture>
+</p>
+
+| Area | Suite | Solved, Meshpool vs Codex | Cost per solved task vs Codex | Time vs Codex |
+|---|---|---|---|---|
+| Coding | SWE-bench Verified (SymPy) | 22 vs 22 of 24 | **0.76x** | 0.93x |
+| Coding | Coding tasks, dev set | 39 vs 38 of 42 | **0.79x** | 0.99x |
+| Coding | Coding tasks, eval set | 144 vs 145 of 156 | **0.71x** | 1.03x |
+| Data | Data analysis (DABench) | 45 vs 44 of 54 | **0.51x** | 0.81x |
+| Office | Office-7: Word, Excel, PowerPoint, PDF | 42 vs 41 of 42 | **0.94x** | 0.76x |
+| Office | Decks: read, edit, add, reorder | 13 vs 11 of 15 | **0.77x** | 1.03x |
+| Office | SpreadsheetBench (public sample) | 10 vs 9 of 12 | **0.76x** | 0.98x |
+| Office | OfficeBench (public sample) | 11 vs 12 of 12 | **0.84x** | 1.16x |
+
+How this was measured:
+- **Same conditions.** Meshpool and Codex CLI 0.171 ran on the same model (DeepSeek V4.1 Flash), through the same gateway, in the same hour, with the same tasks and graders.
+- **Cost and time.** Cost is billed cost per solved task as a multiple of Codex's; under 1.00x is cheaper. Time is the median of per-task time ratios; under 1.00x is faster.
+- **Versions.** Coding, data and Office-7 were measured on Meshpool 0.0.16; decks, SpreadsheetBench and OfficeBench on 0.0.18.
+- **Where Codex is ahead.** Codex solved one more OfficeBench task (12 vs 11) and one more eval-set coding task (145 vs 144). The office samples are small, so a single task moves them.
+- **Raw data.** Every run is in [docs/results](docs/results); the numbers behind the chart are in [docs/benchmarks/headline.json](docs/benchmarks/headline.json), and [docs/BENCHMARKS.md](docs/BENCHMARKS.md) has the full history.
 
 ## Install
 

@@ -1,0 +1,13 @@
+{
+  "about": "Meshpool against Codex CLI 0.171 on the same model (DeepSeek V4.1 Flash), through the same gateway, in the same hour. cost = Meshpool's cost per solved task as a multiple of Codex's (under 1.00 = cheaper). time = median of per-task time ratios (under 1.00 = faster).",
+  "suites": [
+    {"group": "Coding", "name": "SWE-bench Verified (SymPy)", "tasks": 24, "meshpool": 22, "codex": 22, "cost": 0.76, "time": 0.93, "version": "0.0.16", "data": "docs/results/release016/swe_sympy"},
+    {"group": "Coding", "name": "Coding tasks, dev set", "tasks": 42, "meshpool": 39, "codex": 38, "cost": 0.79, "time": 0.99, "version": "0.0.16", "data": "docs/results/release016/v2_dev_c171"},
+    {"group": "Coding", "name": "Coding tasks, eval set", "tasks": 156, "meshpool": 144, "codex": 145, "cost": 0.71, "time": 1.03, "version": "0.0.16", "data": "docs/results/release016/final22_c171"},
+    {"group": "Data", "name": "Data analysis (DABench)", "tasks": 54, "meshpool": 45, "codex": 44, "cost": 0.51, "time": 0.81, "version": "0.0.16", "data": "docs/results/release016/work"},
+    {"group": "Office", "name": "Office-7: Word, Excel, PowerPoint, PDF", "tasks": 42, "meshpool": 42, "codex": 41, "cost": 0.94, "time": 0.76, "version": "0.0.16", "data": "docs/results/release016/office_final6/O7"},
+    {"group": "Office", "name": "Decks: read, edit, add, reorder", "tasks": 15, "meshpool": 13, "codex": 11, "cost": 0.77, "time": 1.03, "version": "0.0.18", "data": "docs/results/release018/decks018"},
+    {"group": "Office", "name": "SpreadsheetBench (public sample)", "tasks": 12, "meshpool": 10, "codex": 9, "cost": 0.76, "time": 0.98, "version": "0.0.18", "data": "docs/results/release018/sb018"},
+    {"group": "Office", "name": "OfficeBench (public sample)", "tasks": 12, "meshpool": 11, "codex": 12, "cost": 0.84, "time": 1.16, "version": "0.0.18", "data": "docs/results/release018/ob018"}
+  ]
+}
