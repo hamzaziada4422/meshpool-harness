@@ -8,6 +8,7 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 |---|---|---|
 | Hermes Agent 0.21.2 (Nous Research) | MIT | https://github.com/NousResearch/hermes-agent (small patches in acp_adapter/server.py and tools/approval.py: `packaging/hermes-acp-server.patch`) |
 | Pi coding agent (Mario Zechner) | MIT | https://www.npmjs.com/package/@earendil-works/pi-coding-agent |
+| Ponytail skills (ponytail, ponytail-review), commit ebd8654 (Dietrich Gebert) | MIT | https://github.com/DietrichGebert/ponytail (app/defaults/skills/ponytail*) |
 | Node.js 22 | MIT and bundled licenses | https://nodejs.org |
 | Python 3.12 (python-build-standalone) | PSF License and bundled licenses | https://github.com/astral-sh/python-build-standalone |
 | Git for Windows, MinGit (Windows) | GPL-2.0 | Source: https://github.com/git-for-windows/git |
