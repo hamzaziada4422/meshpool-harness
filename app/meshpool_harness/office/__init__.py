@@ -183,7 +183,8 @@ def _pair_loads(cert: Path, key: Path) -> bool:
     or a damaged file leaves a pair that does not."""
     import ssl
     try:
-        ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(str(cert), str(key))
+        from meshpool_harness.core import http as _mhttp
+        _mhttp.server_context().load_cert_chain(str(cert), str(key))
         return True
     except (OSError, ssl.SSLError, ValueError):
         return False

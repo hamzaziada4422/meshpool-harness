@@ -97,6 +97,11 @@ def stop_check():
 def serve(name: str, tools: dict[str, Tool], serial: bool = False, instructions: str = "") -> None:
     """Read requests from stdin until it closes. serial=True runs tool calls one at a time, in arrival order
     (needed when the tools drive one shared browser or one mouse)."""
+    try:
+        from meshpool_harness.core import http as _mhttp
+        _mhttp.use_system_trust()                        # the system's certificates (a company proxy's) for all HTTPS
+    except Exception:  # noqa: BLE001 - never stop a server from starting
+        pass
     out_lock, call_lock = threading.Lock(), threading.Lock()
     running: dict = {}                                   # request id -> Event, set on notifications/cancelled
 

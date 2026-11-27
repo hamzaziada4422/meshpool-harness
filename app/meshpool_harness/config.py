@@ -648,6 +648,7 @@ def load_into_env(override: bool = False) -> dict:
     bundled.use_bundled_tools()               # packaged app: its own Node and Git come first on PATH (idempotent)
     try:
         from meshpool_harness.core import http as _h
+        _h.use_system_trust()                 # the system's certificate store (a company proxy's CA), once
         _h.install_tls()                      # CA trust fallback (python.org macOS, a company proxy's CA)
     except Exception:  # noqa: BLE001 - never block start-up
         pass

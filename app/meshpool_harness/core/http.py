@@ -4,8 +4,10 @@
    never from https to http; any other target raises an HTTPError that names the new host, so the key never leaves
    the host the user gave;
  - a loopback model server is never reached through an HTTP(S)_PROXY from the environment;
- - HTTPS trust: ssl's default context, plus a CA bundle when this Python has none (python.org on macOS) or the user
-   names one (MESHPOOL_CA_BUNDLE, a company proxy's CA).
+ - HTTPS trust: the operating system's certificates (truststore, turned on at start-up by use_system_trust: the
+   macOS Keychain, the Windows certificate store, the Linux system bundle), so a company proxy whose certificate is
+   installed only there works; plus a CA file the user names (MESHPOOL_CA_BUNDLE, a company proxy's CA). Without
+   truststore: ssl's default context, plus a CA bundle when this Python has none (python.org on macOS).
 """
 from __future__ import annotations
 
@@ -31,6 +33,12 @@ _KEYCHAINS = ("/Library/Keychains/System.keychain", "/System/Library/Keychains/S
 _LOCK = threading.RLock()
 _CTX: ssl.SSLContext | None = None
 _STATE: dict = {"bundle": "", "needed": False, "installed": False}
+# ssl's own context class, kept before use_system_trust replaces ssl.SSLContext: a listener (server side) needs it,
+# because truststore's class checks the peer's certificate on every handshake and a browser sends none (on Windows
+# that refuses every connection).
+_PLAIN_SSLCONTEXT = ssl.SSLContext if ssl.SSLContext.__module__ == "ssl" else getattr(
+    sys.modules.get("truststore._ssl_constants"), "_original_SSLContext", ssl.SSLContext)
+_TRUST: dict = {"on": False, "error": ""}
 
 
 # ------------------------------------------------------------------ redirects
@@ -112,6 +120,51 @@ def open(req, timeout, handlers=(), refuse_redirects: bool = True):  # noqa: A00
 
 
 # ------------------------------------------------------------------ TLS trust
+def system_trust_on() -> bool:
+    """truststore is in place: ssl.SSLContext is its class, which asks the operating system to verify certificates."""
+    return _TRUST["on"] and ssl.SSLContext is not _PLAIN_SSLCONTEXT
+
+
+def use_system_trust() -> bool:
+    """Trust the operating system's certificates for every HTTPS call in this process: urllib (model calls, web
+    tools, updates), requests and httpx all build their contexts from ssl.SSLContext, which truststore replaces. A
+    company proxy whose certificate is only in the macOS Keychain or the Windows certificate store then works. Call
+    it first thing at start-up, before any HTTP client is made. MESHPOOL_SYSTEM_TRUST=0 leaves Python's default.
+    Never raises: any failure keeps the default trust (and is kept in _TRUST["error"]). True when it is on."""
+    with _LOCK:
+        if system_trust_on():
+            return True
+        if os.environ.get("MESHPOOL_SYSTEM_TRUST", "").strip().lower() in ("0", "false", "no", "off"):
+            return False
+        try:
+            import truststore
+            truststore.inject_into_ssl()
+            ssl.create_default_context().wrap_bio(ssl.MemoryBIO(), ssl.MemoryBIO(), server_hostname="localhost")
+        except Exception as e:  # noqa: BLE001 - missing, too old, or this platform's store failed: keep the default
+            _TRUST["error"] = f"{type(e).__name__}: {e}"[:300]
+            try:
+                truststore.extract_from_ssl()           # type: ignore[possibly-undefined]
+            except Exception:  # noqa: BLE001
+                ssl.SSLContext = _PLAIN_SSLCONTEXT
+            return False
+        _TRUST.update(on=True, error="")
+        ur = sys.modules.get("urllib.request")       # urlopen's shared opener made its context when it was built
+        op = getattr(ur, "_opener", None)
+        if op is not None and any(isinstance(h, ur.HTTPSHandler) and type(getattr(h, "_context", None))
+                                  is _PLAIN_SSLCONTEXT for h in getattr(op, "handlers", ())):
+            ur.install_opener(None)                  # the next urlopen builds one on the system's trust
+        installed = _STATE["installed"]
+        reset()                                         # a context cached before this is rebuilt on the system's trust
+        if installed:
+            install_tls()
+        return True
+
+
+def server_context() -> ssl.SSLContext:
+    """A context for a local HTTPS listener (the Office panel): ssl's own class, never truststore's."""
+    return _PLAIN_SSLCONTEXT(ssl.PROTOCOL_TLS_SERVER)
+
+
 def _load(ctx: ssl.SSLContext, path) -> bool:
     try:
         ctx.load_verify_locations(cafile=str(path))
@@ -157,6 +210,8 @@ def tls_context() -> ssl.SSLContext:
                 break
         if chosen and _load(ctx, chosen[1]):
             bundle, needed = chosen[1], chosen[0] == "MESHPOOL_CA_BUNDLE"
+        elif system_trust_on():
+            pass                    # the system's own store is used: no fallback file, and no Keychain export below
         elif ctx.cert_store_stats().get("x509_ca", 0) == 0:
             cands = []
             try:
@@ -169,7 +224,8 @@ def tls_context() -> ssl.SSLContext:
                 if p and os.path.isfile(p) and _load(ctx, p):
                     bundle, needed = p, True
                     break
-        if sys.platform == "darwin" and not os.environ.get("MESHPOOL_CA_BUNDLE", "").strip():
+        if sys.platform == "darwin" and not os.environ.get("MESHPOOL_CA_BUNDLE", "").strip() and \
+                not system_trust_on():
             # A company TLS proxy's CA lives in the System keychain, which a Python with its own CA bundle (Homebrew,
             # python.org) never reads: add the keychain certificates on top of whatever was loaded.
             p = _macos_bundle()
