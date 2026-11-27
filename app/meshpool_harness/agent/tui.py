@@ -43,7 +43,7 @@ COMMANDS = [
     ("status", "", "model, folder, access mode, usage"),
     ("auto", "[ask|accept-edits|full-access]", "set what the agent may do without asking"),
     ("plan", "[on|off|file]", "plan mode: read and plan, change nothing; file shows where the last plan was saved"),
-    ("goal", "[text|off]", "keep working until this is done"),
+    ("goal", "[text|start|resume|off]", "keep working until an independent check says it is done"),
     ("style", "[id]", "pick how the agent writes"),
     ("agent", "[id]", "switch the agent for this chat"),
     ("mode", "code|work", "switch this chat between Code and Work"),
@@ -622,6 +622,15 @@ class Terminal:
         elif t == "review":
             self._flush_text()
             self.scroll([""] + self._review_lines(ev))
+        elif t == "goal_check":                  # goal mode: one plain line per independent check
+            self._flush_text()
+            self.p(st.dim("  " + str(ev.get("text") or "")))
+        elif t == "goal_rubric":                 # goal mode: the rubric, open for a minute before it freezes
+            self._flush_text()
+            rows = ["", "  " + st.dim("Rubric for the goal. It freezes in 60 s; type /goal start to begin now.")]
+            rows += ["  - " + str(c.get("text") or "") + (st.dim(" (must)") if c.get("must") else "")
+                     for c in ev.get("rubric") or []]
+            self.scroll(rows)
         elif t in ("error", "interrupted"):
             self.failed = True
             self._flush_text()

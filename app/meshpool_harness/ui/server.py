@@ -586,7 +586,7 @@ class Handler(BaseHTTPRequestHandler):
             if keyed:
                 extra["Set-Cookie"] = f"mp_s={SESSION}; HttpOnly; SameSite=Strict; Path=/"
             return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8", extra)
-        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js|preview\.js|editor\.js|memory\.js|memory\.css|insights\.js|insights\.css|yourwork\.js|yourwork\.css|firstrun\.js|chat010\.js|home010\.js|worktree\.js)", u.path)
+        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js|preview\.js|editor\.js|memory\.js|memory\.css|insights\.js|insights\.css|yourwork\.js|yourwork\.css|firstrun\.js|chat010\.js|goal\.js|home010\.js|worktree\.js)", u.path)
         if m:
             ctype = "text/javascript; charset=utf-8" if m.group(1).endswith(".js") else "text/css; charset=utf-8"
             return self._send(200, (HERE / m.group(1)).read_bytes(), ctype)
@@ -1598,6 +1598,7 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     except Exception:  # noqa: BLE001
         pass
     threading.Thread(target=A.recover_worktrees, daemon=True).start()   # copies a crash or a deleted chat left
+    threading.Thread(target=A.resume_goals, daemon=True).start()        # goals that were running resume by themselves
     if desktop:                                     # background update checks and downloads; install on quit
         try:
             from meshpool_harness import autoupdate as AU

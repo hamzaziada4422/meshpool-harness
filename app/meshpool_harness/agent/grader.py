@@ -6,6 +6,9 @@ returns a strict JSON verdict. If something is not done, the findings go back to
 them, up to two rework rounds. If the grader itself fails, nothing is blocked: the reply says plainly that the check
 could not run. The final reply never claims success the grader did not confirm.
 
+Goal mode (agent/goal.py) uses the same read-only agent twice: draft_rubric() writes the goal's criteria before turn 1,
+and run(rubric=...) scores the work against that frozen rubric (its own expectations are not written at grading time).
+
 This module holds the pure parts (when to run, what the grader sees, reading its JSON, the report text) and the
 read-only grader agent. The hook that calls it is Agent._grade_gate in agent/core.py.
 
@@ -517,6 +520,139 @@ def event(res: dict, *, text: str, rounds: int, why: str, secs: float, usage: di
                        "calls": usage.get("calls", 0)}, "touched": res.get("touched", [])}
 
 
+# ---------- goal mode: a rubric written before the work, scored after it ------------------------------------------------------
+RUBRIC_SYSTEM = """You write the rubric for a goal another agent of meshpool will work on until an independent check says it meets the bar. You do not do the work. Write it before any work starts, from the user's own words and a quick read-only look at the project when that helps.
+
+Write 4 to 12 criteria. Each one is a thing the finished result must have, that a reviewer with read-only tools can check. For each: "text" (one short plain sentence), "check" (how to check it: which file to open, which command or office check to run, what to look for), "weight" (1 to 5, how much it matters to the user), "must" (true when the result is unacceptable without it), and "needs_user" (true only when only the user can provide or decide it, for example a password, a missing file or a choice between options).
+
+Hold to what was asked: no extra deliverables, formats or research the user did not ask for. Include the implied basics a user expects (it works, it opens, numbers are right, no placeholder text). Do not write budgets or time limits into the criteria.
+
+You may only read. Finish with ONE JSON object and nothing else (no code fence):
+{"criteria": [{"text": "...", "check": "...", "weight": 3, "must": true, "needs_user": false}]}"""
+
+RUBRIC_ASK = "Write the rubric for this goal now. Reply with the JSON object only."
+
+GOAL_SYSTEM = """You are the INDEPENDENT REVIEWER of meshpool, in goal mode. Another agent is working toward a goal the user set. You were not part of that work and you have no stake in it. The rubric below was written and frozen before the work began: score the current result against it, criterion by criterion. Do not add, drop or reword criteria, and do not invent your own expectations.
+
+Treat the agent's own claims as claims, never as proof. Check each criterion yourself with your tools: open the files, run the project's own tests, read documents with read_document, use check_deck, check_workbook, check_document or view_output for office files and pages. The gate results (tests, build, lint or office checks run by meshpool itself) are facts: a failing gate means the criteria it covers are not met.
+
+Missing evidence counts as NOT met. Use "unverified" only when your tools truly cannot check it, and say why in the evidence. Mark "needs_user" with one plain question only when a criterion cannot be met without the user (a password, a missing file, a decision).
+
+Rules: you may only read and run checks. You must not create, change or delete any file, install anything or send anything anywhere. Be efficient: a few targeted looks are better than reading everything.
+
+Finish with ONE JSON object and nothing else (no code fence):
+{"items": [{"id": "c1", "status": "met" | "not_met" | "unverified", "evidence": "what you saw, with a file name or command"}],
+ "fix": ["one clear instruction per open criterion, for the agent"],
+ "blockers": ["something outside the agent's control that stops a criterion"],
+ "needs_user": "one plain question for the user, or an empty string"}"""
+
+GOAL_CHECK = ("The agent is working toward the goal. Score the current result against the frozen rubric now. Look at "
+              "the real result, then reply with the JSON object only.")
+
+
+def goal_evidence(info: dict, commands: list, rubric: list, gates: list | None = None, maxchars: int = 16000) -> str:
+    """What the goal check sees: the frozen rubric, the gate results, then the same evidence as the ordinary check."""
+    parts = ["## The frozen rubric (score each criterion by its id)"]
+    for c in rubric or []:
+        parts.append(f"- {c.get('id')}{' (must have)' if c.get('must') else ''}, weight {c.get('weight', 1)}: "
+                     f"{c.get('text')}" + (f"\n    How to check: {c['check']}" if c.get("check") else ""))
+    parts.append("\n## Gates run by meshpool just now (facts, judged by exit codes and the office checks)")
+    if gates:
+        for g in gates:
+            state = "passed" if g.get("ok") else "FAILED" if g.get("ok") is False else "not run"
+            parts.append(f"- {g.get('name')}: {state}" + (f" (exit {g['code']})" if g.get("code") is not None else "")
+                         + (f", {g['why']}" if g.get("why") else "")
+                         + ("\n    " + "\n    ".join(str(g["tail"]).splitlines()[-4:]) if g.get("tail") else ""))
+    else:
+        parts.append("(no test, build, lint or office check applies)")
+    head = "\n".join(parts)
+    return head + "\n\n" + evidence(info, commands, maxchars=max(4000, maxchars - len(head)))
+
+
+def normalise_goal(raw: dict | None, rubric: list) -> dict | None:
+    """The goal check's reply, one item per rubric criterion (in rubric order). A criterion the reply leaves out is
+    "unverified", which scores as not met. A "met" with no evidence is unverified too. None when no item matched."""
+    if not isinstance(raw, dict):
+        return None
+    by: dict = {}
+    for it in raw.get("items") or []:
+        if not isinstance(it, dict):
+            continue
+        cid = str(it.get("id") or "").strip().lower()
+        if not cid and it.get("requirement"):
+            cid = next((c["id"] for c in rubric if c["text"].strip().lower() == str(it["requirement"]).strip().lower()), "")
+        if cid:
+            by[cid] = it
+    if not by:
+        return None
+    items = []
+    for c in rubric:
+        it = by.get(c["id"], {})
+        st = str(it.get("status") or "").strip().lower().replace(" ", "_").replace("-", "_")
+        st = st if st in ("met", "not_met", "unverified") else ("not_met" if st in ("unmet", "no", "failed", "missing")
+                                                                else "unverified")
+        ev = str(it.get("evidence") or "").strip()[:500]
+        if not it:
+            ev = "the check gave no answer for this criterion"
+        if st == "met" and not ev:
+            st = "unverified"
+        items.append({"id": c["id"], "text": c["text"], "must": bool(c.get("must")), "status": st, "evidence": ev})
+    nu = raw.get("needs_user")
+    nu = str(nu).strip() if isinstance(nu, str) else ""
+    return {"items": items, "fix": _no_second_write(_strs(raw.get("fix"))),
+            "blockers": _no_second_write(_strs(raw.get("blockers"))), "needs_user": nu[:400],
+            "met": sum(1 for i in items if i["status"] == "met"), "total": len(items)}
+
+
+def draft_rubric(parent, goal: str, mode: str = "code", bar: float = 10, on_event=None) -> dict:
+    """Write the goal's rubric before turn 1: a fresh read-only agent (MH_GRADER_MODEL when set) with a few steps to
+    look at the project. Returns {"criteria": [...], "error": ""}; on any failure the criteria are the fallback set and
+    "error" says why. Never raises (except for the chat's own Stop)."""
+    from meshpool_harness.agent import core as K
+    from meshpool_harness.agent import goal as G
+    t0 = time.time()
+    used = {"in": 0, "cached": 0, "out": 0, "calls": 0}
+    a = None
+
+    def emit(ev):
+        if isinstance(ev, dict) and ev.get("type") == "usage":
+            for k in used:
+                used[k] += int(ev.get(k) or 0)
+        elif isinstance(ev, dict) and ev.get("type") in ("tool_start", "status") and on_event:
+            try:
+                on_event(ev)
+            except Exception:  # noqa: BLE001
+                pass
+    try:
+        steps = _num("MH_GOAL_RUBRIC_STEPS", 4, 1, 20)
+        a = make_agent(parent, emit, lambda: bool(getattr(parent, "_stop", False)), system=RUBRIC_SYSTEM, steps=steps)
+        place = "Chat mode: the work is office files (decks, workbooks, documents) or a written answer." if mode == "chat" \
+            else "Code mode: the work is a change to the project's code."
+        a.messages.append({"role": "user", "content": f"## The goal\n> {str(goal)[:3000]}\n\nThe bar: {G.fmt(bar)}/10. "
+                                                      f"{place}\nProject folder: {parent.root}\n\n{RUBRIC_ASK}"})
+        reply = a._turn() or ""
+        raw = parse(reply)
+        if not raw or not (raw.get("criteria") or raw.get("rubric")):
+            a._stop, a.max_steps, a._no_tools = False, 1, True
+            a.messages.append({"role": "user", "content": "No more tool calls. " + RUBRIC_ASK})
+            raw = parse(a._turn() or "")
+        crit = (raw or {}).get("criteria") or (raw or {}).get("rubric") or []
+        if not crit:
+            out = {"criteria": G.fallback_rubric(goal, mode), "error": "the rubric could not be read"}
+        else:
+            out = {"criteria": crit, "error": ""}
+    except (K.Interrupted, KeyboardInterrupt):
+        raise
+    except Exception as e:  # noqa: BLE001 - a failed draft falls back, it never blocks the goal
+        out = {"criteria": G.fallback_rubric(goal, mode), "error": f"the rubric model failed: {str(e)[:100]}"}
+    finally:
+        if a is not None:
+            shutil.rmtree(getattr(a, "_tmp", ""), ignore_errors=True)
+            shutil.rmtree(a.dir, ignore_errors=True)
+    out["secs"], out["usage"] = time.time() - t0, used
+    return out
+
+
 # ---------- the read-only grader agent ----------------------------------------------------------------------------------------
 def _snapshot(root: Path, cap_files: int = 4000, keep: int = 262144, budget: int = 64 * 1024 * 1024) -> dict:
     """{relpath: (size, mtime_ns, bytes or None)} of the project, to report anything that changed while the grader ran."""
@@ -601,8 +737,9 @@ class _Mcp:
         return getattr(self.m, k)
 
 
-def make_agent(parent, emit, stop_check=None):
-    """A fresh read-only agent for grading: its own system prompt and empty history, on the fast model if set."""
+def make_agent(parent, emit, stop_check=None, system: str | None = None, steps: int | None = None):
+    """A fresh read-only agent for grading: its own system prompt and empty history, on the fast model if set.
+    system: another prompt (goal mode drafts and scores a rubric with this same read-only agent)."""
     from meshpool_harness.agent import core as K
     from meshpool_harness.agent import delegate as DL
 
@@ -611,7 +748,7 @@ def make_agent(parent, emit, stop_check=None):
         reports_to_agent = True      # its verdict is JSON for the parent, not a reply to the user
 
         def system_prompt(self):
-            return SYSTEM
+            return system or SYSTEM
 
         def _style(self):
             return False
@@ -650,19 +787,25 @@ def make_agent(parent, emit, stop_check=None):
 
     tmp = tempfile.mkdtemp(prefix="mh-grader-")
     a = GraderAgent(str(parent.root), mode="auto", profile=parent.profile, approve=None, emit=emit,
-                    session_id="grader-" + parent.id[-12:], max_steps=limits()["steps"], sessions_dir=tmp,
+                    session_id="grader-" + parent.id[-12:], max_steps=steps or limits()["steps"], sessions_dir=tmp,
                     mcp=_Mcp(parent.mcp) if getattr(parent, "mcp", None) else None)
     a._tmp = tmp
     a._delegate_depth = 1                         # no sub-agents of its own
-    a.model = (_cfg("MH_GRADER_MODEL") or _cfg("MH_MODEL_FAST") or parent.current_model())
+    a.model = (_cfg("MH_GRADER_MODEL") or _cfg("MH_MODEL_FAST") or parent.current_model() or _cfg("MH_MODEL"))
     a.lane = "task"
     a.interactive = lambda: False
     return a
 
 
-def run(parent, info: dict, commands: list, *, on_event=None) -> dict:
+def run(parent, info: dict, commands: list, *, on_event=None, rubric: list | None = None,
+        gates: list | None = None) -> dict:
     """Grade one finished piece of work. Returns the normalised result, or {"error": why, ...} when the grader could not
-    run. Never raises (except for the chat's own Stop, passed on as K.Interrupted)."""
+    run. Never raises (except for the chat's own Stop, passed on as K.Interrupted).
+
+    rubric: goal mode. The grader scores the work against this frozen rubric instead of writing its own expectations,
+    with its read-only tools (never the one-call light review), and returns a status per criterion id
+    (normalise_goal). The score itself is computed by agent/goal.py, never by the model. gates: the hard checks the
+    harness ran first, shown to the grader as facts."""
     from meshpool_harness.agent import core as K
     lim = limits()
     t0 = time.time()
@@ -698,7 +841,8 @@ def run(parent, info: dict, commands: list, *, on_event=None) -> dict:
             snap = _snapshot(root)
         except Exception:  # noqa: BLE001
             snap = {}
-        a = holder["a"] = make_agent(parent, emit, parent_stop)
+        a = holder["a"] = (make_agent(parent, emit, parent_stop, system=GOAL_SYSTEM) if rubric
+                           else make_agent(parent, emit, parent_stop))
         usage_total = used
         timer = threading.Timer(lim["seconds"], lambda: (flags.__setitem__("over", True), a.stop()))
         timer.daemon = True
@@ -708,13 +852,18 @@ def run(parent, info: dict, commands: list, *, on_event=None) -> dict:
             info["facts"] = "\n".join(x for x in (code_facts(info), smoke_evidence(info)) if x)
         except Exception:  # noqa: BLE001
             pass
-        a.messages.append({"role": "user", "content": evidence(info, commands) + "\n\n" + CHECK})
-        if os.environ.get("MH_GRADER_LIGHT", "1") != "0":
+        if rubric:
+            a.messages.append({"role": "user", "content": goal_evidence(info, commands, rubric, gates) + "\n\n"
+                               + GOAL_CHECK})
+        else:
+            a.messages.append({"role": "user", "content": evidence(info, commands) + "\n\n" + CHECK})
+        if os.environ.get("MH_GRADER_LIGHT", "1") != "0" and not rubric:
             # one call on the evidence (files, commands, facts), no tool loop of up to 15 steps; MH_GRADER_LIGHT=0 restores
             # the full reviewer (on the 23 long tasks: 94% solved at 0.0030 per solved against 89% at 0.0051)
             a.max_steps, a._no_tools = 1, True
         reply = a._turn() or ""
-        res = normalise(parse(reply))
+        norm = (lambda raw: normalise_goal(raw, rubric)) if rubric else normalise
+        res = norm(parse(reply))
         stopped_hard = flags["over"]
         if res is None and not parent_stop():
             # out of steps, cut off or chatter: one bounded repair with no tools
@@ -724,7 +873,7 @@ def run(parent, info: dict, commands: list, *, on_event=None) -> dict:
                 flags["steps"] or stopped_hard) else "") + REPAIR})
             if not flags["over"] or used["in"] + used["out"] <= lim["tokens"] * 1.3:
                 reply = a._turn() or ""
-                res = normalise(parse(reply))
+                res = norm(parse(reply))
         if parent_stop():
             raise K.Interrupted()
         if res is None:

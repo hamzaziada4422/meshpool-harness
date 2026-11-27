@@ -745,7 +745,14 @@ async function sendNow(interrupt) {
     const images = atts.filter(a => a.image).map(a => ({name: a.name, mime: a.mime, data: a.data}));
     const wasStopping = S.stopping;               // Stop is still finishing: stopNow's wait loop owns the flag
     if (interrupt) { S.stopping = true; renderBar(); }
-    if (S.pendingGoal) { const g = S.pendingGoal; S.pendingGoal = null; await setGoal(g, cur); }
+    if (S.pendingGoal) {                          // /goal in a new chat: the chat is made, the goal set; its first turn
+      const g = S.pendingGoal; S.pendingGoal = null;    // starts by itself once the rubric is frozen
+      await setGoal(g, cur);
+      if (interrupt && !wasStopping) S.stopping = false;
+      S.sendHold = 0; setWorking(null); renderBar();
+      clearTimeout(cur.pollT); poll(); setTimeout(loadThreads, 500);
+      return;
+    }
     const r = await post(`/api/agent/${cur.id}/send`, {text, images, files, since: 1e9, interrupt: !!interrupt});
     attachNote(r.attached, cur);
     if (interrupt && !wasStopping) S.stopping = false;
@@ -777,7 +784,7 @@ const SLASH = [
   ["/model", "Choose the model", () => modelPop($("#mPill"))],
   ["/agent", "Choose the agent", () => harnessPop($("#mPill"))],
   ["/plan", "Turn plan mode on or off", () => setPlan(!cfg().plan)],
-  ["/goal", "Set a goal: the agent keeps going until it is done (/goal clear ends it)", arg => goalCmd(arg)],
+  ["/goal", "Set a goal: meshpool keeps going until an independent check says it is met (/goal clear ends it)", arg => goalCmd(arg)],
   ["/usage", "Usage, by model and by chat", () => openSettings("usage")],
   ["/review", "Review this branch's changes for bugs (/review quick or deep, --max N, what to focus on)", arg => sendCmd(reviewPrompt(arg))],
   ["/simplify", "Make the changed code simpler without changing what it does (/simplify what)", arg => sendCmd(simplifyPrompt(arg))],
@@ -861,17 +868,26 @@ async function useSuggestion(x) {
   else if (x.type === "command") { const t = inp.value.trim(); inp.value = x.id === "/goal" ? `/goal ${t}` : x.id; }
   inp.focus(); inp.dispatchEvent(new Event("input"));
 }
-/* /goal: the agent keeps taking turns until it reports the goal met and checked, it needs you, or you stop it. */
+/* /goal: goal mode. A rubric is written first and shown on the goal card for edits; when it freezes (Start, or after a
+   minute) meshpool works turn after turn until an independent check says the bar is met, a budget runs out, it is stuck
+   or it needs you. "/goal start" starts now, "/goal resume" carries a paused goal on, "/goal clear" ends it. */
 async function goalCmd(arg) {
   const cur = S.cur?.view?.goal || "";
   if (!arg) { toast(cur ? `Goal: ${cur}. Type /goal clear to end it.` : "Type /goal and what should be done, e.g. /goal make every test pass", 5000); return; }
   if (/^(clear|off|stop|none|end)$/i.test(arg)) { if (S.cur) await setGoal(""); else toast("No goal is set."); return; }
+  if (/^(start|resume)$/i.test(arg)) { if (S.cur) await goalOp(arg.toLowerCase()); else toast("No goal is set."); return; }
+  if (S.cur) { await setGoal(arg); return; }                  // this chat: the rubric comes first, then the work
   S.pendingGoal = arg;
-  const inp = $("#input"); inp.value = arg; sendNow(false);     // sends it as the first message of the goal
+  const inp = $("#input"); inp.value = arg; sendNow(false);     // a new chat is made for it; the goal is not sent as a message
+}
+async function goalOp(op, cur = S.cur) {
+  if (!cur) return;
+  try { const v = await post(`/api/agent/${cur.id}/goal`, {op, since: 1e9}); if (cur.view) { cur.view.goal = v.goal; cur.view.goal_state = v.goal_state; } window.renderGoal010?.(cur); renderBar(); }
+  catch (e) { toast(e.message, 4000); }
 }
 async function setGoal(text, cur = S.cur) {
   if (!cur) return;
-  try { const v = await post(`/api/agent/${cur.id}/goal`, {text, since: 1e9}); if (cur.view) cur.view.goal = v.goal; renderBar(); }
+  try { const v = await post(`/api/agent/${cur.id}/goal`, {text, since: 1e9}); if (cur.view) { cur.view.goal = v.goal; cur.view.goal_state = v.goal_state; } window.renderGoal010?.(cur); renderBar(); }
   catch (e) { toast(e.message, 4000); }
 }
 /* Frequency of use: the commands and skills you use most come first in their menus. */
@@ -1087,6 +1103,7 @@ function newThread(opt) {
   S.draft.pid = where.pid; S.draft.incognito = false; S.draft.exclude = [];
   { const i = $("#input"); if (i && !(opt && typeof opt === "object")) { i.value = ""; i.style.height = "auto"; } }
   S.cur = null; S.attachments = []; renderAttach(); setWorking(null); $("#col").classList.remove("loading");
+  window.renderGoal010?.(null);                        // a new chat has no goal card
   S.draft.harness = modeHarness(); S.draft.mode = "";
   renderTop(); renderBar(); renderHero(); renderSide(); renderPanel();
   restoreDraft(); $("#input").focus();
@@ -1211,6 +1228,7 @@ function openThread(id, fresh, find) {
   if (!fresh && known) S.cur.view = {id, title: known.title, state: known.state, kind: known.kind, workdir: known.workdir, scratch: known.scratch, project_id: known.project_id || "", pinned: known.pinned, harness: harness(known.harness), events: [], prefill: true};
   const cur = S.cur;
   S.pinned = true; setWorking(null);
+  window.renderGoal010?.(cur);                         // the other chat's goal card goes; this one's comes with its view
   closePop();
   beginStage(cur);
   if (hit) {                                     // replay what we already had, off-screen, then ask only for the rest
@@ -1287,6 +1305,7 @@ function ingest(cur, v) {
   // A stream frame of only text carries no goal or title (server.py _event_stream): it must not redraw the header, which
   // asked the server for git status on every frame of a code chat (CPU audit: ~80 /api/git requests a second while streaming).
   if (first || prevState !== v.state || ("goal" in v && prevGoal !== v.goal) || (v.title && v.title !== cur.shownTitle)) { cur.shownTitle = v.title; renderTop(); renderBar(); }
+  if ("goal_state" in v) window.renderGoal010?.(cur);   // goal mode: the card above the thread (goal.js)
   renderTrust(cur);
   if (first && S.panel) renderPanel();
   if (first) scrollConv(true);
@@ -1752,7 +1771,7 @@ function bumpGroup(g, done) {
 function closeGroup() { const g = S.cur.group; if (inCol(g)) bumpGroup(g, true); S.cur.group = null; }
 const GOAL_NEXT = "Continue working toward the goal.";
 const RESUME_NEXT = "Continue where you left off.";
-const stripGoal = t => String(t || "").replace(/\n*^\W*GOAL:\s*(DONE|CONTINUE)\b.*$/gim, "").trimEnd();
+const stripGoal = t => String(t || "").replace(/\n*^\W*GOAL:\s*(DONE|CONTINUE|READY|NEEDS YOU|BLOCKED)\b.*$/gim, "").trimEnd();
 const RETRY_RX = /Trying again \(\d+ of \d+\)|^Rate limited by the endpoint|^Trying again without streaming/;   // old transcripts have no retry flag
 const clearRetry = () => $$(".note.retry", colEl()).forEach(n => n.remove());   // the call went through: the "trying again" notes are history
 // OSS-12: one event that cannot be drawn must not break the page or the rest of a saved chat.
@@ -1928,9 +1947,13 @@ function applyEvRaw(ev) {
     case "context": if (cur.view) cur.view.context = {used: ev.used, size: ev.size}; break;
     case "job_stage": cur.jobStage = String(ev.text || "").slice(0, 90); break;   // a long engine job's stage: the working line
     case "review": { closeGroup(); window.reviewCard010?.(ev, add); break; }   // the independent check (chat010.js)
+    case "goal": { if (cur.view && !cur.stage) { cur.view.goal_state = ev.state; window.renderGoal010?.(cur); } break; }   // live: the goal card (goal.js)
+    case "goal_check": { closeGroup(); window.goalCheckLine010?.(ev, add); break; }   // one line per goal check; the card has the detail
+    case "goal_rubric": break;                           // the card shows the rubric for edits
     case "receipt": { closeGroup(); const t = String(ev.text || ""), first = t.split("\n").map(x => x.replace(/^[#*\s-]+|[*]+/g, "").trim()).find(Boolean) || "Reviewed";
       add(`<details><summary>${ICON.check2}<span>${esc(clip(first.replace(/:$/, ""), 80))}</span></summary><div class="rcbody">${md(t)}</div></details>`, "note receipt"); sessionSoon(); break; }   // details: here when opened, and in the Session panel
     case "status": {
+      if (ev.goal) break;                                // goal set, frozen, paused, resuming: the goal card says it (the terminal prints them)
       if (ev.using) { cur.using = ev.text; if (ev.auto) cur.auto = ev.auto;
         // Auto's reason is the router's own note ("Best benchmark quality for a data task (csv)"): it stays out of the
         // transcript, on the line's tooltip and in the Session panel's Agent section.

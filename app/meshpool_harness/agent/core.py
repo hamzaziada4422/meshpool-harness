@@ -3410,6 +3410,13 @@ class Agent:
     _turn_no = 0           # counted up by each send(); turn-scoped guards read it before the first turn too
     budget_stopped = False  # the last turn ended on the spending limit
     _task = None           # the usage task of the turn that is running
+    # Goal mode (agent/goal.py), set by the session before each goal turn: the per-turn grader rework is off (the goal's
+    # own checks score the work), the compaction handoff keeps goal_brief word for word, and at wrap_deadline (the goal's
+    # time budget) tools turn off and wrap_text asks for the report.
+    goal_active = False
+    goal_brief = ""
+    wrap_deadline = 0.0
+    wrap_text = ""
 
     def __init__(self, workdir: str, *, mcp=None, emit=None, approve=None, mode: str | None = None,
                  session_id: str | None = None, max_steps: int = 0, profile: str = "code",
@@ -4365,8 +4372,9 @@ class Agent:
         if files:
             text += "\n\nFiles changed this turn: " + ", ".join(files)
         self.emit({"type": "assistant", "text": text, "streamed": False, "has_tools": False})
-        self.emit({"type": "error", "text": "Stopped: the agent kept repeating the same steps without progress. What it "
-                                            "did so far is kept; send a message to steer it."})
+        self.emit({"type": "error", "loop": True,
+                   "text": "Stopped: the agent kept repeating the same steps without progress. What it "
+                           "did so far is kept; send a message to steer it."})
         return text
 
     def _turn(self) -> str:
@@ -4476,6 +4484,13 @@ class Agent:
                     self.messages.append({"role": "user", "content": PACE.WRAP})
                 if self._pace_wrapped:
                     self._no_tools = True               # every later step is tools-off, even if tool_choice is refused
+                if self.wrap_deadline and step and not g.get("goal_wrapped") and time.time() > self.wrap_deadline:
+                    g["goal_wrapped"] = True            # the goal's time budget ran out: no more tools, the report now
+                    self.messages.append({"role": "user", "content": self.wrap_text or (
+                        "[meshpool] The goal's time budget is used up. Do not call more tools. Say plainly what is "
+                        "done and what is not, then end with GOAL: READY or GOAL: CONTINUE.")})
+                if g.get("goal_wrapped"):
+                    self._no_tools = True
                 self._finish = None
                 if g.pop("hard_wrap", False):
                     self._no_tools = True                 # stuck for good: best-effort answer instead of more calls
@@ -5066,6 +5081,8 @@ class Agent:
         back to the agent to fix, else (False, final with the 'Independent check' section). Never raises, never blocks."""
         try:
             from meshpool_harness.agent import grader as GR
+            if not force and getattr(self, "goal_active", False):
+                return False, final        # goal mode: the goal's own checks score the work (agent/goal.py)
             if (getattr(self, "_is_grader", False) or getattr(self, "_delegate_depth", 0) or self.plan or self._lean()
                     or self._bare_codex() or not final.strip() or final.strip() == "(no reply)" or (not force and not GR.enabled())):
                 return False, final
@@ -6118,7 +6135,8 @@ class Agent:
             win = self._ctx_window()
         except Exception:  # noqa: BLE001
             win = None
-        r = compaction.compact_history(self.messages, win=win, focus=str(focus or "").strip())
+        keep = self.goal_brief() if callable(self.goal_brief) else str(self.goal_brief or "")
+        r = compaction.compact_history(self.messages, win=win, focus=str(focus or "").strip(), keep=keep)
         if r:
             try:
                 EX.run_hooks(self.root, "PostCompact", {"removed": r.get("removed"), "messages": len(self.messages)})

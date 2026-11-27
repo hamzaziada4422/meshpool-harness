@@ -177,9 +177,11 @@ def summarize(middle: list, task: str, client=None, model: str | None = None, wi
 
 
 def compact_history(messages: list, client=None, model: str | None = None, keep_recent: int | None = None,
-                    win: int | None = None, focus: str = "") -> dict | None:
+                    win: int | None = None, focus: str = "", keep: str = "") -> dict | None:
     """Replace the older steps in `messages` (in place) with the handoff note. Returns {"removed": n, "model": bool}
-    or None when nothing was done. win: the model's context window in tokens; it sizes the summary call and the note."""
+    or None when nothing was done. win: the model's context window in tokens; it sizes the summary call and the note.
+    keep: text the note carries word for word, never summarized (goal mode: the goal, the frozen rubric and the last
+    findings, so a long goal is never narrowed)."""
     b = budgets(win)
     parts = split(messages, keep_recent if keep_recent is not None else b["keep"], b["min_middle"])
     if parts is None:
@@ -194,6 +196,8 @@ def compact_history(messages: list, client=None, model: str | None = None, keep_
             "accurate; the user's task above is unchanged.]\n"
             + (written + "\n\n" if written else "(The summary could not be written; the facts from the log follow.)\n")
             + (rules + "\n" if rules else "")
+            + ("[The goal of this chat, kept word for word: it is unchanged and still the bar to meet]\n"
+               + str(keep).strip()[:8000] + "\n" if str(keep or "").strip() else "")
             + "[End of summary. Continue from the messages below. Do not redo finished work.]")
     messages[:] = head + [{"role": "user", "content": note}] + tail
     return {"removed": len(middle), "model": bool(written)}

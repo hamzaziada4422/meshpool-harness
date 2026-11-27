@@ -4,6 +4,7 @@ Without this every request was handled like a deep job: a two-line "do some quic
 25 tool calls and took 70 to 100 s in the built-in agents (practical check, 13 Nov 2026). classify() sorts a message
 into quick / normal / deep with plain rules (no model call, no delay). A quick request gets a hidden note with a small
 budget, and the built-in agents are told to wrap up if they run past it. Deep and normal requests are unchanged.
+Goal turns are deep work (classify(..., goal=True)).
 """
 from __future__ import annotations
 
@@ -38,7 +39,11 @@ WRAP = ("[Meshpool] Time is up for this quick request. Answer now with what you 
         "facts you looked up. Do not call more tools.")
 
 
-def classify(text: str, has_files: bool = False) -> str:
+def classify(text: str, has_files: bool = False, goal: bool = False) -> str:
+    """quick, normal or deep. A turn under goal mode (agent/goal.py) is always deep work: it never gets the quick
+    budget or the quick wrap, whatever its words."""
+    if goal:
+        return "deep"
     t = str(text or "").split(SEP)[0].strip()   # model-only notes follow SEP; a pasted bare \u200b is user text
     if not t:
         return "normal"

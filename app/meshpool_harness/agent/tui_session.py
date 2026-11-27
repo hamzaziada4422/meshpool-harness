@@ -428,11 +428,23 @@ class SharedCommands:
     def cmd_goal(self, arg):
         if not self._need_shared():
             return
-        if not arg:
-            return self.term.p(self.term.st.dim(f"  Goal: {self.s.goal or 'none'}. /goal <text> sets one, /goal off clears it."))
-        self.s.set_goal("" if arg.lower() in ("off", "clear", "none") else arg)
-        if self.s.goal:
-            self.send(self.s.goal)                           # the goal is the first request; the Session keeps going
+        from meshpool_harness.agent import goal as GL
+        t, st = self.term, self.term.st
+        a = (arg or "").strip()
+        low = a.lower()
+        if not a or low == "status":                         # the same plain line the app's goal card is built from
+            gs = getattr(self.s, "gs", None)
+            return t.p(st.dim("  " + GL.status_line(gs if gs and not gs.get("dismissed") else None)
+                              + " /goal <text> sets one, /goal start begins now, /goal resume, /goal off clears it."))
+        ops = {"start": "start", "resume": "resume", "cancel": "cancel_resume"}
+        if low in ops:
+            try:
+                self.s.goal_action(ops[low])
+            except ValueError as e:
+                t.p(st.amber("  " + str(e)))
+            return
+        self.s.set_goal("" if low in ("off", "clear", "none", "stop") else a)
+        # the first goal turn starts by itself once the rubric is frozen (the Session runs the goal turn after turn)
 
     def cmd_style(self, arg):
         if not self._need_shared():
