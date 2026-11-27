@@ -2343,25 +2343,152 @@ function togglePanel(name, force) {
   S.panel = (S.panel === name && !force) ? null : name; store("panel", S.panel);
   flipLayout(() => { renderPanel(); renderTop(); });
 }
-function setupPanelResize() {
-  const w = store("pw"); if (w) document.documentElement.style.setProperty("--pw", w + "px");
-  $("#rz").addEventListener("mousedown", e => {
-    e.preventDefault(); const move = ev => { const nw = Math.max(320, Math.min(innerWidth - 520, innerWidth - ev.clientX)); document.documentElement.style.setProperty("--pw", nw + "px"); store("pw", nw); };
-    document.addEventListener("mousemove", move); document.addEventListener("mouseup", () => document.removeEventListener("mousemove", move), {once: true});
+/* ---------- pane widths: the sidebar, the side panel and the preview, each resized by a handle on its edge ----------
+   paneSizes works out the widths and paneLayout puts them on the page. The drag, the arrow keys, a window resize and a
+   panel opening all go through these two, so a drag never draws a layout that the next redraw undoes.
+   Bounds: the sidebar 200 to 480 px, the right pane (Progress and the other panel tabs, or the preview) 320 px to 60% of
+   the window, and the chat never under 420 px: the right pane gives way first, then the sidebar. A width a person chose
+   is kept per pane (mp_sw, mp_pw, mp_pvw) and clamped again to the window on every layout. A smaller window does not
+   change the stored number, so the width comes back when the window grows again. Whether the sidebar folds for a panel
+   (fitPanel) does not depend on these widths, so a drag never folds or unfolds it. At 980 px and under the right pane is
+   an overlay, and at 760 px and under the sidebar is one: they have no handle there. */
+const PANE_CHAT_MIN = 420, PANE_SIDE = [200, 480], PANE_RIGHT_MIN = 320, PANE_SIDE_DEFAULT = 288;
+const PANE = {drag: null};     // {key, w}: the width under the pointer while a drag runs; every layout uses it until the drop
+const PANE_LABEL = {sw: "Resize the sidebar", pw: "Resize the side panel", pvw: "Resize the preview"};
+function paneRightKey() { return typeof PVX !== "undefined" && PVX.open ? "pvw" : (S.panel ? "pw" : null); }
+// The widths before anyone drags (the 0.0.20 rule: what the window leaves after the sidebar and a 672px chat). s0 is the
+// sidebar as that rule sees it, 288 or 0, never a dragged width: dragging the sidebar does not move the right pane.
+function paneDefault(key, vw, s0) {
+  if (key === "sw") return PANE_SIDE_DEFAULT;
+  if (key === "pvw") return Math.min(Math.min(920, Math.max(480, vw * 0.46)), Math.max(vw - s0 - CHAT_ROOM_MIN, 400));
+  return vw < 1440 ? Math.min(460, Math.max(340, vw - s0 - CHAT_ROOM_MIN)) : 460;
+}
+function paneWant(key, vw, s0) {
+  if (PANE.drag && PANE.drag.key === key) return PANE.drag.w;
+  const v = Number(store(key)); return v > 0 ? v : paneDefault(key, vw, s0);
+}
+function paneSizes() {
+  const a = $("#app"), vw = innerWidth;
+  const side = vw > 760 && !!a && !a.classList.contains("noside") && !a.classList.contains("autoside");
+  const k = paneRightKey(), key = k && vw > 980 ? k : null;
+  const sideWant = Math.max(PANE_SIDE[0], Math.min(PANE_SIDE[1], paneWant("sw", vw, 0)));
+  let s = side ? sideWant : 0, p = 0;
+  if (key) p = Math.max(PANE_RIGHT_MIN, Math.min(paneWant(key, vw, side ? PANE_SIDE_DEFAULT : 0), vw * 0.6, vw - s - PANE_CHAT_MIN));
+  if (side) s = Math.max(PANE_SIDE[0], Math.min(s, vw - p - PANE_CHAT_MIN));
+  s = Math.round(s); p = Math.round(p);
+  return {vw, side, key, s, p, sideWant: Math.round(sideWant),
+    sMax: Math.round(Math.max(PANE_SIDE[0], Math.min(PANE_SIDE[1], vw - p - PANE_CHAT_MIN))),
+    pMax: Math.round(Math.max(PANE_RIGHT_MIN, Math.min(vw * 0.6, vw - s - PANE_CHAT_MIN)))};
+}
+function paneLayout() {
+  const a = $("#app"); if (!a) return;
+  const z = paneSizes(), st = a.style;
+  // --sw-user: the sidebar's width (shell.css .app --sw, .side-in); while it is folded, the width it slides in at.
+  st.setProperty("--sw-user", (z.side ? z.s : z.sideWant) + "px");
+  if (z.key) st.setProperty("--rw", z.p + "px"); else st.removeProperty("--rw");     // app.css .panel, .pvp
+  { const pw = Number(store("pw")); if (pw > 0) st.setProperty("--pw", pw + "px"); else st.removeProperty("--pw"); }   // the overlay panel under 981px
+  const hs = $("#rzSide"), hr = $("#rzRight");
+  if (hs) {
+    hs.hidden = !z.side; hs.style.left = (z.s - 1) + "px";      // from the sidebar's 1px border into the chat: clear of the sidebar list's scrollbar
+    hs.setAttribute("aria-valuenow", z.s); hs.setAttribute("aria-valuemin", PANE_SIDE[0]); hs.setAttribute("aria-valuemax", z.sMax);
+  }
+  if (hr) {
+    hr.hidden = !z.key; hr.style.left = (z.vw - z.p) + "px";     // from the pane's border inward: clear of the chat's scrollbar
+    if (z.key) {
+      hr.setAttribute("aria-label", PANE_LABEL[z.key]); hr.setAttribute("aria-controls", z.key === "pvw" ? "pvp" : "panel");
+      hr.setAttribute("aria-valuenow", z.p); hr.setAttribute("aria-valuemin", PANE_RIGHT_MIN); hr.setAttribute("aria-valuemax", z.pMax);
+    }
+  }
+}
+// The reading position: the deepest block at the top of the chat (a paragraph, a list item) and how far into it the top of
+// the view is. When a width change wraps the text again, the same line stays at the top, during a drag and while the
+// window is resized (the browser's own scroll anchoring keeps a whole message in place, not the line inside it).
+function paneAnchor() {
+  const c = $("#conv"), col = $("#col");
+  if (!c || !col || !c.isConnected || c.scrollHeight <= c.clientHeight + 1) return () => {};
+  if (c.scrollHeight - c.scrollTop - c.clientHeight < 2) return () => { c.scrollTop = c.scrollHeight; };    // at the end: stay there
+  const top = c.getBoundingClientRect().top;
+  let el = null;
+  for (let kids = col.children, depth = 0; kids.length && depth < 8; depth++) {
+    let hit = null;
+    for (const k of kids) { const r = k.getBoundingClientRect(); if (r.height && r.bottom > top && !/^inline/.test(getComputedStyle(k).display)) { hit = k; break; } if (r.top > top) break; }
+    if (!hit) break;
+    el = hit; kids = hit.children;
+  }
+  if (!el) return () => {};
+  const r = el.getBoundingClientRect(), frac = r.height ? (top - r.top) / r.height : 0;
+  return () => { if (!el.isConnected) return; const b = el.getBoundingClientRect(); const d = b.top + frac * b.height - c.getBoundingClientRect().top; if (Math.abs(d) >= 0.5) c.scrollTop += d; };
+}
+function paneSet(key, w) {      // keep a width, clamped to the window as it is now, so the stored number is one that was on screen
+  PANE.drag = {key, w}; const z = paneSizes(); PANE.drag = null;
+  const keep = paneAnchor(); store(key, key === "sw" ? z.s : z.p); paneLayout(); keep();
+}
+function paneReset(key) { const keep = paneAnchor(); try { localStorage.removeItem("mp_" + key); } catch (e) { /* storage is off: the default shows anyway */ } paneLayout(); keep(); }
+function paneHandle(id, isSide) {
+  const h = document.createElement("div");
+  Object.assign(h, {id, className: "pane-rz", tabIndex: 0, hidden: true});
+  h.setAttribute("role", "separator"); h.setAttribute("aria-orientation", "vertical");
+  h.setAttribute("aria-label", isSide ? PANE_LABEL.sw : PANE_LABEL.pw); h.setAttribute("aria-controls", isSide ? "side" : "panel");
+  h.title = "Drag to resize. Double-click for the default width.";
+  const keyOf = () => isSide ? "sw" : paneRightKey();
+  const widthOf = z => isSide ? z.s : z.p;
+  h.addEventListener("pointerdown", e => {
+    const key = keyOf(); if (e.button !== 0 || !key || PANE.drag) return;
+    e.preventDefault();          // no text selection, and the focus stays where it was (the message box keeps it)
+    const x0 = e.clientX, w0 = widthOf(paneSizes()), app = $("#app"), keep = paneAnchor();
+    let x = x0, raf = 0, done = false;
+    try { h.setPointerCapture(e.pointerId); } catch (err) { /* the pointer is already gone */ }
+    PANE.drag = {key, w: w0}; app.classList.add("pane-drag"); h.classList.add("on");
+    const frame = () => { raf = 0; if (PANE.drag) { PANE.drag.w = w0 + (isSide ? x - x0 : x0 - x); paneLayout(); keep(); } };
+    const move = ev => { x = ev.clientX; if (!raf) raf = requestAnimationFrame(frame); };
+    const end = () => {
+      if (done) return; done = true;
+      if (raf) cancelAnimationFrame(raf);
+      frame();                                                  // the last position, drawn now
+      const w = widthOf(paneSizes()); PANE.drag = null; store(key, w); paneLayout();
+      app.classList.remove("pane-drag"); h.classList.remove("on");
+      h.removeEventListener("pointermove", move); h.removeEventListener("pointerup", end); h.removeEventListener("pointercancel", end); h.removeEventListener("lostpointercapture", end);
+      try { h.releasePointerCapture(e.pointerId); } catch (err) { /* released already */ }
+    };
+    h.addEventListener("pointermove", move); h.addEventListener("pointerup", end); h.addEventListener("pointercancel", end); h.addEventListener("lostpointercapture", end);
   });
+  h.addEventListener("dblclick", e => { const key = keyOf(); if (key) { e.preventDefault(); paneReset(key); } });
+  h.addEventListener("keydown", e => {
+    const key = keyOf(); if (!key || e.altKey || e.ctrlKey || e.metaKey) return;
+    const step = e.shiftKey ? 64 : 16, w = widthOf(paneSizes()), grow = isSide ? 1 : -1;    // the handle moves the way the arrow points
+    let to = null;
+    if (e.key === "ArrowLeft") to = w - step * grow;
+    else if (e.key === "ArrowRight") to = w + step * grow;
+    else if (e.key === "Home") to = 0;            // the narrowest
+    else if (e.key === "End") to = 1e5;           // the widest the window allows
+    else if (e.key === "Enter") { e.preventDefault(); paneReset(key); return; }
+    if (to === null) return;
+    e.preventDefault(); paneSet(key, to);
+  });
+  $("#app").appendChild(h);
+  return h;
+}
+function setupPanes() {
+  paneHandle("rzSide", true); paneHandle("rzRight", false);
+  paneLayout();
+  // Every frame of a window resize, not only after it settles (fitPanel). By then the page has its new size, so the reading
+  // position is the one taken at the last scroll (PANE.read), kept up to date while the person reads.
+  const conv = $("#conv"); let rt = 0;
+  if (conv) conv.addEventListener("scroll", () => { if (!rt) rt = requestAnimationFrame(() => { rt = 0; PANE.read = paneAnchor(); }); }, {passive: true});
+  window.addEventListener("resize", () => { paneLayout(); if (PANE.read) PANE.read(); });
 }
 // The room the chat would have with the sidebar kept and the side panel (or the preview) open: the sidebar folds only
-// when that drops under about 640px, not at a fixed window width (priya018). The panel widths are the CSS ones
-// (app.css .panel, .pvp), worked out for the sidebar being open so the answer does not flip when it folds.
+// when that drops under about 640px, not at a fixed window width (priya018). The panel widths are the default ones
+// (paneDefault), worked out for the sidebar being open so the answer does not flip when it folds.
 const CHAT_ROOM_MIN = 672;      // a 640px text column and its 16px gutters: the chat never gets a narrower column than that
 function chatRoomWithSide() {
   const vw = innerWidth, side = 288, pv = typeof PVX !== "undefined" && PVX.open;
   let w = 0;
   if (vw > 980) {
-    // one rule for both panels (app.css): what the window leaves after the sidebar and a 672px chat. Progress takes 340px at
+    // one rule for both panels (paneDefault): what the window leaves after the sidebar and a 672px chat. Progress takes 340px at
     // the least and the preview 400px; the sidebar folds only when the chat would be narrower than 672px even then.
-    if (pv) w = Math.min(Math.min(920, Math.max(480, vw * 0.46)), Math.max(vw - side - CHAT_ROOM_MIN, 400));
-    else { const pw = Number(store("pw")) || 460; w = vw < 1440 ? Math.min(pw, Math.max(340, vw - side - CHAT_ROOM_MIN)) : pw; }
+    // The default widths, never the dragged ones (paneDefault): a drag does not fold or unfold the sidebar.
+    w = paneDefault(pv ? "pvw" : "pw", vw, side);
   }
   return vw - side - w;
 }
@@ -2371,6 +2498,7 @@ function fitPanel() {
   const pv = typeof PVX !== "undefined" && PVX.open;
   const want = (!!S.panel || pv) && innerWidth > 760 && !S.keepSide && chatRoomWithSide() < CHAT_ROOM_MIN;
   if ($("#app").classList.contains("autoside") !== want) { $("#app").classList.toggle("autoside", want); renderTop(); }
+  paneLayout();
 }
 // Each drawing of the side panel gets a number. A tab that loads its data (Git and CI, Changes) checks it after the
 // wait: when another tab or chat was drawn meanwhile, its late answer is dropped instead of drawn over that tab.

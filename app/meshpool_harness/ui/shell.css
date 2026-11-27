@@ -4,22 +4,33 @@
    switches all of it off (app.css). */
 
 /* ---------- shell and sidebar ---------- */
-.app{--sw:288px;grid-template-columns:var(--sw) minmax(0,1fr) auto}
+.app{--sw:var(--sw-user,288px);grid-template-columns:var(--sw) minmax(0,1fr) auto}
 .side{background:var(--side);border-right:1px solid var(--line-2)}
-.side-in{width:288px}
+.side-in{width:100%}   /* inside the 1px border, so the list's scrollbar ends where the sidebar handle starts */
 .app.noside .side,.app.autoside .side{visibility:hidden;transition:visibility 0s var(--t-side),border-color var(--t-side) var(--ease)}
 /* Showing and hiding the sidebar: the columns change once, and the sidebar slides in or out like a drawer, over the
    page, with transform only. The grid width used to animate, which laid out the whole chat, the header and the
    composer again on every frame for 200 ms (UX audit 0.0.18: 12 frames of moving layout per toggle). */
 @media (min-width:761px){
   .side{transition:transform var(--t-side) var(--ease)}
-  .app.noside .side,.app.autoside .side{position:absolute;top:0;bottom:0;left:0;width:var(--sw-open,288px);z-index:30;transform:translateX(-100%);pointer-events:none;
+  .app.noside .side,.app.autoside .side{position:absolute;top:0;bottom:0;left:0;width:var(--sw-user,288px);z-index:30;transform:translateX(-100%);pointer-events:none;
     transition:transform var(--t-menu) var(--ease),visibility 0s var(--t-menu)}
 }
+/* The handles on the edges between the sidebar, the chat and the right pane (app.js paneHandle): an 8px strip that starts
+   on the edge and lies beside the scrollbars, never on them (the chat's scrollbar is on its right, the sidebar list's on
+   its right); a 2px line on the edge shows on hover, on keyboard focus and while dragging. While a drag runs (.pane-drag) nothing on the
+   page takes the pointer or selects text, frames included, so the drag does not stall over a preview. */
+.pane-rz{position:absolute;top:0;bottom:0;width:8px;z-index:20;cursor:col-resize;touch-action:none;outline:none}
+.pane-rz[hidden]{display:none}
+.pane-rz::after{content:"";position:absolute;top:0;bottom:0;left:0;width:2px;background:transparent;transition:background-color var(--t-hover) var(--ease)}
+.pane-rz:hover::after,.pane-rz.on::after,.pane-rz:focus-visible::after{background:var(--focus)}
+.app.pane-drag{cursor:col-resize;user-select:none;-webkit-user-select:none}
+.app.pane-drag *{cursor:col-resize !important}
+.app.pane-drag iframe,.app.pane-drag .pv-stage{pointer-events:none}
 .side-head{display:flex;align-items:center;gap:8px;height:44px;padding:0 12px;flex:none}
 .side-head .iconbtn{color:var(--ink-2)}
 .wm{display:flex;align-items:center;gap:8px;min-width:0;flex:1;padding-left:2px}
-.wm img{height:20px;width:auto;display:block}
+.wm img{height:20px;width:auto;display:block;min-width:0;max-width:100%;object-fit:contain;object-position:left center}   /* a narrow sidebar scales the wordmark down, never cuts or squeezes it */
 .wmode{font:500 16px/1 var(--display);letter-spacing:0;color:var(--ink)}
 .wmode:empty{display:none}
 .modesw{display:inline-flex;gap:2px;padding:2px;border-radius:var(--r-m);background:transparent;flex:none}

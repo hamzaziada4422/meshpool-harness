@@ -62,7 +62,7 @@ function shell() {
         <div class="hintline" id="hintline"><span class="hl-status" id="statusSlot"></span><span class="hl-hint" id="hintTxt"></span></div>
       </div>
     </main>
-    <aside class="panel" id="panel" aria-label="Side panel" ${S.panel ? "" : "hidden"}><div class="rz" id="rz"></div><div class="ptabs" id="ptabs"></div><div class="pbody" id="pbody"></div></aside>
+    <aside class="panel" id="panel" aria-label="Side panel" ${S.panel ? "" : "hidden"}><div class="ptabs" id="ptabs"></div><div class="pbody" id="pbody"></div></aside>
   </div>`;
   $("#updBar").onclick = e => e.currentTarget.dataset.act === "apply" ? applyUpdate() : openSettings("about");
   $("#hideSide").onclick = toggleSide;
@@ -72,7 +72,7 @@ function shell() {
   $("#footBtn").onclick = e => appsMenu(e);
   bindSide();
   setupComposer();
-  setupPanelResize();
+  setupPanes();
   document.addEventListener("keydown", globalKeys);
   // Keyboard or pointer: a field reached with Tab shows a focus ring that a click into it does not (.kbdnav in shell.css).
   document.addEventListener("keydown", e => { if (e.key === "Tab") document.documentElement.classList.add("kbdnav"); }, true);
@@ -111,9 +111,9 @@ function toggleSteps() {
 }
 function toggleSide() {
   const a = $("#app");
-  if (a.classList.contains("autoside")) { S.keepSide = true; flipLayout(() => { a.classList.remove("autoside"); renderTop(); }); return; }
+  if (a.classList.contains("autoside")) { S.keepSide = true; flipLayout(() => { a.classList.remove("autoside"); paneLayout(); renderTop(); }); return; }
   if (narrow()) { a.classList.toggle("sideopen"); return; }
-  flipLayout(() => { a.classList.toggle("noside"); store("sidehidden", a.classList.contains("noside")); renderTop(); });
+  flipLayout(() => { a.classList.toggle("noside"); store("sidehidden", a.classList.contains("noside")); paneLayout(); renderTop(); });
 }
 function globalKeys(e) {
   const m = isMac ? e.metaKey : e.ctrlKey;
