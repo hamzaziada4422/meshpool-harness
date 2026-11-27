@@ -257,8 +257,13 @@ def test_codex_is_told_to_convert_and_render_with_meshpool_s_office_tools(fake):
 def test_soffice_cannot_run_inside_codex_s_sandbox_but_meshpool_s_converter_can(tmp_path):
     """The cause, where Codex is installed: its workspace-write sandbox refuses the local socket LibreOffice opens
     at start, so the conversion exits 1 even for a text file. meshpool's own converter makes it."""
-    codex = shutil.which("codex") or next(iter(sorted(Path("/root/.npm/_npx").glob(
-        "*/node_modules/@openai/codex-linux-x64/vendor/*/bin/codex"))), None) if Path("/root/.npm/_npx").exists() else None
+    codex = shutil.which("codex")
+    if not codex:                     # an npx install under the home folder; a CI runner may not read /root at all
+        try:
+            npx = Path.home() / ".npm" / "_npx"
+            codex = next(iter(sorted(npx.glob("*/node_modules/@openai/codex-linux-x64/vendor/*/bin/codex"))), None)
+        except OSError:
+            codex = None
     if not codex or not _soffice() or not shutil.which("bwrap"):
         pytest.skip("Codex, LibreOffice or bwrap is not here")
     import subprocess
