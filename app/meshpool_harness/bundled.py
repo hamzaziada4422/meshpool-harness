@@ -84,12 +84,11 @@ def bundled_bash() -> str | None:
     return None
 
 
-def use_bundled_tools() -> None:
-    """Put the bundled Node and Git first on this process's PATH, so every child (the agents' shell, the Node agents,
-    `git` called by name anywhere in Meshpool, MCP servers started with npx) gets Meshpool's own. Idempotent. Only in
-    the packaged app; a source checkout keeps the developer's PATH."""
+def front_dirs() -> list:
+    """The bundled programs' folders that go first on PATH, in order: Node, Git, LibreOffice, ffmpeg, pandoc. [] outside
+    the packaged app."""
     if not packaged():
-        return
+        return []
     front = [str(p) for p in git_dirs()]
     if node_dir().is_dir():
         front.insert(0, str(node_dir() if os.name == "nt" else node_dir() / "bin"))
@@ -99,6 +98,16 @@ def use_bundled_tools() -> None:
     for name, exe in (("ffmpeg", bundled_ffmpeg()), ("pandoc", bundled_pandoc())):
         if exe and not (name == "ffmpeg" and ffmpeg_needs_newer_macos()):
             front.append(str(Path(exe).parent))       # `ffmpeg` and `pandoc` by name run Meshpool's own copies
+    return front
+
+
+def use_bundled_tools() -> None:
+    """Put the bundled Node and Git first on this process's PATH, so every child (the agents' shell, the Node agents,
+    `git` called by name anywhere in Meshpool, MCP servers started with npx) gets Meshpool's own. Idempotent. Only in
+    the packaged app; a source checkout keeps the developer's PATH."""
+    if not packaged():
+        return
+    front = front_dirs()
     cur = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p and p not in front]
     os.environ["PATH"] = os.pathsep.join(front + cur)
     # The agents' shell finds Meshpool's own Python first on PATH; these name the rest. The speech model is a folder
