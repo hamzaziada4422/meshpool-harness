@@ -915,8 +915,19 @@ def _delegate_schema():
 SCHEMAS["delegate_task"] = _delegate_schema()
 
 
+def _without_ocr(schema: dict) -> dict:
+    """read_file's definition for an install without OCR (the meshpool apps): it does not promise to read pictures."""
+    f = schema["function"]
+    desc = f["description"].replace("; images and scanned PDFs are read with OCR in many languages",
+                                    "; an image comes back as its size and type (no OCR in this install: look at "
+                                    "it with view_output)")
+    return {**schema, "function": {**f, "description": desc}}
+
+
 def schemas(names):
-    return [SCHEMAS[n] for n in names]
+    from meshpool_harness import ocr
+    plain = not ocr.installed()
+    return [_without_ocr(SCHEMAS[n]) if plain and n == "read_file" else SCHEMAS[n] for n in names]
 
 
 _CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ud800-\udfff]")
