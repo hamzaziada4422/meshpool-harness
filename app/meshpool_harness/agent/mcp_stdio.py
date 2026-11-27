@@ -20,8 +20,44 @@ def text(t: str) -> dict:
     return {"type": "text", "text": t}
 
 
+def image_kind(data) -> str:
+    """"image/png" or "image/jpeg" when data is a whole, readable picture of that kind, else "". An empty or damaged
+    image that reaches the conversation makes every later request to the model fail (HTTP 400), not just this one."""
+    if not isinstance(data, (bytes, bytearray)) or len(data) < 32:
+        return ""
+    data = bytes(data)
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        kind = "image/png"
+        if data[12:16] != b"IHDR" or int.from_bytes(data[16:20], "big") == 0 or int.from_bytes(data[20:24], "big") == 0 \
+                or b"IEND" not in data[-16:]:
+            return ""
+    elif data.startswith(b"\xff\xd8\xff"):
+        kind = "image/jpeg"
+        if not data.rstrip(b"\x00").endswith(b"\xff\xd9"):
+            return ""
+    else:
+        return ""
+    try:
+        import io
+        from PIL import Image
+        with Image.open(io.BytesIO(data)) as im:
+            im.verify()                         # every chunk and its checksum, without decoding the pixels
+    except ImportError:
+        pass
+    except Exception:  # noqa: BLE001 - Pillow could not read it: it is not a picture a model can take
+        return ""
+    return kind
+
+
 def image_png(data: bytes) -> dict:
-    return {"type": "image", "data": base64.b64encode(data).decode("ascii"), "mimeType": "image/png"}
+    """An image block for a PNG (or JPEG) picture. One that is empty or damaged becomes a plain text note instead,
+    so it never goes into the conversation."""
+    kind = image_kind(data)
+    if not kind:
+        n = len(data) if isinstance(data, (bytes, bytearray)) else 0
+        return text(f"[No picture: the screenshot came back {'empty' if not n else f'damaged ({n} bytes)'}, so it was "
+                    "left out. Take it again, or read the page as text.]")
+    return {"type": "image", "data": base64.b64encode(data).decode("ascii"), "mimeType": kind}
 
 
 class Tool:

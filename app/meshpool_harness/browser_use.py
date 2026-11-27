@@ -236,7 +236,7 @@ def launch_chromium(pw, headless: bool = True, user_data_dir=None, **kw):
     is given. Every launch in the app goes through here, so all of them find the same Chromium the same way and none
     needs the headless shell. Each option of chromium_launch_options is tried in turn; the error raised is the one of
     Playwright's own build (or the last one), so "Executable doesn't exist" still reaches the caller."""
-    last = None
+    last, tried = None, []
     for opts in chromium_launch_options():
         try:
             if user_data_dir is not None:
@@ -248,13 +248,48 @@ def launch_chromium(pw, headless: bool = True, user_data_dir=None, **kw):
             return got
         except Exception as e:  # noqa: BLE001 - the next one may work (missing libraries, another revision)
             last = e
+            tried.append((opts.get("executable_path") or "Playwright's own Chromium (channel chromium)", e))
     if last is not None and "xecutable doesn't exist" not in str(last) and "channel" in str(last).lower():
         # a Playwright older than the "chromium" channel name: its default is the full browser
         LAST_LAUNCH.clear()
         if user_data_dir is not None:
             return pw.chromium.launch_persistent_context(str(user_data_dir), headless=headless, **kw)
         return pw.chromium.launch(headless=headless, **kw)
-    raise last
+    raise ChromiumNotStarted(not_started_message(tried))
+
+
+class ChromiumNotStarted(RuntimeError):
+    """No Chromium could be started. The message names every program tried, why each failed, and what to do."""
+
+
+def _why(e) -> str:
+    """The first plain line of a Playwright error (its stack and its boxed install advice left out)."""
+    for line in str(e).splitlines():
+        line = line.strip()
+        if line and not line.startswith(("╔", "║", "╚", "Call log", "=")):
+            return re.sub(r"^BrowserType\.\w+:\s*", "", line)[:300]
+    return type(e).__name__
+
+
+def not_started_message(tried: list) -> str:
+    """Says which programs were tried, why each did not start, and the one thing to do about it."""
+    whys = [_why(e) for _, e in tried]
+    lines = ["meshpool's browser could not start. Tried:"] + [f"- {what}: {why}" for (what, _), why in zip(tried, whys)]
+    own = _bundled_browsers()
+    found = [w for w, _ in tried if not w.startswith("Playwright's own")]
+    every = " ".join(whys).lower()
+    if "already in use" in every or "processsingleton" in every or ("profile" in every and "in use" in every):
+        todo = "another window of meshpool's browser is using the same profile folder. Close it, then try again."
+    elif "shared librar" in every or "cannot open shared object" in every:
+        todo = ("this computer lacks a system library Chromium needs (named above). Install it with the system's "
+                "package manager, then try again.")
+    elif own and not any(w.startswith(own) for w in found):
+        todo = f"the browser that ships with meshpool is missing from {own}. Reinstall meshpool."
+    elif own:
+        todo = "reinstall meshpool; if it still fails, report the lines above."
+    else:
+        todo = "run `meshpool install-browser` to download Chromium, then try again."
+    return "\n".join(lines + [f"What to do: {todo}"])
 
 
 def pick_installed(**kw) -> dict | None:

@@ -365,7 +365,7 @@ class Browser:
                 try:
                     self._install_chromium()
                 except ToolFailed as e:
-                    last = e
+                    last = ToolFailed(f"{last}\nThe download did not work either: {e}")
                     break
                 explicit = ""
             else:
@@ -373,7 +373,13 @@ class Browser:
         chosen = "MH_BROWSER_CHANNEL" in os.environ     # a channel chosen on purpose ("" too) never falls back
         if not own and not chosen and self._launch_system_fallback(headless):
             return
-        raise ToolFailed(f"Could not start a browser: {last}")
+        if isinstance(last, (BU.ChromiumNotStarted, ToolFailed)):
+            raise ToolFailed(str(last))                 # it names every program tried and what to do
+        if explicit:
+            raise ToolFailed(f"Could not start the browser chosen with MH_BROWSER_CHANNEL={explicit}: {BU._why(last)}. "
+                             "Install that browser, or remove MH_BROWSER_CHANNEL to use meshpool's own browser.")
+        raise ToolFailed(f"Could not start meshpool's browser: {BU._why(last)}. Close any other window that uses its "
+                         "profile folder and try again; if it still fails, run `meshpool check`.")
 
     def _launch_system_fallback(self, headless: bool) -> bool:
         """The last resort, source and terminal installs only: no Chromium could be found or installed, so a Chrome or

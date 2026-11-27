@@ -437,3 +437,133 @@ def test_look_review_and_previews_render_from_the_apps_layout(tmp_path, monkeypa
                 assert pg.inner_text("h1") == "rendered"
             finally:
                 b.close()
+
+
+# ---------- when it cannot start, the error says what was tried and what to do ----------------------------------------
+# (Playwright MCP #13, #304: a bare "chrome is not found" with a stack, on Windows and macOS.)
+
+_BOX = ("BrowserType.launch: Executable doesn't exist at {p}\n╔══════════╗\n║ Looks like Playwright was just installed ║\n"
+        "║     playwright install     ║\n╚══════════╝")
+
+
+def _failing_pw(why=lambda opts: _BOX.format(p=opts.get("executable_path") or "/pw/chromium-1255/chrome-linux64/chrome")):
+    def launch(**kw):
+        raise RuntimeError(why(kw))
+    return SimpleNamespace(chromium=SimpleNamespace(launch=launch, launch_persistent_context=lambda prof, **kw: launch(**kw)))
+
+
+def test_a_failed_launch_names_each_path_tried_and_what_to_do(tmp_path, monkeypatch):
+    exe = _stub(tmp_path, "app/vendor/browsers/chromium-1255/chrome-linux64/chrome")
+    _clean(monkeypatch, [str(exe)])
+    monkeypatch.setattr(BU, "_bundled_browsers", lambda: str(tmp_path / "app" / "vendor" / "browsers"))
+    with pytest.raises(BU.ChromiumNotStarted) as e:
+        BU.launch_chromium(_failing_pw())
+    msg = str(e.value)
+    assert f"- {exe}: Executable doesn't exist at {exe}" in msg
+    assert "- Playwright's own Chromium (channel chromium): Executable doesn't exist" in msg
+    assert "What to do: reinstall meshpool" in msg
+    assert "╔" not in msg and "║" not in msg and "Traceback" not in msg and "BrowserType" not in msg
+    # nothing of the app's own was found: say it is missing, and where
+    _clean(monkeypatch, [])
+    msg = str(pytest.raises(BU.ChromiumNotStarted, BU.launch_chromium, _failing_pw()).value)
+    assert "missing from " + str(tmp_path / "app" / "vendor" / "browsers") in msg and "Reinstall meshpool" in msg
+    # a source install: how to get it
+    monkeypatch.setattr(BU, "_bundled_browsers", lambda: "")
+    msg = str(pytest.raises(BU.ChromiumNotStarted, BU.launch_chromium, _failing_pw()).value)
+    assert "meshpool install-browser" in msg
+
+
+def test_a_missing_system_library_and_a_busy_profile_get_their_own_advice(tmp_path, monkeypatch):
+    exe = _stub(tmp_path, "c/chrome")
+    _clean(monkeypatch, [str(exe)])
+    monkeypatch.setattr(BU, "_bundled_browsers", lambda: "")
+    libs = _failing_pw(lambda o: str(o.get("executable_path") or "chromium") +
+                       ": error while loading shared libraries: libnss3.so: cannot open shared object file")
+    msg = str(pytest.raises(BU.ChromiumNotStarted, BU.launch_chromium, libs).value)
+    assert "system library" in msg and str(exe) in msg and "libnss3.so" in msg
+    busy = _failing_pw(lambda o: "BrowserType.launch_persistent_context: Failed to create a ProcessSingleton for "
+                       "your profile directory")
+    msg = str(pytest.raises(BU.ChromiumNotStarted, BU.launch_chromium, busy, user_data_dir=tmp_path / "p").value)
+    assert "same profile folder" in msg
+
+
+def test_the_browser_tool_passes_that_message_on_not_a_stack(tmp_path, monkeypatch):
+    from meshpool_harness.agent import browser_mcp_server as BS
+    exe = _stub(tmp_path, f"own/chromium-1255/{MAC_NEW}")
+    _clean(monkeypatch, [str(exe)])
+    monkeypatch.setattr(BU, "_bundled_browsers", lambda: str(tmp_path / "own"))
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
+    b = BS.Browser()
+    b.pw = _failing_pw()
+    with pytest.raises(BS.ToolFailed) as e:
+        b._launch_meshpool(True, own=True)
+    msg = str(e.value)
+    assert msg.startswith("meshpool's browser could not start. Tried:\n- " + str(exe)) and "What to do:" in msg
+    assert "╔" not in msg
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the stand-in program is a shell script, which needs a POSIX system")
+def test_a_real_launch_of_a_broken_program_names_it(tmp_path, monkeypatch):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+    own = tmp_path / "app" / "vendor" / "browsers"
+    exe = own / "chromium-1255" / "chrome-linux64" / "chrome"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("#!/bin/sh\necho 'this is not chromium' >&2\nexit 3\n")
+    exe.chmod(0o755)
+    for k in ("MH_CHROMIUM_PATH", "MH_TEST_CHROMIUM"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(BU, "chromium_programs", lambda *a, **k: [str(exe)])
+    monkeypatch.setattr(BU, "_bundled_browsers", lambda: str(own))
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(own))
+    with sync_playwright() as pw:
+        with pytest.raises(BU.ChromiumNotStarted) as e:
+            BU.launch_chromium(pw, timeout=20000)
+    msg = str(e.value)
+    assert f"- {exe}: " in msg and "chromium_headless_shell" not in msg and "What to do: reinstall meshpool" in msg
+
+
+# ---------- a screenshot that is empty or damaged never reaches the conversation -----------------------------------------
+# (Playwright MCP #1211: one bad image in the history made every later model request fail with HTTP 400.)
+
+def _png(w=4, h=3) -> bytes:
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (w, h), (200, 30, 30)).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_only_whole_png_or_jpeg_pictures_become_image_blocks():
+    import io
+    from PIL import Image
+    from meshpool_harness.agent.mcp_stdio import image_kind, image_png
+    good = _png()
+    jpg = io.BytesIO()
+    Image.new("RGB", (8, 8)).save(jpg, "JPEG")
+    assert image_kind(good) == "image/png" and image_kind(jpg.getvalue()) == "image/jpeg"
+    assert image_png(good)["type"] == "image" and image_png(jpg.getvalue())["mimeType"] == "image/jpeg"
+    zero_size = bytearray(good)
+    zero_size[16:20] = b"\0\0\0\0"                          # a 0-pixel-wide PNG
+    for bad in (b"", None, b"\x89PNG\r\n\x1a\n", good[: len(good) // 2], good[:-12], b"<html>error</html>" * 4,
+                bytes(zero_size), jpg.getvalue()[:-2], b"\x89PNG\r\n\x1a\n" + b"\0" * 64):
+        assert image_kind(bad) == "", bad[:20] if bad else bad
+        block = image_png(bad)
+        assert block["type"] == "text" and "No picture" in block["text"]
+    corrupt = bytearray(good)
+    corrupt[40] ^= 0xFF                                     # a byte inside the image data: its checksum no longer holds
+    assert image_png(bytes(corrupt))["type"] == "text"
+
+
+def test_browser_screenshot_of_an_empty_capture_is_a_note_not_an_image(tmp_path, monkeypatch):
+    from meshpool_harness.agent import browser_mcp_server as BS
+    monkeypatch.setenv("MESHPOOL_PROJECT", str(tmp_path))
+    b = BS.Browser()
+    for name in ("ensure", "settle", "_check_where"):
+        monkeypatch.setattr(b, name, lambda: None)
+    b.page = SimpleNamespace(screenshot=lambda **k: b"", url="http://127.0.0.1:1/")
+    monkeypatch.setattr(BS, "B", b)
+    out = BS.browser_screenshot()
+    assert [p["type"] for p in out] == ["text", "text"] and "No picture" in out[1]["text"]
+    b.page = SimpleNamespace(screenshot=lambda **k: _png(), url="http://127.0.0.1:1/")
+    assert [p["type"] for p in BS.browser_screenshot()] == ["text", "image"]
