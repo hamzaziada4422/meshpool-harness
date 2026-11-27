@@ -573,11 +573,18 @@ GIT_ASK = re.compile(
     r"|\.git[\\/]+(?:hooks|config)\b|\bcore\.hooksPath\b", re.I)
 
 
+def _look_git(*args: str) -> list:
+    """argv for git calls that only look (the checks before an approval): never the repository's own programs, never
+    .git/index.lock (core.tools.SAFE_GIT_OPTS)."""
+    from meshpool_harness.core.tools import safe_git
+    return safe_git(*args)
+
+
 def amend_pushed(root) -> bool:
     """HEAD is already on a remote branch, so amending it rewrites history others may have (or git cannot tell)."""
     import subprocess
     try:
-        r = subprocess.run(["git", "-C", str(root), "branch", "-r", "--contains", "HEAD"], capture_output=True,
+        r = subprocess.run(_look_git("-C", str(root), "branch", "-r", "--contains", "HEAD"), capture_output=True,
                            text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return True
@@ -603,7 +610,7 @@ def _git_dirty(root, cwd, files) -> bool:
     """Any of these files has changes not yet committed (or git cannot tell): restoring it throws them away."""
     import subprocess
     try:
-        r = subprocess.run(["git", "-C", str(cwd or root), "diff", "--quiet", "HEAD", "--"] + list(files),
+        r = subprocess.run(_look_git("-C", str(cwd or root), "diff", "--quiet", "HEAD", "--", *files),
                            capture_output=True, timeout=10, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         return True
@@ -614,14 +621,14 @@ def _git_unmade_changes(root, cwd, chat_made, untracked: bool) -> bool:
     """Uncommitted changes the chat did not make (or git cannot tell): `git stash` would shelve the user's work."""
     import subprocess
     try:
-        r = subprocess.run(["git", "-C", str(cwd or root), "status", "--porcelain=v1", "-z",
-                            "--untracked-files=" + ("all" if untracked else "no")],
+        r = subprocess.run(_look_git("-C", str(cwd or root), "status", "--porcelain=v1", "-z",
+                                     "--untracked-files=" + ("all" if untracked else "no")),
                            capture_output=True, timeout=10, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         return True
     if r.returncode != 0:
         return True
-    top = subprocess.run(["git", "-C", str(cwd or root), "rev-parse", "--show-toplevel"], capture_output=True,
+    top = subprocess.run(_look_git("-C", str(cwd or root), "rev-parse", "--show-toplevel"), capture_output=True,
                          timeout=10, stdin=subprocess.DEVNULL).stdout.decode("utf-8", "replace").strip()
     made = {os.path.realpath(str(x)) for x in (chat_made or ())}
     parts = r.stdout.decode("utf-8", "replace").split("\0")

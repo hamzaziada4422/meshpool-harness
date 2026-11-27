@@ -348,8 +348,10 @@ _GIT_SAFE_KEY = re.compile(
 
 # What meshpool passes to every git call that only looks at a repository (status, log, diff): the repository's own
 # config must not run programs then (fsmonitor, an external diff, a pager, hooks). ui/workbench.py does the same.
-SAFE_GIT_OPTS = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "diff.external=", "-c",
-                 f"core.hooksPath={os.devnull}", "--no-pager"]
+# --no-optional-locks: a look must not take .git/index.lock. `git status` otherwise rewrites the index to refresh it,
+# and a user's own `git commit` at that moment failed with "index.lock: File exists" (Claude Code #11005).
+SAFE_GIT_OPTS = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "diff.external=",
+                 "-c", f"core.hooksPath={os.devnull}", "--no-pager"]
 
 
 def safe_git(*args: str) -> list:
@@ -932,6 +934,38 @@ class ToolError(Exception):
     pass
 
 
+_INT_TEXT = re.compile(r"[+-]?\d+")
+_NUM_TEXT = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
+
+
+def coerce_arg(v, t: str):
+    """A value the model sent in the wrong JSON type but with an unmistakable meaning, turned into the declared type:
+    "10" for a whole number, 10.0 for a whole number, "true"/"false" for true or false, a list written as JSON text.
+    Gemini, Qwen and several OpenAI-compatible servers send numbers as text; refusing the call cost a turn and could
+    loop (Open WebUI #25641, Roo Code #10322). Anything else is returned as it was, so validate() still reports it."""
+    if t == "integer":
+        if isinstance(v, str) and _INT_TEXT.fullmatch(v.strip()):
+            return int(v.strip())
+        if isinstance(v, float) and v.is_integer():
+            return int(v)
+    elif t == "number":
+        if isinstance(v, str) and _NUM_TEXT.fullmatch(v.strip()):
+            f = float(v.strip())
+            return int(f) if f.is_integer() and _INT_TEXT.fullmatch(v.strip()) else f
+    elif t == "boolean":
+        if isinstance(v, str) and v.strip().lower() in ("true", "false"):
+            return v.strip().lower() == "true"
+    elif t == "array":
+        if isinstance(v, str) and v.strip().startswith("["):
+            try:
+                got = json.loads(v)
+            except ValueError:
+                return v
+            if isinstance(got, list):
+                return got
+    return v
+
+
 def validate(name: str, raw_args, allowed: list[str]) -> dict:
     if name not in allowed:
         raise ToolError(f"unknown tool '{name}'. Available: {', '.join(allowed)}")
@@ -959,10 +993,11 @@ def validate(name: str, raw_args, allowed: list[str]) -> dict:
     for k in sch["required"]:
         if k not in args:
             raise ToolError(f"{name}: missing required argument '{k}'")
-    for k, v in args.items():
+    for k, v in list(args.items()):
         if k not in sch["properties"]:
             raise ToolError(f"{name}: unknown argument '{k}'; allowed: {', '.join(sch['properties'])}")
         t = sch["properties"][k]["type"]
+        v = args[k] = coerce_arg(v, t)
         ok = {"string": isinstance(v, str), "integer": isinstance(v, int) and not isinstance(v, bool),
               "number": isinstance(v, (int, float)) and not isinstance(v, bool),
               "boolean": isinstance(v, bool), "array": isinstance(v, list)}[t]
