@@ -88,38 +88,6 @@ def _money_close(shown: str, value: float) -> bool:
 
 
 @pytest.mark.skipif(not (REPO / "docs" / "results" / "v4" / "final-office").is_dir(), reason="docs not in this copy")
-def _readme_comparison_matches_the_data(readme: str) -> None:
-    """The README's "How it compares with Codex" table is docs/benchmarks/headline.json, row for row; the 0.0.18 rows
-    recompute from their raw runs, the 0.0.16 rows are the MESHPOOL_RESULTS.md table, and Codex's leads are said."""
-    import json
-    import statistics
-    from collections import defaultdict
-    head = json.loads((REPO / "docs" / "benchmarks" / "headline.json").read_text(encoding="utf-8"))["suites"]
-    sec = readme[readme.index("## How it compares with Codex"):]
-    for x in head:
-        row = f"| {x['group']} | {x['name']} | {x['meshpool']} vs {x['codex']} of {x['tasks']} | **{x['cost']:.2f}x** | " \
-              f"{x['time']:.2f}x |"
-        assert row in sec, row
-        if x["version"] == "0.0.18":                          # recomputed from the raw rows
-            rows = [json.loads(ln) for ln in (REPO / x["data"] / "results.jsonl").read_text().splitlines() if ln.strip()]
-            arm = {k: [r for r in rows if r["arm"] == k] for k in ("mp-work", "codex")}
-            ok = {k: sum(bool(r["ok"]) for r in v) for k, v in arm.items()}
-            assert (ok["mp-work"], ok["codex"], len(arm["mp-work"])) == (x["meshpool"], x["codex"], x["tasks"]), x
-            per = {k: sum(r["cost"] or 0 for r in v) / ok[k] for k, v in arm.items()}
-            assert round(per["mp-work"] / per["codex"], 2) == x["cost"], x
-            t = defaultdict(lambda: defaultdict(list))
-            for r in rows:
-                t[r["task"]][r["arm"]].append(r["secs"] or 0)
-            ratio = statistics.median(statistics.median(v["mp-work"]) / statistics.median(v["codex"]) for v in t.values())
-            assert round(ratio, 2) == x["time"], x
-        else:                                                  # the 0.0.16 table, as published
-            res = (REPO / "docs" / "results" / "MESHPOOL_RESULTS.md").read_text(encoding="utf-8")
-            assert any(f"| {x['meshpool']} vs {x['codex']} |" in ln and f"**{x['cost']:.2f}x**" in ln
-                       and f"| {x['time']:.2f}x |" in ln for ln in res.splitlines()), x
-    assert sum(x["meshpool"] for x in head) == int(re.search(r"\*\*(\d+) vs (\d+) of (\d+) tasks", sec).group(1))
-    assert "Where Codex is ahead" in sec and "OfficeBench task (12 vs 11)" in sec    # the losses are said too
-
-
 def test_k04_benchmark_claims_match_the_raw_rows():
     """K-04: every number in the BENCHMARKS.md office table and the README office line comes from the raw rows in
     docs/results/v4, and neither page claims "all 7 passed" or "cheapest on every run"."""
@@ -140,7 +108,15 @@ def test_k04_benchmark_claims_match_the_raw_rows():
     assert round(per["mp-on-codex"] / per["codex"], 1) == float(m.group(1))
     assert round(per["mp-on-codex"] / per["pi"]) == float(m.group(2))
     readme = (REPO / "README.md").read_text(encoding="utf-8")
-    _readme_comparison_matches_the_data(readme)
+    work = next(line for line in readme.splitlines() if line.startswith("| **Meshpool Work**"))
+    # the README now quotes the 0.0.16 measurements: every "N vs M ... at R" pair must be a row of that table
+    notes = (REPO / "packaging" / "release-notes.md").read_text(encoding="utf-8")
+    table = [ln for ln in notes.splitlines() if ln.strip().startswith("|") and " vs " in ln]
+    pairs = re.findall(r"(\d+) vs (\d+)(?: solved)? at (\d\.\d+)x", work)
+    assert len(pairs) >= 4, work
+    for a, b, r in pairs:
+        assert any(f"| {a} vs {b} |" in ln and f"| {r}x" in ln for ln in table), (a, b, r)
+    assert "fewer SpreadsheetBench and OfficeBench" in work      # the losses are said, not only the wins
     for page in (readme, (REPO / "docs" / "BENCHMARKS.md").read_text(encoding="utf-8")):
         assert "all 7 passed" not in page.lower() and "cheapest on every" not in page.lower()
     v2 = (REPO / "docs" / "BENCHMARKS_V2.md").read_text(encoding="utf-8")

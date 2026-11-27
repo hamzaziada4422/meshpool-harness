@@ -64,7 +64,7 @@ How this was measured:
 - **Cost and time.** Cost is billed cost per solved task as a multiple of Codex's; under 1.00x is cheaper. Time is the median of per-task time ratios; under 1.00x is faster.
 - **Versions.** Coding, data and Office-7 were measured on Meshpool 0.0.16; decks, SpreadsheetBench and OfficeBench on 0.0.18.
 - **Where Codex is ahead.** Codex solved one more OfficeBench task (12 vs 11) and one more eval-set coding task (145 vs 144). The office samples are small, so a single task moves them.
-- **Raw data.** Every run is in [docs/results](docs/results); the numbers behind the chart are in [docs/benchmarks/headline.json](docs/benchmarks/headline.json), and [docs/BENCHMARKS.md](docs/BENCHMARKS.md) has the full history.
+- **Raw data.** Every run is in [docs/results](docs/results), and [docs/BENCHMARKS.md](docs/BENCHMARKS.md) has the full history.
 
 ## Install
 
