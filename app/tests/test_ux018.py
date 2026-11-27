@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.uiwait import wait_js
+
 sync_api = pytest.importorskip("playwright.sync_api")
 
 REPO = Path(__file__).resolve().parents[2]
@@ -123,8 +125,8 @@ def _chats(app, page, n=3):
             for (let i = 0; i < n; i++) { const v = await post('/api/agent', {workdir: w, harness: 'meshpool-work', kind: 'cowork', mode: 'auto', task: 'stream long ' + i});
               await post('/api/agent/' + v.id + '/send', {text: 'stream long please, part ' + i}); ids.push(v.id); }
             return ids; }""", [app["work"], n - len(app["chats"])])
-        page.wait_for_function("""ids => Promise.all(ids.map(id => api('/api/agent/' + id + '?since=0').then(v => v.state)))
-            .then(s => s.every(x => !['starting', 'working', 'waiting'].includes(x)))""", arg=ids, timeout=120000, polling=1000)
+        wait_js(page, """ids => Promise.all(ids.map(id => api('/api/agent/' + id + '?since=0').then(v => v.state)))
+            .then(s => s.every(x => !['starting', 'working', 'waiting'].includes(x)))""", ids, timeout=120, every=0.5)
         app["chats"] += ids
     page.evaluate("() => loadThreads()")
     page.wait_for_timeout(300)
@@ -185,15 +187,21 @@ def test_a_sidebar_redraw_keeps_the_rows_that_did_not_change(app, page):
     dot that already popped does not pop again."""
     ids = _chats(app, page, 3)
     page.evaluate("id => { const t = S.threads.find(x => x.id === id); t.unread = true; renderSide(); }", ids[2])
-    page.wait_for_timeout(450)                                   # the unread dot's pop is over
-    page.evaluate("() => { for (const li of document.querySelectorAll('#sideList .th, #sideList .nv')) li._mark = 1; }")
+    # the unread dot's pop is over (waited for, not a guessed 450 ms: on a busy computer it starts late)
+    page.wait_for_function("() => [...document.querySelectorAll('#sideList .dot.done')].flatMap(d => d.getAnimations())"
+                           ".every(a => a.playState !== 'running' && a.playState !== 'pending' && !a.pending)", polling=50)
+    # Marking, the rename, the redraw and the count are one step: the sidebar's own list refresh (loadThreads every 4 to
+    # 20 s, from the server) could otherwise land between them and put the server's title back over the test's rename.
     page.evaluate(REMOVED, "#sideList")
-    page.evaluate("id => { const t = S.threads.find(x => x.id === id); t.title = t.title + ' (renamed)'; renderSide(); }", ids[1])
-    page.wait_for_timeout(50)
-    got = page.evaluate("""id => ({removed: removed(), rows: document.querySelectorAll('#sideList .th').length,
+    got = page.evaluate("""id => {
+        for (const li of document.querySelectorAll('#sideList .th, #sideList .nv')) li._mark = 1;
+        window.removed();                                        // nothing before the rename counts
+        window.__rm = 0;
+        const t = S.threads.find(x => x.id === id); t.title = t.title + ' (renamed)'; renderSide();
+        return {removed: removed(), rows: document.querySelectorAll('#sideList .th').length,
         lost: [...document.querySelectorAll('#sideList .th, #sideList .nv')].filter(li => !li._mark).length,
         title: document.querySelector(`.th[data-id='${id}'] .tt`).textContent,
-        pops: [...document.querySelectorAll('#sideList .dot.done')].flatMap(d => d.getAnimations()).filter(a => a.playState === 'running').length})""", ids[1])
+        pops: [...document.querySelectorAll('#sideList .dot.done')].flatMap(d => d.getAnimations()).filter(a => a.playState === 'running' || a.pending).length}; }""", ids[1])
     assert got["title"].endswith("(renamed)"), got
     assert got["removed"] <= 2 and got["lost"] == 0, got
     assert got["pops"] == 0, got

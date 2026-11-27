@@ -8,6 +8,7 @@ pytest.importorskip("playwright.sync_api")
 
 from tests.test_ui_persona019 import _chat  # noqa: E402
 from tests.test_ux018 import app, page, sync_api  # noqa: E402,F401  (the fixtures start the real server and a browser)
+from tests.uiwait import wait_js  # noqa: E402
 
 
 def _tip(page, id_="tip-x"):
@@ -24,6 +25,9 @@ def test_6_a_tip_card_has_a_never_show_tips_link_that_turns_tips_off(app, page):
     assert link.inner_text() == "Never show tips"
     link.click()
     page.wait_for_selector(".nudge010", state="detached")
+    # the card goes at once and the setting is saved after it (a POST): wait for the save itself, not a guessed time
+    page.wait_for_function("() => (S.caps || []).some(f => f.id === 'tips' && f.on === false)")
+    wait_js(page, "async () => (await api('/api/capabilities')).features.some(f => f.id === 'tips' && f.on === false)", timeout=15)
     caps = page.evaluate("async () => (await api('/api/capabilities')).features")
     tips = next(f for f in caps if f["id"] == "tips")
     assert tips["name"] == "Show tips" and tips["on"] is False, tips
@@ -33,6 +37,36 @@ def test_6_a_tip_card_has_a_never_show_tips_link_that_turns_tips_off(app, page):
     page.evaluate("async () => { await post('/api/capabilities', {id: 'tips', on: true}); await loadCaps(); }")   # back on
     _tip(page, "tip-c")
     page.wait_for_selector(".nudge010")
+    assert page.errors == [], page.errors
+
+
+def test_6_a_tip_that_comes_while_never_show_tips_is_saving_is_not_drawn(app, page):
+    """"Never show tips" removed the card at once but turned the setting off on the page only when the save answered:
+    a tip that came in between (a slow disk, a busy computer) was drawn right after the person said never."""
+    _chat(page, app["work"], "code", "tips while saving")
+    page.wait_for_function("() => S.cur && S.cur.view")
+    page.evaluate("() => { S.cur.busy = false; }")
+    held = []
+    page.route("**/api/capabilities", lambda route: held.append(route) if route.request.method == "POST" else route.continue_())
+    try:
+        _tip(page, "tip-save-a")
+        page.wait_for_selector(".nudge010")
+        page.locator(".nudge010 .n-never").click()
+        page.wait_for_selector(".nudge010", state="detached")
+        for _ in range(300):                           # the save reaches the route above (it is held there)
+            if held:
+                break
+            page.wait_for_timeout(50)
+        assert len(held) == 1, held
+        _tip(page, "tip-save-b")                       # arrives while the save is still on its way
+        page.wait_for_timeout(300)
+        assert page.locator(".nudge010").count() == 0
+    finally:
+        for r in held:
+            r.continue_()
+        page.unroute("**/api/capabilities")
+    wait_js(page, "async () => (await api('/api/capabilities')).features.some(f => f.id === 'tips' && f.on === false)", timeout=15)
+    page.evaluate("async () => { await post('/api/capabilities', {id: 'tips', on: true}); await loadCaps(); }")   # back on
     assert page.errors == [], page.errors
 
 
@@ -46,7 +80,10 @@ def test_6_a_card_that_is_not_a_tip_has_no_never_link(app, page):
 
 def test_7_the_session_tab_folds_connectors_and_explains_the_route(app, page):
     _chat(page, app["work"], "code", "session tab")
-    page.wait_for_function("() => S.cur && S.cur.view && S.cur.view.workdir")
+    # the chat's own first turn runs on the server and sends its own route ("Build · Change"): set ours once that turn is
+    # over and drawn, or its late event replaces ours (a busy computer)
+    page.wait_for_function("() => S.cur && S.cur.view && S.cur.view.workdir && !S.cur.stage && S.cur.ready"
+                           " && !(S.cur.q || []).length && !['starting', 'working', 'waiting'].includes(S.cur.view.state)", timeout=60000, polling=100)
     page.evaluate("() => { S.cur.route = {label: 'Tests · Python', why: ''}; localStorage.removeItem('sp_open'); }")
     page.evaluate("() => togglePanel('session', true)")
     page.wait_for_selector("#pbody .spw")
