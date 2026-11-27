@@ -100,6 +100,7 @@ def _git_cmd(*args: str) -> list:
         pre += ["-c", "core.longpaths=true"]       # deep node_modules / src trees past MAX_PATH
     # never the repository's own programs: no hooks (worktree add runs post-checkout), no fsmonitor
     pre += ["-c", "core.fsmonitor=false", "-c", f"core.hooksPath={os.devnull}"]
+    pre.append("--no-optional-locks")                   # a status never holds the user's .git/index.lock
     return pre + list(args)
 
 

@@ -67,6 +67,13 @@ def _from_json(d) -> str:
         if isinstance(v, dict):
             m = _from_json(v)
             raw = (v.get("metadata") or {}).get("raw") if isinstance(v.get("metadata"), dict) else None
+            if isinstance(raw, (dict, list)):
+                raw = _from_json(raw)
+            elif isinstance(raw, str) and raw.strip()[:1] in ("{", "["):
+                try:                                 # OpenRouter passes the provider's own JSON body on as text
+                    raw = _from_json(json.loads(raw)) or raw
+                except ValueError:
+                    pass
             if m and isinstance(raw, str) and raw.strip() and raw.strip() not in m:
                 m += f" ({raw.strip()})"
             if m:
@@ -123,6 +130,12 @@ def _quote(text: str) -> str:
 def _net_reason(text: str) -> tuple[str, str]:
     """(what happened, what to do) for a connection that failed before any reply."""
     low = text.lower()
+    if re.search(r"certificate verify failed|certificate_verify_failed|self[- ]signed certificate|"
+                 r"unable to get local issuer|certificate has expired|hostname mismatch|ssl: wrong_version_number", low):
+        return ("its security certificate could not be checked (often a company network or antivirus that inspects "
+                "secure connections)",
+                "If your company or antivirus inspects traffic, ask IT for its root certificate and set SSL_CERT_FILE "
+                "to that file; otherwise check the endpoint address (https:// for a secure server).")
     if re.search(r"tunnel connection failed: 407|proxy authentication required", low):
         return ("the proxy asked for a sign-in (407 proxy authentication required)",
                 "Put your proxy user name and password in HTTPS_PROXY (http://user:password@proxy:port), or ask your "
@@ -315,6 +328,10 @@ def _next_for(text: str, status: int, host: str) -> str:
     if status in (401, 403) or re.search(r"api.?key|unauthori[sz]ed|authenticat|invalid token|bad token|"
                                          r"permission|forbidden", low):
         return f"Check the API key for {host or 'this endpoint'} in Settings, then send your message again."
+    if status != 429 and re.search(r"context (?:length|window)|maximum context|prompt is too long|too many tokens|"
+                                   r"input is too long|reduce the length of the messages", low):
+        return ("The chat is longer than this model can take in one request. Start a new chat for the next step, or "
+                "pick a model with a larger context in Settings.")
     if status == 429 or re.search(r"rate.?limit|too many requests|quota", low):
         return "Wait a minute, then send \"continue\"; everything done so far is kept."
     if status == 404 or re.search(r"model\b.{0,60}(?:not found|does not exist|unknown|invalid|not available|not loaded)|"

@@ -346,7 +346,9 @@ def _mcp_add_json(args: list) -> int:
     from meshpool_harness.agent import mcp as M
     if len(args) != 2 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,62}", args[0]):
         print("usage: meshpool mcp add-json NAME JSON   (JSON: {\"command\": ..., \"args\": [...]} or {\"url\": ...};"
-              " - reads it from standard input)", file=sys.stderr)
+              " - reads it from standard input)\n"
+              "  optional: \"enabled_tools\": [...] offers only those tools, \"disabled_tools\": [...] hides those",
+              file=sys.stderr)
         return 2
     raw = sys.stdin.read() if args[1] == "-" else args[1]
     try:

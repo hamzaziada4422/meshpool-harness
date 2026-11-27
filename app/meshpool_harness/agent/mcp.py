@@ -1075,6 +1075,40 @@ def read_only_tools(tools: list[dict]) -> list[dict]:
     return [t for t in tools if ok(t)]
 
 
+def _tool_list(v) -> set:
+    """A tool-name list from a server's settings: a JSON list, or one comma-separated text."""
+    if isinstance(v, str):
+        v = v.split(",")
+    return {str(x).strip() for x in v or [] if str(x).strip()} if isinstance(v, (list, tuple, set, str)) else set()
+
+
+def filter_tools(spec: dict, tools: list[dict]) -> list[dict]:
+    """The tools of one server the model may see. A server's settings can name them (Codex's names for it):
+    "enabled_tools": only these; "disabled_tools": all but these. A server with 40 tools filled the context and the
+    model picked the wrong one; a user could only switch the whole server off (anthropics/claude-code#7328)."""
+    on, off = _tool_list(spec.get("enabled_tools")), _tool_list(spec.get("disabled_tools"))
+    return [t for t in tools if (not on or t.get("name") in on) and t.get("name") not in off]
+
+
+def coerce_args(schema: dict | None, args: dict) -> dict:
+    """Arguments the model sent as text where the tool's input schema wants a number, true/false or a list ("10",
+    "true", '["a"]'), in the declared type; everything else as it was. Many servers validate strictly and refuse the
+    call, which cost a turn (open-webui/open-webui#25641). Only top-level properties with one plain type change."""
+    props = (schema or {}).get("properties") if isinstance(schema, dict) else None
+    if not isinstance(props, dict) or not isinstance(args, dict):
+        return args
+    from meshpool_harness.core.tools import coerce_arg
+    out = dict(args)
+    for k, v in args.items():
+        t = (props.get(k) or {}).get("type") if isinstance(props.get(k), dict) else None
+        if isinstance(t, list):                          # ["integer", "null"]: the one type besides null
+            rest = [x for x in t if x != "null"]
+            t = rest[0] if len(rest) == 1 else None
+        if t in ("integer", "number", "boolean", "array") and isinstance(v, str):
+            out[k] = coerce_arg(v, t)
+    return out
+
+
 class Server:
     def __init__(self, name: str, spec: dict, log_dir: Path, roots: list[str]):
         # this chat's own folder, not whatever the process-wide variable holds when several chats start together
@@ -1321,7 +1355,8 @@ class Server:
             with self._lock:
                 if self.cancelled:                 # the caller gave up waiting: stay an error, do not appear late
                     raise MCPError(self.error or "cancelled")
-                self.tools = [t for t in tools if isinstance(t, dict) and isinstance(t.get("name"), str)]
+                self.tools = filter_tools(self.spec, [t for t in tools if isinstance(t, dict)
+                                                     and isinstance(t.get("name"), str)])
                 if self.spec.get("read_only"):     # Settings, Connectors: read only
                     self.tools = read_only_tools(self.tools)
                 self.status = "connected"
@@ -1343,7 +1378,8 @@ class Server:
         if not hit:
             return False
         self._join_pool()
-        self.tools = [t for t in hit[0] if isinstance(t, dict) and isinstance(t.get("name"), str)]
+        self.tools = filter_tools(self.spec, [t for t in hit[0] if isinstance(t, dict)
+                                              and isinstance(t.get("name"), str)])
         self.info = hit[1]
         self.status = "connected"
         return True
@@ -1379,6 +1415,8 @@ class Server:
                 args["_model"] = str(model)                  # the chat's model, for engines that call one
             if self.spec.get("chat_id"):
                 args["_chat"] = str(self.spec["chat_id"])    # the chat it serves (one process serves every chat)
+        schema = next((t.get("inputSchema") for t in self.tools if t.get("name") == tool), None)
+        args = coerce_args(schema, args)
         r = self._rpc("tools/call", {"name": tool, "arguments": args}, float(self.spec.get("timeout", 120)))
         images: list[dict] = []
         parts = []

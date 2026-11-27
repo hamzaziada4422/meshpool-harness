@@ -477,8 +477,10 @@ def _git(root: Path, *args, check=True, timeout=60) -> str:
         raise ValueError("Git is not installed." + (" On a Mac, run: xcode-select --install" if sys.platform == "darwin" else ""))
     # A project's own .git/config must not run programs when Meshpool merely looks at it (status on opening a
     # project, diffs for the changes list): fsmonitor, an external diff tool and a pager are all programs.
-    safe = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "diff.external=", "-c", "core.quotePath=false",
-            "--no-pager"]
+    # --no-optional-locks: the changes panel asks for status again and again; without it each call could rewrite the
+    # index and hold .git/index.lock while the user ran their own git command (Claude Code #11005).
+    safe = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "diff.external=", "-c",
+            "core.quotePath=false", "--no-pager"]
     env, extra = dict(os.environ, GIT_TERMINAL_PROMPT="0"), []
     if args and args[0] in _NET_CMDS and is_managed(root):      # a clone Meshpool made: it signs in with the saved token
         env, extra = _gh_git_env(env), _CRED_FLAGS + _no_hooks()
