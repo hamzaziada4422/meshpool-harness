@@ -6,6 +6,8 @@ Checks what a user would hit first, with no network and no paid calls:
   1. the packages the app ships with import (PDF, Word, Excel, PowerPoint, browser),
   2. the app's version is the release's version,
   3. Word and PDF files can be made,
+  3a. Node, Git and Pi run from the app, the measuring fonts come from its LibreOffice, and on Windows python3 and
+      MinGit's programs folder are Meshpool's own (each found by the app's own lookup),
   3b. the programs and packages the skills rely on work from the app alone: ffmpeg, pandoc, speech to text (the bundled
       model, offline), a notebook run with the bundled kernel, a chart, HEIC support,
   4. the app's server starts, and a Meshpool Code chat gets an answer from a stand-in model (testkit/mock_llm.py).
@@ -47,6 +49,68 @@ def wait_http(url: str, secs: int = 90):
         except Exception:  # noqa: BLE001
             time.sleep(1)
     raise SystemExit(f"smoke: FAILED, nothing answered at {url} within {secs} s")
+
+
+def run_version(name: str, cmd: list, want: str, env: dict | None = None) -> str:
+    """Run a bundled program's version command; fail the release unless it exits 0 and prints `want`. Returns what it
+    printed."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL, env=env,
+                           errors="replace")
+    except OSError as e:
+        raise SystemExit(f"smoke: FAILED, the bundled {name} does not start ({cmd[0]}): {e}")
+    out = (r.stdout or r.stderr).strip()
+    if r.returncode or want not in out:
+        raise SystemExit(f"smoke: FAILED, the bundled {name} ({cmd[0]}) exited {r.returncode}: {out[-300:]!r}")
+    return out
+
+
+def bundled_programs():
+    """Node, Git, Pi, the measuring fonts and (Windows) python3 and MinGit's programs folder, each found by the app's
+    own lookup and run once, offline. Their folder names come from upstream downloads (Node's latest 22.x, MinGit,
+    LibreOffice, Pi from npm, python-build-standalone): when one is renamed, as MinGit's mingw64 became ucrt64, the
+    release stops here instead of on a customer's computer. LibreOffice, ffmpeg, pandoc and the speech model have
+    their own steps; Chromium has the browser step."""
+    from meshpool_harness import bundled, office_runtime
+    from meshpool_harness.harnesses import pi_rpc
+    step("bundled Node, Git, Pi and the measuring fonts")
+    if not bundled.packaged():
+        raise SystemExit("smoke: FAILED, the app does not count as packaged, so it would look for tools on PATH")
+    node, git = bundled.node_exe(), bundled.bundled_git()
+    if not node:
+        raise SystemExit("smoke: FAILED, Node.js is not in the app (node/)")
+    if not git:
+        raise SystemExit("smoke: FAILED, Git is not in the app (git/)")
+    step(f"node {run_version('Node.js', [node, '--version'], 'v')[:40]} at {node}")
+    step(f"{run_version('Git', [git, '--version'], 'git version')[:60]} at {git}")
+    if os.name == "nt":
+        progs = [d for d in bundled.git_dirs() if d.parent.name != "usr" and d.name == "bin" and (d / "git.exe").is_file()]
+        if not progs:
+            raise SystemExit("smoke: FAILED, MinGit's programs folder (ucrt64/bin, mingw64/bin) is not among the folders "
+                             f"the app puts on PATH: {[str(d) for d in bundled.git_dirs()]}")
+        step(f"MinGit programs folder on PATH: {progs[0]}")
+    cli = pi_rpc.pi_cli()
+    if not cli:
+        raise SystemExit("smoke: FAILED, Pi is not in the app (vendor/pi/.../dist/bundle/cli.js)")
+    step(f"Pi {run_version('Pi', [node, str(cli), '--version'], '.')[:40]}")
+    from engines.forge.common import font_file
+    lo = office_runtime.bundled_dir().resolve()
+    for face, metric in (("Calibri", "Carlito"), ("Arial", "Liberation Sans")):
+        path = font_file(face, False, False, ((face, metric),))[0]
+        if not path or lo not in Path(path).resolve().parents:
+            raise SystemExit(f"smoke: FAILED, {face} is not measured with the {metric} inside the app's LibreOffice "
+                             f"(found {path!r})")
+    step("Calibri and Arial are measured with the fonts in the app's LibreOffice")
+    if os.name == "nt":                         # skills and models type python3: it must be Meshpool's Python
+        sh = bundled.bundled_bash()
+        env = dict(os.environ, PATH=os.pathsep.join([str(Path(sys.executable).parent), os.environ.get("PATH", "")]))
+        out = run_version("python3", [sh, "-lc", "python3 -c 'import sys; print(sys.prefix)'"], ":", env=env)
+        out = out.splitlines()[-1]                  # a login shell may print a line of its own first
+        here = os.path.normcase(os.path.realpath(sys.prefix))
+        if os.path.normcase(os.path.realpath(out.strip())) != here:
+            raise SystemExit(f"smoke: FAILED, python3 in the agents' shell is not Meshpool's Python: {out!r}, "
+                             f"want {sys.prefix}")
+        step(f"python3 in the agents' shell is Meshpool's Python ({out.strip()})")
 
 
 def bundled_media(proj: Path):
@@ -153,6 +217,7 @@ def main():
         if bad or not made.exists() or not made.stat().st_size:
             raise SystemExit(f"smoke: FAILED, {name}: {out}")
 
+    bundled_programs()
     bundled_media(proj)
 
     step("kept LibreOffice session")

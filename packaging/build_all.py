@@ -362,6 +362,13 @@ def linux_app():
         (drv / "node").symlink_to(os.path.relpath(root / "node" / "bin" / "node", drv))
 
 
+def win_runtime(root: Path):
+    """The Windows Python into <app root>/runtime, with python3.exe beside python.exe (bundled_tools.add_python_aliases):
+    skills and models type python3, which on Windows otherwise opens the Microsoft Store stub."""
+    shutil.copytree(RT["win"], root / "runtime", ignore=IGN)
+    _bt().add_python_aliases(root / "runtime")
+
+
 def win_app():
     root = OUT / "app-win" / "Meshpool"
     root.mkdir(parents=True)
@@ -371,7 +378,7 @@ def win_app():
     # `meshpool` would start the app (Windows tries .EXE before .CMD).
     (root / "bin").mkdir()
     shutil.copy2(PKG / "win/meshpool.cmd", root / "bin" / "meshpool.cmd")
-    shutil.copytree(RT["win"], root / "runtime", ignore=IGN)
+    win_runtime(root)
     git_win(root)
     app_code(root / "app")
     pi_and_node(root / "app", root / "node", "win")

@@ -414,7 +414,11 @@ def attach_to(r: Path, name: str, data: bytes, reuse: bool = False) -> dict:
 
 
 def git_exe() -> str | None:
-    """A Git that will not pop up the macOS 'install developer tools' dialog."""
+    """A Git that will not pop up the macOS 'install developer tools' dialog. In the app: the Git that ships inside it
+    (Contents/Resources/git/bin/git, MinGit on Windows), never a Homebrew or Xcode one the customer has."""
+    from meshpool_harness import bundled
+    if bundled.packaged():
+        return bundled.bundled_git()
     if os.name == "nt":
         return shutil.which("git")
     for c in ("/opt/homebrew/bin/git", "/usr/local/bin/git"):

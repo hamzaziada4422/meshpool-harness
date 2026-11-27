@@ -411,6 +411,26 @@ def prune_chromium(folder: Path) -> int:
     return gone
 
 
+# ------------------------------------------------------------------------------------------------ Python on Windows
+# python-build-standalone's Windows Python has python.exe and pythonw.exe only. The skills and the models write
+# `python3` (transcribe-audio, notebooks, data tools), and on Windows that name found the Microsoft Store stub in
+# WindowsApps ("Python was not found; run without arguments to install from the Microsoft Store"), not Meshpool's
+# Python. A copy of python.exe named python3.exe sits beside it (python312.dll and Lib are found from the program's
+# own folder, so the copy is the same Python).
+WIN_PYTHON_ALIASES = {"python3.exe": "python.exe"}
+
+
+def add_python_aliases(runtime: Path) -> list[Path]:
+    """Windows: copy runtime/python.exe to the other names the app's users type (python3.exe). Returns the copies."""
+    made = []
+    for alias, src in WIN_PYTHON_ALIASES.items():
+        if not (Path(runtime) / src).is_file():
+            raise BundleError(f"{src} is missing from the Windows Python in {runtime}")
+        shutil.copy2(Path(runtime) / src, Path(runtime) / alias)
+        made.append(Path(runtime) / alias)
+    return made
+
+
 # ------------------------------------------------------------------------------------------------ MinGit
 def fetch_mingit(cache: Path, dest: Path) -> Path:
     """Windows: MinGit (Git and Bash) unpacked into dest, verified against the pinned SHA-256."""

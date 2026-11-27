@@ -7,7 +7,8 @@ still work.
 
 Layout (packaging/build_all.py), relative to config.APP.parent (macOS: Meshpool.app/Contents/Resources):
   node/            Node.js (bin/node, bin/npx; Windows: node.exe)
-  git/             Windows: MinGit (cmd, mingw64, usr/bin).  macOS: bin/git and libexec/git-core
+  git/             Windows: MinGit (cmd, ucrt64, usr/bin).  macOS: bin/git and libexec/git-core
+  python/          Python (bin/python3). Windows: runtime/ (python.exe, pythonw.exe, and python3.exe, the name skills use)
   app/vendor/      hermes, pi (with its node_modules), libreoffice, browsers, ffmpeg, pandoc, whisper (the speech model)
 """
 from __future__ import annotations
@@ -48,10 +49,20 @@ def node_exe() -> str | None:
     return os.environ.get("MH_NODE") or shutil.which("node")
 
 
+# MinGit's own programs folder is named after its toolchain: ucrt64 since Git for Windows moved to UCRT (2.56.1, the
+# pinned release, has ucrt64/ and no mingw64/), mingw64 before that, clangarm64 on Arm. All are listed, so moving the
+# MinGit pin cannot drop it from PATH again; only the ones that exist are used.
+MINGIT_PROGRAM_DIRS = ("ucrt64", "mingw64", "clangarm64")
+
+
 def git_dirs() -> list[Path]:
-    """Folders of the bundled Git that belong on PATH (Windows MinGit has three), existing ones only."""
+    """Folders of the bundled Git that belong on PATH (Windows MinGit has three: cmd, its programs folder, usr/bin),
+    existing ones only."""
     g = root() / "git"
-    cands = [g / "cmd", g / "mingw64" / "bin", g / "usr" / "bin"] if os.name == "nt" else [g / "bin"]
+    if os.name == "nt":
+        cands = [g / "cmd", *(g / d / "bin" for d in MINGIT_PROGRAM_DIRS), g / "usr" / "bin"]
+    else:
+        cands = [g / "bin"]
     return [p for p in cands if p.is_dir()]
 
 
