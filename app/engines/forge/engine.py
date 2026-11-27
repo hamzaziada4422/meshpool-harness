@@ -20,6 +20,22 @@ def _inputs(workdir: str, files: list[str] | None) -> list[str]:
             and f.suffix.lower() in (".md", ".txt", ".pdf", ".docx", ".pptx", ".potx", ".xlsx", ".csv")]
 
 
+def figures_sentence(res: dict) -> str:
+    """Where the deck's figures come from, for the reply: the slides whose figures are illustrative (a deck with no
+    source file, grounded.label_unsourced), or, when nothing was flagged, the request and the cited web sources. The
+    first-hour reply said "I made none up" over market figures from a report nobody gave."""
+    illus = [int(n) for n in res.get("illustrative") or []]
+    if illus:
+        many = len(illus) > 1
+        return (f" The figures on slide{'s' if many else ''} {', '.join(map(str, illus))} are illustrative: no file the "
+                f"user gave and no cited source states them, and {'those slides say' if many else 'that slide says'} "
+                "so. Tell the user which slides; never say the figures are real or that none were made up.")
+    if res.get("source_files") or (res.get("rules") or {}).get("P29") == "fail":
+        return ""
+    return (" Every figure on the slides is from the request" + (" or the web sources cited on the slides"
+                                                                  if res.get("web_sources") else "") + ".")
+
+
 def _brief(task: str, workdir: str, files: list[str] | None) -> str:
     import time
     # the model does not know the date: without this a cover reads "March 2026" in November
@@ -396,6 +412,7 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
               + "checked after rendering. "
               + (f"{left} items are still flagged by the checks (listed in qa.json); rules failing: "
                  f"{', '.join(failing) or 'none'}." if left or failing else "All checks passed."))
+    answer += figures_sentence(res)
     answer += design_sentence(res.get("design"))
     answer += panel_sentence(res.get("panel"))
     rv = res.get("review") or {}
