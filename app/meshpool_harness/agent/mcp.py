@@ -1087,6 +1087,8 @@ def filter_tools(spec: dict, tools: list[dict]) -> list[dict]:
     "enabled_tools": only these; "disabled_tools": all but these. A server with 40 tools filled the context and the
     model picked the wrong one; a user could only switch the whole server off (anthropics/claude-code#7328)."""
     on, off = _tool_list(spec.get("enabled_tools")), _tool_list(spec.get("disabled_tools"))
+    if not on and isinstance(spec.get("enabled_tools"), (list, tuple)):
+        return []                    # "enabled_tools": [] offers none, as in Codex (not every tool)
     return [t for t in tools if (not on or t.get("name") in on) and t.get("name") not in off]
 
 
@@ -1355,19 +1357,26 @@ class Server:
             with self._lock:
                 if self.cancelled:                 # the caller gave up waiting: stay an error, do not appear late
                     raise MCPError(self.error or "cancelled")
-                self.tools = filter_tools(self.spec, [t for t in tools if isinstance(t, dict)
-                                                     and isinstance(t.get("name"), str)])
-                if self.spec.get("read_only"):     # Settings, Connectors: read only
-                    self.tools = read_only_tools(self.tools)
+                every = [t for t in tools if isinstance(t, dict) and isinstance(t.get("name"), str)]
+                self.tools = self._offered(every)
                 self.status = "connected"
-            if self.spec.get("command") and self.tools:   # a private one too: a chat's browser then starts lazily
-                save_tools(self.name, self.spec, self.tools, self.info)
+            # the server's whole list is saved, and the settings are applied to it each time (_offered): a list saved
+            # after the settings had narrowed it kept a tool hidden for a day after the user turned it back on, and a
+            # server switched to read only afterwards was offered its write tools again from the saved list
+            if self.spec.get("command") and every:   # a private one too: a chat's browser then starts lazily
+                save_tools(self.name, self.spec, every, self.info)
         except Exception as e:
             with self._lock:
                 if not self.cancelled:
                     self.status, self.error = "error", redact(e)[:400]
                     self.timed_out = bool(_TIMEOUT_ERR.search(str(e)))
             self.close()
+
+    def _offered(self, tools: list[dict]) -> list[dict]:
+        """The server's tools as this server's settings offer them: enabled_tools / disabled_tools, then read only
+        (Settings, Connectors)."""
+        tools = filter_tools(self.spec, tools)
+        return read_only_tools(tools) if self.spec.get("read_only") else tools
 
     def start_lazy(self) -> bool:
         """Connected from the saved tool list, without starting the process: it starts on the first tool call.
@@ -1378,8 +1387,7 @@ class Server:
         if not hit:
             return False
         self._join_pool()
-        self.tools = filter_tools(self.spec, [t for t in hit[0] if isinstance(t, dict)
-                                              and isinstance(t.get("name"), str)])
+        self.tools = self._offered([t for t in hit[0] if isinstance(t, dict) and isinstance(t.get("name"), str)])
         self.info = hit[1]
         self.status = "connected"
         return True

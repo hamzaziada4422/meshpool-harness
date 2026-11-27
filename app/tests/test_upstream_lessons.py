@@ -118,6 +118,47 @@ def test_a_read_after_cd_into_the_project_does_not_ask(tmp_path):
         assert not PR.safe_read(c, root), c
 
 
+def test_a_cd_the_shell_reads_differently_is_never_followed(tmp_path, monkeypatch):
+    """The checked folder must be the one the shell enters. A newline after `cd` ends that command (a bare `cd` goes
+    home), and braces and globs expand: with a folder named `true`, "cd\\ntrue && cat .ssh/id_rsa" read the user's key
+    unasked, and so did "cd {/home/me,} && cat .ssh/id_rsa" with a folder named `{/home/me,}` in the project. Each is
+    proved against bash first, then must ask."""
+    from meshpool_harness.core import permrules as PR
+    monkeypatch.delenv("CDPATH", raising=False)
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "id_rsa").write_text("SECRET-KEY\n")
+    root = tmp_path / "proj"
+    (root / "true").mkdir(parents=True)
+    (root / ("{" + str(home) + ",}")).mkdir(parents=True)        # a folder whose name brace-expands to the home folder
+    (root / "src").mkdir()
+    (root / "src" / "*").mkdir()
+    bash = shutil.which("bash")
+    env = dict(os.environ, HOME=str(home))
+    for c in ("cd\ntrue && cat .ssh/id_rsa", "cd {" + str(home) + ",} && cat .ssh/id_rsa", "cd true\n&& ls",
+              "cd src/* && ls", "cd sr? && ls", "cd ~/x && ls", "cd =true && ls", "cd true\r&& ls"):
+        assert not PR.safe_read(c, root), repr(c)
+    if bash:
+        for c in ("cd\ntrue && cat .ssh/id_rsa", "cd {" + str(home) + ",} && cat .ssh/id_rsa"):
+            got = subprocess.run([bash, "-c", c], cwd=root, env=env, capture_output=True, text=True).stdout
+            assert "SECRET-KEY" in got, (c, got)                      # the shell really reads the key: it must ask
+    assert PR.safe_read("cd\ttrue\t&&\tls", root)                     # tabs are plain separators
+    assert PR.safe_read("cd 'src/*' && ls", root)                     # quoted, a glob is a plain name
+
+
+def test_with_cdpath_set_a_bare_folder_name_is_not_followed(tmp_path, monkeypatch):
+    """bash looks a relative `cd NAME` up in CDPATH first: the folder entered can be outside the project."""
+    from meshpool_harness.core import permrules as PR
+    root = tmp_path / "proj"
+    (root / "src").mkdir(parents=True)
+    monkeypatch.setenv("CDPATH", str(tmp_path / "other"))
+    assert not PR.safe_read("cd src && ls", root)
+    assert PR.safe_read("cd ./src && ls", root)
+    assert PR.safe_read(f"cd {root / 'src'} && ls", root)
+    monkeypatch.delenv("CDPATH")
+    assert PR.safe_read("cd src && ls", root)
+
+
 # ------------------------------------------------------------------ 3. errors in plain words
 def test_openrouter_provider_error_shows_the_provider_words_not_json():
     inner = {"error": {"message": "This model's maximum context length is 128000 tokens."}}
@@ -201,3 +242,70 @@ def test_mcp_arguments_sent_as_text_reach_the_server_typed(tmp_path, monkeypatch
         assert json.loads(out) == {"n": "str"}
     finally:
         m.close()
+
+
+def _server(tmp_path, **extra):
+    from meshpool_harness.agent import mcp as M
+    p = tmp_path / "pages_srv.py"
+    p.write_text(_MCP_SRV, encoding="utf-8")
+    return M.Server("pages", {"command": sys.executable, "args": [str(p)], **extra}, tmp_path / "logs", [str(tmp_path)])
+
+
+def _start(tmp_path, **extra):
+    """One start of the pages server with these settings, as a chat starts it; the names it offers."""
+    s = _server(tmp_path, **extra)
+    try:
+        s.start(20)
+        assert s.status == "connected", s.error
+        return sorted(t["name"] for t in s.tools)
+    finally:
+        s.close()
+
+
+def _lazy(tmp_path, **extra):
+    """The next chat: the server connected from the saved tool list, without starting it (Server.start_lazy)."""
+    s = _server(tmp_path, **extra)
+    try:
+        assert s.start_lazy(), "the tool list was not saved"
+        return sorted(t["name"] for t in s.tools)
+    finally:
+        s.close()
+
+
+@pytest.fixture
+def mcp_home(tmp_path, monkeypatch):
+    from meshpool_harness.agent import mcp as M
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path))
+    monkeypatch.setenv("MH_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.delenv("MH_MCP_POOL", raising=False)
+    yield tmp_path
+    M.stop_all()
+
+
+def test_a_tool_turned_back_on_is_offered_in_the_next_chat(mcp_home):
+    """The saved tool list (a day's cache, so a new chat does not start every server) was saved after disabled_tools
+    had narrowed it: a tool the user turned back on stayed hidden in every new chat until the cache ran out."""
+    assert _start(mcp_home, disabled_tools=["delete_page"]) == ["read_page", "write_page"]
+    assert _lazy(mcp_home) == ["delete_page", "read_page", "write_page"]
+    assert _lazy(mcp_home, enabled_tools=["write_page"]) == ["write_page"]
+
+
+def test_a_server_switched_to_read_only_is_read_only_from_the_saved_list(mcp_home):
+    """Settings, Connectors, "read only" was applied when the server started but not to the saved list, so the next
+    chat was offered the server's write and delete tools."""
+    assert _start(mcp_home) == ["delete_page", "read_page", "write_page"]
+    assert _lazy(mcp_home, read_only=True) == ["read_page"]
+
+
+def test_bad_tool_lists_in_the_settings_never_widen_what_is_offered():
+    from meshpool_harness.agent import mcp as M
+    tools = [{"name": n} for n in ("a", "b", "c")]
+
+    def names(spec):
+        return [t["name"] for t in M.filter_tools(spec, tools)]
+    assert names({"enabled_tools": []}) == []                              # an empty allow list offers none (Codex)
+    assert names({"enabled_tools": " a , c ,"}) == ["a", "c"]
+    assert names({"enabled_tools": ["a", "b"], "disabled_tools": "b"}) == ["a"]
+    assert names({"enabled_tools": [1, None]}) == []                       # names that match nothing: nothing
+    assert names({"disabled_tools": None, "enabled_tools": None}) == ["a", "b", "c"]
+    assert names({"enabled_tools": ""}) == ["a", "b", "c"]                 # a blank text: not set

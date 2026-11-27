@@ -319,7 +319,10 @@ def _arg_paths(a: str) -> list[str]:
     return [v for v in out if v]
 
 
-_CD_FIRST = re.compile(r"""\s*cd\s+("[^"$`\\]*"|'[^']*'|[^\s;&|<>()$`"'\\]+)\s*&&\s*(?=\S)""")
+# Only spaces and tabs separate the words: a newline after `cd` ends that command (a bare `cd` goes home), so
+# "cd\nNAME && cat .ssh/id_rsa" ran NAME and the read in the home folder. An unquoted folder is plain characters only:
+# braces, globs and ~ expand ("cd {/home/me,} && ..." is `cd /home/me`), so what the shell enters is not what is checked.
+_CD_FIRST = re.compile(r"""[ \t]*cd[ \t]+("[^"$`\\\n]*"|'[^'\n]*'|[A-Za-z0-9_./+@%:,-]+)[ \t]*&&[ \t]*(?=\S)""")
 
 
 def _peel_cd(cmd: str, root, cwd=None):
@@ -333,6 +336,8 @@ def _peel_cd(cmd: str, root, cwd=None):
     d = d[1:-1] if d[:1] in "\"'" else d
     if not d or d.startswith(("~", "-")):
         return None
+    if os.environ.get("CDPATH") and not os.path.isabs(d) and not re.match(r"\.\.?(?:[\\/]|$)", d):
+        return None                                  # with CDPATH set, `cd NAME` may enter a folder elsewhere
     if re.match(r"^[A-Za-z]:(?![\\/])", d):
         return None                                  # C:x is relative to that drive's own folder: never followed
     p = d if os.path.isabs(d) else os.path.join(str(cwd if cwd is not None else root), d)
