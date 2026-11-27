@@ -813,6 +813,13 @@ def _strip_heredocs(s: str):
     return "".join(out), bodies
 
 
+# The file a heredoc writes: `cat > chart.py <<EOF`, `tee -a "my notes.txt" <<'EOF'`. A quoted name may hold spaces
+# (an approval titled "Write my?" for "my notes.txt").
+_QWORD = r"""(?:"[^"\n]+"|'[^'\n]+'|[^\s<>|;&'"]+)"""
+_HEREDOC_TARGET = re.compile(r"(?:\bcat|\btee(?:\s+-a)?)\s*(?:>>?\s*)?(?P<f>" + _QWORD + r")\s*<<|\bcat\s*>>?\s*(?P<g>"
+                             + _QWORD + r")\s*<<")
+
+
 def _heredoc_title(s: str) -> str:
     """Title for a script with a heredoc (`cat > chart.py <<'EOF' ... EOF` then `python chart.py`, or `python - <<'EOF'`):
     from what it does, not from the lines of the program text (Lina, 0.0.19: "Run 27 steps: cat, import, ...")."""
@@ -821,13 +828,12 @@ def _heredoc_title(s: str) -> str:
     head, bodies = _strip_heredocs(s)
     if not bodies:
         return ""
-    w = re.search(r"(?:\bcat|\btee(?:\s+-a)?)\s*(?:>>?\s*)?(?P<f>[^\s<>|;&]+)\s*<<|\bcat\s*>>?\s*(?P<g>[^\s<>|;&]+)\s*<<",
-                  head)
+    w = _HEREDOC_TARGET.search(head)
     written = os.path.basename((w.group("f") or w.group("g") or "").strip("'\"")) if w else ""
     if not written and not re.search(r"(?:^|[;&|\s])(?:python[\d.]*|node|Rscript|ruby|perl)\b[^\n<]*<<", head):
         return ""
     hfiles = [f for f in dict.fromkeys(m.group(0).rsplit("/", 1)[-1] for b in bodies + [head] for m in _FILE_WORD.finditer(b))
-              if f != written][:3]
+              if f != written and not written.endswith(" " + f)][:3]
     on = (" on " + ", ".join(hfiles)) if hfiles else ""
     lang = next((v for k, v in _PROGRAMS.items() if re.search(r"\b" + k + r"\b", head)), "")
     if not lang and re.search(r"\bimport\b|\bdef\b|\bprint\(", " ".join(bodies)):
@@ -1039,9 +1045,9 @@ def _plain_command_title(script: str, root=None) -> str:
     # "Write 1{n++?"): found where quotes are blanked out, then the file name read from the command itself
     mk = PR._OKREDIR.sub(lambda m: " " * len(m.group(0)), PR._scan(s)[0])
     red = re.search(r"(?<![0-9&])>>?", mk)
-    dest = re.match(r"""\s*['"]?([^\s;&|<>'"]+)""", s[red.end():]) if red else None
+    dest = re.match(r"\s*(" + _QWORD + ")", s[red.end():]) if red else None
     if dest and not more:
-        return f"Write {os.path.basename(dest.group(1))}?"
+        return f"Write {os.path.basename(dest.group(1).strip(chr(39) + chr(34)))}?"
     # the first real step (not cd, export or VAR=...), up to three words before an option or a quoted argument
     seg = steps[0] if steps else ""
     first = []
@@ -3386,7 +3392,7 @@ def approval_view(kind: str, title: str, detail: str) -> dict:
     out: dict = {"sum": line[:160]} if line else {}
     if "<<" in d:
         head, bodies = _strip_heredocs(d)
-        w = re.search(r"(?:\bcat|\btee(?:\s+-a)?)\s*(?:>>?\s*)?(?P<f>[^\s<>|;&]+)\s*<<|\bcat\s*>>?\s*(?P<g>[^\s<>|;&]+)\s*<<", head)
+        w = _HEREDOC_TARGET.search(head)
         tgt = (w.group("f") or w.group("g") or "").strip("'\"") if w else ""
         name = os.path.basename(tgt)
         ran = bool(name) and bool(re.search(r"(?:python[\d.]*|node|Rscript|ruby|perl|bash|sh)\s+\S*" + re.escape(name), head))

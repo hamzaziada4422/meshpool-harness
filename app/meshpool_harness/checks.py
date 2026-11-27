@@ -252,22 +252,25 @@ def _latest_details(run_id: str) -> list[dict]:
     """The detail rows that still hold: a detail counts only when no later run of the same check on the same file
     came after it. A deck fixed in three passes wrote the failures of every pass; first-hour run, 0.0.18: the line
     under a finished deck named "an empty box is left on slide 4" from a middle pass the final file no longer had."""
+    # By position in the record, not by time: a pass writes its check rows first and its detail last (rules_ran), so a
+    # detail holds when no check row of its kind and file comes after it. A time window of one second kept a detail of
+    # a pass that a later pass, within that second, no longer had.
     rows = _rows(run_id)
     last: dict = {}
-    for r in rows:
+    for i, r in enumerate(rows):
         if r.get("kind") not in ("stage", "detail", "fact"):
-            k = (r.get("kind"), r.get("subject", ""))
-            last[k] = max(last.get(k, 0.0), float(r.get("ts") or 0))
+            last[(r.get("kind"), r.get("subject", ""))] = i
     out = []
-    for r in rows:
+    for i, r in enumerate(rows):
         if r.get("kind") != "detail":
             continue
         try:
             d = json.loads(r.get("subject") or "{}")
         except ValueError:
             d = {}
+        d = d if isinstance(d, dict) else {}
         end = last.get((d.get("kind") or r.get("label"), d.get("subject", "")))
-        if end is None or float(r.get("ts") or 0) >= end - 1.0:
+        if end is None or i > end:
             out.append(r)
     return out
 

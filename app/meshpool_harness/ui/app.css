@@ -1134,7 +1134,7 @@ details .keyrow input{flex:1;min-width:0;padding:8px 12px;border:1px solid var(-
 #edFp svg{transform:rotate(180deg)}
 .ed-warn{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 12px;background:var(--warn-bg);color:var(--ink);border-bottom:1px solid var(--line-2);font-size:var(--fs-s)}
 .ed-view{flex:1;min-height:0;overflow:auto}
-.ed-box{position:relative;flex:1;min-height:0;overflow:hidden;background:var(--surface)}
+.ed-box{position:relative;flex:1;min-height:0;overflow:hidden;background:var(--surface);margin-left:8px}   /* clear of the right pane's 8px resize handle (shell.css .pane-rz), which lies over the pane's left edge */
 .ed-layer{position:absolute;left:0;top:0;pointer-events:none;will-change:transform}
 .ed-pre{margin:0;box-sizing:border-box;padding:12px 12px 12px 56px;font:13px/20px var(--mono);tab-size:4;white-space:pre;word-wrap:normal;overflow-wrap:normal;border:0;letter-spacing:0}
 .ed-pre.wrap{white-space:pre-wrap;overflow-wrap:anywhere}
