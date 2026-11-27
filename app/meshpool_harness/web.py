@@ -148,7 +148,7 @@ def _pinned_create(url: str):
     def create(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None, *a, **k):
         host, port = address[0], address[1]
         infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
-        for info in infos:
+        for info in infos if not _private_allowed() else ():    # MH_ALLOW_PRIVATE_FETCH=1: local addresses too
             _check_ip(url, host, ipaddress.ip_address(str(info[4][0]).split("%", 1)[0]))
         err = None
         for info in infos:

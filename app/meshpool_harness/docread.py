@@ -277,7 +277,7 @@ def _pdf(p: Path, pages: str | None = None, lang: str = "auto", ocr_mode: str = 
         try:
             from meshpool_harness import ocr
             if not ocr.available():
-                raise RuntimeError("OCR is not included in this install")
+                raise RuntimeError(ocr.MISSING)
             for i, img in ocr.pdf_page_images(p, sorted(want[:40])):
                 ocr_text[i] = ocr.describe(img, f"page {i + 1}", lang)
             if ocr_text:
