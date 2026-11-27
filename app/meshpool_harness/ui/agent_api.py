@@ -278,7 +278,17 @@ def undo_message(r: dict) -> tuple[str, str]:
             msg += f" Kept as {'it is' if one else 'they are'}: {names(kept)} (see details for why)."
     if outside:
         msg += f" Not restored, because Undo only covers this chat's folder: {names(outside)}."
+    gone_c, kept_c = r.get("commits_undone") or [], r.get("commits_kept") or []
+    if gone_c:                               # the commit the undone reply made is taken back too (first-hour run)
+        msg += (f" Took back the commit it made ({gone_c[0]})." if len(gone_c) == 1 else
+                f" Took back the {len(gone_c)} commits it made.")
+    elif kept_c:
+        msg += (f" The commit it made ({kept_c[0]}) stays in the history" if len(kept_c) == 1 else
+                f" The {len(kept_c)} commits it made stay in the history") + \
+            (f", because {r.get('commits_why')}." if r.get("commits_why") else ".")
     det = list(notes)                        # why each file was kept: changed later, never stored, a link...
+    if len(gone_c) > 1:
+        det.append("Commits taken back: " + "; ".join(gone_c))
     det += [f"{p}: {CHANGED_AFTER}" for p in kept if not why[p]]
     if outside:
         det.append("Changed outside this chat's folder, not restored: " + ", ".join(Path(x).name or x for x in once(outside)))

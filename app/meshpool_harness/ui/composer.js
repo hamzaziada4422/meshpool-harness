@@ -190,8 +190,9 @@ function renderBar() {
 function projectSelector(anchor) {
   const draw = () => {
     const pins = S.pj.filter(p => p.pinned), rest = S.pj.filter(p => !p.pinned).slice(0, 30);
-    const it = p => ({label: p.name, icon: ICON.stack, check: p.id === S.draft.pid, fn: () => { S.draft.pid = p.id; renderBar(); renderTop(); }});
-    return [...(S.draft.pid ? [{label: "", items: [{label: "No project", icon: ICON.x, fn: () => { S.draft.pid = ""; renderBar(); }}]}] : []), ...(pins.length ? [{label: "Pinned", items: pins.map(it)}] : []), ...(rest.length ? [{label: pins.length ? "Recent" : "Projects", items: rest.map(it)}] : [])];
+    // the page's heading names the project too: "No project" left "Q4work" over a chat with no project (first-hour run)
+    const it = p => ({label: p.name, icon: ICON.stack, check: p.id === S.draft.pid, fn: () => { S.draft.pid = p.id; renderBar(); renderTop(); renderHero(); }});
+    return [...(S.draft.pid ? [{label: "", items: [{label: "No project", icon: ICON.x, fn: () => { S.draft.pid = ""; renderBar(); renderTop(); renderHero(); }}]}] : []), ...(pins.length ? [{label: "Pinned", items: pins.map(it)}] : []), ...(rest.length ? [{label: pins.length ? "Recent" : "Projects", items: rest.map(it)}] : [])];
   };
   listPop({anchor, groups: draw, placeholder: "Search projects", width: 300, empty: "No projects yet.",
     tools: `<button class="iconbtn" id="lpPjAll" data-tip="All projects" aria-label="All projects">${ICON.grid}</button>`,

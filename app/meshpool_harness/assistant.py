@@ -1013,12 +1013,18 @@ def search_chats(query: str, limit: int = 8) -> str:
         score = sum(low.count(w) for w in words)
         if not score or not all(w in low for w in words[:3]):
             continue
-        snip = ""
-        for role, t in texts:
+        snip, at = "", -1
+        for k, (role, t) in enumerate(texts):
             i = t.lower().find(words[0])
             if i >= 0:
-                snip = f"{role}: " + re.sub(r"\s+", " ", t[max(0, i - 120): i + 280])
+                snip, at = f"{role}: " + re.sub(r"\s+", " ", t[max(0, i - 120): i + 280]), k
                 break
+        # How the chat ended: the last reply. First-hour run, 0.0.18: "what did we decide about the bakery budget?"
+        # found the chat but only the request that opened it, so the agent said it could not see any decision.
+        li = next((k for k in range(len(texts) - 1, -1, -1) if texts[k][0] == "assistant" and texts[k][1].strip()), -1)
+        if li >= 0 and li != at:
+            last = re.sub(r"\s+", " ", texts[li][1]).strip()
+            snip += "\n   last reply: " + (last if len(last) <= 600 else last[:600].rstrip() + "...")
         hits.append((score, d.get("updated", 0), meta.get("title") or d.get("title") or "Untitled", d.get("id"),
                      d.get("workdir"), snip))
     if not hits:
