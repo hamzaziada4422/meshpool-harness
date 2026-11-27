@@ -3937,6 +3937,7 @@ async function restartApp(bootBefore) {
   window.addEventListener("focus", officePairs);
   window.addEventListener("focus", () => { if (!document.hidden) S.spTick?.(); });     // back from an editor: the Session panel shows its edits
   document.addEventListener("visibilitychange", () => { if (document.hidden) return; S.spTick?.(); thT = Date.now(); Promise.resolve(loadThreads()).catch(() => {}); wakeFrame(); const c = S.cur; if (c && !c.stage) { clearTimeout(c.pollT); c.quiet = 0; poll(); } });
+  S.booted = true;      // start-up is over: the first chat (or a new one) is open; the UI tests wait for this
 })();
 
 /* ---------- pull requests: the repository's pull requests, one in full with its diff, checks, runs and deployments ---------- */

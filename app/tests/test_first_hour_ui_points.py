@@ -134,7 +134,7 @@ def _page(app, pw, onboarded: bool):
     if onboarded:
         pg.add_init_script("try { localStorage.setItem('mp_onbDone', '1'); localStorage.setItem('mp_permsAsked', '1'); } catch (e) {}")
     pg.goto(app["base"] + "/")
-    pg.wait_for_function("() => typeof S === 'object' && S.settings && S.settings.ready !== undefined && S.threads", timeout=30000)
+    pg.wait_for_function("() => typeof S === 'object' && S.settings && S.settings.ready !== undefined && S.threads && S.booted", timeout=30000)
     pg.errors, pg.browser_ = errors, b
     return pg
 

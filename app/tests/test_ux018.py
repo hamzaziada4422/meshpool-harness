@@ -104,10 +104,15 @@ def _open(app, pw, width=1280, height=820, **ctx):
                        "localStorage.removeItem('mp_last_chat'); localStorage.removeItem('mp_sidehidden'); } catch (e) {}")
     pg.goto(app["base"] + "/")
     pg.wait_for_selector("#newThread", timeout=30000)
-    pg.wait_for_function("() => typeof S === 'object' && S.settings && S.settings.ready !== undefined && S.threads", timeout=30000)
+    pg.wait_for_function(BOOTED, timeout=30000)
     pg.errors = errors
     pg.browser_ = b
     return pg
+
+
+# Start-up is over (app.js sets S.booted last): the chat list alone is not enough, start-up goes on after it (the
+# project list, newThread) and would replace a chat a test opens meanwhile.
+BOOTED = "() => typeof S === 'object' && S.settings && S.settings.ready !== undefined && S.threads && S.booted"
 
 
 @pytest.fixture()
@@ -134,8 +139,15 @@ def _chats(app, page, n=3):
 
 
 def _fake_chat(page, cid="t-ux018"):
-    """An open chat with no server behind it: applyEv draws into it as a live chat would."""
-    page.evaluate("""cid => { openThread(cid, true); if (S.cur.pollT) { clearTimeout(S.cur.pollT); clearInterval(S.cur.pollT); }
+    """An open chat with no server behind it: applyEv draws into it as a live chat would.
+
+    openThread asks the server for the chat at once (poll). The answer, a 404, used to land after the column below was
+    cleared, at any time later on a busy computer: commitStage swapped the column for "This chat is gone." over what the
+    test had drawn (a card 59 px off, "Could not show this item."). That first answer (a 404, or the chat when it is a
+    real one) is waited for first: commitStage ends the stage."""
+    page.evaluate("cid => { openThread(cid, true); }", cid)
+    page.wait_for_function("cid => S.cur && S.cur.id === cid && !S.cur.stage", arg=cid, timeout=30000)
+    page.evaluate("""cid => { if (S.cur.pollT) { clearTimeout(S.cur.pollT); clearInterval(S.cur.pollT); }
         S.cur.pollT = null; stopStream(S.cur); S.cur.stage = null; $('#col').replaceChildren(); $('#col').classList.remove('loading');
         S.cur.view.state = 'idle'; }""", cid)
 
@@ -177,6 +189,45 @@ def test_the_open_chat_stays_marked_while_another_row_is_hovered(app, page, sche
     assert sel2 == sel, (sel, sel2)
     assert _ratio(sel, hov) >= 1.08, (scheme, sel, hov, round(_ratio(sel, hov), 3))
     assert page.errors == [], page.errors
+
+
+def test_a_fake_chat_keeps_what_the_test_draws_when_the_server_answers_late(page):
+    """The harness itself: the server's late answer for a chat _fake_chat opened (a 404 on a busy computer) added
+    "This chat is gone." under what a test had drawn, at any moment. Held for 1.5 s here, as a slow server would."""
+    page.route("**/api/agent/t-late-answer*", lambda route: (time.sleep(1.5), route.continue_()))
+    try:
+        _fake_chat(page, "t-late-answer")
+        page.evaluate("() => applyEv({type: 'user', text: 'drawn by the test', i: 0})")
+        page.wait_for_timeout(2500)
+        assert "drawn by the test" in page.inner_text("#col")
+        assert "This chat is gone" not in page.inner_text("#col")
+    finally:
+        page.unroute("**/api/agent/t-late-answer*")
+
+
+def test_the_page_helper_waits_until_start_up_is_over(app):
+    """_open returned as soon as the chat list had loaded; start-up then went on (the project list, then newThread)
+    and replaced the chat a test had just opened with a new one, so its events went to a chat with no view ("Could not
+    show this item.", test_first_hour_ui_points) or its cards moved (test_round3_020). The project list is held for
+    1.5 s here, as on a busy computer: the chat opened after _open stays open."""
+    with sync_api.sync_playwright() as pw:
+        b = _launch(pw)
+        try:
+            c = b.new_context(viewport={"width": 1280, "height": 820})
+            pg = c.new_page()
+            pg.add_init_script("try { localStorage.setItem('mp_onbDone', '1'); localStorage.setItem('mp_permsAsked', '1'); "
+                               "localStorage.removeItem('mp_last_chat'); } catch (e) {}")
+            # the project list answers 1.5 s late, held in the page (a held route would hold the test too)
+            pg.add_init_script("""{ const f = window.fetch; window.fetch = (u, o) => /\\/api\\/pj(\\?|$)/.test(String(u && u.url || u))
+                ? new Promise(r => setTimeout(r, 1500)).then(() => f(u, o)) : f(u, o); }""")
+            pg.goto(app["base"] + "/")
+            pg.wait_for_selector("#newThread", timeout=30000)
+            pg.wait_for_function(BOOTED, timeout=30000)
+            pg.evaluate("() => { openThread('t-boot-race', true); }")
+            pg.wait_for_timeout(2500)
+            assert pg.evaluate("() => S.cur && S.cur.id") == "t-boot-race"
+        finally:
+            b.close()
 
 
 # ---------------------------------------------------------------------------------------------------- UX-02
