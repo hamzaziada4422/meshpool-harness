@@ -19,6 +19,7 @@ psutil>=5.9
 duckdb>=1.1
 ddgs>=9.0                 # free web search (metasearch); without it web search fell back to rate-limited engines
 ruff>=0.8
+pytest>=8.0               # a Code chat runs the project's tests without installing anything (MIT; pluggy and iniconfig MIT)
 truststore>=0.10          # HTTPS trusts the system's certificates (a company proxy's, in the Keychain or the Windows store)
 cryptography>=41          # meshpool office install: the localhost certificate Office loads the panel over (Windows has no openssl)
 tomli>=2.0; python_version < "3.11"

@@ -424,6 +424,75 @@ def prune_chromium(folder: Path) -> int:
     return gone
 
 
+# ------------------------------------------------------------------------------------------------ console scripts
+# pip writes the build machine's absolute Python path into every command it installs (pytest, ruff, jupyter...):
+# "#!/home/runner/.../deps/rt-linux/python/bin/python3", or, for a long path, a /bin/sh line that execs it. Copied into
+# the app, those commands fail with "not found" on the customer's computer (a Code chat that ran `pytest` was told to
+# `pip install pytest`). python-build-standalone's own commands (pip3) find python next to themselves; these are
+# rewritten the same way. Windows: the .exe launchers carry the path after the launcher code, before the zip; it becomes
+# <launcher_dir>\..\python.exe, which the launcher resolves next to itself.
+RELOCATABLE_SHEBANG = "#!/bin/sh\n'''exec' \"$(dirname -- \"$0\")/{py}\" \"$0\" \"$@\"\n' '''\n"
+
+
+def relocatable_scripts(bin_dir: Path, build_bin: Path | str | None = None) -> list[Path]:
+    """Rewrite the commands in a POSIX Python's bin folder that start a Python by its absolute path in `build_bin` (the
+    folder pip ran from on the build machine; None: any absolute python), so they start the python next to them
+    wherever the folder is unpacked. Returns the files changed."""
+    bin_dir = Path(bin_dir)
+    changed = []
+    for f in sorted(bin_dir.iterdir()) if bin_dir.is_dir() else []:
+        if f.is_symlink() or not f.is_file():
+            continue
+        try:
+            data = f.read_bytes()
+        except OSError:
+            continue
+        if not data.startswith(b"#!"):
+            continue
+        lines = data[:4096].split(b"\n", 3)
+        first = lines[0][2:].strip()
+        target = None
+        if first.startswith(b"/") and b"python" in first.rsplit(b"/", 1)[-1] and b" " not in first:
+            target, keep = first, 1                                     # #!/abs/bin/python3
+        elif first in (b"/bin/sh", b"/bin/bash") and len(lines) > 2 and lines[1].startswith(b"'''exec' /") \
+                and lines[2].startswith(b"' '''"):
+            target, keep = lines[1].split(b" ")[1].strip(b'"'), 3       # pip's form for long paths
+        if not target or (build_bin and os.path.normpath(os.fsdecode(target.rsplit(b"/", 1)[0]))
+                          not in {os.path.normpath(str(build_bin)), os.path.realpath(str(build_bin))}):
+            continue
+        name = target.rsplit(b"/", 1)[-1].decode()
+        parts = data.split(b"\n", keep)
+        body = parts[keep] if len(parts) > keep else b""
+        mode = f.stat().st_mode
+        f.write_bytes(RELOCATABLE_SHEBANG.format(py=name).encode() + body)
+        f.chmod(mode)
+        changed.append(f)
+    return changed
+
+
+def relocatable_launchers(scripts_dir: Path) -> list[Path]:
+    """Windows: point each pip .exe launcher in Scripts at <launcher_dir>\\..\\python.exe (the runtime's python next to
+    Scripts) instead of the build machine's path. Returns the files changed."""
+    import re
+    changed = []
+    d = Path(scripts_dir)
+    for f in sorted(d.glob("*.exe")) if d.is_dir() else []:
+        data = f.read_bytes()
+        zip_at = data.rfind(b"PK\x05\x06")
+        if zip_at < 0:
+            continue
+        m = None
+        for m in re.finditer(rb"#!(\"?)([A-Za-z]:\\[^\r\n\"]*?python(?:w)?\.exe)\1\r?\n", data):
+            pass                                                     # the last shebang: it sits just before the zip
+        if not m or m.end() > zip_at:
+            continue
+        exe = m.group(2).rsplit(b"\\", 1)[-1]
+        new = b'#!"<launcher_dir>\\..\\' + exe + b'"\n'
+        f.write_bytes(data[:m.start()] + new + data[m.end():])
+        changed.append(f)
+    return changed
+
+
 # ------------------------------------------------------------------------------------------------ Python on Windows
 # python-build-standalone's Windows Python has python.exe and pythonw.exe only. The skills and the models write
 # `python3` (transcribe-audio, notebooks, data tools), and on Windows that name found the Microsoft Store stub in

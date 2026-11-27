@@ -97,6 +97,7 @@ names them and how they were worked out; `app/tests/test_fix_pass2_open_engines.
 | httpx | 0.28.1 | BSD License |
 | httpx2 | 2.7.0 | BSD-3-Clause |
 | idna | 3.20 | BSD-3-Clause |
+| iniconfig (a pytest dependency) | 2.3.1 | MIT |
 | Jinja2 | 3.1.6 | BSD License |
 | jiter | 0.19.0 | MIT |
 | jsonschema | 4.26.0 | MIT |
@@ -122,6 +123,7 @@ names them and how they were worked out; `app/tests/test_fix_pass2_open_engines.
 | pillow_heif | 1.8.1 | BSD-3-Clause |
 | pip (comes with the bundled Python) | 24.1.2 | MIT License |
 | playwright | 1.65.1 | Apache-2.0 |
+| pluggy (a pytest dependency) | 1.7.0 | MIT |
 | portalocker | 4.4.2 | BSD-3-Clause |
 | prompt_toolkit | 3.0.52 | BSD License |
 | protobuf | 7.36.2 (Mac: 6.33.5) | 3-Clause BSD License |
@@ -141,6 +143,7 @@ names them and how they were worked out; `app/tests/test_fix_pass2_open_engines.
 | pyobjc-framework-WebKit | 13.0 | MIT |
 | pypdf | 7.0.1 | BSD-3-Clause |
 | pypdfium2 | 5.15.2 (Mac: 4.30.1) | BSD-3-Clause, Apache-2.0, dependency licenses |
+| pytest (runs a project's tests in Code chats with nothing to install) | 9.2.0 | MIT |
 | python-dateutil | 4.0.0 | BSD-3-Clause |
 | python-docx | 1.2.0 | MIT License |
 | python-dotenv | 1.2.2 | BSD-3-Clause |

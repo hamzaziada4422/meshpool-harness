@@ -315,6 +315,7 @@ def mac_app(arch: str):
     shutil.copy2(PKG / "mac/meshpool", root / "Resources/meshpool")
     shutil.copy2(PKG / "icons/Meshpool.icns", root / "Resources/Meshpool.icns")
     shutil.copytree(RT[arch], root / "Resources/python", symlinks=True, ignore=IGN)
+    _bt().relocatable_scripts(root / "Resources/python/bin", RT[arch] / "bin")     # pytest, ruff...: no build path
     app_code(root / "Resources/app")
     pi_and_node(root / "Resources/app", root / "Resources/node", arch)
     libreoffice(root / "Resources/app", arch)
@@ -364,6 +365,7 @@ def linux_app():
     stamp(PKG / "linux/meshpool.desktop", root / "meshpool.desktop")
     shutil.copy2(PKG / "icons/icon-256.png", root / "meshpool.png")
     shutil.copytree(RT["linux"], root / "python", symlinks=True, ignore=IGN)
+    _bt().relocatable_scripts(root / "python" / "bin", RT["linux"] / "bin")    # pytest, ruff...: no build path
     git_linux(root)
     app_code(root / "app")
     pi_and_node(root / "app", root / "node", "linux")
@@ -385,6 +387,7 @@ def win_runtime(root: Path):
     skills and models type python3, which on Windows otherwise opens the Microsoft Store stub."""
     shutil.copytree(RT["win"], root / "runtime", ignore=IGN)
     _bt().add_python_aliases(root / "runtime")
+    _bt().relocatable_launchers(root / "runtime" / "Scripts")                 # pytest.exe...: no build path
 
 
 def win_app():
