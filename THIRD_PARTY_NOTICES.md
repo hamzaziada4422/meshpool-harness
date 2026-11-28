@@ -129,7 +129,7 @@ names them and how they were worked out; `app/tests/test_fix_pass2_open_engines.
 | playwright | 1.65.1 | Apache-2.0 |
 | pluggy (a pytest dependency) | 1.7.0 | MIT |
 | portalocker | 4.4.2 | BSD-3-Clause |
-| prompt_toolkit | 3.0.53 | BSD License |
+| prompt_toolkit | 3.0.52 | BSD License |
 | protobuf | 7.36.2 (Mac: 6.33.5) | 3-Clause BSD License |
 | proxy_tools | 0.1.0 | MIT License |
 | psutil | 7.2.2 | BSD-3-Clause |
