@@ -96,7 +96,10 @@ def test_a_code_chat_runs_pytest_in_the_unpacked_app(tmp_path, monkeypatch, long
     (proj / "test_math.py").write_text("def test_add():\n    assert 1 + 1 == 2\n")
     monkeypatch.setenv("PATH", f"{bundle}{os.pathsep}/usr/bin{os.pathsep}/bin")   # the launcher puts it first
     out = _code_chat_runs_pytest(proj, monkeypatch)
-    assert "1 passed" not in out and "not found" in out, out        # what the shipped app did: no Python there
+    # what the shipped app did: no Python there. Each shell words it its own way: "not found" (dash, bash 5.2:
+    # "required file not found") or "bad interpreter: No such file or directory" (bash 5.3, the CI runner)
+    assert "1 passed" not in out and out.startswith("[exit ") and any(
+        w in out for w in ("not found", "bad interpreter", "No such file")), out
     changed = BT.relocatable_scripts(bundle, build)
     assert [p.name for p in changed] == ["pytest"]
     assert (bundle / "pip3").read_text().endswith("print('pbs own')\n")
