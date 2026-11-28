@@ -256,7 +256,7 @@ class Health:
         except Fail as e:
             line(tool, "FAIL", str(e))
         except Exception as e:  # noqa: BLE001  a crash in a check is a failure of that tool
-            line(tool, "FAIL", f"{type(e).__name__}: {e} | {traceback.format_exc(limit=3)[-400:]}")
+            line(tool, "FAIL", f"{type(e).__name__}: {e} | {traceback.format_exc()[-700:]}")
         return False
 
     def mcp(self, server: str, tool: str, fn, *a):
@@ -345,6 +345,26 @@ def core_tools(h: Health):
     h.check("use_skill", skills)
     h.check("find_skill", lambda: expect(c("find_skill", {"query": "make a spreadsheet chart"}), ""))
     h.check("load_skill", lambda: c("load_skill", {"name": "build-code"}, want_ok=False) and "")
+    # get_capability finds what is already here first; offline (the proxy points at a closed port) the online sources
+    # are reported as unreachable, not as a crash
+    h.check("get_capability", lambda: c("get_capability", {"need": "make a chart from a spreadsheet"}))
+
+    def keep_tool():       # a small script tool: its test runs (in the sandbox where there is one), then it is kept
+        before = h.agent.approve
+        h.agent.approve = lambda *x, **k: ("yes", "")        # the user allows keeping it on its own card
+        try:
+            out = c("save_tool", {
+                "name": "health-greet", "kind": "script", "description": "Greets someone: the tool health check's tool",
+                "files": {"SKILL.md": "---\nname: health-greet\ndescription: Greets someone\n---\nRun scripts/greet.py NAME.\n",
+                          "scripts/greet.py": "import sys\n\n\ndef greet(n):\n    return 'hi ' + n\n\n\n"
+                                              "if __name__ == '__main__':\n    print(greet(sys.argv[1]))\n"},
+                "tests": {"tests/test_greet.py": "import pathlib\nimport sys\n"
+                          "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))\n"
+                          "from greet import greet\n\n\ndef test_greet():\n    assert greet('ana') == 'hi ana'\n"}})
+        finally:
+            h.agent.approve = before
+        return expect(out, "Kept health-greet", "tests passed") or out[:160]
+    h.check("save_tool", keep_tool)
     (P / "mod.py").write_text("def f(x):\n    return x + 1\n", encoding="utf-8")
     h.check("diagnostics", lambda: c("diagnostics", {"paths": ["mod.py"]}) and "")
     h.check("fetch_url", lambda: expect(c("fetch_url", {"url": f"{h.web}/page1.html"}), "HEALTH-7731"))

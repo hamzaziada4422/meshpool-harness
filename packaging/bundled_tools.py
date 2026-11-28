@@ -348,6 +348,15 @@ def extract(archive: Path, dest: Path, key: str) -> Path:
             sysdir = out / "System64"
             for dll in sysdir.glob("*.dll") if sysdir.is_dir() else ():
                 shutil.copy2(dll, dest / "program" / dll.name)
+            # Its fonts (Carlito, Liberation, Caladea ...) go to Windows' Fonts folder the same way (FontsFolder in the
+            # MSI's Directory table), so they were left behind: no Carlito to measure Calibri with. They go where
+            # LibreOffice keeps them on the other platforms, share/fonts/truetype; lo_prune drops the spare ones.
+            fonts = next((d for d in out.iterdir() if d.is_dir() and d.name.lower() == "fonts"), None)
+            if fonts:
+                (dest / "share" / "fonts" / "truetype").mkdir(parents=True, exist_ok=True)
+                for f in fonts.iterdir():
+                    if f.suffix.lower() in (".ttf", ".otf"):
+                        shutil.copy2(f, dest / "share" / "fonts" / "truetype" / f.name)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     if not (dest / LO_EXE[key]).is_file():
