@@ -319,11 +319,44 @@ def _arg_paths(a: str) -> list[str]:
     return [v for v in out if v]
 
 
+# Only spaces and tabs separate the words: a newline after `cd` ends that command (a bare `cd` goes home), so
+# "cd\nNAME && cat .ssh/id_rsa" ran NAME and the read in the home folder. An unquoted folder is plain characters only:
+# braces, globs and ~ expand ("cd {/home/me,} && ..." is `cd /home/me`), so what the shell enters is not what is checked.
+_CD_FIRST = re.compile(r"""[ \t]*cd[ \t]+("[^"$`\\\n]*"|'[^'\n]*'|[A-Za-z0-9_./+@%:,-]+)[ \t]*&&[ \t]*(?=\S)""")
+
+
+def _peel_cd(cmd: str, root, cwd=None):
+    """(rest, folder) for `cd FOLDER && rest` when FOLDER is a plain path inside the project, else None. Models write
+    `cd /path/to/project && git status` all the time; the cd alone made a plain read ask for approval
+    (anthropics/claude-code#28240)."""
+    m = _CD_FIRST.match(cmd or "")
+    if not m:
+        return None
+    d = m.group(1)
+    d = d[1:-1] if d[:1] in "\"'" else d
+    if not d or d.startswith(("~", "-")):
+        return None
+    if os.environ.get("CDPATH") and not os.path.isabs(d) and not re.match(r"\.\.?(?:[\\/]|$)", d):
+        return None                                  # with CDPATH set, `cd NAME` may enter a folder elsewhere
+    if re.match(r"^[A-Za-z]:(?![\\/])", d):
+        return None                                  # C:x is relative to that drive's own folder: never followed
+    p = d if os.path.isabs(d) else os.path.join(str(cwd if cwd is not None else root), d)
+    if not _inside(p, root) or not os.path.isdir(p):
+        return None
+    return cmd[m.end():], os.path.realpath(p)
+
+
 def safe_read(cmd: str, root, cwd=None) -> bool:
     """H-15: a single plain read-only command (tools.read_only, which already refuses writes and unknown programs)
-    whose paths stay inside the project. Compound commands, substitutions and `$` never qualify. cwd: the folder the
-    command runs in (a shell call's workdir); it must be inside the project too, and relative paths start there."""
+    whose paths stay inside the project. Compound commands, substitutions and `$` never qualify, except a leading
+    `cd FOLDER &&` into a folder of the project (the read is then checked from there). cwd: the folder the command
+    runs in (a shell call's workdir); it must be inside the project too, and relative paths start there."""
     from meshpool_harness.core import tools as T
+    if cwd is not None and not _inside(str(cwd), root):
+        return False
+    peeled = _peel_cd(cmd, root, cwd)
+    if peeled:
+        return safe_read(peeled[0], root, peeled[1])
     if not cmd or "$" in cmd or compound(cmd) or writes(cmd) or not T.read_only(cmd):
         return False
     if cwd is not None and not _inside(str(cwd), root):
@@ -573,11 +606,18 @@ GIT_ASK = re.compile(
     r"|\.git[\\/]+(?:hooks|config)\b|\bcore\.hooksPath\b", re.I)
 
 
+def _look_git(*args: str) -> list:
+    """argv for git calls that only look (the checks before an approval): never the repository's own programs, never
+    .git/index.lock (core.tools.SAFE_GIT_OPTS)."""
+    from meshpool_harness.core.tools import safe_git
+    return safe_git(*args)
+
+
 def amend_pushed(root) -> bool:
     """HEAD is already on a remote branch, so amending it rewrites history others may have (or git cannot tell)."""
     import subprocess
     try:
-        r = subprocess.run(["git", "-C", str(root), "branch", "-r", "--contains", "HEAD"], capture_output=True,
+        r = subprocess.run(_look_git("-C", str(root), "branch", "-r", "--contains", "HEAD"), capture_output=True,
                            text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return True
@@ -603,7 +643,7 @@ def _git_dirty(root, cwd, files) -> bool:
     """Any of these files has changes not yet committed (or git cannot tell): restoring it throws them away."""
     import subprocess
     try:
-        r = subprocess.run(["git", "-C", str(cwd or root), "diff", "--quiet", "HEAD", "--"] + list(files),
+        r = subprocess.run(_look_git("-C", str(cwd or root), "diff", "--quiet", "HEAD", "--", *files),
                            capture_output=True, timeout=10, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         return True
@@ -614,14 +654,14 @@ def _git_unmade_changes(root, cwd, chat_made, untracked: bool) -> bool:
     """Uncommitted changes the chat did not make (or git cannot tell): `git stash` would shelve the user's work."""
     import subprocess
     try:
-        r = subprocess.run(["git", "-C", str(cwd or root), "status", "--porcelain=v1", "-z",
-                            "--untracked-files=" + ("all" if untracked else "no")],
+        r = subprocess.run(_look_git("-C", str(cwd or root), "status", "--porcelain=v1", "-z",
+                                     "--untracked-files=" + ("all" if untracked else "no")),
                            capture_output=True, timeout=10, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         return True
     if r.returncode != 0:
         return True
-    top = subprocess.run(["git", "-C", str(cwd or root), "rev-parse", "--show-toplevel"], capture_output=True,
+    top = subprocess.run(_look_git("-C", str(cwd or root), "rev-parse", "--show-toplevel"), capture_output=True,
                          timeout=10, stdin=subprocess.DEVNULL).stdout.decode("utf-8", "replace").strip()
     made = {os.path.realpath(str(x)) for x in (chat_made or ())}
     parts = r.stdout.decode("utf-8", "replace").split("\0")

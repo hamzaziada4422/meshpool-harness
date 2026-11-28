@@ -8,11 +8,14 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 |---|---|---|
 | Hermes Agent 0.21.2 (Nous Research) | MIT | https://github.com/NousResearch/hermes-agent (small patches in acp_adapter/server.py and tools/approval.py: `packaging/hermes-acp-server.patch`) |
 | Pi coding agent (Mario Zechner) | MIT | https://www.npmjs.com/package/@earendil-works/pi-coding-agent |
+| Ponytail skills (ponytail, ponytail-review), commit ebd8654 (Dietrich Gebert) | MIT | https://github.com/DietrichGebert/ponytail (app/defaults/skills/ponytail*) |
 | Node.js 22 | MIT and bundled licenses | https://nodejs.org |
+| uv 0.13.7 (Astral), `uv` and `uvx` taken unmodified from the official PyPI wheels, SHA-256 checked (`uv/` beside the app; pins in `packaging/bundled_tools.py`), runs the uvx MCP servers | MIT or Apache-2.0 | https://github.com/astral-sh/uv |
 | Python 3.12 (python-build-standalone) | PSF License and bundled licenses | https://github.com/astral-sh/python-build-standalone |
 | Git for Windows, MinGit (Windows) | GPL-2.0 | Source: https://github.com/git-for-windows/git |
 | Git 2.56.1, built unmodified from the official source (macOS: `git/`; build script `packaging/mac/build_git.sh`, licence `git/COPYING-git-GPL-2.0.txt`) | GPL-2.0 | Source: https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.56.1.tar.xz |
 | LibreOffice 26.2.7, binaries unmodified (unused parts such as help, Base, Math, extensions and other languages are removed: `packaging/lo_prune.py`), used for Office conversion and rendering (`app/vendor/libreoffice`; notice and licence in `app/defaults/licenses/libreoffice`) | MPL-2.0 and bundled licenses | Source: https://downloadarchive.documentfoundation.org/libreoffice/old/26.2.7.3/src/ |
+| bubblewrap 0.11.0, built unmodified from the official source and linked statically with libcap 2.76 (Linux: `app/vendor/bwrap`; build script `packaging/linux/build_bwrap.sh`, licences `app/vendor/bwrap/COPYING-bubblewrap-LGPL-2.0.txt` and `LICENSE-libcap.txt`), the command sandbox | LGPL-2.0-or-later (libcap: BSD-3-Clause, one of its two licences) | Source: https://github.com/containers/bubblewrap/releases/download/v0.11.0/bubblewrap-0.11.0.tar.xz and https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/libcap-2.76.tar.xz |
 | ffmpeg (static build taken unmodified from the imageio-ffmpeg 0.7.0 wheel, `app/vendor/ffmpeg`; FFmpeg 7.0 to 7.1 as configured by its builders, GPL because it includes libx264; build details in `ffmpeg -version`) | GPL-2.0-or-later (the wrapper package is BSD-2-Clause) | Source: https://ffmpeg.org/releases/ and https://github.com/imageio/imageio-binaries |
 | pandoc 2.19.2, unmodified, from the pypandoc_binary 1.13 wheel (`app/vendor/pandoc`) | GPL-2.0-or-later | Source: https://github.com/jgm/pandoc/releases/tag/2.19.2 |
 | OpenAI Whisper "base" speech model, converted to CTranslate2 format by Systran (`app/vendor/whisper/base`) | MIT | https://huggingface.co/Systran/faster-whisper-base (revision ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66) and https://github.com/openai/whisper |
@@ -37,9 +40,11 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | Selawik font, Regular and Bold, compiled unmodified from source (`app/engines/forge/fonts`): measures slides set in Segoe UI | SIL Open Font License 1.1 (`Selawik-LICENSE.txt` beside it) | https://github.com/microsoft/Selawik |
 | Mermaid 11.17.2 (`app/meshpool_harness/ui/vendor/mermaid.min.js`, `LICENSE-mermaid.txt`): diagrams in chat | MIT | https://mermaid.js.org |
 | KaTeX 0.16.11 (`app/meshpool_harness/ui/vendor/katex.min.js`, CSS and fonts, `LICENSE-katex.txt`): maths in chat | MIT | https://katex.org |
+| xterm.js 6.0.0 and its fit addon 0.11.0 (`app/meshpool_harness/ui/vendor/xterm.min.js`, `xterm.css`, `xterm-addon-fit.min.js`, `LICENSE-xterm.txt`, `LICENSE-xterm-addon-fit.txt`; npm @xterm/xterm and @xterm/addon-fit, unmodified but for the source map line): the Terminal panel | MIT | https://xtermjs.org |
 | 7-Zip 25.01 (`7zr.exe`, inside the Windows installer: unpacks the program files appended to it) | LGPL-2.1-or-later (the unRAR code is not used) | https://www.7-zip.org |
 | Taste Skill, method for building and reviewing user interfaces (`app/defaults/skills/build-ui`, `ui-review`; adapted, not copied), Copyright (c) 2026 Leonxlnx | MIT | https://github.com/Leonxlnx/taste-skill |
 | Anthropic knowledge-work plugins: finance, legal, sales and customer-support skills (`app/defaults/skills`) | Apache-2.0 | https://github.com/anthropics/knowledge-work-plugins |
+| Hermes Agent (Nous Research), Copyright (c) 2025 Nous Research: the skill folder rules of `tools/skill_manager_tool.py` (name pattern, size limits) and a subset of the scan rules and trust policy of `tools/skills_guard.py`, ported to `app/meshpool_harness/tools_store.py` (rules adapted, no Hermes code imported) | MIT | https://github.com/NousResearch/hermes-agent |
 
 ## Designs followed (no code copied)
 
@@ -96,6 +101,7 @@ names them and how they were worked out; `app/tests/test_fix_pass2_open_engines.
 | httpx | 0.28.1 | BSD License |
 | httpx2 | 2.7.0 | BSD-3-Clause |
 | idna | 3.20 | BSD-3-Clause |
+| iniconfig (a pytest dependency) | 2.3.1 | MIT |
 | Jinja2 | 3.1.6 | BSD License |
 | jiter | 0.19.0 | MIT |
 | jsonschema | 4.26.0 | MIT |
@@ -121,8 +127,9 @@ names them and how they were worked out; `app/tests/test_fix_pass2_open_engines.
 | pillow_heif | 1.8.1 | BSD-3-Clause |
 | pip (comes with the bundled Python) | 24.1.2 | MIT License |
 | playwright | 1.65.1 | Apache-2.0 |
+| pluggy (a pytest dependency) | 1.7.0 | MIT |
 | portalocker | 4.4.2 | BSD-3-Clause |
-| prompt_toolkit | 3.0.52 | BSD License |
+| prompt_toolkit | 3.0.53 | BSD License |
 | protobuf | 7.36.2 (Mac: 6.33.5) | 3-Clause BSD License |
 | proxy_tools | 0.1.0 | MIT License |
 | psutil | 7.2.2 | BSD-3-Clause |
@@ -140,6 +147,7 @@ names them and how they were worked out; `app/tests/test_fix_pass2_open_engines.
 | pyobjc-framework-WebKit | 13.0 | MIT |
 | pypdf | 7.0.1 | BSD-3-Clause |
 | pypdfium2 | 5.15.2 (Mac: 4.30.1) | BSD-3-Clause, Apache-2.0, dependency licenses |
+| pytest (runs a project's tests in Code chats with nothing to install) | 9.2.0 | MIT |
 | python-dateutil | 4.0.0 | BSD-3-Clause |
 | python-docx | 1.2.0 | MIT License |
 | python-dotenv | 1.2.2 | BSD-3-Clause |

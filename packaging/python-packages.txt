@@ -67,6 +67,7 @@ httpx2
 huggingface-hub
 humanfriendly
 idna
+iniconfig
 ipykernel
 ipython
 ipython-pygments-lexers
@@ -113,6 +114,7 @@ pillow-heif
 pip                                     # comes with the bundled Python (python-build-standalone)
 platformdirs
 playwright
+pluggy
 portalocker                             # Windows only
 primp
 prompt-toolkit
@@ -135,6 +137,7 @@ pyobjc-framework-webkit                 # Mac only
 pyparsing
 pypdf
 pypdfium2
+pytest
 pyreadline3                             # Windows only
 python-dateutil
 python-docx

@@ -516,8 +516,10 @@ def reveal(body: dict) -> dict:
     from meshpool_harness.ui.desktop import show_in_folder
     try:
         show_in_folder(p)
+    except FileNotFoundError as e:           # no xdg-open (a server or a bare Linux): no error name, just where it is
+        raise ValueError(f"This computer has no file manager meshpool can open. The file is at: {p}") from e
     except OSError as e:
-        raise ValueError(f"There is no file manager to show it in ({e.strerror or e}). It is at: {p}") from e
+        raise ValueError(f"The file manager did not open ({e.strerror or e}). The file is at: {p}") from e
     return {"ok": True}
 
 

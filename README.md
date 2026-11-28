@@ -16,7 +16,7 @@
 Meshpool runs on your own computer. It does research, writing, analysis, spreadsheets, decks and code with any model on the Meshpool endpoint, your own OpenAI-compatible key, or the ChatGPT plan you already pay for.
 
 > [!NOTE]
-> **Meshpool is a beta (currently 0.0.18).** Some things will break. When one does, Meshpool shows what went wrong in the chat, and **Report this** (or the **Beta** badge) opens a GitHub issue with your version and system filled in. Your chats and files are never included.
+> **Meshpool is a beta (currently 0.0.20).** Some things will break. When one does, Meshpool shows what went wrong in the chat, and **Report this** (or the **Beta** badge) opens a GitHub issue with your version and system filled in. Your chats and files are never included.
 
 ## What Meshpool does
 
@@ -55,15 +55,15 @@ Meshpool solves as many tasks as Codex and costs less per solved task on every s
 | Coding | Coding tasks, eval set | 144 vs 145 of 156 | **0.71x** | 1.03x |
 | Data | Data analysis (DABench) | 45 vs 44 of 54 | **0.51x** | 0.81x |
 | Office | Office-7: Word, Excel, PowerPoint, PDF | 42 vs 41 of 42 | **0.94x** | 0.76x |
-| Office | Decks: read, edit, add, reorder | 13 vs 11 of 15 | **0.77x** | 1.03x |
+| Office | Decks: read, edit, add, reorder | 13 vs 11 of 15 | **0.77x** | 1.31x |
 | Office | SpreadsheetBench (public sample) | 10 vs 9 of 12 | **0.76x** | 0.98x |
-| Office | OfficeBench (public sample) | 11 vs 12 of 12 | **0.84x** | 1.16x |
+| Office | OfficeBench (public sample) | 11 vs 12 of 12 | **0.84x** | 1.20x |
 
 How this was measured:
 - **Same conditions.** Meshpool and Codex CLI 0.171 ran on the same model (DeepSeek V4.1 Flash), through the same gateway, in the same hour, with the same tasks and graders.
 - **Cost and time.** Cost is billed cost per solved task as a multiple of Codex's; under 1.00x is cheaper. Time is the median of per-task time ratios; under 1.00x is faster.
 - **Versions.** Coding, data and Office-7 were measured on Meshpool 0.0.16; decks, SpreadsheetBench and OfficeBench on 0.0.18.
-- **Where Codex is ahead.** Codex solved one more OfficeBench task (12 vs 11) and one more eval-set coding task (145 vs 144). The office samples are small, so a single task moves them.
+- **Where Codex is ahead.** Codex solved one more OfficeBench task (12 vs 11) and one more eval-set coding task (145 vs 144), and was faster on decks (meshpool took 1.31x its time), OfficeBench (1.20x) and the eval set (1.03x). The office samples are small, so a single task moves them.
 - **Raw data.** Every run is in [docs/results](docs/results), and [docs/BENCHMARKS.md](docs/BENCHMARKS.md) has the full history.
 
 ## Install

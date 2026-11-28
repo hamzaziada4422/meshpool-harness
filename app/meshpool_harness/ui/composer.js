@@ -190,8 +190,9 @@ function renderBar() {
 function projectSelector(anchor) {
   const draw = () => {
     const pins = S.pj.filter(p => p.pinned), rest = S.pj.filter(p => !p.pinned).slice(0, 30);
-    const it = p => ({label: p.name, icon: ICON.stack, check: p.id === S.draft.pid, fn: () => { S.draft.pid = p.id; renderBar(); renderTop(); }});
-    return [...(S.draft.pid ? [{label: "", items: [{label: "No project", icon: ICON.x, fn: () => { S.draft.pid = ""; renderBar(); }}]}] : []), ...(pins.length ? [{label: "Pinned", items: pins.map(it)}] : []), ...(rest.length ? [{label: pins.length ? "Recent" : "Projects", items: rest.map(it)}] : [])];
+    // the page's heading names the project too: "No project" left "Q4work" over a chat with no project (first-hour run)
+    const it = p => ({label: p.name, icon: ICON.stack, check: p.id === S.draft.pid, fn: () => { S.draft.pid = p.id; renderBar(); renderTop(); renderHero(); }});
+    return [...(S.draft.pid ? [{label: "", items: [{label: "No project", icon: ICON.x, fn: () => { S.draft.pid = ""; renderBar(); renderTop(); renderHero(); }}]}] : []), ...(pins.length ? [{label: "Pinned", items: pins.map(it)}] : []), ...(rest.length ? [{label: pins.length ? "Recent" : "Projects", items: rest.map(it)}] : [])];
   };
   listPop({anchor, groups: draw, placeholder: "Search projects", width: 300, empty: "No projects yet.",
     tools: `<button class="iconbtn" id="lpPjAll" data-tip="All projects" aria-label="All projects">${ICON.grid}</button>`,
@@ -230,9 +231,20 @@ function repoSelector(anchor) {
 /* ================================== home ================================== */
 const CARDS = () => [
   {id: "key", show: S.settings && !S.settings.has_key && !S.settings.ready, title: "Add your " + lowBrand(S.settings?.key_name || "meshpool") + " key", text: "meshpool needs a key to talk to a model. It takes a minute.", cta: "Add key", fn: () => openSettings("general")},
-  {id: "github", show: (S.connCache || []).some(c => /github/i.test(c.id || c.name) && !c.connected), title: "Connect GitHub", text: "Let meshpool work on your repositories and pull requests.", cta: "Connect", fn: () => openSettings("connectors")},
+  {id: "github", show: draftIsRepo() && (S.connCache || []).some(c => /github/i.test(c.id || c.name) && !c.connected), title: "Connect GitHub", text: "Let meshpool work on your repositories and pull requests.", cta: "Connect", fn: () => openSettings("connectors")},
   {id: "project", show: !!S.settings?.ready && !(S.pj || []).length, title: "Keep related work together", text: "A project gives its chats shared instructions, files and memory.", cta: "New project", fn: () => newProjectFlow()},
 ];
+// The chat's folder is a Git repository: the GitHub card is for those only. First-hour run, 0.0.18: it showed on a
+// plain folder of documents. Asked once per folder (the answer is kept), and the page is drawn again when it comes.
+function draftIsRepo() {
+  const f = S.draft?.project; if (!f) return false;
+  S.repoOf = S.repoOf || {};
+  if (!(f in S.repoOf)) {
+    S.repoOf[f] = false;
+    api("/api/git?root=" + encodeURIComponent(f)).then(g => { S.repoOf[f] = !!(g && g.repo); if (S.repoOf[f] && S.draft?.project === f && !S.cur) renderHero(); }, () => {});
+  }
+  return S.repoOf[f];
+}
 function waitingList() { return chatList().filter(t => isCodeThread(t) && t.state === "waiting").slice(0, 3); }
 function renderHero() {
   const col = $("#col"); if (!col || S.view !== "chat" || S.cur) return;

@@ -126,16 +126,10 @@ AUDIT_JS = r"""
 
 
 def launcher(pw):
-    """Opens a headless Chromium: Playwright's own, else any Chromium already on this computer."""
+    """Opens a headless Chromium the way every launch in meshpool does (browser_use.launch_chromium)."""
     def launch():
-        try:
-            return pw.chromium.launch(headless=True)
-        except Exception:  # noqa: BLE001
-            from meshpool_harness import browser_use as BU
-            path = BU.find_playwright_chromium()
-            if not path:
-                raise
-            return pw.chromium.launch(headless=True, executable_path=path)
+        from meshpool_harness import browser_use as BU
+        return BU.launch_chromium(pw, headless=True)
     return launch
 
 

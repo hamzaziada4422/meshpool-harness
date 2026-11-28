@@ -102,6 +102,7 @@ Section "Meshpool" SecMain
   !insertmacro MP_SWAP node
   !insertmacro MP_SWAP harness-docs
   !insertmacro MP_SWAP bin
+  !insertmacro MP_SWAP uv
   StrCmp $R9 "1" swap_failed
   ; older installs had the terminal command next to Meshpool.exe; it now lives in bin
   Delete "$INSTDIR\meshpool.cmd"
@@ -119,6 +120,7 @@ Section "Meshpool" SecMain
   !insertmacro MP_DROP_OLD node
   !insertmacro MP_DROP_OLD harness-docs
   !insertmacro MP_DROP_OLD bin
+  !insertmacro MP_DROP_OLD uv
   Goto swap_done
   swap_failed:
     !insertmacro MP_ROLLBACK app
@@ -127,6 +129,7 @@ Section "Meshpool" SecMain
     !insertmacro MP_ROLLBACK node
     !insertmacro MP_ROLLBACK harness-docs
     !insertmacro MP_ROLLBACK bin
+    !insertmacro MP_ROLLBACK uv
     RMDir /r "$INSTDIR.new"
     MessageBox MB_OK|MB_ICONSTOP "Meshpool could not be updated: a file in $INSTDIR is in use or the disk is full. The previous version was kept." /SD IDOK
     Abort
@@ -182,6 +185,7 @@ Section "Uninstall"
   RMDir /r "$INSTDIR\node"
   RMDir /r "$INSTDIR\harness-docs"
   RMDir /r "$INSTDIR\bin"
+  RMDir /r "$INSTDIR\uv"
   ; what a failed update can leave behind (see the swap in the install section)
   RMDir /r "$INSTDIR.new"
   RMDir /r "$INSTDIR\app.old"
@@ -190,6 +194,7 @@ Section "Uninstall"
   RMDir /r "$INSTDIR\node.old"
   RMDir /r "$INSTDIR\harness-docs.old"
   RMDir /r "$INSTDIR\bin.old"
+  RMDir /r "$INSTDIR\uv.old"
   Delete "$INSTDIR\Meshpool.exe"
   Delete "$INSTDIR\meshpool.cmd"
   Delete "$INSTDIR\Meshpool.ico"

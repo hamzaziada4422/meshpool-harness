@@ -90,7 +90,8 @@ OPTIONAL = {"AppKit", "Foundation", "Quartz", "mss", "webview", "fastembed", "pb
 DIST = {"PIL": "pillow", "docx": "python-docx", "pptx": "python-pptx", "yaml": "pyyaml", "pdfminer": "pdfminer.six",
         "cairosvg": "cairosvg", "lxml": "lxml", "openpyxl": "openpyxl", "pandas": "pandas", "playwright": "playwright",
         "psutil": "psutil", "pypdf": "pypdf", "pypdfium2": "pypdfium2", "reportlab": "reportlab", "tomli": "tomli",
-        "xlrd": "xlrd", "olefile": "olefile", "numpy": "pandas"}   # numpy comes with pandas
+        "xlrd": "xlrd", "olefile": "olefile", "numpy": "pandas",   # numpy comes with pandas
+        "winpty": "pywinpty"}                          # the import name of pywinpty (Windows terminal)
 
 
 def _declared():

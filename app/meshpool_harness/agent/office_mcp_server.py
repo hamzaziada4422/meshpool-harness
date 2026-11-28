@@ -1583,7 +1583,14 @@ def tools() -> dict:
     outside agent that was asked to change a file, not to make one, pays for six schemas, not sixteen)."""
     from meshpool_harness.agent.mcp_stdio import Tool
     only = EDIT_TOOLS if os.environ.get("MH_OFFICE_TOOLS", "") == "edit" else None
-    return {k: Tool(_as_mcp(fn, p or {}), d, p, r) for k, (fn, d, p, r) in TOOLS.items() if only is None or k in only}
+    from meshpool_harness import ocr
+    plain = not ocr.installed()                      # no OCR in this install: read_document does not promise it
+
+    def desc(k, d):
+        return d.replace(" (OCR for scans)", " (no OCR in this install: a scan's text is not read)") \
+            if plain and k == "read_document" else d
+    return {k: Tool(_as_mcp(fn, p or {}), desc(k, d), p, r) for k, (fn, d, p, r) in TOOLS.items()
+            if only is None or k in only}
 
 
 def handle(msg: dict, wait_s: float = 900) -> dict | None:

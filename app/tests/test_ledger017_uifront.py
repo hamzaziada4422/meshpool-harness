@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.uiwait import wait_js
+
 sync_api = pytest.importorskip("playwright.sync_api")
 
 REPO = Path(__file__).resolve().parents[2]
@@ -164,8 +166,8 @@ def test_memory_forget_on_date_can_be_removed(page):
     page.wait_for_selector("#dlgIn")
     page.fill("#dlgIn", "")
     page.click(".dlg [data-a='1']")
-    page.wait_for_function("id => api('/api/memory?q=&category=&scope=&kind=&unused=').then(d => !d.facts.find(f => f.id === id).valid_until)",
-                           arg=fid, timeout=10000)
+    wait_js(page, "id => api('/api/memory?q=&category=&scope=&kind=&unused=').then(d => !d.facts.find(f => f.id === id).valid_until)",
+            fid, timeout=10)
     assert not _fact(page, fid)["valid_until"]
     # Cancel still leaves it alone
     page.evaluate("id => post('/api/memory', {action: 'expiry', id, until: '2031-12-31'})", fid)
@@ -188,8 +190,8 @@ def test_memory_restore_keeps_old_text_with_slash_and_bar(page):
     sel = f"[data-restore='edited|{fid}']"
     page.wait_for_selector(sel, timeout=15000)
     page.click(sel)
-    page.wait_for_function("([id, t]) => api('/api/memory?q=&category=&scope=&kind=&unused=').then(d => d.facts.find(f => f.id === id).text === t)",
-                           arg=[fid, old], timeout=10000)
+    wait_js(page, "([id, t]) => api('/api/memory?q=&category=&scope=&kind=&unused=').then(d => d.facts.find(f => f.id === id).text === t)",
+            [fid, old], timeout=10)
     assert _fact(page, fid)["text"] == old
     assert page.errors == [], page.errors
 

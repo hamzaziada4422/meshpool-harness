@@ -4,15 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meshpool-harness"
-version = "0.0.18"
+version = "0.0.20"
 description = "Meshpool: a model-agnostic coding agent (terminal and local app, with MCP) plus one-shot engines for code, data, office and browser tasks."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["pandas>=2.0", "openpyxl>=3.1", "python-pptx>=0.6.23", "python-docx>=1.1", "PyYAML>=6.0",
                 "lxml>=5.0", "Pillow>=10.0", "cairosvg>=2.7", "reportlab>=4.0",
                 "ddgs>=9.0", "playwright>=1.40",
-                "psutil>=5.9", "pypdf>=4.0", "pypdfium2>=4.0", "pdfminer.six>=20231228", "xlrd>=2.0", "olefile>=0.47", "duckdb>=1.1",
-                "tomli>=2.0; python_version < '3.11'"]                 # free web search out of the box (DuckDuckGo and other engines)
+                "psutil>=5.9", "pypdf>=4.0", "pypdfium2>=4.0", "pdfminer.six>=20231228", "xlrd>=2.0", "olefile>=0.47", "duckdb>=1.1", "truststore>=0.10",
+                "tomli>=2.0; python_version < '3.11'",
+                "prompt-toolkit>=3.0.36",                         # the terminal UI's keys and input line
+                "ptyprocess>=0.7; sys_platform != 'win32'", "pywinpty>=2.0.15; sys_platform == 'win32'"]   # Terminal panel                 # free web search out of the box (DuckDuckGo and other engines)
 
 [project.optional-dependencies]
 browser = ["playwright>=1.40"]

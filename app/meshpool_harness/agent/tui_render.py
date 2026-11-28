@@ -617,6 +617,13 @@ def context_window(model: str, known: dict | None = None) -> int:
     bare = (model or "").split(":", 1)[-1]
     if known and known.get(bare):
         return int(known[bare])
+    try:   # the window the agent itself uses (model table, profile, learned): the footer said "4.9%/128k" while the
+        from meshpool_harness.core import context as CX      # chat's own line said "context 1,049k" (first-hour run)
+        w = CX.window(model or bare, probe_endpoint="cache")
+        if w and int(w) > 0:
+            return int(w)
+    except Exception:  # noqa: BLE001
+        pass
     m = re.search(r"(\d+(?:\.\d+)?)([mk])\b", bare.lower())
     if m:
         return int(float(m.group(1)) * (1_000_000 if m.group(2) == "m" else 1_000))

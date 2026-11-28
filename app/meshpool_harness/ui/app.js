@@ -745,7 +745,14 @@ async function sendNow(interrupt) {
     const images = atts.filter(a => a.image).map(a => ({name: a.name, mime: a.mime, data: a.data}));
     const wasStopping = S.stopping;               // Stop is still finishing: stopNow's wait loop owns the flag
     if (interrupt) { S.stopping = true; renderBar(); }
-    if (S.pendingGoal) { const g = S.pendingGoal; S.pendingGoal = null; await setGoal(g, cur); }
+    if (S.pendingGoal) {                          // /goal in a new chat: the chat is made, the goal set; its first turn
+      const g = S.pendingGoal; S.pendingGoal = null;    // starts by itself once the rubric is frozen
+      await setGoal(g, cur);
+      if (interrupt && !wasStopping) S.stopping = false;
+      S.sendHold = 0; setWorking(null); renderBar();
+      clearTimeout(cur.pollT); poll(); setTimeout(loadThreads, 500);
+      return;
+    }
     const r = await post(`/api/agent/${cur.id}/send`, {text, images, files, since: 1e9, interrupt: !!interrupt});
     attachNote(r.attached, cur);
     if (interrupt && !wasStopping) S.stopping = false;
@@ -777,7 +784,7 @@ const SLASH = [
   ["/model", "Choose the model", () => modelPop($("#mPill"))],
   ["/agent", "Choose the agent", () => harnessPop($("#mPill"))],
   ["/plan", "Turn plan mode on or off", () => setPlan(!cfg().plan)],
-  ["/goal", "Set a goal: the agent keeps going until it is done (/goal clear ends it)", arg => goalCmd(arg)],
+  ["/goal", "Set a goal: meshpool keeps going until an independent check says it is met (/goal clear ends it)", arg => goalCmd(arg)],
   ["/usage", "Usage, by model and by chat", () => openSettings("usage")],
   ["/review", "Review this branch's changes for bugs (/review quick or deep, --max N, what to focus on)", arg => sendCmd(reviewPrompt(arg))],
   ["/simplify", "Make the changed code simpler without changing what it does (/simplify what)", arg => sendCmd(simplifyPrompt(arg))],
@@ -861,17 +868,26 @@ async function useSuggestion(x) {
   else if (x.type === "command") { const t = inp.value.trim(); inp.value = x.id === "/goal" ? `/goal ${t}` : x.id; }
   inp.focus(); inp.dispatchEvent(new Event("input"));
 }
-/* /goal: the agent keeps taking turns until it reports the goal met and checked, it needs you, or you stop it. */
+/* /goal: goal mode. A rubric is written first and shown on the goal card for edits; when it freezes (Start, or after a
+   minute) meshpool works turn after turn until an independent check says the bar is met, a budget runs out, it is stuck
+   or it needs you. "/goal start" starts now, "/goal resume" carries a paused goal on, "/goal clear" ends it. */
 async function goalCmd(arg) {
   const cur = S.cur?.view?.goal || "";
   if (!arg) { toast(cur ? `Goal: ${cur}. Type /goal clear to end it.` : "Type /goal and what should be done, e.g. /goal make every test pass", 5000); return; }
   if (/^(clear|off|stop|none|end)$/i.test(arg)) { if (S.cur) await setGoal(""); else toast("No goal is set."); return; }
+  if (/^(start|resume)$/i.test(arg)) { if (S.cur) await goalOp(arg.toLowerCase()); else toast("No goal is set."); return; }
+  if (S.cur) { await setGoal(arg); return; }                  // this chat: the rubric comes first, then the work
   S.pendingGoal = arg;
-  const inp = $("#input"); inp.value = arg; sendNow(false);     // sends it as the first message of the goal
+  const inp = $("#input"); inp.value = arg; sendNow(false);     // a new chat is made for it; the goal is not sent as a message
+}
+async function goalOp(op, cur = S.cur) {
+  if (!cur) return;
+  try { const v = await post(`/api/agent/${cur.id}/goal`, {op, since: 1e9}); if (cur.view) { cur.view.goal = v.goal; cur.view.goal_state = v.goal_state; } window.renderGoal010?.(cur); renderBar(); }
+  catch (e) { toast(e.message, 4000); }
 }
 async function setGoal(text, cur = S.cur) {
   if (!cur) return;
-  try { const v = await post(`/api/agent/${cur.id}/goal`, {text, since: 1e9}); if (cur.view) cur.view.goal = v.goal; renderBar(); }
+  try { const v = await post(`/api/agent/${cur.id}/goal`, {text, since: 1e9}); if (cur.view) { cur.view.goal = v.goal; cur.view.goal_state = v.goal_state; } window.renderGoal010?.(cur); renderBar(); }
   catch (e) { toast(e.message, 4000); }
 }
 /* Frequency of use: the commands and skills you use most come first in their menus. */
@@ -1087,6 +1103,7 @@ function newThread(opt) {
   S.draft.pid = where.pid; S.draft.incognito = false; S.draft.exclude = [];
   { const i = $("#input"); if (i && !(opt && typeof opt === "object")) { i.value = ""; i.style.height = "auto"; } }
   S.cur = null; S.attachments = []; renderAttach(); setWorking(null); $("#col").classList.remove("loading");
+  window.renderGoal010?.(null);                        // a new chat has no goal card
   S.draft.harness = modeHarness(); S.draft.mode = "";
   renderTop(); renderBar(); renderHero(); renderSide(); renderPanel();
   restoreDraft(); $("#input").focus();
@@ -1211,6 +1228,7 @@ function openThread(id, fresh, find) {
   if (!fresh && known) S.cur.view = {id, title: known.title, state: known.state, kind: known.kind, workdir: known.workdir, scratch: known.scratch, project_id: known.project_id || "", pinned: known.pinned, harness: harness(known.harness), events: [], prefill: true};
   const cur = S.cur;
   S.pinned = true; setWorking(null);
+  window.renderGoal010?.(cur);                         // the other chat's goal card goes; this one's comes with its view
   closePop();
   beginStage(cur);
   if (hit) {                                     // replay what we already had, off-screen, then ask only for the rest
@@ -1240,7 +1258,7 @@ async function poll() {
     if (S.cur !== cur) return;
     if (/not found/i.test(e.message)) { colEl().insertAdjacentHTML("beforeend", `<div class="note bad">This chat is gone.</div>`); commitStage(cur); return; }
     cur.fails = (cur.fails || 0) + 1;            // keep trying: one dropped request must not freeze a running chat
-    let n = $("#pollErr"); if (!n && cur.fails > 1) { colEl().insertAdjacentHTML("beforeend", `<div class="note bad" id="pollErr"></div>`); n = $("#pollErr"); }
+    let n = $("#pollErr"); if (!n && cur.fails > 1) { ($("#col") || colEl()).insertAdjacentHTML("beforeend", `<div class="note bad" id="pollErr"></div>`); n = $("#pollErr"); }
     if (n) { n.textContent = `${e.message} Retrying… `; if (!$("button", n)) { const b = document.createElement("button"); b.className = "linkbtn"; b.textContent = "Reload"; b.onclick = () => location.reload(); n.appendChild(b); } }
     if (cur.fails > 1 && S.stopping) { S.stopping = false; renderBar(); }
     cur.pollT = setTimeout(poll, Math.min(15000, 500 * 2 ** cur.fails));
@@ -1287,6 +1305,7 @@ function ingest(cur, v) {
   // A stream frame of only text carries no goal or title (server.py _event_stream): it must not redraw the header, which
   // asked the server for git status on every frame of a code chat (CPU audit: ~80 /api/git requests a second while streaming).
   if (first || prevState !== v.state || ("goal" in v && prevGoal !== v.goal) || (v.title && v.title !== cur.shownTitle)) { cur.shownTitle = v.title; renderTop(); renderBar(); }
+  if ("goal_state" in v) window.renderGoal010?.(cur);   // goal mode: the card above the thread (goal.js)
   renderTrust(cur);
   if (first && S.panel) renderPanel();
   if (first) scrollConv(true);
@@ -1752,7 +1771,7 @@ function bumpGroup(g, done) {
 function closeGroup() { const g = S.cur.group; if (inCol(g)) bumpGroup(g, true); S.cur.group = null; }
 const GOAL_NEXT = "Continue working toward the goal.";
 const RESUME_NEXT = "Continue where you left off.";
-const stripGoal = t => String(t || "").replace(/\n*^\W*GOAL:\s*(DONE|CONTINUE)\b.*$/gim, "").trimEnd();
+const stripGoal = t => String(t || "").replace(/\n*^\W*GOAL:\s*(DONE|CONTINUE|READY|NEEDS YOU|BLOCKED)\b.*$/gim, "").trimEnd();
 const RETRY_RX = /Trying again \(\d+ of \d+\)|^Rate limited by the endpoint|^Trying again without streaming/;   // old transcripts have no retry flag
 const clearRetry = () => $$(".note.retry", colEl()).forEach(n => n.remove());   // the call went through: the "trying again" notes are history
 // OSS-12: one event that cannot be drawn must not break the page or the rest of a saved chat.
@@ -1928,9 +1947,13 @@ function applyEvRaw(ev) {
     case "context": if (cur.view) cur.view.context = {used: ev.used, size: ev.size}; break;
     case "job_stage": cur.jobStage = String(ev.text || "").slice(0, 90); break;   // a long engine job's stage: the working line
     case "review": { closeGroup(); window.reviewCard010?.(ev, add); break; }   // the independent check (chat010.js)
+    case "goal": { if (cur.view && !cur.stage) { cur.view.goal_state = ev.state; window.renderGoal010?.(cur); } break; }   // live: the goal card (goal.js)
+    case "goal_check": { closeGroup(); window.goalCheckLine010?.(ev, add); break; }   // one line per goal check; the card has the detail
+    case "goal_rubric": break;                           // the card shows the rubric for edits
     case "receipt": { closeGroup(); const t = String(ev.text || ""), first = t.split("\n").map(x => x.replace(/^[#*\s-]+|[*]+/g, "").trim()).find(Boolean) || "Reviewed";
       add(`<details><summary>${ICON.check2}<span>${esc(clip(first.replace(/:$/, ""), 80))}</span></summary><div class="rcbody">${md(t)}</div></details>`, "note receipt"); sessionSoon(); break; }   // details: here when opened, and in the Session panel
     case "status": {
+      if (ev.goal) break;                                // goal set, frozen, paused, resuming: the goal card says it (the terminal prints them)
       if (ev.using) { cur.using = ev.text; if (ev.auto) cur.auto = ev.auto;
         // Auto's reason is the router's own note ("Best benchmark quality for a data task (csv)"): it stays out of the
         // transcript, on the line's tooltip and in the Session panel's Agent section.
@@ -1958,6 +1981,7 @@ function applyEvRaw(ev) {
       if (/ is ready\. ?/.test(ev.text || "") && !cur.turn) break;
       if (ev.down !== undefined) {                     // the model service is down: one line, updated at each check
         if (cur.downEl && !cur.downEl.isConnected) cur.downEl = null;
+        if (!ev.down && !cur.downEl) break;              // "answering again" belongs to the chat that showed it was down
         if (ev.down) $("#waitNote")?.remove();
         const dw = downWords(ev);                         // one plain line, updated in place, with Stop while it is down
         if (cur.downEl) { setTxt($(".dn", cur.downEl), dw); if (!ev.down) { $("[data-dstop]", cur.downEl)?.remove(); cur.downEl.className = cur.downEl.className.replace(" retry", ""); } }
@@ -2343,25 +2367,152 @@ function togglePanel(name, force) {
   S.panel = (S.panel === name && !force) ? null : name; store("panel", S.panel);
   flipLayout(() => { renderPanel(); renderTop(); });
 }
-function setupPanelResize() {
-  const w = store("pw"); if (w) document.documentElement.style.setProperty("--pw", w + "px");
-  $("#rz").addEventListener("mousedown", e => {
-    e.preventDefault(); const move = ev => { const nw = Math.max(320, Math.min(innerWidth - 520, innerWidth - ev.clientX)); document.documentElement.style.setProperty("--pw", nw + "px"); store("pw", nw); };
-    document.addEventListener("mousemove", move); document.addEventListener("mouseup", () => document.removeEventListener("mousemove", move), {once: true});
+/* ---------- pane widths: the sidebar, the side panel and the preview, each resized by a handle on its edge ----------
+   paneSizes works out the widths and paneLayout puts them on the page. The drag, the arrow keys, a window resize and a
+   panel opening all go through these two, so a drag never draws a layout that the next redraw undoes.
+   Bounds: the sidebar 200 to 480 px, the right pane (Progress and the other panel tabs, or the preview) 320 px to 60% of
+   the window, and the chat never under 420 px: the right pane gives way first, then the sidebar. A width a person chose
+   is kept per pane (mp_sw, mp_pw, mp_pvw) and clamped again to the window on every layout. A smaller window does not
+   change the stored number, so the width comes back when the window grows again. Whether the sidebar folds for a panel
+   (fitPanel) does not depend on these widths, so a drag never folds or unfolds it. At 980 px and under the right pane is
+   an overlay, and at 760 px and under the sidebar is one: they have no handle there. */
+const PANE_CHAT_MIN = 420, PANE_SIDE = [200, 480], PANE_RIGHT_MIN = 320, PANE_SIDE_DEFAULT = 288;
+const PANE = {drag: null};     // {key, w}: the width under the pointer while a drag runs; every layout uses it until the drop
+const PANE_LABEL = {sw: "Resize the sidebar", pw: "Resize the side panel", pvw: "Resize the preview"};
+function paneRightKey() { return typeof PVX !== "undefined" && PVX.open ? "pvw" : (S.panel ? "pw" : null); }
+// The widths before anyone drags (the 0.0.20 rule: what the window leaves after the sidebar and a 672px chat). s0 is the
+// sidebar as that rule sees it, 288 or 0, never a dragged width: dragging the sidebar does not move the right pane.
+function paneDefault(key, vw, s0) {
+  if (key === "sw") return PANE_SIDE_DEFAULT;
+  if (key === "pvw") return Math.min(Math.min(920, Math.max(480, vw * 0.46)), Math.max(vw - s0 - CHAT_ROOM_MIN, 400));
+  return vw < 1440 ? Math.min(460, Math.max(340, vw - s0 - CHAT_ROOM_MIN)) : 460;
+}
+function paneWant(key, vw, s0) {
+  if (PANE.drag && PANE.drag.key === key) return PANE.drag.w;
+  const v = Number(store(key)); return v > 0 ? v : paneDefault(key, vw, s0);
+}
+function paneSizes() {
+  const a = $("#app"), vw = innerWidth;
+  const side = vw > 760 && !!a && !a.classList.contains("noside") && !a.classList.contains("autoside");
+  const k = paneRightKey(), key = k && vw > 980 ? k : null;
+  const sideWant = Math.max(PANE_SIDE[0], Math.min(PANE_SIDE[1], paneWant("sw", vw, 0)));
+  let s = side ? sideWant : 0, p = 0;
+  if (key) p = Math.max(PANE_RIGHT_MIN, Math.min(paneWant(key, vw, side ? PANE_SIDE_DEFAULT : 0), vw * 0.6, vw - s - PANE_CHAT_MIN));
+  if (side) s = Math.max(PANE_SIDE[0], Math.min(s, vw - p - PANE_CHAT_MIN));
+  s = Math.round(s); p = Math.round(p);
+  return {vw, side, key, s, p, sideWant: Math.round(sideWant),
+    sMax: Math.round(Math.max(PANE_SIDE[0], Math.min(PANE_SIDE[1], vw - p - PANE_CHAT_MIN))),
+    pMax: Math.round(Math.max(PANE_RIGHT_MIN, Math.min(vw * 0.6, vw - s - PANE_CHAT_MIN)))};
+}
+function paneLayout() {
+  const a = $("#app"); if (!a) return;
+  const z = paneSizes(), st = a.style;
+  // --sw-user: the sidebar's width (shell.css .app --sw, .side-in); while it is folded, the width it slides in at.
+  st.setProperty("--sw-user", (z.side ? z.s : z.sideWant) + "px");
+  if (z.key) st.setProperty("--rw", z.p + "px"); else st.removeProperty("--rw");     // app.css .panel, .pvp
+  { const pw = Number(store("pw")); if (pw > 0) st.setProperty("--pw", pw + "px"); else st.removeProperty("--pw"); }   // the overlay panel under 981px
+  const hs = $("#rzSide"), hr = $("#rzRight");
+  if (hs) {
+    hs.hidden = !z.side; hs.style.left = (z.s - 1) + "px";      // from the sidebar's 1px border into the chat: clear of the sidebar list's scrollbar
+    hs.setAttribute("aria-valuenow", z.s); hs.setAttribute("aria-valuemin", PANE_SIDE[0]); hs.setAttribute("aria-valuemax", z.sMax);
+  }
+  if (hr) {
+    hr.hidden = !z.key; hr.style.left = (z.vw - z.p) + "px";     // from the pane's border inward: clear of the chat's scrollbar
+    if (z.key) {
+      hr.setAttribute("aria-label", PANE_LABEL[z.key]); hr.setAttribute("aria-controls", z.key === "pvw" ? "pvp" : "panel");
+      hr.setAttribute("aria-valuenow", z.p); hr.setAttribute("aria-valuemin", PANE_RIGHT_MIN); hr.setAttribute("aria-valuemax", z.pMax);
+    }
+  }
+}
+// The reading position: the deepest block at the top of the chat (a paragraph, a list item) and how far into it the top of
+// the view is. When a width change wraps the text again, the same line stays at the top, during a drag and while the
+// window is resized (the browser's own scroll anchoring keeps a whole message in place, not the line inside it).
+function paneAnchor() {
+  const c = $("#conv"), col = $("#col");
+  if (!c || !col || !c.isConnected || c.scrollHeight <= c.clientHeight + 1) return () => {};
+  if (c.scrollHeight - c.scrollTop - c.clientHeight < 2) return () => { c.scrollTop = c.scrollHeight; };    // at the end: stay there
+  const top = c.getBoundingClientRect().top;
+  let el = null;
+  for (let kids = col.children, depth = 0; kids.length && depth < 8; depth++) {
+    let hit = null;
+    for (const k of kids) { const r = k.getBoundingClientRect(); if (r.height && r.bottom > top && !/^inline/.test(getComputedStyle(k).display)) { hit = k; break; } if (r.top > top) break; }
+    if (!hit) break;
+    el = hit; kids = hit.children;
+  }
+  if (!el) return () => {};
+  const r = el.getBoundingClientRect(), frac = r.height ? (top - r.top) / r.height : 0;
+  return () => { if (!el.isConnected) return; const b = el.getBoundingClientRect(); const d = b.top + frac * b.height - c.getBoundingClientRect().top; if (Math.abs(d) >= 0.5) c.scrollTop += d; };
+}
+function paneSet(key, w) {      // keep a width, clamped to the window as it is now, so the stored number is one that was on screen
+  PANE.drag = {key, w}; const z = paneSizes(); PANE.drag = null;
+  const keep = paneAnchor(); store(key, key === "sw" ? z.s : z.p); paneLayout(); keep();
+}
+function paneReset(key) { const keep = paneAnchor(); try { localStorage.removeItem("mp_" + key); } catch (e) { /* storage is off: the default shows anyway */ } paneLayout(); keep(); }
+function paneHandle(id, isSide) {
+  const h = document.createElement("div");
+  Object.assign(h, {id, className: "pane-rz", tabIndex: 0, hidden: true});
+  h.setAttribute("role", "separator"); h.setAttribute("aria-orientation", "vertical");
+  h.setAttribute("aria-label", isSide ? PANE_LABEL.sw : PANE_LABEL.pw); h.setAttribute("aria-controls", isSide ? "side" : "panel");
+  h.title = "Drag to resize. Double-click for the default width.";
+  const keyOf = () => isSide ? "sw" : paneRightKey();
+  const widthOf = z => isSide ? z.s : z.p;
+  h.addEventListener("pointerdown", e => {
+    const key = keyOf(); if (e.button !== 0 || !key || PANE.drag) return;
+    e.preventDefault();          // no text selection, and the focus stays where it was (the message box keeps it)
+    const x0 = e.clientX, w0 = widthOf(paneSizes()), app = $("#app"), keep = paneAnchor();
+    let x = x0, raf = 0, done = false;
+    try { h.setPointerCapture(e.pointerId); } catch (err) { /* the pointer is already gone */ }
+    PANE.drag = {key, w: w0}; app.classList.add("pane-drag"); h.classList.add("on");
+    const frame = () => { raf = 0; if (PANE.drag) { PANE.drag.w = w0 + (isSide ? x - x0 : x0 - x); paneLayout(); keep(); } };
+    const move = ev => { x = ev.clientX; if (!raf) raf = requestAnimationFrame(frame); };
+    const end = () => {
+      if (done) return; done = true;
+      if (raf) cancelAnimationFrame(raf);
+      frame();                                                  // the last position, drawn now
+      const w = widthOf(paneSizes()); PANE.drag = null; store(key, w); paneLayout();
+      app.classList.remove("pane-drag"); h.classList.remove("on");
+      h.removeEventListener("pointermove", move); h.removeEventListener("pointerup", end); h.removeEventListener("pointercancel", end); h.removeEventListener("lostpointercapture", end);
+      try { h.releasePointerCapture(e.pointerId); } catch (err) { /* released already */ }
+    };
+    h.addEventListener("pointermove", move); h.addEventListener("pointerup", end); h.addEventListener("pointercancel", end); h.addEventListener("lostpointercapture", end);
   });
+  h.addEventListener("dblclick", e => { const key = keyOf(); if (key) { e.preventDefault(); paneReset(key); } });
+  h.addEventListener("keydown", e => {
+    const key = keyOf(); if (!key || e.altKey || e.ctrlKey || e.metaKey) return;
+    const step = e.shiftKey ? 64 : 16, w = widthOf(paneSizes()), grow = isSide ? 1 : -1;    // the handle moves the way the arrow points
+    let to = null;
+    if (e.key === "ArrowLeft") to = w - step * grow;
+    else if (e.key === "ArrowRight") to = w + step * grow;
+    else if (e.key === "Home") to = 0;            // the narrowest
+    else if (e.key === "End") to = 1e5;           // the widest the window allows
+    else if (e.key === "Enter") { e.preventDefault(); paneReset(key); return; }
+    if (to === null) return;
+    e.preventDefault(); paneSet(key, to);
+  });
+  $("#app").appendChild(h);
+  return h;
+}
+function setupPanes() {
+  paneHandle("rzSide", true); paneHandle("rzRight", false);
+  paneLayout();
+  // Every frame of a window resize, not only after it settles (fitPanel). By then the page has its new size, so the reading
+  // position is the one taken at the last scroll (PANE.read), kept up to date while the person reads.
+  const conv = $("#conv"); let rt = 0;
+  if (conv) conv.addEventListener("scroll", () => { if (!rt) rt = requestAnimationFrame(() => { rt = 0; PANE.read = paneAnchor(); }); }, {passive: true});
+  window.addEventListener("resize", () => { paneLayout(); if (PANE.read) PANE.read(); });
 }
 // The room the chat would have with the sidebar kept and the side panel (or the preview) open: the sidebar folds only
-// when that drops under about 640px, not at a fixed window width (priya018). The panel widths are the CSS ones
-// (app.css .panel, .pvp), worked out for the sidebar being open so the answer does not flip when it folds.
+// when that drops under about 640px, not at a fixed window width (priya018). The panel widths are the default ones
+// (paneDefault), worked out for the sidebar being open so the answer does not flip when it folds.
 const CHAT_ROOM_MIN = 672;      // a 640px text column and its 16px gutters: the chat never gets a narrower column than that
 function chatRoomWithSide() {
   const vw = innerWidth, side = 288, pv = typeof PVX !== "undefined" && PVX.open;
   let w = 0;
   if (vw > 980) {
-    // one rule for both panels (app.css): what the window leaves after the sidebar and a 672px chat. Progress takes 340px at
+    // one rule for both panels (paneDefault): what the window leaves after the sidebar and a 672px chat. Progress takes 340px at
     // the least and the preview 400px; the sidebar folds only when the chat would be narrower than 672px even then.
-    if (pv) w = Math.min(Math.min(920, Math.max(480, vw * 0.46)), Math.max(vw - side - CHAT_ROOM_MIN, 400));
-    else { const pw = Number(store("pw")) || 460; w = vw < 1440 ? Math.min(pw, Math.max(340, vw - side - CHAT_ROOM_MIN)) : pw; }
+    // The default widths, never the dragged ones (paneDefault): a drag does not fold or unfold the sidebar.
+    w = paneDefault(pv ? "pvw" : "pw", vw, side);
   }
   return vw - side - w;
 }
@@ -2371,6 +2522,7 @@ function fitPanel() {
   const pv = typeof PVX !== "undefined" && PVX.open;
   const want = (!!S.panel || pv) && innerWidth > 760 && !S.keepSide && chatRoomWithSide() < CHAT_ROOM_MIN;
   if ($("#app").classList.contains("autoside") !== want) { $("#app").classList.toggle("autoside", want); renderTop(); }
+  paneLayout();
 }
 // Each drawing of the side panel gets a number. A tab that loads its data (Git and CI, Changes) checks it after the
 // wait: when another tab or chat was drawn meanwhile, its late answer is dropped instead of drawn over that tab.
@@ -2600,8 +2752,153 @@ async function panelFiles(body) {
   const open = S.fsOpen?.root === root ? S.fsOpen.path : (PVX.open && PVX.root === root ? PVX.path : ""); S.fsOpen = null;
   fsTree($("#tree"), root, {open});
 }
+/* ---------- Terminal: a real shell. xterm.js draws it here; a pseudo-terminal runs it on the computer (pty_term.py) ----------
+   One shell per chat and folder. Your keys go straight to it, as in your own terminal: the agent never types here,
+   and its own commands keep their permission and approval rules. The page asks for new output in a loop: the server
+   waits up to half a second for some, so an idle shell costs two requests a second, and one every 2 s while the tab
+   is not on screen. The panel's size decides the shell's columns and rows, also while the panel is dragged wider.
+   Without ptyprocess (Mac, Linux) or pywinpty (Windows), panelTerm keeps the one-command mode. */
+const PTY = {};                 // chat and folder -> {id, term, fit, since, alive, ...}
+let ptyAssetsP = null;
+function ptyAssets() {
+  if (!ptyAssetsP) {
+    document.head.appendChild(Object.assign(document.createElement("link"), {rel: "stylesheet", href: "/ui/vendor/xterm.css"}));
+    const load = src => new Promise((ok, no) => { const s = Object.assign(document.createElement("script"), {src}); s.onload = ok; s.onerror = () => no(new Error("Could not load the terminal. Reload the window.")); document.head.appendChild(s); });
+    ptyAssetsP = load("/ui/vendor/xterm.min.js").then(() => load("/ui/vendor/xterm-addon-fit.min.js")).catch(e => { ptyAssetsP = null; throw e; });
+  }
+  return ptyAssetsP;
+}
+function ptyTheme() {
+  const de = document.documentElement, cs = getComputedStyle(de), v = n => cs.getPropertyValue(n).trim();
+  const dark = de.dataset.theme === "dark" || (de.dataset.theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+  // ANSI colours that read on the panel's own background: darker ones on light, the usual ones on dark
+  const pal = dark ? ["#2e2e32", "#f0716a", "#5fd38d", "#e6c35c", "#6aa8f0", "#c792ea", "#5cc8d6", "#d6d6d8", "#6e6e74", "#ff8f87", "#7ee2a8", "#f2d57e", "#8dbdf5", "#d8aef2", "#7fd9e4", "#ffffff"]
+    : ["#1f1f1f", "#c4271d", "#18794e", "#8a6100", "#1559b0", "#8e3ab8", "#0b7285", "#6a6a6a", "#5c5c5c", "#d93a2f", "#22915f", "#a87900", "#1f6fd0", "#a64fd1", "#138a9e", "#3a3a3a"];
+  const names = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white", "brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite"];
+  const t = {background: v("--surface") || (dark ? "#19191b" : "#ffffff"), foreground: v("--ink") || (dark ? "#ededed" : "#171717"),
+    cursor: v("--ink") || "#171717", cursorAccent: v("--surface") || "#ffffff", selectionBackground: dark ? "#2b4a70" : "#bcd6f5"};
+  names.forEach((n, i) => { t[n] = pal[i]; });
+  return t;
+}
+const ptyShown = st => S.panel === "term" && st.wrap.isConnected && !document.hidden;
+const ptyNap = (st, ms) => new Promise(ok => { const t = setTimeout(ok, ms); st.wake = () => { clearTimeout(t); ok(); }; });
+function ptyFit(st) {
+  cancelAnimationFrame(st.fitR);
+  st.fitR = requestAnimationFrame(() => { if (st.wrap.isConnected && st.wrap.clientWidth > 20 && st.wrap.clientHeight > 20) { try { st.fit.fit(); } catch (e) { /* not measurable yet */ } } });
+}
+function ptyMake(key, root, owner) {
+  const wrap = Object.assign(document.createElement("div"), {className: "pty-wrap"});
+  const mono = getComputedStyle(document.documentElement).getPropertyValue("--mono").trim() || "ui-monospace, monospace";
+  const term = new window.Terminal({fontFamily: mono, fontSize: 13, lineHeight: 1.15, cursorBlink: true, scrollback: 5000, theme: ptyTheme()});
+  const fit = new window.FitAddon.FitAddon(); term.loadAddon(fit);
+  const st = {key, root, owner, wrap, term, fit, id: null, since: 0, alive: false, starting: false, polling: false, opened: false, out: "", sending: false};
+  term.onData(d => ptyInput(st, d));
+  term.onResize(({cols, rows}) => { clearTimeout(st.rzT); st.rzT = setTimeout(() => { if (st.id && st.alive) post(`/api/pty/${st.id}/resize`, {cols, rows}).catch(() => {}); }, 60); });
+  // Windows and Linux: Ctrl+Shift+C copies, Ctrl+Shift+V pastes, and Ctrl+C copies when text is selected (else it
+  // interrupts, as in any terminal). On a Mac, Cmd+C and Cmd+V do it and Ctrl+C always interrupts.
+  term.attachCustomKeyEventHandler(e => {
+    if (isMac || e.type !== "keydown" || !e.ctrlKey || e.altKey) return true;
+    const k = e.key.toLowerCase();
+    if (k === "v" && e.shiftKey) return false;                       // the browser pastes into the terminal
+    if (k === "c" && (e.shiftKey || term.hasSelection())) {
+      const sel = term.getSelection(); if (sel) { try { navigator.clipboard.writeText(sel); } catch (err) { /* no clipboard here */ } }
+      term.clearSelection(); e.preventDefault(); return false;
+    }
+    return true;
+  });
+  return st;
+}
+async function ptyStart(st, fresh) {
+  if (st.starting) return;
+  st.starting = true; ptyBar(st);
+  const d = (st.opened && st.fit.proposeDimensions()) || {};
+  try {
+    const v = await post("/api/pty", {root: st.root, owner: st.owner, shell: store("term_shell") || S.settings?.shells?.default || "", cols: d.cols || st.term.cols, rows: d.rows || st.term.rows, new: !!fresh});
+    if (v.id !== st.id) { if (st.id || fresh) st.term.reset(); st.id = v.id; st.since = 0; }
+    st.alive = !!v.running;
+  } catch (e) {
+    st.term.write(`\r\n\x1b[2m${e.message}\x1b[0m\r\n`);
+  }
+  st.starting = false; ptyBar(st);
+  if (st.alive) ptyPoll(st);
+}
+async function ptyPoll(st) {
+  if (st.polling || !st.id) return;
+  st.polling = true;
+  let fails = 0;
+  try {
+    while (st.id && PTY[st.key] === st) {
+      const id = st.id, vis = ptyShown(st);
+      let r;
+      try { r = await api(`/api/pty/${id}?since=${st.since}&wait=${vis ? 0.5 : 0}`); fails = 0; }
+      catch (e) {
+        const gone = /not found/i.test(e.message);
+        if (gone || ++fails >= 4) { st.alive = false; st.id = null; st.term.write(`\r\n\x1b[2m[${gone ? "This shell was closed." : e.message} Press Enter to start a new one.]\x1b[0m\r\n`); ptyBar(st); return; }
+        await ptyNap(st, 1000 * fails); continue;
+      }
+      if (id !== st.id) continue;                          // a new shell was started meanwhile
+      if (r.data) st.term.write(r.data);
+      st.since = r.next;
+      if (!r.running) {
+        st.alive = false; ptyBar(st);
+        st.term.write(`\r\n\x1b[2m[The shell ended${r.rc ? ` (exit ${r.rc})` : ""}. Press Enter to start a new one.]\x1b[0m\r\n`);
+        return;
+      }
+      if (!vis) await ptyNap(st, 2000);                   // off screen: read every 2 s, so a dev server costs little
+    }
+  } finally { st.polling = false; }
+}
+function ptyInput(st, d) {
+  if (!st.alive) { if (/\r/.test(d) && !st.starting) ptyStart(st, true); return; }
+  st.out += d;
+  if (!st.sending) ptySend(st);
+}
+async function ptySend(st) {
+  st.sending = true;
+  try {
+    while (st.out && st.id && st.alive) {
+      const d = st.out.slice(0, 60000); st.out = st.out.slice(d.length);
+      await post(`/api/pty/${st.id}/input`, {data: d});
+    }
+  } catch (e) { st.out = ""; }
+  finally { st.sending = false; }
+  if (st.wake) st.wake();
+}
+function ptyBar(st) {
+  if (!st.wrap.isConnected) return;
+  const b = $("#ptyStop"), n = $("#ptyNote");
+  if (b) b.hidden = !st.alive;
+  if (n) n.textContent = st.starting ? "Starting..." : st.alive ? "" : "Not running";
+}
+async function ptyStop(st) {
+  if (!st.id) return;
+  try { await post(`/api/pty/${st.id}/stop`); } catch (e) { /* already gone */ }
+  if (st.wake) st.wake();
+}
+function panelPty(body, root) {
+  const owner = S.cur?.id || "", key = owner + "|" + root;
+  const shs = S.settings?.shells?.shells || {}, one = Object.keys(shs).length < 2;      // one shell: its name; else the picker
+  body.innerHTML = `<div class="pty-bar">${one ? `<span class="pty-shell">${esc(Object.values(shs)[0] || "Shell")}</span>` : termShellPicker()}<span class="pty-note" id="ptyNote"></span><span style="flex:1"></span><button class="btn" id="ptyStop" hidden title="End the shell and everything it started">Stop</button></div><div class="pty-host" id="ptyHost" role="region" aria-label="Terminal in ${esc(shortPath(root))}"></div>`;
+  const host = $("#ptyHost");
+  ptyAssets().then(() => {
+    if (!host.isConnected) return;
+    const st = PTY[key] || (PTY[key] = ptyMake(key, root, owner));
+    host.appendChild(st.wrap);
+    if (!st.opened) { st.term.open(st.wrap); st.opened = true; }
+    st.term.options.theme = ptyTheme();
+    if (st.ro) st.ro.disconnect();
+    st.ro = new ResizeObserver(() => ptyFit(st)); st.ro.observe(host);
+    ptyFit(st);
+    $("#ptyStop").onclick = () => ptyStop(st);
+    const sh = $("#tshell"); if (sh) sh.addEventListener("change", async () => { if (st.alive) await ptyStop(st); setTimeout(() => ptyStart(st, true), 300); });
+    ptyBar(st);
+    if (!st.id) ptyStart(st); else { ptyPoll(st); if (st.wake) st.wake(); }
+    requestAnimationFrame(() => st.term.focus());
+  }).catch(e => { if (host.isConnected) host.innerHTML = `<div class="pnote">${esc(e.message)}</div>`; });
+}
 function panelTerm(body) {
   const root = curRoot(); if (!root) { body.innerHTML = `<div class="pnote">Choose a project folder first.</div>`; return; }
+  if (S.settings?.terminal?.pty) return panelPty(body, root);       // a real shell; else one command at a time, below
   S.term = S.term && S.term.root === root ? S.term : {root, html: "", hist: [], hi: 0, id: null, running: false};
   body.innerHTML = `<pre class="term-out" id="tout">${S.term.html || `<span class="rc">Commands run in ${esc(shortPath(root))}</span>\n`}</pre><div class="term-in">${termShellPicker()}<input id="tin" placeholder="Run a command" spellcheck="false" autocomplete="off"><button class="btn" id="tstop" ${S.term.running ? "" : "hidden"}>Stop</button></div>`;
   const out = $("#tout"), inp = $("#tin"); out.scrollTop = out.scrollHeight; inp.focus();
@@ -2621,7 +2918,7 @@ function panelTerm(body) {
     put(`<span class="cmd">$ ${esc(cmd)}</span>\n`);
     const stopBtn = v => { const b = shown() && $("#tstop"); if (b) b.hidden = !v; };
     try {
-      const t = await post("/api/term", {root, command: cmd, shell: store("term_shell") || S.settings?.shells?.default || ""}); term.id = t.id; term.running = true; stopBtn(true);
+      const t = await post("/api/term", {root, command: cmd, shell: store("term_shell") || S.settings?.shells?.default || "", owner: S.cur?.id || ""}); term.id = t.id; term.running = true; stopBtn(true);
       let since = 0, fails = 0;
       const tick = async () => {
         let r;
@@ -3782,7 +4079,8 @@ async function restartApp(bootBefore) {
   if (!S.settings.ready) showOnboarding();
   else {
     loadModels().then(renderBar);
-    if (!store("onbDone") && get0("MH_ONBOARDED") !== "1" && !S.threads.length) { if (store("onbStep") === 3 || store("onbStep") === 2) { if (store("onbStep") === 2) { permStep(); } else { const o = Object.assign(document.createElement("div"), {className: "onb", id: "onb"}); document.body.appendChild(o); setupStep(o); } } else if (!store("permsAsked")) permStep(); }
+    // chats started in the terminal do not count: the app's first start still offers its folder and permission steps
+    if (!store("onbDone") && get0("MH_ONBOARDED") !== "1" && !S.threads.some(t => !t.terminal)) { if (store("onbStep") === 3 || store("onbStep") === 2) { if (store("onbStep") === 2) { permStep(); } else { const o = Object.assign(document.createElement("div"), {className: "onb", id: "onb"}); document.body.appendChild(o); setupStep(o); } } else if (!store("permsAsked")) permStep(); }
     // 21. a thread waiting for the user's OK opens straight away after a restart
     const waiting = S.threads.find(t => t.state === "waiting" && !t.archived);
     const last = store("last_chat");
@@ -3807,6 +4105,7 @@ async function restartApp(bootBefore) {
   window.addEventListener("focus", officePairs);
   window.addEventListener("focus", () => { if (!document.hidden) S.spTick?.(); });     // back from an editor: the Session panel shows its edits
   document.addEventListener("visibilitychange", () => { if (document.hidden) return; S.spTick?.(); thT = Date.now(); Promise.resolve(loadThreads()).catch(() => {}); wakeFrame(); const c = S.cur; if (c && !c.stage) { clearTimeout(c.pollT); c.quiet = 0; poll(); } });
+  S.booted = true;      // start-up is over: the first chat (or a new one) is open; the UI tests wait for this
 })();
 
 /* ---------- pull requests: the repository's pull requests, one in full with its diff, checks, runs and deployments ---------- */

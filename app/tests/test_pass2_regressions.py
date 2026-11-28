@@ -397,3 +397,16 @@ def test_p2_uifront_15_server_gone_mid_run_shows_reload_and_clears_stop(page, ui
     page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
     page.wait_for_timeout(1000)
     assert page.errors == [], page.errors
+
+
+def test_p2_uifront_15b_server_gone_while_history_rebuilds_still_shows_reload(page, ui_app):
+    # the server died while the chat was rebuilding its history (a reset after undo or rewind): the note must go to the
+    # column on screen, not to the detached list being built, or the reader sees nothing and never gets Reload
+    r = page.evaluate("post('/api/agent', {kind: 'chat'})")
+    page.evaluate("async id => { await loadThreads(); openThread(id); }", r["id"])
+    page.wait_for_function("id => S.cur && S.cur.id === id && S.cur.view", arg=r["id"], timeout=15000)
+    ui_app["proc"].kill()
+    ui_app["proc"].wait(10)
+    page.evaluate("stopStream(S.cur); clearTimeout(S.cur.pollT); beginStage(S.cur); S.cur.fails = 1; poll()")
+    page.wait_for_selector("#pollErr button", timeout=10000)
+    assert page.inner_text("#pollErr button") == "Reload"

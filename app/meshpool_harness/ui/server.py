@@ -27,6 +27,7 @@ from meshpool_harness.ui import instance as INST
 from meshpool_harness.ui import office_pair as OP
 from meshpool_harness.settings_api import _key_follows_host  # noqa: F401  (test_connection and the tests use it here)
 from meshpool_harness.ui import workbench as W
+from meshpool_harness.ui import pty_term as PT
 
 APP = C.APP
 HERE = Path(__file__).resolve().parent
@@ -150,7 +151,7 @@ def get_settings() -> dict:
     return {"path": str(C.config_path()), "fields": fields, "system": C.system_check(),
             "desktop": DESKTOP, "home": str(C.home()), "cli": Dk.cli_status(),
             "default_project": str(Dk.default_project()),
-            "native": NATIVE[0], "platform": sys.platform, "shells": W.shells(), "user_home": str(Path.home()),
+            "native": NATIVE[0], "platform": sys.platform, "shells": W.shells(), "terminal": PT.info(), "user_home": str(Path.home()),
             "has_key": bool(PV.key()), "key_name": PV.key_name(),
             "ready": HR.ready(), "provider": HR.provider(), "providers": HR.PROVIDER_NAMES,
             "signed_in": {p: HR.signed_in(w) for p, w in HR.LOGINS.items()}}
@@ -586,7 +587,7 @@ class Handler(BaseHTTPRequestHandler):
             if keyed:
                 extra["Set-Cookie"] = f"mp_s={SESSION}; HttpOnly; SameSite=Strict; Path=/"
             return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8", extra)
-        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js|preview\.js|editor\.js|memory\.js|memory\.css|insights\.js|insights\.css|yourwork\.js|yourwork\.css|firstrun\.js|chat010\.js|home010\.js|worktree\.js)", u.path)
+        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js|preview\.js|editor\.js|memory\.js|memory\.css|insights\.js|insights\.css|yourwork\.js|yourwork\.css|firstrun\.js|chat010\.js|goal\.js|home010\.js|worktree\.js)", u.path)
         if m:
             ctype = "text/javascript; charset=utf-8" if m.group(1).endswith(".js") else "text/css; charset=utf-8"
             return self._send(200, (HERE / m.group(1)).read_bytes(), ctype)
@@ -863,6 +864,10 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/term/(\w+)", u.path)
             if m:
                 return self._send(200, W.term_view(m.group(1), int(q.get("since", "0"))))
+            m = re.fullmatch(r"/api/pty/(\w+)", u.path)     # the Terminal panel's shell (pty_term.py): what is new
+            if m:
+                return self._send(200, PT.read(m.group(1), int(q.get("since", "0") or 0),
+                                               min(1.0, max(0.0, float(q.get("wait", "0") or 0)))))
             m = re.fullmatch(r"/api/agent/([\w-]+)/diff", u.path)
             if m:
                 s_ = A.get(m.group(1))
@@ -1400,10 +1405,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, W.session_bg_stop(m.group(1), b.get("kind", ""), b.get("id", "")))
             if u.path == "/api/term":
                 b = self._json()
-                return self._send(200, W.term_run(b.get("root", ""), b.get("command", ""), b.get("shell", "")))
+                return self._send(200, W.term_run(b.get("root", ""), b.get("command", ""), b.get("shell", ""),
+                                                      str(b.get("owner") or "")))
             m = re.fullmatch(r"/api/term/(\w+)/stop", u.path)
             if m:
                 return self._send(200, W.term_stop(m.group(1)))
+            if u.path == "/api/pty":                       # open (or find again) the shell of a chat in a folder
+                b = self._json()
+                return self._send(200, PT.open_pty(b.get("root", ""), str(b.get("owner") or ""), b.get("shell", ""),
+                                                   b.get("cols", 80), b.get("rows", 24), bool(b.get("new"))))
+            m = re.fullmatch(r"/api/pty/(\w+)/(input|resize|stop)", u.path)
+            if m:                                          # the person's own keys: never the agent's commands
+                b = self._json() if m.group(2) != "stop" else {}
+                if m.group(2) == "input":
+                    return self._send(200, PT.write(m.group(1), b.get("data", "")))
+                if m.group(2) == "resize":
+                    return self._send(200, PT.resize(m.group(1), b.get("cols", 80), b.get("rows", 24)))
+                return self._send(200, PT.stop(m.group(1)))
             m = re.fullmatch(r"/api/threads/([\w-]+)", u.path)
             if m:
                 return self._send(200, A.thread_action(m.group(1), self._json()))
@@ -1598,6 +1616,7 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     except Exception:  # noqa: BLE001
         pass
     threading.Thread(target=A.recover_worktrees, daemon=True).start()   # copies a crash or a deleted chat left
+    threading.Thread(target=A.resume_goals, daemon=True).start()        # goals that were running resume by themselves
     if desktop:                                     # background update checks and downloads; install on quit
         try:
             from meshpool_harness import autoupdate as AU
@@ -1766,7 +1785,8 @@ def _start_office() -> str:
     if not cp or not (OF.folder() / "manifest.xml").exists():     # only once the add-in was set up here
         return ""
     try:
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        from meshpool_harness.core import http as _mhttp
+        ctx = _mhttp.server_context()            # ssl's own class: truststore's would check the browser's certificate
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         ctx.load_cert_chain(str(cp[0]), str(cp[1]))
     except (OSError, ssl.SSLError) as e:

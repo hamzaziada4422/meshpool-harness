@@ -291,6 +291,13 @@ def font_file(family: str, bold: bool = False, italic: bool = False, metric_map:
             path = Path(__file__).with_name("fonts") / own[1 if bold else 0]
             if path.exists():
                 return str(path), name == family
+    # ...then the faces in the LibreOffice that ships in the app, the files it draws with (Carlito for Calibri,
+    # Liberation for Arial and Times New Roman, Caladea for Cambria). fc-match is not on macOS or Windows and the
+    # /usr/share fallback below is a Debian path, so there every deck in those faces was measured at a guessed width.
+    for name, exact in ((family, True), (mapping.get(family), False)):
+        own = _bundled_office_font(name, style) if name else None
+        if own:
+            return own, exact
     subst = None
     for name, exact in ((family, True), (mapping.get(family), False)):
         if not name:
@@ -315,6 +322,27 @@ def font_file(family: str, bold: bool = False, italic: bool = False, metric_map:
     if Path(fallback).exists():
         return fallback, False
     return None, False
+
+
+# Where the LibreOffice in the app keeps its fonts (packaging/lo_prune.py keeps Liberation, Carlito, Caladea, DejaVu
+# and Noto): share/fonts/truetype on Windows and Linux, inside the app bundle on macOS.
+OFFICE_FONT_DIRS = ("share/fonts/truetype", "LibreOffice.app/Contents/Resources/fonts/truetype")
+
+
+def _bundled_office_font(name: str, style: str) -> str | None:
+    """<the app's LibreOffice>/.../fonts/truetype/<Name without spaces>-<Style>.ttf ("Liberation Sans", "Bold" ->
+    LiberationSans-Bold.ttf), or None when the app carries no such file (a source checkout carries none)."""
+    try:
+        from meshpool_harness import office_runtime
+        base = office_runtime.bundled_dir()
+    except Exception:  # noqa: BLE001
+        return None
+    fname = f"{name.replace(' ', '')}-{style or 'Regular'}.ttf"
+    for d in OFFICE_FONT_DIRS:
+        p = base / d / fname
+        if p.is_file():
+            return str(p)
+    return None
 
 
 @lru_cache(maxsize=64)

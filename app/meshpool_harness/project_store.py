@@ -676,12 +676,18 @@ def migrate(extra_paths=()) -> list[dict]:
             if hit is not None and str(hit) not in names:
                 names[str(hit)] = hit.name
         made = []
+        linked = legacy_map()        # folders a project already links ("Add a folder" makes the project at once)
         for path, name in names.items():
             try:
                 rp = str(Path(path).expanduser().resolve())
             except OSError:
                 continue
             if rp in seen or rp in skip or is_scratch(rp) or not Path(rp).is_dir():
+                continue
+            if linked.get(rp) or linked.get(str(Path(path).expanduser())):
+                # First-hour run, 0.0.18: a folder added in the app got a second, unpinned project at the next start,
+                # and new chats in it went there, out of the pinned folder's list in the sidebar
+                seen[rp] = linked.get(rp) or linked.get(str(Path(path).expanduser()))
                 continue
             managed = False
             try:

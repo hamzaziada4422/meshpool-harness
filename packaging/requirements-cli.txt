@@ -8,7 +8,8 @@ lxml>=5.0
 Pillow>=10.0
 cairosvg>=2.7
 reportlab>=4.0
-playwright>=1.40            # browser use works out of the box; Chromium is fetched on first use if missing
+playwright==1.65.2          # pinned: the Chromium revision and its folder names come with it (browser_use.CHROMIUM_PROGRAMS);
+                            # read for macOS in packaging/mac/verified_minos.json. A source install fetches Chromium if missing
 pypdf>=4.0
 pdfminer.six>=20231228
 pypdfium2>=4.0
@@ -18,8 +19,13 @@ psutil>=5.9
 duckdb>=1.1
 ddgs>=9.0                 # free web search (metasearch); without it web search fell back to rate-limited engines
 ruff>=0.8
+pytest>=8.0               # a Code chat runs the project's tests without installing anything (MIT; pluggy and iniconfig MIT)
+truststore>=0.10          # HTTPS trusts the system's certificates (a company proxy's, in the Keychain or the Windows store)
 cryptography>=41          # meshpool office install: the localhost certificate Office loads the panel over (Windows has no openssl)
 tomli>=2.0; python_version < "3.11"
+prompt-toolkit==3.0.53    # the terminal UI's keys and input line (agent/tui_input.py); the version read for macOS
+ptyprocess==0.7.0; sys_platform != "win32"     # the Terminal panel's shell runs in a real pseudo-terminal (ui/pty_term.py)
+pywinpty>=2.0.15; sys_platform == "win32"      # the same on Windows (ConPTY); without either the panel runs one command at a time
 # Built into the app so no skill has to install anything (docs/plan/0.0.11-bundled.md). Pinned on purpose: these are the
 # versions whose macOS builds were read file by file and need macOS 11 at most (packaging/mac/wheel_minos.py,
 # packaging/mac/verified_minos.json; app/tests/test_macos_floor.py holds this list to it). The same packages' newer

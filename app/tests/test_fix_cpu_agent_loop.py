@@ -63,6 +63,13 @@ class Spawns:
         return out
 
 
+def _cmd(k):
+    try:
+        return " ".join(k.cmdline())[-200:]
+    except psutil.Error:
+        return str(k.pid)
+
+
 def _kids():
     out = []
     for k in psutil.Process().children(recursive=True):
@@ -99,7 +106,8 @@ def test_five_app_chats_start_nothing_on_open_and_share_office_and_assistant(hom
     _chat(home, "prime").close()                         # the first start ever saves the tool lists
     before = {k.pid for k in _kids()}
     chats = [_chat(d, f"c{i}") for i, d in enumerate(_folders(home, 5))]
-    assert not [k for k in _kids() if k.pid not in before]   # was 15 processes (3 per chat), each started on open
+    new = [k for k in _kids() if k.pid not in before and "_mcp_server" in _cmd(k)]   # strays of earlier tests aside
+    assert not new, [_cmd(k) for k in new]               # was 15 processes (3 per chat), each started on open
     for c in (chats[0], chats[3]):
         assert not c.call(_tool(c, "find_icon"), {"query": "money", "limit": 1})[1]
     for c in (chats[1], chats[4]):
@@ -109,7 +117,8 @@ def test_five_app_chats_start_nothing_on_open_and_share_office_and_assistant(hom
     for c in chats:
         c.close()
     time.sleep(0.5)
-    assert not [k for k in _kids() if k.pid not in before]
+    new = [k for k in _kids() if k.pid not in before and "_mcp_server" in _cmd(k)]   # strays of earlier tests aside
+    assert not new, [_cmd(k) for k in new]
 
 
 def test_chat_browser_starts_on_first_call_and_is_kept_while_idle(home, monkeypatch):

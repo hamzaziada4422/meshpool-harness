@@ -10,7 +10,7 @@ the same on the finished app). Standard library plus pip.
         [--arch arm64|x86_64|both] [--record]                                  these list, dependencies included, and
                                                                               scan them (--record writes the result
                                                                               to packaging/mac/verified_minos.json)
-  python packaging/mac/wheel_minos.py programs [--record]                    download the pinned ffmpeg and pandoc wheels
+  python packaging/mac/wheel_minos.py programs [--only uv] [--record]        download the pinned ffmpeg, pandoc and uv wheels
                                                                               (packaging/bundled_tools.py), read the
                                                                               program inside and the libraries it loads
   python packaging/mac/wheel_minos.py check                                  re-download what verified_minos.json lists
@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
 import struct
 import subprocess
@@ -159,12 +160,15 @@ def _bundled_tools():
     return mod
 
 
-def scan_programs(cache: Path) -> dict:
+def scan_programs(cache: Path, only=()) -> dict:
     """{program: {platform key: {minos, libs, wheel, sha256, member}}} for the Mac builds of every program that
-    bundled_tools.WHEEL_PROGRAMS takes out of a wheel, read from the pinned, hash-checked wheel."""
+    bundled_tools.WHEEL_PROGRAMS takes out of a wheel (or only those named), read from the pinned, hash-checked wheel.
+    A program with `also` members (uvx beside uv) is held to the highest macOS any of them needs."""
     bt = _bundled_tools()
     out: dict = {}
     for name, spec in bt.WHEEL_PROGRAMS.items():
+        if only and name not in only:
+            continue
         for key, (url, sha, size) in spec["pins"].items():
             if not key.startswith("mac-"):
                 continue
@@ -175,11 +179,16 @@ def scan_programs(cache: Path) -> dict:
             with zipfile.ZipFile(whl) as z:
                 hit = next(i for i in z.infolist() if re.fullmatch(spec["member"], i.filename))
                 data = z.read(hit)
-            with tempfile.TemporaryDirectory() as tmp:
-                f = Path(tmp) / "prog"
-                f.write_bytes(data)
-                v = minos(f, arch)
-            libs = needed_libs(data, arch)
+                extra = [z.read(next(i for i in z.infolist() if re.fullmatch(rx, i.filename)))
+                         for rx in spec.get("also", {}).values()]
+            v, libs = None, set()
+            for blob in [data, *extra]:
+                with tempfile.TemporaryDirectory() as tmp:
+                    f = Path(tmp) / "prog"
+                    f.write_bytes(blob)
+                    got = minos(f, arch)
+                v = max(v, got) if v and got else (v or got)
+                libs |= set(needed_libs(blob, arch))
             out.setdefault(name, {})[key] = {"minos": list(v) if v else None, "libs": sorted(libs), "wheel": whl.name,
                                               "sha256": sha, "member": hit.filename}
     return out
@@ -208,8 +217,9 @@ def main(argv: list[str]) -> int:
                       + (f" ({max(found, key=found.get)})" if over else ""))
         return 1 if bad else 0
     if cmd == "programs":
+        only = rest[rest.index("--only") + 1].split(",") if "--only" in rest else ()
         with tempfile.TemporaryDirectory() as tmp:
-            res = scan_programs(Path(tmp))
+            res = scan_programs(Path(os.environ.get("MH_WHEEL_CACHE") or tmp), only)
         for name, per in res.items():
             for key, d in per.items():
                 foreign = [x for x in d["libs"] if not x.startswith(SYSTEM_LIB_PREFIXES)]
@@ -217,7 +227,7 @@ def main(argv: list[str]) -> int:
                       + (f", NOT from the system: {foreign}" if foreign else ", all from the system"))
         if "--record" in rest:
             old = json.loads(RECORD.read_text()) if RECORD.exists() else {}
-            old["programs"] = res
+            old.setdefault("programs", {}).update(res)
             RECORD.write_text(json.dumps(old, indent=1, sort_keys=True) + "\n")
             print(f"wrote {RECORD.name}")
         return 0

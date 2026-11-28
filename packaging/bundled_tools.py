@@ -62,6 +62,19 @@ GIT_VERSION = "2.56.1"
 GIT_SOURCE_SHA256 = "f0b0bf89264b9bd2e1c640363e7529643989da76281600473c50745cd34a607f"   # from kernel.org sha256sums.asc
 GIT_SOURCE_URL = f"https://mirrors.edge.kernel.org/pub/software/scm/git/git-{GIT_VERSION}.tar.xz"
 
+# Linux: bubblewrap, the command sandbox (core/sandbox.py), built static from source with libcap by
+# packaging/linux/build_bwrap.sh into <app>/vendor/bwrap. A desktop without the distribution's bwrap package then still
+# runs ordinary commands in the sandbox instead of asking. bubblewrap is LGPL-2.0-or-later; libcap is BSD-3-Clause or
+# GPL-2.0 (BSD used here). Both are built unmodified; the source is at these URLs (THIRD_PARTY_NOTICES.md).
+BWRAP_VERSION = "0.11.0"
+BWRAP_SOURCE_SHA256 = "988fd6b232dafa04b8b8198723efeaccdb3c6aa9c1c7936219d5791a8b7a8646"   # the GitHub release tarball
+BWRAP_SOURCE_URL = (f"https://github.com/containers/bubblewrap/releases/download/v{BWRAP_VERSION}/"
+                    f"bubblewrap-{BWRAP_VERSION}.tar.xz")
+LIBCAP_VERSION = "2.76"
+LIBCAP_SOURCE_SHA256 = "629da4ab29900d0f7fcc36227073743119925fd711c99a1689bbf5c9b40c8e6f"  # from kernel.org sha256sums.asc
+LIBCAP_SOURCE_URL = (f"https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/"
+                     f"libcap-{LIBCAP_VERSION}.tar.xz")
+
 
 # ------------------------------------------------------------------------------------------------ ffmpeg and pandoc
 # Programs that ship inside two PyPI wheels (their publishers build the binaries and attach them to the wheel), so each
@@ -110,6 +123,28 @@ WHEEL_PROGRAMS = {
             "linux-x64": (_PYPI + "c8/91/df8eff0a17a3e714589e84516aebaf82d952930ef0894a5b160ae7bcd3cb/pypandoc_binary-1.13-py3-none-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
                           "9455fdd9521cbf4b56d79a56b806afa94c8c22f3c8ef878536e58d941a70f6d6", 17055071),
         },
+    },
+}
+# uv (Astral, MIT or Apache-2.0): runs the MCP library's uvx entries (Python MCP servers) in the packaged app. Taken from
+# the official PyPI wheels of one exact release, like ffmpeg and pandoc; `also` lists the other program in the same wheel.
+# It goes beside the app as uv/ (like node/), and bundled.front_dirs puts it on PATH.
+UV_VERSION = "0.13.7"
+WHEEL_PROGRAMS["uv"] = {
+    "version": f"uv {UV_VERSION}",
+    "license": "MIT or Apache-2.0",
+    "source": f"https://github.com/astral-sh/uv/releases/tag/{UV_VERSION}",
+    "member": rf"uv-{re.escape(UV_VERSION)}\.data/scripts/uv(?:\.exe)?",
+    "also": {"uvx": rf"uv-{re.escape(UV_VERSION)}\.data/scripts/uvx(?:\.exe)?"},
+    "exe": {"win-x64": "uv.exe"},
+    "pins": {
+        "mac-arm64": (_PYPI + "40/a5/8756c38ace102fa13fd4e653e8bc40e1f65924f1c0a0d23350339dac97e5/uv-0.13.7-py3-none-macosx_11_0_arm64.whl",
+                      "f91a229093163eefca89ea1b220a221d64c3beade05d03519a6584d1797a5a5f", 14454941),
+        "mac-x64": (_PYPI + "3d/5b/e0379e7b172659420b1ec99a8e8229830aa85ea59684847c80b1c959a056/uv-0.13.7-py3-none-macosx_10_12_x86_64.whl",
+                    "fd04bf01ba5f2829f4f94ca8f0c24a743f21e73d75045613ed6fc2fd66fc7bda", 17194673),
+        "win-x64": (_PYPI + "8e/4f/041b59d2a38807a3e31ef41064cf3e45d2752fe0409d89040d52778049ae/uv-0.13.7-py3-none-win_amd64.whl",
+                    "2835e2ab397d0db86323b9975dce75ecd76aa9cfa0d6a2aea84734aae7f8c9b3", 15330939),
+        "linux-x64": (_PYPI + "b9/93/0e053a2ca4523ee9825ccbedeb7121470d0a188933f11688b6d90d7f5c08/uv-0.13.7-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+                      "2c9bdc4a872b60a93c5f26c0791089ea11585a4f9d3b3c017d78eb8487505e25", 17202345),
     },
 }
 # The Apple silicon ffmpeg needs macOS 12 (read from the file); the app promises 11, so it is exempt from the macOS 11
@@ -411,6 +446,95 @@ def prune_chromium(folder: Path) -> int:
     return gone
 
 
+# ------------------------------------------------------------------------------------------------ console scripts
+# pip writes the build machine's absolute Python path into every command it installs (pytest, ruff, jupyter...):
+# "#!/home/runner/.../deps/rt-linux/python/bin/python3", or, for a long path, a /bin/sh line that execs it. Copied into
+# the app, those commands fail with "not found" on the customer's computer (a Code chat that ran `pytest` was told to
+# `pip install pytest`). python-build-standalone's own commands (pip3) find python next to themselves; these are
+# rewritten the same way. Windows: the .exe launchers carry the path after the launcher code, before the zip; it becomes
+# <launcher_dir>\..\python.exe, which the launcher resolves next to itself.
+RELOCATABLE_SHEBANG = "#!/bin/sh\n'''exec' \"$(dirname -- \"$0\")/{py}\" \"$0\" \"$@\"\n' '''\n"
+
+
+def relocatable_scripts(bin_dir: Path, build_bin: Path | str | None = None) -> list[Path]:
+    """Rewrite the commands in a POSIX Python's bin folder that start a Python by its absolute path in `build_bin` (the
+    folder pip ran from on the build machine; None: any absolute python), so they start the python next to them
+    wherever the folder is unpacked. Returns the files changed."""
+    bin_dir = Path(bin_dir)
+    changed = []
+    for f in sorted(bin_dir.iterdir()) if bin_dir.is_dir() else []:
+        if f.is_symlink() or not f.is_file():
+            continue
+        try:
+            data = f.read_bytes()
+        except OSError:
+            continue
+        if not data.startswith(b"#!"):
+            continue
+        lines = data[:4096].split(b"\n", 3)
+        first = lines[0][2:].strip()
+        target = None
+        if first.startswith(b"/") and b"python" in first.rsplit(b"/", 1)[-1] and b" " not in first:
+            target, keep = first, 1                                     # #!/abs/bin/python3
+        elif first in (b"/bin/sh", b"/bin/bash") and len(lines) > 2 and lines[1].startswith(b"'''exec' /") \
+                and lines[2].startswith(b"' '''"):
+            target, keep = lines[1].split(b" ")[1].strip(b'"'), 3       # pip's form for long paths
+        if not target or (build_bin and os.path.normpath(os.fsdecode(target.rsplit(b"/", 1)[0]))
+                          not in {os.path.normpath(str(build_bin)), os.path.realpath(str(build_bin))}):
+            continue
+        name = target.rsplit(b"/", 1)[-1].decode()
+        parts = data.split(b"\n", keep)
+        body = parts[keep] if len(parts) > keep else b""
+        mode = f.stat().st_mode
+        f.write_bytes(RELOCATABLE_SHEBANG.format(py=name).encode() + body)
+        f.chmod(mode)
+        changed.append(f)
+    return changed
+
+
+def relocatable_launchers(scripts_dir: Path) -> list[Path]:
+    """Windows: point each pip .exe launcher in Scripts at <launcher_dir>\\..\\python.exe (the runtime's python next to
+    Scripts) instead of the build machine's path. Returns the files changed."""
+    import re
+    changed = []
+    d = Path(scripts_dir)
+    for f in sorted(d.glob("*.exe")) if d.is_dir() else []:
+        data = f.read_bytes()
+        zip_at = data.rfind(b"PK\x05\x06")
+        if zip_at < 0:
+            continue
+        m = None
+        for m in re.finditer(rb"#!(\"?)([A-Za-z]:\\[^\r\n\"]*?python(?:w)?\.exe)\1\r?\n", data):
+            pass                                                     # the last shebang: it sits just before the zip
+        if not m or m.end() > zip_at:
+            continue
+        exe = m.group(2).rsplit(b"\\", 1)[-1]
+        new = b'#!"<launcher_dir>\\..\\' + exe + b'"\n'
+        f.write_bytes(data[:m.start()] + new + data[m.end():])
+        changed.append(f)
+    return changed
+
+
+# ------------------------------------------------------------------------------------------------ Python on Windows
+# python-build-standalone's Windows Python has python.exe and pythonw.exe only. The skills and the models write
+# `python3` (transcribe-audio, notebooks, data tools), and on Windows that name found the Microsoft Store stub in
+# WindowsApps ("Python was not found; run without arguments to install from the Microsoft Store"), not Meshpool's
+# Python. A copy of python.exe named python3.exe sits beside it (python312.dll and Lib are found from the program's
+# own folder, so the copy is the same Python).
+WIN_PYTHON_ALIASES = {"python3.exe": "python.exe"}
+
+
+def add_python_aliases(runtime: Path) -> list[Path]:
+    """Windows: copy runtime/python.exe to the other names the app's users type (python3.exe). Returns the copies."""
+    made = []
+    for alias, src in WIN_PYTHON_ALIASES.items():
+        if not (Path(runtime) / src).is_file():
+            raise BundleError(f"{src} is missing from the Windows Python in {runtime}")
+        shutil.copy2(Path(runtime) / src, Path(runtime) / alias)
+        made.append(Path(runtime) / alias)
+    return made
+
+
 # ------------------------------------------------------------------------------------------------ MinGit
 def fetch_mingit(cache: Path, dest: Path) -> Path:
     """Windows: MinGit (Git and Bash) unpacked into dest, verified against the pinned SHA-256."""
@@ -429,8 +553,8 @@ def fetch_mingit(cache: Path, dest: Path) -> Path:
 
 # ------------------------------------------------------------------------------------------------ ffmpeg, pandoc, speech model
 def fetch_wheel_program(name: str, key: str, cache: Path, dest: Path) -> Path:
-    """Download the pinned wheel (cached, SHA-256 checked), take its program out and put it in dest as ffmpeg or pandoc
-    (.exe on Windows), executable, with MESHPOOL-<NAME>.json beside it. Returns the program's path."""
+    """Download the pinned wheel (cached, SHA-256 checked), take its program out and put it in dest as ffmpeg, pandoc or
+    uv (.exe on Windows, with uvx beside uv), executable, with MESHPOOL-<NAME>.json beside it. Returns the program's path."""
     import zipfile
     spec = WHEEL_PROGRAMS[name]
     if key not in spec["pins"]:
@@ -448,6 +572,14 @@ def fetch_wheel_program(name: str, key: str, cache: Path, dest: Path) -> Path:
             raise BundleError(f"{archive.name} should hold exactly one {name} program, found {[h.filename for h in hits]}")
         with z.open(hits[0]) as src, open(dest / exe, "wb") as out:
             shutil.copyfileobj(src, out, 1 << 20)
+        for other, rx in spec.get("also", {}).items():     # uvx beside uv: the same wheel, one program each
+            more = [i for i in z.infolist() if re.fullmatch(rx, i.filename)]
+            if len(more) != 1:
+                raise BundleError(f"{archive.name} should hold exactly one {other} program, found {[h.filename for h in more]}")
+            target = dest / (other + (".exe" if exe.endswith(".exe") else ""))
+            with z.open(more[0]) as src, open(target, "wb") as out:
+                shutil.copyfileobj(src, out, 1 << 20)
+            target.chmod(0o755)
     (dest / exe).chmod(0o755)
     (dest / f"MESHPOOL-{name.upper()}.json").write_text(
         json.dumps({"program": name, "from": spec["version"], "member": hits[0].filename, "wheel": archive.name,

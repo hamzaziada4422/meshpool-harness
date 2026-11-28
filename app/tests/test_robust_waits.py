@@ -268,7 +268,7 @@ def page(app):
                            "localStorage.removeItem('mp_last_chat'); } catch (e) {}")
         pg.goto(app["base"] + "/")
         pg.wait_for_selector("#newThread", timeout=30000)
-        pg.wait_for_function("() => typeof S === 'object' && S.settings && S.settings.ready !== undefined && S.threads", timeout=30000)
+        pg.wait_for_function("() => typeof S === 'object' && S.settings && S.settings.ready !== undefined && S.threads && S.booted", timeout=30000)
         pg.app = app
         yield pg
         b.close()

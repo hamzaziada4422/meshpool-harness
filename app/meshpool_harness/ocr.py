@@ -35,6 +35,22 @@ def models_dir() -> Path:
     return C.APP / "vendor" / "ocr"
 
 
+# The meshpool apps do not ship OCR (pyproject.toml extra "ocr": RapidOCR needs macOS 13 or later and downloads its
+# models on first use). Said plainly wherever a tool would read text in a picture, and the tool descriptions only offer
+# OCR when it is installed (installed()).
+MISSING = ("this install has no OCR (an optional part the meshpool apps do not include), so text in pictures is not "
+           "read. Look at the picture with view_output instead")
+
+
+def installed() -> bool:
+    """Whether the OCR packages are installed, without importing them (cheap enough for tool descriptions)."""
+    import importlib.util
+    try:
+        return all(importlib.util.find_spec(m) is not None for m in ("rapidocr", "onnxruntime"))
+    except (ImportError, ValueError):
+        return False
+
+
 def available() -> bool:
     try:
         import onnxruntime  # noqa: F401
@@ -125,7 +141,7 @@ def _quality(r: tuple) -> float:
 def read_image(img, lang: str = "auto") -> dict:
     """OCR one image (path, bytes or PIL image). Returns {"text", "script", "confidence"}."""
     if not available():
-        raise RuntimeError("OCR is not included in this install.")
+        raise RuntimeError(MISSING)
     from PIL import Image
     _heif()
     if isinstance(img, (str, Path)):
@@ -159,6 +175,8 @@ def read_image(img, lang: str = "auto") -> dict:
 
 def describe(img, name: str = "image", lang: str = "auto") -> str:
     """Readable OCR result for an agent."""
+    if not available():
+        return f"[No text read from {name}: {MISSING}.]"
     try:
         r = read_image(img, lang)
     except Exception as e:  # noqa: BLE001

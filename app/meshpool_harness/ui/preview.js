@@ -436,6 +436,7 @@ function pvTurnCards(cur, foot, turn) {
   for (let n = foot.nextElementSibling; n && !n.classList.contains("turnfoot"); n = n.nextElementSibling) if (n.classList.contains("pvcards")) { row = n; break; }
   if (!paths.length || !root) { if (row?.nextElementSibling?.classList.contains("pvbigs")) row.nextElementSibling.remove(); row?.remove(); return; }
   if (!row) { row = document.createElement("div"); row.className = "pvcards"; foot.after(row); }
+  row._redraw = () => { if (row.isConnected) pvTurnCards(cur, foot, turn); };   // a large picture that did not load: its card
   // A picture shown large in the reply is not also a card in the row under it (the chart was there twice).
   const bigs = pvBigImages(row, root, paths);
   const shown = paths.filter(p => !bigs.has(p)).slice(0, 6), key = shown.join("|") + "#" + [...bigs].join("|");
@@ -460,10 +461,11 @@ function pvTurnCards(cur, foot, turn) {
 // pictures are all the turn made. The file card stays; the picture is capped at the column's width, loads lazily and
 // opens the preview on a click. A picture the reply text already shows (linkFiles) is not drawn twice.
 const PV_IMG_RX = /\.(png|jpe?g|gif|webp|svg)$/i;
+const PV_BAD = new Set();       // root + "\n" + path of each large picture that did not load: shown as a file card instead
 const PV_ASKED_RX = /\b(show|display|see|view|put|include|embed|attach|let me see)\b[^.?!]*\b(chat|here|inline|reply|below|me|this)\b|\b(in|into|inside) (the |this )?(chat|reply|conversation)\b|\bright here\b|\binline\b/i;
 function pvBigImages(row, root, paths) {
   const old = row.nextElementSibling?.classList.contains("pvbigs") ? row.nextElementSibling : null;
-  const imgs = paths.filter(p => PV_IMG_RX.test(p));
+  const imgs = paths.filter(p => PV_IMG_RX.test(p) && !PV_BAD.has(root + "\n" + p));
   let mu = row.previousElementSibling; while (mu && !mu.classList?.contains("msg-user")) mu = mu.previousElementSibling;
   const asked = mu && typeof userText === "function" ? PV_ASKED_RX.test(userText(mu)) : false;
   const main = imgs.length > 0 && imgs.length === paths.length;
@@ -476,7 +478,7 @@ function pvBigImages(row, root, paths) {
   if (old && old.dataset.k === k) return big;                             // already drawn: leave the loaded pictures alone
   const box = old || document.createElement("div"); box.className = "pvbigs"; box.dataset.root = root; box.dataset.k = k;
   box.innerHTML = list.map(p => `<button type="button" class="pvbig wait" data-pvbig="${esc(p)}" title="Open ${esc(p.split("/").pop())}"><img alt="${esc(p.split("/").pop())}" loading="lazy" decoding="async" src="/raw?t=${encodeURIComponent(MP.token)}&${pvQuery(root, p)}"></button>`).join("");
-  $$("img", box).forEach(im => { const b = im.parentNode; im.onload = () => b.classList.remove("wait"); im.onerror = () => b.remove(); });
+  $$("img", box).forEach(im => { const b = im.parentNode; im.onload = () => b.classList.remove("wait"); im.onerror = () => { PV_BAD.add(root + "\n" + b.dataset.pvbig); b.remove(); if (row._redraw) row._redraw(); }; });   // its card comes back
   if (!old) row.after(box);
   return big;
 }

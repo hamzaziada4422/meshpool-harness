@@ -130,7 +130,7 @@ FIELDS = [
     ("SERPER_API_KEY", "Serper API key", "", "Optional. Google results through serper.dev."),
     ("SEARXNG_URL", "SearXNG address", "", "Optional. Your own SearXNG search server, for example http://localhost:8888."),
     ("INSTANTLY_API_KEY", "Instantly API key", "", "Set from Settings, Connectors."),
-    ("MH_SANDBOX", "Sandbox for commands", "", "On by default where available (Linux needs bubblewrap; macOS has it built in; "
+    ("MH_SANDBOX", "Sandbox for commands", "", "On by default where available (Linux: bubblewrap, which the Linux app carries; macOS has it built in; "
      "not available on Windows) except in Full access. 1 = always on, 0 = off. Commands can write only in the project and temporary folders."),
     ("MH_SANDBOX_NETWORK", "Network for sandboxed commands", "", "Empty or 1 = commands may use the network. 0 = no network inside the sandbox."),
     ("MH_SHELL_ENV_ALLOW", "Secrets the agent's commands may see", "", "Optional. Comma-separated variable names (for example OPENAI_API_KEY) kept in the "
@@ -648,6 +648,7 @@ def load_into_env(override: bool = False) -> dict:
     bundled.use_bundled_tools()               # packaged app: its own Node and Git come first on PATH (idempotent)
     try:
         from meshpool_harness.core import http as _h
+        _h.use_system_trust()                 # the system's certificate store (a company proxy's CA), once
         _h.install_tls()                      # CA trust fallback (python.org macOS, a company proxy's CA)
     except Exception:  # noqa: BLE001 - never block start-up
         pass
@@ -751,10 +752,15 @@ def system_check() -> list[dict]:
                      "fix": why})
     else:
         from meshpool_harness import browser_use as BU
-        have = bundled.packaged() or bool(BU.find_playwright_chromium())
-        rows.append({"name": "Browser use", "ok": True,
-                     "detail": ("ready" if pw and have else "sets itself up the first time it is used"),
-                     "fix": "To do it now, run: meshpool install-browser"})
+        have = BU.find_playwright_chromium()
+        if bundled.packaged() and not (pw and have):     # the app never downloads one: it ships inside it
+            rows.append({"name": "Browser use", "optional": True, "ok": False,
+                         "detail": "the browser that ships with meshpool is missing",
+                         "fix": "Missing from this install; reinstall meshpool."})
+        else:
+            rows.append({"name": "Browser use", "ok": True,
+                         "detail": (f"ready ({have})" if pw and have else "sets itself up the first time it is used"),
+                         "fix": "To do it now, run: meshpool install-browser"})
     try:
         from meshpool_harness.agent import computer_mcp_server as CU
         st = CU.computer_status()

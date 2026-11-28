@@ -1,13 +1,15 @@
 """The programs Meshpool ships inside its installers, and how the installed app finds them.
 
-Rule: in the packaged app (config.packaged(), or a frozen build) Meshpool uses ONLY its own copy of Node.js, Git, Pi,
+Rule: in the packaged app (config.packaged(), or a frozen build) meshpool uses ONLY its own copy of Node.js, uv, Git, Pi,
 Chromium, LibreOffice (office_runtime.py), ffmpeg, pandoc and the speech-to-text model. It never falls back to PATH, npx or a download. Codex and OpenCode are not
 shipped at all (harnesses.NOT_SHIPPED). In a source checkout or command-line install nothing changes: PATH and npx
 still work.
 
 Layout (packaging/build_all.py), relative to config.APP.parent (macOS: Meshpool.app/Contents/Resources):
   node/            Node.js (bin/node, bin/npx; Windows: node.exe)
-  git/             Windows: MinGit (cmd, mingw64, usr/bin).  macOS: bin/git and libexec/git-core
+  uv/              uv and uvx (Windows: uv.exe, uvx.exe), pinned in packaging/bundled_tools.py: the uvx MCP servers
+  git/             Windows: MinGit (cmd, ucrt64, usr/bin).  macOS: bin/git and libexec/git-core
+  python/          Python (bin/python3). Windows: runtime/ (python.exe, pythonw.exe, and python3.exe, the name skills use)
   app/vendor/      hermes, pi (with its node_modules), libreoffice, browsers, ffmpeg, pandoc, whisper (the speech model)
 """
 from __future__ import annotations
@@ -48,10 +50,32 @@ def node_exe() -> str | None:
     return os.environ.get("MH_NODE") or shutil.which("node")
 
 
+def uv_dir() -> Path:
+    return root() / "uv"
+
+
+def bundled_uv() -> str | None:
+    """The uv the app ships (uv/uv, Windows uv/uv.exe), or None. uvx sits beside it."""
+    for p in (uv_dir() / "uv.exe", uv_dir() / "uv"):
+        if p.is_file():
+            return str(p)
+    return None
+
+
+# MinGit's own programs folder is named after its toolchain: ucrt64 since Git for Windows moved to UCRT (2.56.1, the
+# pinned release, has ucrt64/ and no mingw64/), mingw64 before that, clangarm64 on Arm. All are listed, so moving the
+# MinGit pin cannot drop it from PATH again; only the ones that exist are used.
+MINGIT_PROGRAM_DIRS = ("ucrt64", "mingw64", "clangarm64")
+
+
 def git_dirs() -> list[Path]:
-    """Folders of the bundled Git that belong on PATH (Windows MinGit has three), existing ones only."""
+    """Folders of the bundled Git that belong on PATH (Windows MinGit has three: cmd, its programs folder, usr/bin),
+    existing ones only."""
     g = root() / "git"
-    cands = [g / "cmd", g / "mingw64" / "bin", g / "usr" / "bin"] if os.name == "nt" else [g / "bin"]
+    if os.name == "nt":
+        cands = [g / "cmd", *(g / d / "bin" for d in MINGIT_PROGRAM_DIRS), g / "usr" / "bin"]
+    else:
+        cands = [g / "bin"]
     return [p for p in cands if p.is_dir()]
 
 
@@ -73,21 +97,32 @@ def bundled_bash() -> str | None:
     return None
 
 
-def use_bundled_tools() -> None:
-    """Put the bundled Node and Git first on this process's PATH, so every child (the agents' shell, the Node agents,
-    `git` called by name anywhere in Meshpool, MCP servers started with npx) gets Meshpool's own. Idempotent. Only in
-    the packaged app; a source checkout keeps the developer's PATH."""
+def front_dirs() -> list:
+    """The bundled programs' folders that go first on PATH, in order: Node, uv, Git, LibreOffice, ffmpeg, pandoc. [] outside
+    the packaged app."""
     if not packaged():
-        return
+        return []
     front = [str(p) for p in git_dirs()]
     if node_dir().is_dir():
         front.insert(0, str(node_dir() if os.name == "nt" else node_dir() / "bin"))
+    if bundled_uv():                                  # `uvx pkg==1.2.3` in mcp.json runs the app's own uv
+        front.insert(1 if node_dir().is_dir() else 0, str(uv_dir()))
     lo = vendor_dir("libreoffice") / ("LibreOffice.app/Contents/MacOS" if sys.platform == "darwin" else "program")
     if lo.is_dir():                                   # so vendored skills that look for `soffice` find ours
         front.append(str(lo))
     for name, exe in (("ffmpeg", bundled_ffmpeg()), ("pandoc", bundled_pandoc())):
         if exe and not (name == "ffmpeg" and ffmpeg_needs_newer_macos()):
             front.append(str(Path(exe).parent))       # `ffmpeg` and `pandoc` by name run Meshpool's own copies
+    return front
+
+
+def use_bundled_tools() -> None:
+    """Put the bundled Node and Git first on this process's PATH, so every child (the agents' shell, the Node agents,
+    `git` called by name anywhere in Meshpool, MCP servers started with npx) gets Meshpool's own. Idempotent. Only in
+    the packaged app; a source checkout keeps the developer's PATH."""
+    if not packaged():
+        return
+    front = front_dirs()
     cur = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p and p not in front]
     os.environ["PATH"] = os.pathsep.join(front + cur)
     # The agents' shell finds Meshpool's own Python first on PATH; these name the rest. The speech model is a folder
@@ -98,6 +133,9 @@ def use_bundled_tools() -> None:
         os.environ.setdefault("MESHPOOL_WHISPER_MODEL", str(model))
     if sys.executable:
         os.environ.setdefault("MESHPOOL_PYTHON", sys.executable)
+        if bundled_uv():                              # uvx uses the app's Python 3.12, never a downloaded one
+            os.environ.setdefault("UV_PYTHON", sys.executable)
+            os.environ.setdefault("UV_PYTHON_DOWNLOADS", "never")
 
 
 def bundled_program(name: str) -> str | None:

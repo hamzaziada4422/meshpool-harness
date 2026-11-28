@@ -346,7 +346,9 @@ def _mcp_add_json(args: list) -> int:
     from meshpool_harness.agent import mcp as M
     if len(args) != 2 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,62}", args[0]):
         print("usage: meshpool mcp add-json NAME JSON   (JSON: {\"command\": ..., \"args\": [...]} or {\"url\": ...};"
-              " - reads it from standard input)", file=sys.stderr)
+              " - reads it from standard input)\n"
+              "  optional: \"enabled_tools\": [...] offers only those tools, \"disabled_tools\": [...] hides those",
+              file=sys.stderr)
         return 2
     raw = sys.stdin.read() if args[1] == "-" else args[1]
     try:
@@ -443,6 +445,8 @@ def _permissions_cmd(argv) -> int:
 def main(argv=None):
     """The command line. Anything that goes wrong comes out as one `error: ...` line and exit code 1, never a
     traceback (F-10); MH_DEBUG=1 keeps the traceback. Ctrl+C and sys.exit pass through."""
+    from meshpool_harness.core import http as _mhttp
+    _mhttp.use_system_trust()                   # first: the system's certificates (a company proxy's) for all HTTPS
     from meshpool_harness.core.tools import exit_cleanly_on_sigterm
     exit_cleanly_on_sigterm()                   # the console script enters here, not through __main__
     try:

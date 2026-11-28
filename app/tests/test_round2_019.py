@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from tests.test_ux018 import _fake_chat, app, page, sync_api  # noqa: F401  (the fixtures start the real server and a browser)
+from tests.uiwait import wait_js
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "app"))
@@ -391,7 +392,7 @@ def test_search_shows_a_snippet_and_no_developer_key_hints_for_chat_users(app, p
     "Actions Alt+Enter" to people who never use Code."""
     cid = page.evaluate("""async w => { const v = await post('/api/agent', {workdir: w, harness: 'meshpool-work', kind: 'cowork', mode: 'auto', task: 'Order notes'});
         await post('/api/agent/' + v.id + '/send', {text: 'Please find the brass lantern invoice from March and tell me what it says'}); return v.id; }""", app["work"])
-    page.wait_for_function("""id => api('/api/agent/' + id + '?since=0').then(v => !['starting', 'working', 'waiting'].includes(v.state))""", arg=cid, timeout=60000, polling=500)
+    wait_js(page, """id => api('/api/agent/' + id + '?since=0').then(v => !['starting', 'working', 'waiting'].includes(v.state))""", cid, timeout=60, every=0.5)
     page.evaluate("() => loadThreads()")
     page.evaluate("() => openSearch('all', '')")
     page.wait_for_selector("#srchIn")

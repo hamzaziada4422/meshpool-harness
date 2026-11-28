@@ -391,6 +391,16 @@ def child_env() -> dict:
         env = merged
         for k in ("MESHPOOL_RESOLVING_ENV", "PWD", "OLDPWD", "SHLVL", "_"):
             env.pop(k, None)
+        try:
+            # The packaged app's own Node, Git and tools stay first: the login PATH went ahead of them, so the bundled
+            # npx (#!/usr/bin/env node) ran on an older system Node from /usr/local/bin or Homebrew and failed
+            from meshpool_harness import bundled as _B
+            front = [p for p in _B.front_dirs() if p]
+        except Exception:  # noqa: BLE001
+            front = []
+        if front:
+            rest = [p for p in env.get("PATH", "").split(os.pathsep) if p and p not in front]
+            env["PATH"] = os.pathsep.join(front + rest)
     # PA-toplevel-23: a server outlives the turn it was started in; with the turn's MH_CHECK_RUN it would record every
     # later turn's checks into that first one. Without it, it follows checks.current() (the pointer file).
     env.pop("MH_CHECK_RUN", None)
@@ -1075,6 +1085,42 @@ def read_only_tools(tools: list[dict]) -> list[dict]:
     return [t for t in tools if ok(t)]
 
 
+def _tool_list(v) -> set:
+    """A tool-name list from a server's settings: a JSON list, or one comma-separated text."""
+    if isinstance(v, str):
+        v = v.split(",")
+    return {str(x).strip() for x in v or [] if str(x).strip()} if isinstance(v, (list, tuple, set, str)) else set()
+
+
+def filter_tools(spec: dict, tools: list[dict]) -> list[dict]:
+    """The tools of one server the model may see. A server's settings can name them (Codex's names for it):
+    "enabled_tools": only these; "disabled_tools": all but these. A server with 40 tools filled the context and the
+    model picked the wrong one; a user could only switch the whole server off (anthropics/claude-code#7328)."""
+    on, off = _tool_list(spec.get("enabled_tools")), _tool_list(spec.get("disabled_tools"))
+    if not on and isinstance(spec.get("enabled_tools"), (list, tuple)):
+        return []                    # "enabled_tools": [] offers none, as in Codex (not every tool)
+    return [t for t in tools if (not on or t.get("name") in on) and t.get("name") not in off]
+
+
+def coerce_args(schema: dict | None, args: dict) -> dict:
+    """Arguments the model sent as text where the tool's input schema wants a number, true/false or a list ("10",
+    "true", '["a"]'), in the declared type; everything else as it was. Many servers validate strictly and refuse the
+    call, which cost a turn (open-webui/open-webui#25641). Only top-level properties with one plain type change."""
+    props = (schema or {}).get("properties") if isinstance(schema, dict) else None
+    if not isinstance(props, dict) or not isinstance(args, dict):
+        return args
+    from meshpool_harness.core.tools import coerce_arg
+    out = dict(args)
+    for k, v in args.items():
+        t = (props.get(k) or {}).get("type") if isinstance(props.get(k), dict) else None
+        if isinstance(t, list):                          # ["integer", "null"]: the one type besides null
+            rest = [x for x in t if x != "null"]
+            t = rest[0] if len(rest) == 1 else None
+        if t in ("integer", "number", "boolean", "array") and isinstance(v, str):
+            out[k] = coerce_arg(v, t)
+    return out
+
+
 class Server:
     def __init__(self, name: str, spec: dict, log_dir: Path, roots: list[str]):
         # this chat's own folder, not whatever the process-wide variable holds when several chats start together
@@ -1321,18 +1367,26 @@ class Server:
             with self._lock:
                 if self.cancelled:                 # the caller gave up waiting: stay an error, do not appear late
                     raise MCPError(self.error or "cancelled")
-                self.tools = [t for t in tools if isinstance(t, dict) and isinstance(t.get("name"), str)]
-                if self.spec.get("read_only"):     # Settings, Connectors: read only
-                    self.tools = read_only_tools(self.tools)
+                every = [t for t in tools if isinstance(t, dict) and isinstance(t.get("name"), str)]
+                self.tools = self._offered(every)
                 self.status = "connected"
-            if self.spec.get("command") and self.tools:   # a private one too: a chat's browser then starts lazily
-                save_tools(self.name, self.spec, self.tools, self.info)
+            # the server's whole list is saved, and the settings are applied to it each time (_offered): a list saved
+            # after the settings had narrowed it kept a tool hidden for a day after the user turned it back on, and a
+            # server switched to read only afterwards was offered its write tools again from the saved list
+            if self.spec.get("command") and every:   # a private one too: a chat's browser then starts lazily
+                save_tools(self.name, self.spec, every, self.info)
         except Exception as e:
             with self._lock:
                 if not self.cancelled:
                     self.status, self.error = "error", redact(e)[:400]
                     self.timed_out = bool(_TIMEOUT_ERR.search(str(e)))
             self.close()
+
+    def _offered(self, tools: list[dict]) -> list[dict]:
+        """The server's tools as this server's settings offer them: enabled_tools / disabled_tools, then read only
+        (Settings, Connectors)."""
+        tools = filter_tools(self.spec, tools)
+        return read_only_tools(tools) if self.spec.get("read_only") else tools
 
     def start_lazy(self) -> bool:
         """Connected from the saved tool list, without starting the process: it starts on the first tool call.
@@ -1343,7 +1397,7 @@ class Server:
         if not hit:
             return False
         self._join_pool()
-        self.tools = [t for t in hit[0] if isinstance(t, dict) and isinstance(t.get("name"), str)]
+        self.tools = self._offered([t for t in hit[0] if isinstance(t, dict) and isinstance(t.get("name"), str)])
         self.info = hit[1]
         self.status = "connected"
         return True
@@ -1379,6 +1433,9 @@ class Server:
                 args["_model"] = str(model)                  # the chat's model, for engines that call one
             if self.spec.get("chat_id"):
                 args["_chat"] = str(self.spec["chat_id"])    # the chat it serves (one process serves every chat)
+        schema = next((t.get("inputSchema") for t in (getattr(self, "tools", None) or [])
+                       if isinstance(t, dict) and t.get("name") == tool), None)   # a server not listed yet: no schema
+        args = coerce_args(schema, args)
         r = self._rpc("tools/call", {"name": tool, "arguments": args}, float(self.spec.get("timeout", 120)))
         images: list[dict] = []
         parts = []
@@ -1566,6 +1623,17 @@ class Manager:
 
     def has(self, name: str) -> bool:
         return name in self.map or (name in (RES_LIST, RES_READ) and bool(self._resource_servers()))
+
+    def coerce(self, name: str, args: dict) -> dict:
+        """The arguments as the server will be sent them (coerce_args with the tool's input schema). The agent judges
+        a call by these, before it is approved: a list sent as JSON text ('["~/.ssh/id_rsa"]') was one odd relative
+        path to the check that keeps the office tools inside the project, and a real list to the server."""
+        hit = self.map.get(name)
+        s = self.servers.get(hit[0]) if hit else None
+        if not s or not isinstance(args, dict):
+            return args
+        tools = getattr(s, "tools", None) or []
+        return coerce_args(next((t.get("inputSchema") for t in tools if t.get("name") == hit[1]), None), args)
 
     # ---- prompts (ready-made requests a server offers, used as /mcp__server__prompt) ------------------------------
     def prompts(self) -> list[dict]:

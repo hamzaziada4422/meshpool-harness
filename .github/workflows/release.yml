@@ -244,8 +244,9 @@ jobs:
           bash packaging/mac/repack.sh "$PWD/dist-src"
           ls -la dist-src/out
       - name: Smoke test the disk image (what a user downloads) before anything is published
-        # normally a few minutes; a hang must not burn the job
-        timeout-minutes: 30
+        # normally a few minutes (smoke, the tool health check, LibreOffice, Hermes); more on the Intel runner's 4 slow
+        # cores. A hang must not burn the job.
+        timeout-minutes: 45
         run: |
           set -euo pipefail
           VER=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' app/meshpool_harness/__init__.py)
@@ -260,6 +261,8 @@ jobs:
           R="$T/Meshpool.app/Contents/Resources"
           echo "== $f.dmg on $(uname -m)"
           "$R/python/bin/python3" packaging/smoke.py --app "$R/app" --version "$VER"
+          # every tool the agent can be offered, called once for real, offline (docs/dev/TOOLS_HEALTH.md)
+          "$R/python/bin/python3" packaging/tool_health.py --app "$R/app" --version "$VER"
           # the pruned LibreOffice (packaging/lo_prune.py) must still draw a deck, recalculate a workbook and convert a document
           "$R/python/bin/python3" packaging/verify_lo_prune.py "$R/app/vendor/libreoffice/LibreOffice.app/Contents/MacOS/soffice"
           # the pruned Hermes (bundled_tools.hermes_ignore) must still start its ACP adapter and finish a turn against a mock model
@@ -323,13 +326,18 @@ jobs:
       - name: Build the app tree
         run: python packaging/build_all.py --only=win
       - name: Smoke test the app the installer will carry, before anything is published
-        timeout-minutes: 15      # normally about 2 minutes; a hang must not run until the job's timeout
+        # smoke (now with the browser and the bundled programs), the tool health check (every tool, LibreOffice and
+        # Chromium cold), the LibreOffice and Hermes checks: several minutes on a fresh, Defender-scanned tree. A hang
+        # must still not run until the job's timeout.
+        timeout-minutes: 35
         shell: bash
         run: |
           set -euo pipefail
           VER=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' app/meshpool_harness/__init__.py)
           M=dist-src/app-win/Meshpool
           "$M/runtime/python.exe" packaging/smoke.py --app "$M/app" --version "$VER"
+          # every tool the agent can be offered, called once for real, offline (docs/dev/TOOLS_HEALTH.md)
+          "$M/runtime/python.exe" packaging/tool_health.py --app "$M/app" --version "$VER"
           # the pruned LibreOffice (packaging/lo_prune.py) must still draw a deck, recalculate a workbook and convert a document
           "$M/runtime/python.exe" packaging/verify_lo_prune.py "$M/app/vendor/libreoffice/program/soffice.exe"
           # the pruned Hermes (bundled_tools.hermes_ignore) must still start its ACP adapter and finish a turn against a mock model
@@ -556,6 +564,11 @@ jobs:
             cd /tmp && tar -xzf /w/out/Meshpool-Linux-x64.tar.gz
             env -i HOME=/root PATH=/usr/bin:/bin LANG=C.UTF-8 /tmp/Meshpool/python/bin/python3 -P /w/packaging/linux/selfcheck.py /tmp/Meshpool
             env -i HOME=/root PATH=/usr/bin:/bin LANG=C.UTF-8 /tmp/Meshpool/python/bin/python3 /w/packaging/smoke.py --app /tmp/Meshpool/app --version "$VER"
+            # every tool the agent can be offered, called once for real, offline (docs/dev/TOOLS_HEALTH.md): as root,
+            # then as an ordinary user with the download unpacked in their own home, as real users run it
+            env -i HOME=/root PATH=/usr/bin:/bin LANG=C.UTF-8 /tmp/Meshpool/python/bin/python3 /w/packaging/tool_health.py --app /tmp/Meshpool/app --version "$VER"
+            useradd -m -s /bin/bash ana
+            su ana -s /bin/bash -c "cd /home/ana && tar -xzf /w/out/Meshpool-Linux-x64.tar.gz && env -i HOME=/home/ana USER=ana PATH=/usr/bin:/bin LANG=C.UTF-8 /home/ana/Meshpool/python/bin/python3 /w/packaging/tool_health.py --app /home/ana/Meshpool/app --version $VER"
             # `meshpool check` exits 1 here because no API key is set; what matters is where each tool comes from
             out=$(env -i HOME=/root PATH=/usr/bin:/bin /tmp/Meshpool/meshpool check || true); echo "$out"
             for t in "Git " "Node.js " "LibreOffice "; do

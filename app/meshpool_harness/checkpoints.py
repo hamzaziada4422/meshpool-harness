@@ -91,6 +91,85 @@ def undo_turns() -> int:
         return 100
 
 
+# ---------- commits a turn made ----------------------------------------------------------------------------------------
+# First-hour run, 0.0.18: "add a function, then commit", then Undo, put the files back and left the commit, so the
+# repository showed the commit and, uncommitted, its reverse. Undo now also takes back the commits those turns made,
+# while that is safe: the branch is still where the last of them left it, and no remote has the commits.
+
+def _git(root, *args, timeout: float = 10) -> tuple[int, str]:
+    import subprocess
+    exe = shutil.which("git")
+    if not exe:
+        return 127, ""
+    try:
+        # never the repository's own programs (hooks, fsmonitor, a pager), and no optional index lock for a look
+        safe = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", f"core.hooksPath={os.devnull}", "--no-pager"]
+        r = subprocess.run([exe, *safe, "-C", str(root), *args], capture_output=True, text=True, timeout=timeout,
+                           stdin=subprocess.DEVNULL, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return r.returncode, (r.stdout or "").strip()
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return 1, ""
+
+
+def _git_head(root) -> dict | None:
+    """{"sha", "ref"} of the repository the folder is in (ref "" when HEAD is detached); None outside a repository, or
+    in one with no commit yet. MH_UNDO_GIT=0 turns commit tracking off."""
+    if os.environ.get("MH_UNDO_GIT", "1") == "0":
+        return None
+    try:
+        p = Path(root).resolve()
+        if not any((d / ".git").exists() for d in (p, *p.parents)):
+            return None                                 # not a repository: no git call on every turn
+    except OSError:
+        return None
+    rc, sha = _git(root, "rev-parse", "--verify", "-q", "HEAD")
+    if rc != 0 or not re.fullmatch(r"[0-9a-f]{40,64}", sha):
+        return None
+    rc, ref = _git(root, "symbolic-ref", "-q", "HEAD")
+    return {"sha": sha, "ref": ref if rc == 0 else ""}
+
+
+def _pushed(root, old: str, new: str) -> bool:
+    """Any commit of old..new is on a remote branch (or git cannot tell). Every one is checked, not only the last: a
+    push of the first of two commits must keep them both."""
+    a = _git(root, "rev-list", "--count", f"{old}..{new}")
+    b = _git(root, "rev-list", "--count", f"{old}..{new}", "--not", "--remotes")
+    return bool(a[0] or b[0] or a[1] != b[1])
+
+
+def _undo_commits(root, turns: list, kept: list) -> dict:
+    """After Undo put the files of `turns` back: take back the commits they made with `git reset --mixed` to where
+    the branch was before the first of them (the files already hold that state; nothing in the working tree changes).
+    Only when the branch is the same one, sits exactly where the last turn left it, the old commit is an ancestor, and
+    no remote branch has the new commits. Never raises. {"commits_undone": [...]} or {"commits_kept": [...], "why"}."""
+    try:
+        first = next((x.get("git") for x in sorted(turns, key=lambda x: x["n"]) if x.get("git")), None)
+        last = next((x.get("git_after") for x in sorted(turns, key=lambda x: -x["n"]) if x.get("git_after")), None)
+        if not first or not last or first["sha"] == last["sha"]:
+            return {}
+        now = _git_head(root)
+        if not now:
+            return {}
+        rc, log = _git(root, "log", "--format=%h %s", f"{first['sha']}..{now['sha']}")
+        made = [ln for ln in log.splitlines() if ln.strip()][:10] if rc == 0 else []
+        if not made:
+            return {}
+        why = ""
+        if now != last or first["ref"] != now["ref"]:
+            why = "the branch moved after this reply"
+        elif _git(root, "merge-base", "--is-ancestor", first["sha"], now["sha"])[0] != 0:
+            why = "the history was rewritten after this reply"
+        elif _pushed(root, first["sha"], now["sha"]):
+            why = "it was already sent to the remote repository"
+        elif kept:
+            why = "some files changed after this reply, so they were kept"
+        if not why and _git(root, "reset", "-q", "--mixed", first["sha"])[0] != 0:
+            why = "git could not move the branch back"
+        return {"commits_kept": made, "commits_why": why} if why else {"commits_undone": made}
+    except Exception:  # noqa: BLE001 - the files are already back; the commits are only reported
+        return {}
+
+
 def _ignore_rules(root: Path) -> list[tuple[str, bool]]:
     rules = []
     gi = root / ".gitignore"
@@ -881,6 +960,9 @@ class Checkpoints:
             idx["seq"] = n
             t = {"n": n, "title": (title or "")[:120], "time": time.time(), "message_index": message_index,
                  "event_index": event_index, "pre": {}, "post": {}, "changed": [], "done": False, "mode": self.mode}
+            head = _git_head(self.root)
+            if head:
+                t["git"] = head                        # where the repository's branch was: Undo takes back its commits
             idx["turns"].append(t)
             self._dirty = True
             self._register()
@@ -912,6 +994,10 @@ class Checkpoints:
                 self._book(t, *self._end_window(w))
             t["done"] = True
             t["changed"] = self._changed(t)
+            if t.get("git"):
+                after = _git_head(self.root)
+                if after:
+                    t["git_after"] = after
             self._dirty = True
             self._prune()
             self._flush()
@@ -1415,6 +1501,7 @@ class Checkpoints:
                 cache.pop(path, None)
                 note_foreign_write(self.root, path, str(self.store), shared=self.shared)
             self._cache_dirty = True
+            commits = _undo_commits(self.root, [x for x in later if self._done(x)], kept)
             idx["turns"] = [x for x in turns if x["n"] < turn]
             self._legacy.clear()
             self._dirty = True
@@ -1432,6 +1519,7 @@ class Checkpoints:
             out["notes"] = notes
         if copied:
             out["backup"] = str(bdir)
+        out.update(commits)
         return out
 
     def _trim_backups(self) -> None:

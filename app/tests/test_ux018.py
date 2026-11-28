@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.uiwait import wait_js
+
 sync_api = pytest.importorskip("playwright.sync_api")
 
 REPO = Path(__file__).resolve().parents[2]
@@ -102,10 +104,15 @@ def _open(app, pw, width=1280, height=820, **ctx):
                        "localStorage.removeItem('mp_last_chat'); localStorage.removeItem('mp_sidehidden'); } catch (e) {}")
     pg.goto(app["base"] + "/")
     pg.wait_for_selector("#newThread", timeout=30000)
-    pg.wait_for_function("() => typeof S === 'object' && S.settings && S.settings.ready !== undefined && S.threads", timeout=30000)
+    pg.wait_for_function(BOOTED, timeout=30000)
     pg.errors = errors
     pg.browser_ = b
     return pg
+
+
+# Start-up is over (app.js sets S.booted last): the chat list alone is not enough, start-up goes on after it (the
+# project list, newThread) and would replace a chat a test opens meanwhile.
+BOOTED = "() => typeof S === 'object' && S.settings && S.settings.ready !== undefined && S.threads && S.booted"
 
 
 @pytest.fixture()
@@ -123,8 +130,8 @@ def _chats(app, page, n=3):
             for (let i = 0; i < n; i++) { const v = await post('/api/agent', {workdir: w, harness: 'meshpool-work', kind: 'cowork', mode: 'auto', task: 'stream long ' + i});
               await post('/api/agent/' + v.id + '/send', {text: 'stream long please, part ' + i}); ids.push(v.id); }
             return ids; }""", [app["work"], n - len(app["chats"])])
-        page.wait_for_function("""ids => Promise.all(ids.map(id => api('/api/agent/' + id + '?since=0').then(v => v.state)))
-            .then(s => s.every(x => !['starting', 'working', 'waiting'].includes(x)))""", arg=ids, timeout=120000, polling=1000)
+        wait_js(page, """ids => Promise.all(ids.map(id => api('/api/agent/' + id + '?since=0').then(v => v.state)))
+            .then(s => s.every(x => !['starting', 'working', 'waiting'].includes(x)))""", ids, timeout=120, every=0.5)
         app["chats"] += ids
     page.evaluate("() => loadThreads()")
     page.wait_for_timeout(300)
@@ -132,8 +139,15 @@ def _chats(app, page, n=3):
 
 
 def _fake_chat(page, cid="t-ux018"):
-    """An open chat with no server behind it: applyEv draws into it as a live chat would."""
-    page.evaluate("""cid => { openThread(cid, true); if (S.cur.pollT) { clearTimeout(S.cur.pollT); clearInterval(S.cur.pollT); }
+    """An open chat with no server behind it: applyEv draws into it as a live chat would.
+
+    openThread asks the server for the chat at once (poll). The answer, a 404, used to land after the column below was
+    cleared, at any time later on a busy computer: commitStage swapped the column for "This chat is gone." over what the
+    test had drawn (a card 59 px off, "Could not show this item."). That first answer (a 404, or the chat when it is a
+    real one) is waited for first: commitStage ends the stage."""
+    page.evaluate("cid => { openThread(cid, true); }", cid)
+    page.wait_for_function("cid => S.cur && S.cur.id === cid && !S.cur.stage", arg=cid, timeout=30000)
+    page.evaluate("""cid => { if (S.cur.pollT) { clearTimeout(S.cur.pollT); clearInterval(S.cur.pollT); }
         S.cur.pollT = null; stopStream(S.cur); S.cur.stage = null; $('#col').replaceChildren(); $('#col').classList.remove('loading');
         S.cur.view.state = 'idle'; }""", cid)
 
@@ -177,6 +191,45 @@ def test_the_open_chat_stays_marked_while_another_row_is_hovered(app, page, sche
     assert page.errors == [], page.errors
 
 
+def test_a_fake_chat_keeps_what_the_test_draws_when_the_server_answers_late(page):
+    """The harness itself: the server's late answer for a chat _fake_chat opened (a 404 on a busy computer) added
+    "This chat is gone." under what a test had drawn, at any moment. Held for 1.5 s here, as a slow server would."""
+    page.route("**/api/agent/t-late-answer*", lambda route: (time.sleep(1.5), route.continue_()))
+    try:
+        _fake_chat(page, "t-late-answer")
+        page.evaluate("() => applyEv({type: 'user', text: 'drawn by the test', i: 0})")
+        page.wait_for_timeout(2500)
+        assert "drawn by the test" in page.inner_text("#col")
+        assert "This chat is gone" not in page.inner_text("#col")
+    finally:
+        page.unroute("**/api/agent/t-late-answer*")
+
+
+def test_the_page_helper_waits_until_start_up_is_over(app):
+    """_open returned as soon as the chat list had loaded; start-up then went on (the project list, then newThread)
+    and replaced the chat a test had just opened with a new one, so its events went to a chat with no view ("Could not
+    show this item.", test_first_hour_ui_points) or its cards moved (test_round3_020). The project list is held for
+    1.5 s here, as on a busy computer: the chat opened after _open stays open."""
+    with sync_api.sync_playwright() as pw:
+        b = _launch(pw)
+        try:
+            c = b.new_context(viewport={"width": 1280, "height": 820})
+            pg = c.new_page()
+            pg.add_init_script("try { localStorage.setItem('mp_onbDone', '1'); localStorage.setItem('mp_permsAsked', '1'); "
+                               "localStorage.removeItem('mp_last_chat'); } catch (e) {}")
+            # the project list answers 1.5 s late, held in the page (a held route would hold the test too)
+            pg.add_init_script("""{ const f = window.fetch; window.fetch = (u, o) => /\\/api\\/pj(\\?|$)/.test(String(u && u.url || u))
+                ? new Promise(r => setTimeout(r, 1500)).then(() => f(u, o)) : f(u, o); }""")
+            pg.goto(app["base"] + "/")
+            pg.wait_for_selector("#newThread", timeout=30000)
+            pg.wait_for_function(BOOTED, timeout=30000)
+            pg.evaluate("() => { openThread('t-boot-race', true); }")
+            pg.wait_for_timeout(2500)
+            assert pg.evaluate("() => S.cur && S.cur.id") == "t-boot-race"
+        finally:
+            b.close()
+
+
 # ---------------------------------------------------------------------------------------------------- UX-02
 def test_a_sidebar_redraw_keeps_the_rows_that_did_not_change(app, page):
     """UX-02: any change to the chat list beyond a status dot (a new title, a new chat) rewrote the whole sidebar with
@@ -185,15 +238,21 @@ def test_a_sidebar_redraw_keeps_the_rows_that_did_not_change(app, page):
     dot that already popped does not pop again."""
     ids = _chats(app, page, 3)
     page.evaluate("id => { const t = S.threads.find(x => x.id === id); t.unread = true; renderSide(); }", ids[2])
-    page.wait_for_timeout(450)                                   # the unread dot's pop is over
-    page.evaluate("() => { for (const li of document.querySelectorAll('#sideList .th, #sideList .nv')) li._mark = 1; }")
+    # the unread dot's pop is over (waited for, not a guessed 450 ms: on a busy computer it starts late)
+    page.wait_for_function("() => [...document.querySelectorAll('#sideList .dot.done')].flatMap(d => d.getAnimations())"
+                           ".every(a => a.playState !== 'running' && a.playState !== 'pending' && !a.pending)", polling=50)
+    # Marking, the rename, the redraw and the count are one step: the sidebar's own list refresh (loadThreads every 4 to
+    # 20 s, from the server) could otherwise land between them and put the server's title back over the test's rename.
     page.evaluate(REMOVED, "#sideList")
-    page.evaluate("id => { const t = S.threads.find(x => x.id === id); t.title = t.title + ' (renamed)'; renderSide(); }", ids[1])
-    page.wait_for_timeout(50)
-    got = page.evaluate("""id => ({removed: removed(), rows: document.querySelectorAll('#sideList .th').length,
+    got = page.evaluate("""id => {
+        for (const li of document.querySelectorAll('#sideList .th, #sideList .nv')) li._mark = 1;
+        window.removed();                                        // nothing before the rename counts
+        window.__rm = 0;
+        const t = S.threads.find(x => x.id === id); t.title = t.title + ' (renamed)'; renderSide();
+        return {removed: removed(), rows: document.querySelectorAll('#sideList .th').length,
         lost: [...document.querySelectorAll('#sideList .th, #sideList .nv')].filter(li => !li._mark).length,
         title: document.querySelector(`.th[data-id='${id}'] .tt`).textContent,
-        pops: [...document.querySelectorAll('#sideList .dot.done')].flatMap(d => d.getAnimations()).filter(a => a.playState === 'running').length})""", ids[1])
+        pops: [...document.querySelectorAll('#sideList .dot.done')].flatMap(d => d.getAnimations()).filter(a => a.playState === 'running' || a.pending).length}; }""", ids[1])
     assert got["title"].endswith("(renamed)"), got
     assert got["removed"] <= 2 and got["lost"] == 0, got
     assert got["pops"] == 0, got

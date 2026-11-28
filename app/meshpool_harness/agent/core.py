@@ -52,7 +52,8 @@ SESSIONS = C.runs_dir() / "sessions"
 DEFAULT_MODEL = "deepseek-v4.1-flash"
 
 READ_ONLY = {"bash_output", "bash_stop", "read_file", "grep", "glob", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
-             "ask_user", "diagnostics", "find_skill", "update_plan", "mcp_find_tools"}
+             "ask_user", "diagnostics", "find_skill", "update_plan", "mcp_find_tools",
+             "get_capability", "save_tool"}     # these two ask the user with their own card (capability_get, tools_store)
 # Run without asking, yet they write files into the chat's folder: the turn's checkpoint books them (office_task's
 # engine saves the finished deck or workbook there), so Undo of the turn takes those files back.
 WRITES_FILES = {"office_task"}
@@ -297,6 +298,45 @@ T.SCHEMAS.setdefault("use_skill", T._fn(
     "a task that matches a skill, and whenever the user writes $skill-name.",
     {"name": T.S, "arguments": {"type": "string", "description": "Optional: what to run the skill on, for skills "
                                                                   "that take arguments"}}, ["name"]))
+# Get a capability mid-task (capability_get.py, tools_store.py). Offered once a message or a goal check needs one
+# (Agent.capability_on), appended at the end of the tool list so the earlier tools never move. MH_GET_CAPABILITY=0
+# turns them off; =always offers them from the start.
+CAP_TOOLS = ["get_capability", "save_tool"]
+T.SCHEMAS.setdefault("get_capability", T._fn(
+    "get_capability", "When the task needs a tool or skill you do not have: search for one. The search looks at what "
+    "is already here, meshpool's curated MCP list, the official MCP Registry, then npm and PyPI, and returns ranked "
+    "candidates with ids. Call again with `add` set to a candidate id to ask the user to add it (they see a card and "
+    "decide). If nothing fits, write the tool and keep it with save_tool.",
+    {"need": {"type": "string", "description": "What you need to do, in a few plain words"},
+     "add": {"type": "string", "description": "Optional: the id of a candidate from the last search, to add it"},
+     "deep": {"type": "boolean", "description": "Optional: search every source even after a good match"}}, ["need"]))
+T.SCHEMAS.setdefault("save_tool", T._fn(
+    "save_tool", "Keep a tool you wrote for later chats: a skill (SKILL.md), a script (scripts/ plus SKILL.md) or a "
+    "small local MCP server (server.py or server.js). Give its files and its tests; the tests run in the sandbox and "
+    "must pass, and a scan refuses risky code. The user approves keeping it once.",
+    {"name": {"type": "string", "description": "lowercase-name-with-dashes"},
+     "kind": {"type": "string", "enum": ["skill", "script", "mcp"]},
+     "description": {"type": "string", "description": "One line: what it does and when to use it"},
+     "files": {"type": "object", "additionalProperties": {"type": "string"},
+               "description": "{relative path: file text}, e.g. {\"SKILL.md\": \"...\", \"scripts/run.py\": \"...\"}"},
+     "tests": {"type": "object", "additionalProperties": {"type": "string"},
+               "description": "{\"tests/test_x.py\": \"...\"} (pytest or unittest) or {\"tests/x.test.js\": \"...\"}"},
+     "overwrite": {"type": "boolean", "description": "Replace a saved tool with the same name"}},
+    ["name", "kind", "description", "files", "tests"]))
+_CAP_ASK = (r"\b(?:install|add|connect|set ?up|hook up|integrate|enable|get)\b[^.?!\n]{0,40}\b(?:tool|mcp|server|"
+            r"integration|plugin|connector|skill|extension|capability)s?\b|\b(?:no|missing|don'?t have a|lack(?:s|ing)?"
+            r"(?: a| the)?) (?:tool|integration|connector|capability)\b|\bmcp\b")
+
+# Tools that show text the agent asked to see (a file, a search hit, a page, a skill's instructions): a missing-command
+# message inside it is not a failure of the agent's own (Agent._cap_signal).
+_CAP_READERS = {"read_file", "grep", "glob", "fetch_url", "web_search", "web_research", "use_skill", "diagnostics",
+                "get_capability", "find_skill", "todo_write", "update_plan", "ask_user"}
+
+
+def _cap_mode() -> str:
+    return os.environ.get("MH_GET_CAPABILITY", "1").strip().lower()
+
+
 _REC = {"type": "string", "enum": ["", "day", "week", "month", "year"], "description": "Only recent results"}
 T.SCHEMAS["fetch_url"] = T._fn(
     "fetch_url", "Read a web page, PDF or Office file from a URL as clean text (title, date, main content). Long pages "
@@ -773,6 +813,13 @@ def _strip_heredocs(s: str):
     return "".join(out), bodies
 
 
+# The file a heredoc writes: `cat > chart.py <<EOF`, `tee -a "my notes.txt" <<'EOF'`. A quoted name may hold spaces
+# (an approval titled "Write my?" for "my notes.txt").
+_QWORD = r"""(?:"[^"\n]+"|'[^'\n]+'|[^\s<>|;&'"]+)"""
+_HEREDOC_TARGET = re.compile(r"(?:\bcat|\btee(?:\s+-a)?)\s*(?:>>?\s*)?(?P<f>" + _QWORD + r")\s*<<|\bcat\s*>>?\s*(?P<g>"
+                             + _QWORD + r")\s*<<")
+
+
 def _heredoc_title(s: str) -> str:
     """Title for a script with a heredoc (`cat > chart.py <<'EOF' ... EOF` then `python chart.py`, or `python - <<'EOF'`):
     from what it does, not from the lines of the program text (Lina, 0.0.19: "Run 27 steps: cat, import, ...")."""
@@ -781,13 +828,12 @@ def _heredoc_title(s: str) -> str:
     head, bodies = _strip_heredocs(s)
     if not bodies:
         return ""
-    w = re.search(r"(?:\bcat|\btee(?:\s+-a)?)\s*(?:>>?\s*)?(?P<f>[^\s<>|;&]+)\s*<<|\bcat\s*>>?\s*(?P<g>[^\s<>|;&]+)\s*<<",
-                  head)
+    w = _HEREDOC_TARGET.search(head)
     written = os.path.basename((w.group("f") or w.group("g") or "").strip("'\"")) if w else ""
     if not written and not re.search(r"(?:^|[;&|\s])(?:python[\d.]*|node|Rscript|ruby|perl)\b[^\n<]*<<", head):
         return ""
     hfiles = [f for f in dict.fromkeys(m.group(0).rsplit("/", 1)[-1] for b in bodies + [head] for m in _FILE_WORD.finditer(b))
-              if f != written][:3]
+              if f != written and not written.endswith(" " + f)][:3]
     on = (" on " + ", ".join(hfiles)) if hfiles else ""
     lang = next((v for k, v in _PROGRAMS.items() if re.search(r"\b" + k + r"\b", head)), "")
     if not lang and re.search(r"\bimport\b|\bdef\b|\bprint\(", " ".join(bodies)):
@@ -884,7 +930,41 @@ def _only_reads(s: str) -> list | None:
     return list(dict.fromkeys(names))
 
 
-def _plain_command_title(script: str) -> str:
+def _cmd_brief(s: str, n: int = 80) -> str:
+    """A command in one line for a card's title: a multi-line `python3 -c "..."` read as `python3 -c "` (an open quote
+    and nothing else) when only its first line was kept (first-hour run, 0.0.18)."""
+    one = re.sub(r"\s+", " ", str(s or "")).strip()
+    return one if len(one) <= n else one[:n - 1].rstrip() + "\u2026"
+
+
+def _step_name(step: str) -> str:
+    """The program a step runs, as a name: `(which python3 ...` and `"$VENV/bin/pip" install` read as "(which" and
+    "\\"$VENV/bin/pip\\"" in "Run 7 steps: (which, ..." (first-hour run)."""
+    w = (str(step or "").split() or [""])[0].lstrip("({").strip("'\"")
+    return os.path.basename(w.rstrip("/\\")) or w
+
+
+def _in_root(s: str, root) -> str:
+    """The command with the chat's own folder written as "." (and its files as ./name): a path inside the folder the
+    chat works in is not "outside this folder" (first-hour run, 0.0.18: `cd /home/u/Documents/Q4work && ls` in a
+    chat in Q4work asked "Use files outside this folder, in your home folder?"). A command with a `..` step is left as
+    it is: `cat /home/u/proj/../.ssh/id_rsa` or `cd /home/u/proj && cat ../.ssh/id_rsa` leaves the folder, and its
+    card must not read "Look at files in this folder?"."""
+    if re.search(r"(?:^|[\s/\\'\"=(])\.\.(?:[/\\\s'\";&|)]|$)", str(s or "")):
+        return s
+    try:                   # the files the user attached to a chat are kept in runs/_uploads/chat-<id>: theirs, given
+        from meshpool_harness import config as _C           # to this chat (a PDF read asked about "your home folder")
+        ups = str(_C.runs_dir() / "_uploads")
+        s = re.sub(re.escape(ups) + r"[/\\][^/\\\s'\";&|)]+", "./attachments", s)
+    except Exception:  # noqa: BLE001
+        pass
+    r = str(root or "").rstrip("/\\")
+    if len(r) < 2:
+        return s
+    return re.sub(re.escape(r) + r"(?=[/\\\s'\";&|)]|$)", ".", s)
+
+
+def _plain_command_title(script: str, root=None) -> str:
     """What a command does, in words a person can judge, for the approval card (persona runs, 0.0.18: every card was
     a raw `D=/tmp/...; python3 -I -c "..."` line nobody could judge). The command itself stays below the title.
     Never milder than the command (review, 0.0.18): "Read" only when every step only reads, a write, delete or the
@@ -912,10 +992,11 @@ def _plain_command_title(script: str) -> str:
     cuts.append(s[at:])
     steps = [x.strip() for x in cuts
              if x.strip() and not re.match(r"(?:cd|export|set|echo|true|mkdir)\b|[A-Za-z_]\w*=\S*$", x.strip())]
-    more = f" ({len(steps)} steps: " + ", ".join(dict.fromkeys(x.split()[0] for x in steps))[:60] + ")" \
+    more = f" ({len(steps)} steps: " + ", ".join(dict.fromkeys(_step_name(x) for x in steps))[:60] + ")" \
         if len(steps) > 1 else ""
-    if re.search(r"\b(?:pip3?|npm|pnpm|yarn|cargo|gem|brew|apt|apt-get|conda|uv)\s+(?:install|add|i)\b", s):
-        return "Install software from the internet? (" + s.strip().splitlines()[0][:80] + ")"
+    unq = re.sub(r"['\"]", "", s)                    # "$VENV/bin/pip" install read as a Python step (first-hour run)
+    if re.search(r"\b(?:pip3?|npm|pnpm|yarn|cargo|gem|brew|apt|apt-get|conda|uv)\s+(?:install|add|i)\b", unq):
+        return "Install software from the internet? (" + _cmd_brief(s) + ")"
     if re.search(r"\bgit\s+push\b", s):
         return "Send your commits to the remote repository?"
     if re.search(r"\bgit\s+(?:clone|fetch|pull)\b", s):
@@ -927,10 +1008,11 @@ def _plain_command_title(script: str) -> str:
         host = re.search(r"https?://([^/\s'\"]+)", s)         # script, a link in a commit message) is not the network
         return "Use the internet" + (f" ({host.group(1)})" if host else "") + "?"
     if PR.NETWORK.search(s):
-        return "Use the internet? (" + s.strip().splitlines()[0][:80] + ")"
-    if PR._HOME_REF.search(s) or re.search(r"(?:^|[\s'\"=(])~(?:/|\s|$)|/(?:home|Users)/|\b[A-Za-z]:\\Users\\", s):
+        return "Use the internet? (" + _cmd_brief(s) + ")"
+    own = _in_root(s, root)
+    if PR._HOME_REF.search(own) or re.search(r"(?:^|[\s'\"=(])~(?:/|\s|$)|/(?:home|Users)/|\b[A-Za-z]:\\Users\\", own):
         # release review: `cat $HOME/.ssh/id_rsa` asked under "Look at files in this folder?", which anyone would allow
-        return "Use files outside this folder, in your home folder? (" + s.strip().splitlines()[0][:80] + ")"
+        return "Use files outside this folder, in your home folder? (" + _cmd_brief(s) + ")"
     if PR.DELETES.search(s):
         # name only what the deleting steps remove: "sed -i … report.py && rm sample.csv" deletes sample.csv, not both
         dsegs = [x for x in steps if PR.DELETES.search(x)] or [s]
@@ -959,7 +1041,11 @@ def _plain_command_title(script: str) -> str:
         return ("Read " + ", ".join(files) + "?") if files else "Look at files in this folder?"
     if re.search(r"\bsed\s+(?:-\w*\s+)*-i", s) and files and not more:
         return "Change " + ", ".join(files) + "?"
-    dest = re.search(r"(?<![0-9&])>>?\s*([^\s;&|<>]+)", PR._OKREDIR.sub(" ", s))
+    # a redirection the shell makes, not a ">" inside a quoted program (first-hour run: awk 'NR>1{n++ ...}' asked
+    # "Write 1{n++?"): found where quotes are blanked out, then the file name read from the command itself
+    mk = PR._OKREDIR.sub(lambda m: " " * len(m.group(0)), PR._scan(s)[0])
+    red = re.search(r"(?<![0-9&])>>?", mk)
+    dest = re.match(r"\s*(" + _QWORD + ")", s[red.end():]) if red else None
     if dest and not more:
         return f"Write {os.path.basename(dest.group(1).strip(chr(39) + chr(34)))}?"
     # the first real step (not cd, export or VAR=...), up to three words before an option or a quoted argument
@@ -973,7 +1059,7 @@ def _plain_command_title(script: str) -> str:
     if first and any(f in first for f in files):
         on = ""
     if more:
-        return f"Run {len(steps)} steps: " + ", ".join(dict.fromkeys(x.split()[0] for x in steps))[:60] + "?"
+        return f"Run {len(steps)} steps: " + ", ".join(dict.fromkeys(_step_name(x) for x in steps))[:60] + "?"
     return f"Run {first}{on}?" if first else "Run this command?"
 
 
@@ -2560,6 +2646,17 @@ def _norm_text(t: str) -> str:
     return " ".join(t.lower().split())
 
 
+# "I made none up", "nothing is invented", "none of the figures were made up": one sentence that says so
+_NONE_MADE_UP = re.compile(
+    r"[^.!?\n]*\b(?:made (?:none|nothing|no(?: \w+){0,2}?) up|made up (?:none|nothing|no)\b|"
+    r"did(?: not|n't) (?:make|invent) (?:up )?(?:any|anything|a single)|"
+    r"(?:nothing|none)(?: of (?:it|them|the (?:figures|numbers|data|statistics)))? (?:is|was|were|are|has been|have "
+    r"been) (?:made up|invented|fabricated)|no (?:figures?|numbers?|data|statistics?) (?:is|are|was|were) (?:made up|"
+    r"invented|fabricated)|invented (?:nothing|no (?:figures?|numbers?|data)))\b[^.!?\n]*[.!?]?", re.I)
+_FOLDER_OK = "folder:ordinary-work"        # in Agent.always: the chat's one yes for ordinary work without a sandbox
+_NOTICED: set = set()                      # notices said once per app run
+
+
 def _sandbox_auto_on() -> bool:
     """MH_SANDBOX_AUTO (Settings, Permissions: "Ask before every command and change" sets 0), read from the
     environment or the settings file at call time, so a change in Settings reaches open chats."""
@@ -2864,6 +2961,13 @@ def _formula_result_miss(asked: str, root, since: float) -> str:
 
 
 # A message about a web page or an app's interface: the browser tools (open, click, screenshot, ui_audit) join the chat.
+# A message that needs the web: news, prices, "look it up", a site named by its address (example.com). A Codex-style
+# Code chat has only its shell otherwise, and a bare computer has no curl (first-hour run, 0.0.18).
+_WEB_LOOKUP = (r"\b(?:news|latest|headlines?|look (?:it |this |that |them )?up|search (?:the )?(?:web|internet|online)|"
+               r"on ?line|internet|google|web|website|url|link|weather|stock price|exchange rate|"
+               r"what(?:'s| is) new)\b|"
+               r"\b(?:www\.)?[a-z0-9][a-z0-9-]*\.(?:com|org|net|io|dev|ai|app|co|gov|edu|info|news|uk|de|fr|eu|me)\b"
+               r"(?!\.\w)")
 _WEB_ASK = (r"\b(?:browser|web ?page|website|web app|webapp|landing page|front[- ]?end|frontend|html|css|ui|ux|"
             r"screenshot|localhost|https?://|click|button|form|layout|responsive|dark mode|playwright|selenium)\b")
 
@@ -3288,7 +3392,7 @@ def approval_view(kind: str, title: str, detail: str) -> dict:
     out: dict = {"sum": line[:160]} if line else {}
     if "<<" in d:
         head, bodies = _strip_heredocs(d)
-        w = re.search(r"(?:\bcat|\btee(?:\s+-a)?)\s*(?:>>?\s*)?(?P<f>[^\s<>|;&]+)\s*<<|\bcat\s*>>?\s*(?P<g>[^\s<>|;&]+)\s*<<", head)
+        w = _HEREDOC_TARGET.search(head)
         tgt = (w.group("f") or w.group("g") or "").strip("'\"") if w else ""
         name = os.path.basename(tgt)
         ran = bool(name) and bool(re.search(r"(?:python[\d.]*|node|Rscript|ruby|perl|bash|sh)\s+\S*" + re.escape(name), head))
@@ -3342,6 +3446,9 @@ class Agent:
     model_req_at = None    # when the model call now running began; None while no request is made or waited on
     office_on = False      # a message in this chat asked for an office file: Codex style shows the office tools too
     browser_on = False     # a message in this chat is about a web page or app UI: Codex style shows the browser tools
+    web_on = False         # a message in this chat looks something up online: a Codex-style Code chat gets web_research
+    capability_on = False  # a message or a goal check needs a missing capability: get_capability and save_tool join
+    cap_pending = ""       # a get_capability card the user has not answered (the goal loop pauses on it)
     office_engines = False  # MH_OFFICE_DIRECT=1: a message asked for a new deck, report or model (engine tools shown)
     office_c171 = False  # MH_WORK_OFFICE_STYLE=c171: this Work chat's office job sends Codex 0.171's request
     office_revisions = False  # MH_OFFICE_DIRECT=1: a message asked for tracked changes or comments (edit_office_file shown)
@@ -3351,6 +3458,13 @@ class Agent:
     _turn_no = 0           # counted up by each send(); turn-scoped guards read it before the first turn too
     budget_stopped = False  # the last turn ended on the spending limit
     _task = None           # the usage task of the turn that is running
+    # Goal mode (agent/goal.py), set by the session before each goal turn: the per-turn grader rework is off (the goal's
+    # own checks score the work), the compaction handoff keeps goal_brief word for word, and at wrap_deadline (the goal's
+    # time budget) tools turn off and wrap_text asks for the report.
+    goal_active = False
+    goal_brief = ""
+    wrap_deadline = 0.0
+    wrap_text = ""
 
     def __init__(self, workdir: str, *, mcp=None, emit=None, approve=None, mode: str | None = None,
                  session_id: str | None = None, max_steps: int = 0, profile: str = "code",
@@ -3520,8 +3634,18 @@ class Agent:
                 return False
             if self._office_panel_chat(own):
                 return False
-            return bool(getattr(self, "office_on", False) or re.search(r"\.(docx?|xlsx?|pptx?|pdf)\b", own, re.I)
+            # A PDF is read, not edited in place: a question about one (an attached contract) on Codex's one-tool request
+            # went to pdftotext and PyMuPDF, neither of them on a new computer, with an approval card for each try,
+            # instead of read_document (first-hour run, 0.0.18). office_on alone is not enough either: the attachment's
+            # path in the message turns it on.
+            if not (re.search(r"\.(docx?|xlsx?|pptx?)\b", own, re.I) or CAP.needs(own)) and \
+                    re.search(r"\.pdf\b", own, re.I) and not getattr(self, "_office_c171_seen", False):
+                return False
+            want = bool(getattr(self, "office_on", False) or re.search(r"\.(docx?|xlsx?|pptx?|pdf)\b", own, re.I)
                         or CAP.needs(own))
+            if want:
+                self._office_c171_seen = True
+            return want
         except Exception:  # noqa: BLE001
             return False
 
@@ -3730,7 +3854,7 @@ class Agent:
                 return not n.startswith("mcp__meshpool_") and not name.endswith("run_subtasks")
             mcp = [x for x in self.mcp.schemas() if keep(x["function"]["name"])] if self.mcp else []
             if self._c171():                       # Codex 0.171: exec_command, then the user's MCP tools
-                return T.schemas(["exec_command"]) + mcp
+                return T.schemas(self._tool_names()) + mcp
             if not self._office_direct():
                 return T.schemas(self._tool_names()) + mcp
             # MH_OFFICE_DIRECT=1: the engine tools come last and only once a message asked for a deck, report or
@@ -3755,7 +3879,7 @@ class Agent:
             # A quick question carries the tools it can need (look, change, run, search), not the 19 of a long job:
             # 2k tokens less on every call. Once a message asks for more, the whole set stays for the chat, so the
             # prompt prefix does not flip back and forth.
-            names = [n for n in names if n in _CHAT_TOOLS]
+            names = [n for n in names if n in _CHAT_TOOLS or n in CAP_TOOLS]
         elif self.profile == "work" and os.environ.get("MH_LITE_WORK_TOOLS", "0") == "1":
             # MH_LITE_WORK_TOOLS=1 (off by default, unmeasured): a Work chat carries the 14 tools a document or data job
             # uses, not the 20 of a long coding job (background shells, notebooks, sub-agents): 1.5k tokens a call.
@@ -3813,10 +3937,31 @@ class Agent:
         self._lazy_hidden = [h["function"]["name"] for h in hidden]
         return shown + ([lz.find_schema(hidden)] if hidden else [])
 
+    def _web_tools(self) -> list:
+        """web_research and fetch_url for a Codex-style Code chat: always in Chat mode (the Chat tab in a folder runs
+        here, and a question about the news had only the shell: "I don't have another way to search the web in this
+        chat"), and in a Code-tab chat once a message needs the web. A Work chat has them already (LEAN_WORK_TOOLS)."""
+        if self.profile == "work" or not (getattr(self, "chat_mode", False) or getattr(self, "web_on", False)):
+            return []
+        return ["web_research", "fetch_url"]
+
+    def _cap_offered(self) -> bool:
+        mode = _cap_mode()
+        if mode in ("0", "off", "false", "no") or self.plan or getattr(self, "_delegate_depth", 0) > 0:
+            return False
+        return mode == "always" or bool(getattr(self, "capability_on", False))
+
     def _tool_names(self) -> list:
+        names = self._tool_names_base()
+        if self._cap_offered() and not (self._codex() and self._c171()):
+            drop = self._dropped()
+            names = names + [n for n in CAP_TOOLS if n not in names and n not in drop]
+        return names
+
+    def _tool_names_base(self) -> list:
         if self._codex():
             if self._c171():
-                return ["exec_command"]
+                return ["exec_command"] + self._web_tools()
             # an Office panel chat: the user is in Excel, Word or PowerPoint and the panel shows ask_user questions;
             # the lean Work route had no ask_user since 0.0.16, so the panel's questions never came. Before
             # office_task, which is appended later, so the list only grows at its end.
@@ -3824,7 +3969,7 @@ class Agent:
             if self._office_direct():                  # office_task only once a message asked for a deck or model
                 return list(T.CODEX_TOOLS) + [n for n in LEAN_WORK_TOOLS if n != "office_task"] + ask + \
                     (["office_task"] if self.office_engines else [])
-            return list(T.CODEX_TOOLS) + (LEAN_WORK_TOOLS if self.profile == "work" else []) + ask
+            return list(T.CODEX_TOOLS) + (LEAN_WORK_TOOLS if self.profile == "work" else self._web_tools()) + ask
         names = PLAN_TOOLS if self.plan else (WORK_TOOLS if self.profile == "work" else BUILTIN)
         extra = []
         route = getattr(self, "route", None)
@@ -3833,7 +3978,7 @@ class Agent:
             extra += [t for t in route_tools(route) if t not in names]
         try:
             from meshpool_harness import skills as SK
-            if SK.on_demand() and "find_skill" not in names:
+            if (SK.on_demand() or SK.saved_any()) and "find_skill" not in names:   # saved tools: found, not listed
                 extra.append("find_skill")
         except Exception:  # noqa: BLE001
             pass
@@ -3856,6 +4001,148 @@ class Agent:
         if getattr(self, "_delegations", None):          # the sub-agents it is running
             from meshpool_harness.agent import delegate as DL
             DL.stop_all(self)
+
+    # ---------- get a capability mid-task (capability_get.py, tools_store.py) --------------------------------------
+    def _cap_ask(self, title: str, detail: str) -> tuple[str, str]:
+        """One card for adding or keeping a tool. Always asked, whatever the mode or the chat's grants: scope "once"
+        offers only Allow and Deny, so nothing is remembered. ("no answer", note) when the card was not answered (Stop,
+        or the wait ran out): cap_pending then holds it, and the goal loop pauses."""
+        if not self.approve or getattr(self, "_delegate_depth", 0) > 0:
+            return "no", ("Nobody can approve adding a tool here. Tell the user what you found; they can add it in "
+                          "Settings.")
+        self.cap_pending = title
+        decision, note = PR.approve_with_scope(self.approve, "mcp", title, detail, "once")
+        if self._stop or "No answer within" in str(note or ""):
+            return "no answer", note or ""
+        self.cap_pending = ""
+        return ("yes" if decision in ("yes", "always", "save") else "no"), note or ""
+
+    def _cap_visible_tools(self) -> list:
+        """The chat's connected tools (all of them, also those the lazy index hides), for the first search tier."""
+        ms = list(getattr(self, "_lazy_all", None) or [])
+        if not ms and self.mcp:
+            try:
+                ms = self.mcp.schemas()
+            except Exception:  # noqa: BLE001
+                ms = []
+        return ms
+
+    def _get_capability(self, args: dict) -> str:
+        from meshpool_harness import capability_get as CG
+        found = self.__dict__.setdefault("_cap_found", {})
+        add = str(args.get("add") or "").strip()
+        if not add:
+            res = self._wait(CG.find, str(args.get("need") or ""), self._cap_visible_tools(), None,
+                             bool(args.get("deep")))
+            found.update({c["id"]: c for c in res["candidates"]})
+            return CG.render(res)
+        c = found.get(add)
+        if c is None:
+            return (f"No candidate {add!r} from a search in this chat. Search first with get_capability(need), then "
+                    "pass one of the ids it lists.")
+        if c["tier"] in ("enabled", "write") or not c.get("addable"):
+            return c.get("how") or f"{c['name']} cannot be added from here."
+        cd = CG.card(c)
+        decision, note = self._cap_ask(cd["title"], cd["detail"])
+        if decision == "no answer":
+            return ("The card is still waiting for the user, so nothing was added. Stop here and say what you are "
+                    "waiting for; do not retry the card." + (f" ({note})" if note else ""))
+        if decision != "yes":
+            return f"The user said no, so {c['name']} was not added." + (f" Their note: {note}" if note else "") + \
+                " Do not ask again for it in this task; go on another way."
+        try:
+            r = CG.install(c)
+        except (ValueError, OSError) as e:
+            return f"Not added: {e}"
+        if r["missing"]:
+            return (f"Added {c['name']} as the MCP server {r['server']}, switched off until the user fills in "
+                    f"{', '.join(r['missing'])} in Settings, MCP servers (the values go into meshpool's settings, never "
+                    "into this chat). Ask the user to do that; never ask them to paste a key here.")
+        msg = f"Added {c['name']} as the MCP server {r['server']} and switched it on."
+        if self.mcp:
+            try:
+                self._wait(self.mcp.add, r["server"], r["spec"])
+                msg += " Its tools are available now; look them up with mcp_find_tools."
+            except Exception as e:  # noqa: BLE001 - the entry stays; the next chat starts it
+                msg += f" It did not start here ({str(e)[:200]}); it starts in the next chat."
+        self.emit({"type": "status", "text": f"Added {c['name']} ({'remote service' if c.get('remote') else 'local'})."})
+        return msg
+
+    def _save_tool(self, args: dict) -> str:
+        from meshpool_harness import tools_store as TS
+        try:
+            name = TS.check_name(args.get("name"))
+        except TS.ToolRefused as e:
+            return f"Not saved: {e}"
+        kind = str(args.get("kind") or "")
+        files, tests = args.get("files") or {}, args.get("tests") or {}
+        listed = ", ".join(sorted(list(files)[:12] + [f"tests: {t}" for t in list(tests)[:6]]))
+        detail = (f"Name: {name}\nKind: {kind}\nWhat it does: {args.get('description', '')}\nSource: written by the "
+                  f"agent in this chat\nFiles: {listed}\nWhere it goes: {TS.folder() / name}\n"
+                  "Before it is kept, its tests run in the sandbox and must pass, and a scan refuses risky code."
+                  + ("\nIt runs as a local MCP server, added to mcp.json." if kind == "mcp" else ""))
+        decision, note = self._cap_ask(f"Keep the new tool {name} for later chats?", detail)
+        if decision == "no answer":
+            return "The card is still waiting for the user, so the tool was not kept. Stop here; do not retry the card."
+        if decision != "yes":
+            return f"The user said no, so {name} was not kept." + (f" Their note: {note}" if note else "")
+        try:
+            prov = self._wait(TS.save, name, kind, str(args.get("description") or ""), files, tests,
+                              "written by the agent", "1", bool(args.get("overwrite")))
+        except (TS.ToolRefused, OSError) as e:
+            return f"{e}"
+        msg = (f"Kept {name} (sha256 {prov['sha256'][:12]}). Its tests passed"
+               + (" in the sandbox." if prov["tests"]["sandboxed"] else " (this computer has no sandbox).")
+               + (" Scan notes: " + "; ".join(prov["caution"]) if prov["caution"] else ""))
+        if kind == "mcp" and self.mcp and prov.get("server"):
+            try:
+                from meshpool_harness.agent import mcp as M
+                self._wait(self.mcp.add, prov["server"], M.load_config().get(prov["server"]) or {})
+                msg += " Its tools are available now through mcp_find_tools."
+            except Exception as e:  # noqa: BLE001
+                msg += f" It did not start here ({str(e)[:200]}); it starts in the next chat."
+        else:
+            msg += " Later chats find it with find_skill."
+        return msg
+
+    def _cap_signal(self, text: str, kind: str, tool: str = "") -> str:
+        """A missing-capability signal in a tool result or a reply (capability_get.missing_signal) turns the capability
+        tools on from the next model step. A reply counts while the task is open: no plan, or a plan step not done.
+        tool: the tool whose result it is. What a reading tool shows (a log, a source file, a web page that mentions
+        "command not found") is text the agent looked at, not a failure of its own: it never counts."""
+        if getattr(self, "capability_on", False) or _cap_mode() in ("0", "off", "false", "no"):
+            return ""
+        if kind == "tool" and tool in _CAP_READERS:
+            return ""
+        try:
+            from meshpool_harness import capability_get as CG
+            todos = getattr(self, "_todos", None) or []
+            task_open = not todos or any(i.get("status") != "completed" for i in todos)
+            hit = CG.missing_signal(text, kind, task_open)
+        except Exception:  # noqa: BLE001 - never breaks a step
+            return ""
+        if hit:
+            self.capability_on = True
+        return hit
+
+    def _saved_tool_result(self, name: str, ok: bool, out: str) -> None:
+        """A saved MCP tool that fails is marked failing and the user is told; a later success clears it. Never
+        removed."""
+        try:
+            server = (getattr(self.mcp, "map", {}) or {}).get(name, ("",))[0]
+            if not server:
+                return
+            from meshpool_harness import tools_store as TS
+            tool = TS.server_tool(server)
+            if not tool:
+                return
+            if not ok and TS.mark_failing(tool, out[:200]):
+                self.emit({"type": "status", "text": f"The saved tool {tool} failed and is marked failing. It stays "
+                                                     "installed; fix it or remove it in Settings."})
+            elif ok:
+                TS.mark_ok(tool)
+        except Exception:  # noqa: BLE001 - bookkeeping never breaks a tool call
+            pass
 
     def _run_subtasks(self, name: str, args: dict):
         """Sub-agents for this chat run here, in the app's own process, with what only this chat knows: its model,
@@ -4039,6 +4326,7 @@ class Agent:
         """Run one user request to the end of the agent's turn. Returns the final reply text.
         images: [{"mime": "image/png", "data": base64, "name": ...}] attached by the user."""
         self._stop = False
+        self.cap_pending = ""                                 # a new message or Resume answers an open capability card
         self._partial_text, self.last_request_id = "", ""     # nothing from an earlier turn's failures
         self._skill_block = {}                                # skill tool limits last one turn
         for m in re.findall(r"(?<![\w$])\$([A-Za-z0-9][\w-]{1,63})", str(text or "")):
@@ -4097,6 +4385,10 @@ class Agent:
                 self.office_on = True
             if re.search(_WEB_ASK, own, re.I):              # a page, an app's UI, a browser: the browser tools join
                 self.browser_on = True
+            if re.search(_WEB_ASK, own, re.I) or re.search(_WEB_LOOKUP, own, re.I):
+                self.web_on = True                          # news, a site, "look it up": web_research and fetch_url join
+            if re.search(_CAP_ASK, own, re.I):              # "add a tool for X", "connect Y": the capability tools join
+                self.capability_on = True
         except Exception:  # noqa: BLE001
             pass
         if self._office_direct_raw() and not self.office_engines:   # decided here, before the turn: fixed for the turn
@@ -4286,8 +4578,9 @@ class Agent:
         if files:
             text += "\n\nFiles changed this turn: " + ", ".join(files)
         self.emit({"type": "assistant", "text": text, "streamed": False, "has_tools": False})
-        self.emit({"type": "error", "text": "Stopped: the agent kept repeating the same steps without progress. What it "
-                                            "did so far is kept; send a message to steer it."})
+        self.emit({"type": "error", "loop": True,
+                   "text": "Stopped: the agent kept repeating the same steps without progress. What it "
+                           "did so far is kept; send a message to steer it."})
         return text
 
     def _turn(self) -> str:
@@ -4397,6 +4690,13 @@ class Agent:
                     self.messages.append({"role": "user", "content": PACE.WRAP})
                 if self._pace_wrapped:
                     self._no_tools = True               # every later step is tools-off, even if tool_choice is refused
+                if self.wrap_deadline and step and not g.get("goal_wrapped") and time.time() > self.wrap_deadline:
+                    g["goal_wrapped"] = True            # the goal's time budget ran out: no more tools, the report now
+                    self.messages.append({"role": "user", "content": self.wrap_text or (
+                        "[meshpool] The goal's time budget is used up. Do not call more tools. Say plainly what is "
+                        "done and what is not, then end with GOAL: READY or GOAL: CONTINUE.")})
+                if g.get("goal_wrapped"):
+                    self._no_tools = True
                 self._finish = None
                 if g.pop("hard_wrap", False):
                     self._no_tools = True                 # stuck for good: best-effort answer instead of more calls
@@ -4685,7 +4985,9 @@ class Agent:
                     again, final = self._grade_gate(g, turn, final)   # independent check of a big task (agent/grader.py)
                     if again:
                         continue
+                    self._cap_signal(final, "reply")          # "I don't have a tool for that": offered next step
                     final = self._without_trailing_promise(final)
+                    final = self._without_false_sourcing(final, g)
                     break
                 if tools_off and os.environ.get("MH_REPEAT_STOP", "8") != "0":
                     g["off_calls"] = g.get("off_calls", 0) + 1     # tools were off for this reply, yet it asked for some
@@ -4718,6 +5020,7 @@ class Agent:
                     step_out += outs
                     for c, out in zip(batch, outs):
                         self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": clean(out)})
+                        self._cap_signal(str(out), "tool", (c.get("function") or {}).get("name") or "")   # "command not found"
                         if _engine_tool((c.get("function") or {}).get("name") or ""):   # the file an office job made
                             made = _job_file(str(out), self.root)
                             if made:
@@ -4986,6 +5289,8 @@ class Agent:
         back to the agent to fix, else (False, final with the 'Independent check' section). Never raises, never blocks."""
         try:
             from meshpool_harness.agent import grader as GR
+            if not force and getattr(self, "goal_active", False):
+                return False, final        # goal mode: the goal's own checks score the work (agent/goal.py)
             if (getattr(self, "_is_grader", False) or getattr(self, "_delegate_depth", 0) or self.plan or self._lean()
                     or self._bare_codex() or not final.strip() or final.strip() == "(no reply)" or (not force and not GR.enabled())):
                 return False, final
@@ -5900,6 +6205,41 @@ class Agent:
             check += "  \n**Independent check:** " + GR.receipt_line(rv)
         return f"**Changed:** {', '.join(parts)}{more}  \n**Checked:** {check}"
 
+    def _without_false_sourcing(self, final: str, g: dict) -> str:
+        """A deck or file built this turn holds figures that no file of the user's and no cited source gives (the
+        slides engine labelled them illustrative, or its "nothing invented" check still fails), yet the reply says
+        none were made up (first-hour run, 0.0.18: "I made none up" over a "Market Research Report 2034" nobody
+        gave). That sentence is replaced with what is true; the full reply stays in the run's turn.log."""
+        if not _NONE_MADE_UP.search(str(final or "")):
+            return final
+        try:
+            from meshpool_harness.agent import office_jobs as _OJ
+            said = "\n".join(str(m.get("content") or "") for m in self.messages[g.get("msg0", 0):]
+                             if m.get("role") == "tool")
+            if not _OJ.UNSOURCED.search(said):
+                return final
+        except Exception:  # noqa: BLE001 - when in doubt the reply stays as written
+            return final
+        m = re.search(r"(?i)figures on slides? ([\d][\d, and]*?) are illustrative", said)
+        where = re.sub(r",\s*(\d+)$", r" and \1", m.group(1).strip()) if m else ""
+        true = (f"Some figures are illustrative, not from your files or a cited source: slide{'s' if ',' in where or ' and ' in where else ''} "
+                f"{where} {'say' if ',' in where or ' and ' in where else 'says'} so." if where else
+                "Some figures are not from your files or a cited source, so check them before you use them.")
+        fixed = _NONE_MADE_UP.sub(lambda _: true + " ", str(final), count=1)
+        fixed = _NONE_MADE_UP.sub("", fixed).replace("  ", " ").strip()
+        try:
+            with (self.ws.run_dir / "turn.log").open("a", encoding="utf-8", errors="replace") as f:
+                f.write("\n[replaced a claim that no figure was made up]\n" + str(final) + "\n")
+        except (OSError, AttributeError):
+            pass
+        for msg in reversed(self.messages):
+            if msg.get("role") == "assistant" and not msg.get("tool_calls"):
+                if isinstance(msg.get("content"), str) and msg["content"].strip() == str(final).strip():
+                    msg["content"] = fixed
+                break
+        self.emit({"type": "reply_trim", "text": fixed})
+        return fixed
+
     def _without_trailing_promise(self, final: str) -> str:
         """The turn ended with no tool call, and its last paragraph still promises an action ("I'll retry the commit
         as before..."), after the promise nudge fired or when it did not apply. The answer above it says what
@@ -6003,7 +6343,8 @@ class Agent:
             win = self._ctx_window()
         except Exception:  # noqa: BLE001
             win = None
-        r = compaction.compact_history(self.messages, win=win, focus=str(focus or "").strip())
+        keep = self.goal_brief() if callable(self.goal_brief) else str(self.goal_brief or "")
+        r = compaction.compact_history(self.messages, win=win, focus=str(focus or "").strip(), keep=keep)
         if r:
             try:
                 EX.run_hooks(self.root, "PostCompact", {"removed": r.get("removed"), "messages": len(self.messages)})
@@ -7092,12 +7433,25 @@ class Agent:
         except Exception:  # noqa: BLE001
             return False
 
+    def _say_no_sandbox(self) -> None:
+        """Once per app run, in the chat: commands run without the OS sandbox here, why, and the command that turns it
+        on (the distribution's bubblewrap) where one does. It used to be one line in the server log only."""
+        if "no-sandbox" in _NOTICED:
+            return
+        _NOTICED.add("no-sandbox")
+        try:
+            from meshpool_harness.core import sandbox as SBX
+            self.emit({"type": "status", "text": SBX.unavailable_notice()})
+        except Exception:  # noqa: BLE001 - a notice never blocks the question
+            pass
+
     def _work_without_asking(self) -> bool:
         """Ordinary work in the folder runs without a question: in the sandbox, or after the user's one yes for the
         chat where there is none. MH_SANDBOX_AUTO=0 asks as before 0.0.18."""
         if not _sandbox_auto_on():
             return False
-        return self._sandboxed() or bool(getattr(self, "_folder_ok", False))
+        # the one yes is kept in the chat's saved "allow" set too, so it outlives the reaper, a restart and a handoff
+        return self._sandboxed() or bool(getattr(self, "_folder_ok", False)) or _FOLDER_OK in (self.always or ())
 
     def _edit_inside(self, name: str, args: dict) -> bool:
         """Every file this edit touches is inside the chat's folder (or one the user added)."""
@@ -7574,13 +7928,14 @@ class Agent:
             if destr:
                 title = "The app marks this as one that deletes or overwrites data. " + title
         elif name == "bash":
-            kind, title, detail = "bash", _plain_command_title(args.get("command", "")), args.get("command", "")
+            kind, title, detail = "bash", _plain_command_title(args.get("command", ""), self.root), args.get("command", "")
         elif name == "bash_start":
             kind, title, detail = "bash", "Start this in the background?", args.get("command", "")
         elif name in ("probe", "trace"):        # FL-L13: they run a command, so they ask like bash (no MCP-style title)
             kind, title, detail = "bash", f"Run this command ({name})?", str(args.get("command") or args.get("cmd") or "")
         elif name in ("shell", "exec_command"):
-            kind, title, detail = "bash", _plain_command_title(_summary_of(name, args)), _summary_of(name, args)
+            kind, title, detail = "bash", _plain_command_title(_summary_of(name, args), self.root), \
+                _summary_of(name, args)
         elif name == "apply_patch":
             files = _patch_files(args.get("input"))
             kind, title, detail = "edit", "Apply a patch to " + (", ".join(files[:3]) + (" and more" if len(files) > 3
@@ -7601,8 +7956,14 @@ class Agent:
                     "Build a spreadsheet", "make_deck": "Make a PowerPoint deck", "convert_document": "Convert a file",
                     "analyze_data": "Analyse data", "edit_office_file": "Change", "read_document": "Read",
                     "add_slides": "Add slides to", "fill_template": "Fill in", "merge_decks": "Combine decks into",
-                    "check_deck": "Check", "check_workbook": "Check", "check_document": "Check"}.get(tool) or ("Use " + tool.replace("_", " ") + " ("
+                    "check_deck": "Check", "check_workbook": "Check", "check_document": "Check",
+                    # first-hour run, 0.0.18: "Use schedule task (meshpool-assistant)?" named the server, not the act
+                    "schedule_task": "Schedule a task", "delete_scheduled_task": "Delete a scheduled task",
+                    "memory_save": "Remember this", "memory_forget": "Forget a saved memory",
+                    "project_note": "Save a note for this project"}.get(tool) or ("Use " + tool.replace("_", " ") + " ("
                                                               + (name.split('__')[1] if '__' in name else name).replace("_", " ") + ")")
+            if tool == "schedule_task" and str(args.get("name") or "").strip():
+                target = '"' + str(args.get("name")).strip()[:60] + '"'
             kind, title = ("doc" if args.get("markdown") else "mcp"), f"{nice}{' ' + target if target else ''}?"
             if destr:
                 title = "The app marks this as one that deletes or overwrites data. " + title
@@ -7628,6 +7989,8 @@ class Agent:
                   and not self._sandboxed() and (group == "edit" or office_w or
                                                  (cmds and all(PR.sandbox_auto_ok(c, self.root, wd, self._chat_made(), self._chat_touched()) for c in cmds))))
         folder = folder and not outside_edit
+        if folder:                                 # why this asks: said once in the app, with the fix where there is one
+            self._say_no_sandbox()
         scope = ("once" if risky == "destructive" or _destructive(args, self.root) or orisk or outside_edit else   # a destructive command: this once only
                  # no sandbox: one yes for the chat. Said plainly (review, 0.0.18): nothing isolates these commands
                  "ordinary commands and edits in this folder (not isolated: this computer has no sandbox)" if folder else
@@ -7650,6 +8013,7 @@ class Agent:
                 c.strip() for c in PR.commands_of(name, args) if c.strip())
         if decision == "always" and folder:
             self._folder_ok = True                 # what _work_without_asking reads for the rest of this chat
+            self.always.add(_FOLDER_OK)
         if decision == "always" and scope != "once":
             if group == "bash":
                 self.always.update("bash:" + p for p in pats)   # no pattern (a chain, a redirect): this once only
@@ -7789,6 +8153,8 @@ class Agent:
         except ValueError:
             args = {}
         is_mcp = bool(self.mcp and self.mcp.has(name))
+        if is_mcp and hasattr(self.mcp, "coerce"):
+            args = self.mcp.coerce(name, args)         # typed as the server gets them: the approval judges what runs
         T._LIVE.cid = cid                              # a command's output shows under this step as it comes
         self.ws.on_output = self._live_output
         if E2E and name not in ("bash", "bash_many", "bash_start", "bash_output", "bash_stop", "todo_write", "update_plan",
@@ -7889,6 +8255,7 @@ class Agent:
                 out, err = self._wait(self.mcp.call, name, args, on_stop=getattr(self.mcp, "abort_calls", None))
                 paged = self.__dict__.setdefault("_paged", set())
                 pre, post, ok = MA.classify(str(out), bool(err), name in paged)
+                self._saved_tool_result(name, ok, str(out))
                 post += self._repeat_note(name, args, ok)
                 if ok and MA.assist_on():
                     note, replace = MA.same_result(self.__dict__.setdefault("_same_out", {}), name, str(out))
@@ -7927,6 +8294,10 @@ class Agent:
             elif name == "find_skill":
                 from meshpool_harness import skills as SK
                 out = SK.search_text(str(args.get("query", "")))
+            elif name == "get_capability":
+                out = self._get_capability(args)
+            elif name == "save_tool":
+                out = self._save_tool(args)
             elif name == "diagnostics":
                 out = self._wait(_PACKS.diagnostics, self.ws, args.get("paths"), args.get("language"),
                                  bool(args.get("deep")))

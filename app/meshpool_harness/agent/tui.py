@@ -9,8 +9,9 @@
 One scrolling column: a header, the conversation (assistant text, shell calls as filled blocks, other tools as
 one-line entries), then a live area at the bottom (a spinner, or the input box between two rules with the footer
 hint, the project line and the counters line). Everything printed above the live area is append-only; only the live
-area is erased and redrawn. Rendering lives in tui_render.py and keys in tui_input.py. Without a terminal (a pipe)
-the same events come out as plain lines; NO_COLOR keeps the layout and drops the colors.
+area is erased and redrawn. Rendering lives in tui_render.py; prompt_toolkit reads the keys (tui_input.py) and holds
+the input line (read_input). Without a terminal (a pipe) the same events come out as plain lines; NO_COLOR keeps the
+layout and drops the colors.
 """
 from __future__ import annotations
 
@@ -43,7 +44,7 @@ COMMANDS = [
     ("status", "", "model, folder, access mode, usage"),
     ("auto", "[ask|accept-edits|full-access]", "set what the agent may do without asking"),
     ("plan", "[on|off|file]", "plan mode: read and plan, change nothing; file shows where the last plan was saved"),
-    ("goal", "[text|off]", "keep working until this is done"),
+    ("goal", "[text|start|resume|off]", "keep working until an independent check says it is done"),
     ("style", "[id]", "pick how the agent writes"),
     ("agent", "[id]", "switch the agent for this chat"),
     ("mode", "code|work", "switch this chat between Code and Work"),
@@ -163,6 +164,12 @@ def _tilde(path: str) -> str:
 # events that may arrive between a final answer and the review round that replaces it (print mode holds the answer)
 _HOLD_THROUGH = ("model_wait", "assistant", "review_round", "status", "usage", "model_start", "model_end", "text_delta", "thought",
                  "stream_reset", "reply_trim")
+
+def _set_text(b, text: str) -> None:
+    """Put text in the input line (a prompt_toolkit Buffer) with the cursor at its end."""
+    from prompt_toolkit.document import Document
+    b.document = Document(text, len(text))
+
 
 class Terminal:
     """Draws the session. `emit` takes the agent's events; `approve` and `ask_questions` take its questions.
@@ -349,34 +356,20 @@ class Terminal:
                 time.sleep(0.05)
                 continue
             try:
-                if os.name == "nt":
-                    import msvcrt
+                with K.RawKeys() as keys:              # prompt_toolkit's reader, on Windows too (its console records)
                     while self._turn and self.idle.is_set():
-                        if msvcrt.kbhit():
-                            ch = msvcrt.getwch()
-                            if ch == "\x1b":
-                                self._esc_pressed()
-                                return
-                            self.typeahead.extend(K.parse_keys(ch))
+                        k = keys.read(timeout=0.05)
+                        if k == "esc":
+                            self._esc_pressed()
+                            return
+                        if k is not None:             # typed ahead: kept for the next prompt
+                            self.typeahead.append(k)
                             if self._typed_exit():
-                                return
-                        else:
-                            time.sleep(0.05)
-                else:
-                    with K.RawKeys() as keys:
-                        while self._turn and self.idle.is_set():
-                            k = keys.read(timeout=0.05)
-                            if k == "esc":
-                                self._esc_pressed()
-                                return
-                            if k is not None:             # typed ahead: kept for the next prompt
-                                self.typeahead.append(k)
-                                if self._typed_exit():
-                                    break
-                        self.typeahead.extend(keys.pending)    # keys read together with the last one
-                        keys.pending = []
-                    if self.stopping:                 # /exit typed: the turn is stopping, the keys wait for the prompt
-                        return
+                                break
+                    self.typeahead.extend(keys.pending)    # keys read together with the last one
+                    keys.pending = []
+                if self.stopping:                     # /exit typed: the turn is stopping, the keys wait for the prompt
+                    return
             except Exception:  # noqa: BLE001 - no usable terminal: Ctrl+C still stops
                 return
             finally:
@@ -622,6 +615,15 @@ class Terminal:
         elif t == "review":
             self._flush_text()
             self.scroll([""] + self._review_lines(ev))
+        elif t == "goal_check":                  # goal mode: one plain line per independent check
+            self._flush_text()
+            self.p(st.dim("  " + str(ev.get("text") or "")))
+        elif t == "goal_rubric":                 # goal mode: the rubric, open for a minute before it freezes
+            self._flush_text()
+            rows = ["", "  " + st.dim("Rubric for the goal. It freezes in 60 s; type /goal start to begin now.")]
+            rows += ["  - " + str(c.get("text") or "") + (st.dim(" (must)") if c.get("must") else "")
+                     for c in ev.get("rubric") or []]
+            self.scroll(rows)
         elif t in ("error", "interrupted"):
             self.failed = True
             self._flush_text()
@@ -923,8 +925,8 @@ class Terminal:
         if stat:
             lines.append(stat)
         lines.append(self.rule_line())
-        buf = s["buf"]
-        before = buf[:s["cur"]]
+        buf, cur = s["b"].text, s["b"].cursor_position          # the line (a prompt_toolkit Buffer, read_input)
+        before = buf[:cur]
         crow, ctext = before.count("\n"), before.split("\n")[-1]
         first_row = len(lines)
         ccol = 2
@@ -957,6 +959,8 @@ class Terminal:
 
     def _search_key(self, s: dict, k) -> bool:
         """A key while searching earlier prompts (Ctrl+R). True when the search took it."""
+        b = s["b"]
+
         def find(q, before):
             for i in range(before - 1, -1, -1):
                 if q.lower() in self.history[i].lower():
@@ -967,11 +971,12 @@ class Terminal:
             hit = find(s["search"], start) if s["search"] else None
             s["found"] = hit if hit is not None else s["found"]
         elif k in ("esc", "ctrl_c"):
-            s["buf"], s["cur"], s["search"] = s["orig"], len(s["orig"]), None
+            _set_text(b, s["orig"])
+            s["search"] = None
             return True
         elif k in ("enter", "right", "left", "tab"):
             s["search"] = None
-            s["cur"] = len(s["buf"])
+            b.cursor_position = len(b.text)
             return True
         elif k == "backspace":
             s["search"] = s["search"][:-1]
@@ -982,8 +987,7 @@ class Terminal:
         else:
             return False
         if s["found"] is not None:
-            s["buf"] = self.history[s["found"]]
-            s["cur"] = len(s["buf"])
+            _set_text(b, self.history[s["found"]])
         s["note"] = (f"Search earlier prompts: {s['search']!r}" +
                      ("" if s["found"] is not None or not s["search"] else " (no match)") + ". Enter to use, Esc to cancel")
         return True
@@ -993,15 +997,21 @@ class Terminal:
         self.scroll([""] + [f" {self.st.accent('❯') if i == 0 else ' '} {r}" for i, r in enumerate(rows)])
 
     def read_input(self, prefill: str = "") -> str | None:
-        """One message or /command from the input box. None: the user is leaving (Ctrl+D, or Ctrl+C twice)."""
+        """One message or /command from the input box. None: the user is leaving (Ctrl+D, or Ctrl+C twice).
+
+        The line is a prompt_toolkit Buffer: it inserts and deletes, and its Document finds the start and end of a line,
+        the line above or below, and the words. This loop decides what each key means here (the command list, history,
+        Ctrl+R, the stash), and _box draws the box."""
         self.keys_free.wait(0.5)                # the Esc watcher of the last turn lets go first
         if not self.raw_ok():
             return self._read_plain()
+        from prompt_toolkit.buffer import Buffer
+        from prompt_toolkit.document import Document
         pre, self.prefill = getattr(self, "prefill", ""), ""        # /rewind: the earlier message, to edit
         if not pre and getattr(self, "stash", "") and getattr(self, "stash_used", False):
             pre, self.stash, self.stash_used = self.stash, "", False   # the stashed prompt comes back after a send
-        s = {"buf": pre, "cur": len(pre), "sel": 0, "note": "",
-             "hint": PLACEHOLDERS[len(self.history) % len(PLACEHOLDERS)], "search": None}
+        b = Buffer(document=Document(pre, len(pre)))
+        s = {"b": b, "sel": 0, "note": "", "hint": PLACEHOLDERS[len(self.history) % len(PLACEHOLDERS)], "search": None}
         h = len(self.history)
         draft = ""
         last_c = 0.0
@@ -1021,93 +1031,87 @@ class Terminal:
                         break
                     if k is None:
                         continue
-                    buf, cur = s["buf"], s["cur"]
-                    menu = self.menu_rows(buf)
+                    menu = self.menu_rows(b.text)
                     s["note"] = ""
                     if s["search"] is not None:            # Ctrl+R: searching earlier prompts
                         if isinstance(k, tuple) or k in ("up", "down", "ctrl_p", "ctrl_n", "home", "end"):
                             s["search"] = None             # a paste or a move ends the search, keeping the match
-                            s["cur"] = len(s["buf"])
-                            buf, cur = s["buf"], s["cur"]
+                            b.cursor_position = len(b.text)
                         elif self._search_key(s, k):
                             self.refresh()
                             continue
+                    buf, cur, doc = b.text, b.cursor_position, b.document
                     if isinstance(k, tuple):
-                        s["buf"], s["cur"] = buf[:cur] + k[1] + buf[cur:], cur + len(k[1])
+                        b.insert_text(k[1])
                     elif k == "enter":
                         if menu:
                             name, hint, _ = menu[min(s["sel"], len(menu) - 1)]
                             if buf != "/" + name and hint:
-                                s["buf"] = "/" + name + " "
-                                s["cur"] = len(s["buf"])
+                                _set_text(b, "/" + name + " ")
                                 self.refresh()
                                 continue
                             buf = "/" + name
                         if buf.endswith("\\"):
-                            s["buf"], s["cur"] = buf[:-1] + "\n", len(buf)
+                            _set_text(b, buf[:-1] + "\n")
                         elif buf.strip():
                             result = buf.strip()
                             break
                     elif k == "alt_enter":
-                        s["buf"], s["cur"] = buf[:cur] + "\n" + buf[cur:], cur + 1
+                        b.insert_text("\n")
                     elif len(k) == 1:
-                        s["buf"], s["cur"], s["sel"] = buf[:cur] + k + buf[cur:], cur + 1, 0
+                        b.insert_text(k)
+                        s["sel"] = 0
                     elif k == "backspace":
-                        if cur:
-                            s["buf"], s["cur"], s["sel"] = buf[:cur - 1] + buf[cur:], cur - 1, 0
+                        b.delete_before_cursor(1)
+                        s["sel"] = 0
                     elif k == "delete":
-                        s["buf"] = buf[:cur] + buf[cur + 1:]
-                    elif k == "left":
-                        s["cur"] = max(0, cur - 1)
+                        b.delete(1)
+                    elif k == "left":                       # across a line break too
+                        b.cursor_position = max(0, cur - 1)
                     elif k == "right":
-                        s["cur"] = min(len(buf), cur + 1)
+                        b.cursor_position = min(len(buf), cur + 1)
                     elif k in ("home", "ctrl_a"):
-                        s["cur"] = buf.rfind("\n", 0, cur) + 1
+                        b.cursor_position += doc.get_start_of_line_position()
                     elif k in ("end", "ctrl_e"):
-                        j = buf.find("\n", cur)
-                        s["cur"] = len(buf) if j < 0 else j
+                        b.cursor_position += doc.get_end_of_line_position()
                     elif k == "ctrl_k":
-                        j = buf.find("\n", cur)
-                        s["buf"] = buf[:cur] + (buf[j:] if j >= 0 else "")
+                        b.delete(doc.get_end_of_line_position())
                     elif k == "ctrl_u":
-                        s["buf"], s["cur"] = buf[cur:], 0
+                        b.delete_before_cursor(cur)
                     elif k in ("ctrl_w", "word_backspace"):   # Ctrl+W, and Alt+Backspace (read as ctrl_w)
-                        j = len(buf[:cur].rstrip(" "))
-                        if j and buf[j - 1] == "\n":       # FL-V15: at a line's start: join it to the line above
-                            j -= 1
-                        else:                               # else stop at a space or a line break, never past it
-                            j = max(buf.rfind(" ", 0, j), buf.rfind("\n", 0, j)) + 1
-                        s["buf"], s["cur"] = buf[:j] + buf[cur:], j
+                        kept = doc.text_before_cursor.rstrip(" ")
+                        if kept.endswith("\n"):            # FL-V15: at a line's start: join it to the line above
+                            b.delete_before_cursor(cur - len(kept) + 1)
+                        else:                               # else the word and the spaces after it, never past a line break
+                            back = doc.find_start_of_previous_word(WORD=True)
+                            b.delete_before_cursor(-back if back else cur)
                     elif k in ("up", "ctrl_p"):
                         recalled = h < len(self.history) and buf == self.history[h]   # walking history, not the menu
                         if menu and not recalled:
                             s["sel"] = (s["sel"] - 1) % len(menu)
-                        elif "\n" in buf[:cur]:
-                            s["cur"] = self._vmove(buf, cur, -1)
+                        elif "\n" in doc.text_before_cursor:
+                            b.cursor_up()
                         elif self.history and h > 0:
                             if h == len(self.history):
                                 draft = buf
                             h -= 1
-                            s["buf"] = self.history[h]
-                            s["cur"] = len(s["buf"])
+                            _set_text(b, self.history[h])
                     elif k in ("down", "ctrl_n"):
                         recalled = h < len(self.history) and buf == self.history[h]
                         if menu and not recalled:
                             s["sel"] = (s["sel"] + 1) % len(menu)
-                        elif "\n" in buf[cur:]:
-                            s["cur"] = self._vmove(buf, cur, 1)
+                        elif "\n" in doc.text_after_cursor:
+                            b.cursor_down()
                         elif h < len(self.history):
                             h += 1
-                            s["buf"] = self.history[h] if h < len(self.history) else draft
-                            s["cur"] = len(s["buf"])
+                            _set_text(b, self.history[h] if h < len(self.history) else draft)
                     elif k == "tab":
                         if menu:
-                            s["buf"] = "/" + menu[min(s["sel"], len(menu) - 1)][0] + " "
-                            s["cur"] = len(s["buf"])
+                            _set_text(b, "/" + menu[min(s["sel"], len(menu) - 1)][0] + " ")
                     elif k == "shift_tab":
                         self.cycle_mode()
                     elif k == "esc":
-                        s["buf"], s["cur"] = "", 0
+                        b.reset()
                     elif k == "ctrl_o":
                         self.expand_last()
                     elif k == "ctrl_r":
@@ -1116,21 +1120,21 @@ class Terminal:
                     elif k == "ctrl_s":
                         if buf.strip():
                             self.stash, self.stash_used = buf, False
-                            s["buf"], s["cur"] = "", 0
+                            b.reset()
                             s["note"] = "Prompt stashed. Ctrl+S brings it back; it also comes back after your next message."
                         elif getattr(self, "stash", ""):
-                            s["buf"], s["cur"], self.stash = self.stash, len(self.stash), ""
+                            _set_text(b, self.stash)
+                            self.stash = ""
                     elif k == "word_left":
-                        j = len(buf[:cur].rstrip())
-                        s["cur"] = max(buf.rfind(" ", 0, j), buf.rfind("\n", 0, j)) + 1
-                    elif k == "word_right":
-                        j = cur + (len(buf[cur:]) - len(buf[cur:].lstrip()))
-                        nxt = [x for x in (buf.find(" ", j), buf.find("\n", j)) if x >= 0]
-                        s["cur"] = min(nxt) if nxt else len(buf)
-                    elif k == "word_delete":
-                        j = cur + (len(buf[cur:]) - len(buf[cur:].lstrip()))
-                        nxt = [x for x in (buf.find(" ", j), buf.find("\n", j)) if x >= 0]
-                        s["buf"] = buf[:cur] + buf[min(nxt) if nxt else len(buf):]
+                        back = doc.find_previous_word_beginning(WORD=True)
+                        b.cursor_position = cur + back if back is not None else 0
+                    elif k in ("word_right", "word_delete"):
+                        ahead_ = doc.find_next_word_ending(include_current_position=True, WORD=True)
+                        ahead_ = ahead_ if ahead_ else len(buf) - cur
+                        if k == "word_right":
+                            b.cursor_position = cur + ahead_
+                        else:                               # Alt+D: delete to the end of the next word
+                            b.delete(ahead_)
                     elif k == "ctrl_l":
                         self._write("\x1b[2J\x1b[H")
                         self._rows = self._cur_row = 0
@@ -1140,13 +1144,12 @@ class Terminal:
                             break
                     elif k == "ctrl_c":
                         if buf:
-                            s["buf"], s["cur"] = "", 0
+                            b.reset()
                         elif self.clock() - last_c < 2:
                             break
                         else:
                             last_c = self.clock()
                             s["note"] = "Press Ctrl+C again to exit"
-                    s["cur"] = min(s["cur"], len(s["buf"]))
                     self.refresh()
         finally:
             self.set_live(None)
@@ -1160,18 +1163,6 @@ class Terminal:
             self.started = True
             self.echo_user(result)
         return result
-
-    @staticmethod
-    def _vmove(buf: str, cur: int, d: int) -> int:
-        start = buf.rfind("\n", 0, cur) + 1
-        col = cur - start
-        if d < 0:
-            pstart = buf.rfind("\n", 0, max(0, start - 1)) + 1
-            return min(pstart + col, start - 1)
-        nl = buf.find("\n", cur)
-        nend = buf.find("\n", nl + 1)
-        nend = len(buf) if nend < 0 else nend
-        return min(nl + 1 + col, nend)
 
     def _read_plain(self) -> str | None:
         lines = []
@@ -2107,7 +2098,8 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
     body = {"workdir": wd, "kind": _KINDS[mode_kind] or "",
             "mode": "auto" if auto else (pm if pm in ("ask", "edits") else None),
             "plan": True if plan_mode else None, "incognito": incognito, "project_id": project or "",
-            "no_mcp": no_mcp, "model": model or os.environ.get("MH_MODEL") or None, "task": prompt or first or "", "effort": effort or ""}
+            "no_mcp": no_mcp, "model": model or os.environ.get("MH_MODEL") or None, "task": prompt or first or "", "effort": effort or "",
+            "terminal": True}
     if mode_kind == "auto":
         body["harness"] = "meshpool-auto"
     elif agent:

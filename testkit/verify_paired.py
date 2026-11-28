@@ -44,6 +44,29 @@ def cost(r):
     return 0.0
 
 
+def paired_point(by, tasks, a, b):
+    """Solve-rate difference (points), cost per solved task as a multiple of b's, and the median of per-task time
+    ratios (each task's mean seconds over its reps, a over b), over `tasks`. by: (arm, task) -> runs."""
+    sa = na = sb = nb = 0
+    ca = cb = 0.0
+    tr = []
+    for t in tasks:
+        ra, rb = by[(a, t)], by[(b, t)]
+        sa += sum(1 for r in ra if passed(r))
+        sb += sum(1 for r in rb if passed(r))
+        na += len(ra)
+        nb += len(rb)
+        ca += sum(cost(r) for r in ra)
+        cb += sum(cost(r) for r in rb)
+        ta = statistics.mean(r.get("secs") or 0 for r in ra)
+        tb = statistics.mean(r.get("secs") or 0 for r in rb)
+        if tb > 0:
+            tr.append(ta / tb)
+    rate = 100 * (sa / max(1, na) - sb / max(1, nb))
+    cps = (ca / max(1, sa)) / (cb / max(1, sb)) if sb and sa else float("inf")
+    return rate, cps, statistics.median(tr) if tr else float("nan")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("files", nargs="+")
@@ -84,24 +107,7 @@ def main():
               f"errors {len(errs)}")
 
     def stats(ts):
-        sa = na = sb = nb = 0
-        ca = cb = 0.0
-        tr = []
-        for t in ts:
-            ra, rb = by[(a.a, t)], by[(a.b, t)]
-            sa += sum(1 for r in ra if passed(r))
-            sb += sum(1 for r in rb if passed(r))
-            na += len(ra)
-            nb += len(rb)
-            ca += sum(cost(r) for r in ra)
-            cb += sum(cost(r) for r in rb)
-            ta = statistics.mean(r.get("secs") or 0 for r in ra)
-            tb = statistics.mean(r.get("secs") or 0 for r in rb)
-            if tb > 0:
-                tr.append(ta / tb)
-        rate = 100 * (sa / max(1, na) - sb / max(1, nb))
-        cps = (ca / max(1, sa)) / (cb / max(1, sb)) if sb and sa else float("inf")
-        return rate, cps, statistics.median(tr) if tr else float("nan")
+        return paired_point(by, ts, a.a, a.b)
 
     rnd = random.Random(a.seed)
     point = stats(common)

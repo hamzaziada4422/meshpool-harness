@@ -228,6 +228,11 @@
    "minos": null,
    "worst": null
   },
+  "iniconfig==2.3.1": {
+   "file": "iniconfig-2.3.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
   "ipykernel==7.4.0": {
    "file": "ipykernel-7.4.0-py3-none-any.whl",
    "minos": null,
@@ -376,6 +381,11 @@
    "minos": null,
    "worst": null
   },
+  "packaging==26.4": {
+   "file": "packaging-26.4-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
   "pandas==3.1.1": {
    "file": "pandas-3.1.1-cp312-cp312-macosx_11_0_arm64.whl",
    "minos": [
@@ -432,6 +442,11 @@
     5
    ],
    "worst": "playwright/driver/node"
+  },
+  "pluggy==1.7.0": {
+   "file": "pluggy-1.7.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
   },
   "primp==2.0.1": {
    "file": "primp-2.0.1-cp310-abi3-macosx_11_0_arm64.whl",
@@ -499,6 +514,11 @@
     0
    ],
    "worst": "pypdfium2_raw/libpdfium.dylib"
+  },
+  "pytest==9.2.0": {
+   "file": "pytest-9.2.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
   },
   "python-dateutil==4.0.0": {
    "file": "python_dateutil-4.0.0-py3-none-any.whl",
@@ -768,6 +788,44 @@
     "sha256": "946666388eb79b307d7f497b3b33045ef807750f8e5ef3440e0ba3bbab698044",
     "wheel": "pypandoc_binary-1.13-py3-none-macosx_10_9_x86_64.whl"
    }
+  },
+  "uv": {
+   "mac-arm64": {
+    "libs": [
+     "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+     "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+     "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+     "/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration",
+     "/usr/lib/libSystem.B.dylib",
+     "/usr/lib/libiconv.2.dylib",
+     "/usr/lib/libobjc.A.dylib"
+    ],
+    "member": "uv-0.13.7.data/scripts/uv",
+    "minos": [
+     11,
+     0
+    ],
+    "sha256": "f91a229093163eefca89ea1b220a221d64c3beade05d03519a6584d1797a5a5f",
+    "wheel": "uv-0.13.7-py3-none-macosx_11_0_arm64.whl"
+   },
+   "mac-x64": {
+    "libs": [
+     "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+     "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+     "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+     "/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration",
+     "/usr/lib/libSystem.B.dylib",
+     "/usr/lib/libiconv.2.dylib",
+     "/usr/lib/libobjc.A.dylib"
+    ],
+    "member": "uv-0.13.7.data/scripts/uv",
+    "minos": [
+     10,
+     12
+    ],
+    "sha256": "fd04bf01ba5f2829f4f94ca8f0c24a743f21e73d75045613ed6fc2fd66fc7bda",
+    "wheel": "uv-0.13.7-py3-none-macosx_10_12_x86_64.whl"
+   }
   }
  },
  "x86_64": {
@@ -999,6 +1057,11 @@
    "minos": null,
    "worst": null
   },
+  "iniconfig==2.3.1": {
+   "file": "iniconfig-2.3.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
   "ipykernel==7.4.0": {
    "file": "ipykernel-7.4.0-py3-none-any.whl",
    "minos": null,
@@ -1147,6 +1210,11 @@
    "minos": null,
    "worst": null
   },
+  "packaging==26.4": {
+   "file": "packaging-26.4-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
   "pandas==3.1.1": {
    "file": "pandas-3.1.1-cp312-cp312-macosx_10_13_x86_64.whl",
    "minos": [
@@ -1203,6 +1271,11 @@
     5
    ],
    "worst": "playwright/driver/node"
+  },
+  "pluggy==1.7.0": {
+   "file": "pluggy-1.7.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
   },
   "primp==2.0.1": {
    "file": "primp-2.0.1-cp310-abi3-macosx_10_12_x86_64.whl",
@@ -1270,6 +1343,11 @@
     13
    ],
    "worst": "pypdfium2_raw/libpdfium.dylib"
+  },
+  "pytest==9.2.0": {
+   "file": "pytest-9.2.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
   },
   "python-dateutil==4.0.0": {
    "file": "python_dateutil-4.0.0-py3-none-any.whl",

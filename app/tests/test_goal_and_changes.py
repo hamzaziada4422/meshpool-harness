@@ -20,30 +20,49 @@ def turn(s, reply, acted=True, extra=(), after=()):
                  {"type": "assistant", "text": reply}, *after, {"type": "turn_end"}]
 
 
-def test_goal_continues_until_done(monkeypatch):
+def checker(status):
+    """A fake independent check (goal mode, 0.0.20): every criterion of the frozen rubric gets `status`."""
+    return lambda s, st, why: {"items": [{"id": c["id"], "status": status, "evidence": "looked"} for c in st["rubric"]],
+                               "gates": []}
+
+
+def test_goal_continues_until_the_independent_check_says_it_is_met(monkeypatch):
+    # 0.0.20: "GOAL: DONE" is read as READY. It asks for a check; the check, not the agent, ends the goal.
     monkeypatch.setattr(A, "write_meta", lambda *a, **k: {})
     s = session()
+    s.goal_checker = checker("met")
     turn(s, "Wrote part 1.\nGOAL: CONTINUE with part 2")
     assert s._goal_next(0) == (A.GOAL_NEXT, [])
     n = len(s.events)
     turn(s, "All done and tested.\nGOAL: DONE")
     assert s._goal_next(n) is None and s.goal == ""
-    assert s.events[-1]["text"].startswith("Goal met")
+    assert s.events[-1]["text"].startswith("Met: 10/10 after 1 check.")
+
+
+def test_the_agents_own_done_never_ends_the_goal(monkeypatch):
+    monkeypatch.setattr(A, "write_meta", lambda *a, **k: {})
+    s = session()
+    s.goal_checker = checker("not_met")
+    turn(s, "All done.\nGOAL: DONE")
+    assert s._goal_next(0) == (A.GOAL_NEXT, []) and s.goal == "ship it"
+    assert any(e.get("type") == "goal_check" and "Below the bar" in e["text"] for e in s.events)
 
 
 def test_goal_pauses_for_the_user_errors_and_no_progress(monkeypatch):
     monkeypatch.setattr(A, "write_meta", lambda *a, **k: {})
     s = session()
     turn(s, "Which database should I use?")                       # a question: no GOAL line
-    assert s._goal_next(0) is None and s.goal == "ship it"
+    assert s._goal_next(0) is None and s.goal == "ship it" and s.gs["status"] == "paused"
+    s._goal_turn_start("Use Postgres")                             # the user's reply carries the goal on
     n = len(s.events)
     turn(s, "GOAL: CONTINUE", after=[{"type": "error", "text": "API down"}])   # the turn ENDED on the error
     assert s._goal_next(n) is None and "error" in s.events[-1]["text"]
+    s._goal_turn_start("try again")
     n = len(s.events)
     turn(s, "Thinking.\nGOAL: CONTINUE", acted=False)
     assert s._goal_next(n) == (A.GOAL_NEXT, [])
     n = len(s.events)
-    turn(s, "Still thinking.\nGOAL: CONTINUE", acted=False)       # two idle turns in a row: pause
+    turn(s, "Still thinking.\nGOAL: CONTINUE", acted=False)       # two idle turns in a row: stuck, it stops
     assert s._goal_next(n) is None and "without doing anything" in s.events[-1]["text"]
 
 

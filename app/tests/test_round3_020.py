@@ -192,9 +192,17 @@ def test_a_python_step_card_reads_in_one_plain_line_and_folds_the_code(app, page
 
 # ======================================================================================================== item 4
 def test_a_picture_shown_large_is_not_also_a_card(app, page):
+    # the picture is a real file in the chat's folder, as after a real turn: a picture that does not load is taken out
+    # of the reply (preview.js pvBigImages, onerror), so with no file the count below raced the 404 on a busy computer
+    from PIL import Image
+    Image.new("RGB", (64, 40), "steelblue").save(Path(app["work"]) / "chart.png")
+    # a folder the page may show files from (a real chat's folder is; this chat has no server behind it): alone, the
+    # picture was refused and dropped, and the test passed only on the timing above
+    page.evaluate("w => post('/api/projects', {action: 'add', path: w})", app["work"])
     _chat_view(page, app["work"])
     _ev(page, {"type": "user", "text": "Make a chart of revenue and show it here", "i": 0})
     page.evaluate("""() => { S.cur.tpaths = ['chart.png']; applyEv({type: 'turn_end', turn: {}}); }""")
+    page.wait_for_selector("#col .pvbig:not(.wait) img")         # loaded: nothing about it changes after this
     got = page.evaluate("""() => { const row = document.querySelector('#col .pvcards'); return {big: document.querySelectorAll('#col .pvbig').length,
         cards: row ? [...row.querySelectorAll('.pvcard')].filter(c => c.offsetParent).length : 0}; }""")
     assert got["big"] == 1 and got["cards"] == 0, got

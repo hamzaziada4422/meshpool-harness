@@ -209,7 +209,9 @@ function nextNudge010() {
     const event = b.dataset.ic;
     if (event === "never") {                // turns the Settings switch off: no tip card shows again, here or in the terminal
       done();
-      try { const r = await post("/api/capabilities", {id: "tips", on: false}); if (r?.features) S.caps = r.features; } catch (err) { S.caps = (S.caps || []).map(f => f.id === "tips" ? Object.assign({}, f, {on: false}) : f); }
+      // off on this page at once: a tip that arrives while the setting is being saved is not drawn either
+      S.caps = (S.caps || []).map(f => f.id === "tips" ? Object.assign({}, f, {on: false}) : f);
+      try { const r = await post("/api/capabilities", {id: "tips", on: false}); if (r?.features) S.caps = r.features; } catch (err) { /* the save failed: tips stay off on this page */ }
       toast("Tips are off. You can turn them back on in Settings, under Features.", 7000);
       return;
     }

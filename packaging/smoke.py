@@ -6,8 +6,14 @@ Checks what a user would hit first, with no network and no paid calls:
   1. the packages the app ships with import (PDF, Word, Excel, PowerPoint, browser),
   2. the app's version is the release's version,
   3. Word and PDF files can be made,
+  3a. Node, Git and Pi run from the app, the measuring fonts come from its LibreOffice, and on Windows python3 and
+      MinGit's programs folder are Meshpool's own (each found by the app's own lookup),
   3b. the programs and packages the skills rely on work from the app alone: ffmpeg, pandoc, speech to text (the bundled
       model, offline), a notebook run with the bundled kernel, a chart, HEIC support,
+  3c. browser use: the app's own Chromium starts hidden (it ships without the headless shell) and the browser tool
+      opens, reads, types into, clicks and screenshots a page served on 127.0.0.1; the look review's browser renders it,
+  3d. the Terminal panel's shell: a pseudo-terminal (ptyprocess on Mac and Linux, pywinpty on Windows) starts the
+      shell, a marker it echoes is read back, a resize is taken, and Stop ends the shell and its children,
   4. the app's server starts, and a Meshpool Code chat gets an answer from a stand-in model (testkit/mock_llm.py).
 Exits non-zero on the first failure, so the release is not published.
 """
@@ -47,6 +53,68 @@ def wait_http(url: str, secs: int = 90):
         except Exception:  # noqa: BLE001
             time.sleep(1)
     raise SystemExit(f"smoke: FAILED, nothing answered at {url} within {secs} s")
+
+
+def run_version(name: str, cmd: list, want: str, env: dict | None = None) -> str:
+    """Run a bundled program's version command; fail the release unless it exits 0 and prints `want`. Returns what it
+    printed."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL, env=env,
+                           errors="replace")
+    except OSError as e:
+        raise SystemExit(f"smoke: FAILED, the bundled {name} does not start ({cmd[0]}): {e}")
+    out = (r.stdout or r.stderr).strip()
+    if r.returncode or want not in out:
+        raise SystemExit(f"smoke: FAILED, the bundled {name} ({cmd[0]}) exited {r.returncode}: {out[-300:]!r}")
+    return out
+
+
+def bundled_programs():
+    """Node, Git, Pi, the measuring fonts and (Windows) python3 and MinGit's programs folder, each found by the app's
+    own lookup and run once, offline. Their folder names come from upstream downloads (Node's latest 22.x, MinGit,
+    LibreOffice, Pi from npm, python-build-standalone): when one is renamed, as MinGit's mingw64 became ucrt64, the
+    release stops here instead of on a customer's computer. LibreOffice, ffmpeg, pandoc and the speech model have
+    their own steps; Chromium has the browser step."""
+    from meshpool_harness import bundled, office_runtime
+    from meshpool_harness.harnesses import pi_rpc
+    step("bundled Node, Git, Pi and the measuring fonts")
+    if not bundled.packaged():
+        raise SystemExit("smoke: FAILED, the app does not count as packaged, so it would look for tools on PATH")
+    node, git = bundled.node_exe(), bundled.bundled_git()
+    if not node:
+        raise SystemExit("smoke: FAILED, Node.js is not in the app (node/)")
+    if not git:
+        raise SystemExit("smoke: FAILED, Git is not in the app (git/)")
+    step(f"node {run_version('Node.js', [node, '--version'], 'v')[:40]} at {node}")
+    step(f"{run_version('Git', [git, '--version'], 'git version')[:60]} at {git}")
+    if os.name == "nt":
+        progs = [d for d in bundled.git_dirs() if d.parent.name != "usr" and d.name == "bin" and (d / "git.exe").is_file()]
+        if not progs:
+            raise SystemExit("smoke: FAILED, MinGit's programs folder (ucrt64/bin, mingw64/bin) is not among the folders "
+                             f"the app puts on PATH: {[str(d) for d in bundled.git_dirs()]}")
+        step(f"MinGit programs folder on PATH: {progs[0]}")
+    cli = pi_rpc.pi_cli()
+    if not cli:
+        raise SystemExit("smoke: FAILED, Pi is not in the app (vendor/pi/.../dist/bundle/cli.js)")
+    step(f"Pi {run_version('Pi', [node, str(cli), '--version'], '.')[:40]}")
+    from engines.forge.common import font_file
+    lo = office_runtime.bundled_dir().resolve()
+    for face, metric in (("Calibri", "Carlito"), ("Arial", "Liberation Sans")):
+        path = font_file(face, False, False, ((face, metric),))[0]
+        if not path or lo not in Path(path).resolve().parents:
+            raise SystemExit(f"smoke: FAILED, {face} is not measured with the {metric} inside the app's LibreOffice "
+                             f"(found {path!r})")
+    step("Calibri and Arial are measured with the fonts in the app's LibreOffice")
+    if os.name == "nt":                         # skills and models type python3: it must be Meshpool's Python
+        sh = bundled.bundled_bash()
+        env = dict(os.environ, PATH=os.pathsep.join([str(Path(sys.executable).parent), os.environ.get("PATH", "")]))
+        out = run_version("python3", [sh, "-lc", "python3 -c 'import sys; print(sys.prefix)'"], ":", env=env)
+        out = out.splitlines()[-1]                  # a login shell may print a line of its own first
+        here = os.path.normcase(os.path.realpath(sys.prefix))
+        if os.path.normcase(os.path.realpath(out.strip())) != here:
+            raise SystemExit(f"smoke: FAILED, python3 in the agents' shell is not Meshpool's Python: {out!r}, "
+                             f"want {sys.prefix}")
+        step(f"python3 in the agents' shell is Meshpool's Python ({out.strip()})")
 
 
 def bundled_media(proj: Path):
@@ -109,6 +177,141 @@ def bundled_media(proj: Path):
     step("notebook, chart and HEIC support work")
 
 
+_PAGE = b"""<!doctype html><html><head><meta charset=utf-8><title>Smoke page</title></head><body>
+<h1>Browser smoke</h1><label>Name <input id=name aria-label=Name></label>
+<button onclick="document.getElementById('out').textContent = 'Hello ' + document.getElementById('name').value">Greet</button>
+<p id=out>nobody yet</p></body></html>"""
+
+
+def browser(proj: Path):
+    """The browser tool and the look review start the app's own Chromium, hidden, and work a local page. Offline: the
+    page is served on 127.0.0.1. The app ships the full Chromium only (no headless shell), so this fails the release
+    on any system where browser use could not start (v0.0.18 on macOS: it looked for chromium_headless_shell)."""
+    import http.server
+    import threading
+    from meshpool_harness import browser_use as BU
+    from meshpool_harness import bundled
+    step("browser use: the app's own Chromium, hidden, on a local page")
+    why = bundled.browser_needs_newer_macos()
+    if why:
+        step(f"browser use skipped: {why}")
+        return
+    exe = BU.find_playwright_chromium()
+    if bundled.packaged():
+        own = bundled.browsers_dir().resolve()
+        if not exe or own not in Path(exe).resolve().parents:
+            raise SystemExit(f"smoke: FAILED, the app's own Chromium is not found in {own} (found {exe!r})")
+        if list(own.glob("chromium_headless_shell-*")):
+            raise SystemExit("smoke: FAILED, the headless shell is in the app; it is meant to be left out (--no-shell)")
+
+    class Page(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(_PAGE)))
+            self.end_headers()
+            self.wfile.write(_PAGE)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Page)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/"
+    os.environ["MH_BROWSER_HEADLESS"] = "1"
+    from meshpool_harness.agent import browser_mcp_server as BM
+    try:
+        snap = BM.browser_open(url)
+        refs = dict(re.findall(r'\[(e\d+)\] (?:input|textbox|button) "(Name|Greet)"', snap))
+        refs = {v: k for k, v in refs.items()}
+        if "Browser smoke" not in snap or "Name" not in refs or "Greet" not in refs:
+            raise SystemExit(f"smoke: FAILED, the browser tool did not read the page: {snap[:400]!r}")
+        BM.browser_type(refs["Name"], "meshpool")
+        after = BM.browser_click(refs["Greet"])
+        if "Hello meshpool" not in after and "Hello meshpool" not in BM.browser_snapshot():
+            raise SystemExit(f"smoke: FAILED, typing and clicking in the browser did not work: {after[:400]!r}")
+        shot = BM.browser_screenshot()
+        if not any(isinstance(p, dict) and p.get("type") == "image" for p in shot):
+            raise SystemExit(f"smoke: FAILED, the browser took no screenshot: {str(shot)[:200]!r}")
+        used = dict(BU.LAST_LAUNCH)
+        step(f"browser tool opened, typed, clicked and took a screenshot ({used})")
+    finally:
+        try:
+            BM.browser_close()
+        except Exception:  # noqa: BLE001
+            pass
+    if bundled.packaged() and Path(used.get("executable_path", "")).resolve() != Path(exe).resolve():
+        raise SystemExit(f"smoke: FAILED, the browser tool started {used}, not the app's own Chromium {exe}")
+    # the look review and page previews (review_interact.launch_browser, ui_audit) start it the same way
+    from playwright.sync_api import sync_playwright
+    from meshpool_harness.review_interact import launch_browser
+    with sync_playwright() as pw:
+        b = launch_browser(pw)
+        try:
+            pg = b.new_page()
+            pg.goto(url)
+            if pg.inner_text("h1") != "Browser smoke":
+                raise SystemExit("smoke: FAILED, the look review's browser did not render the page")
+        finally:
+            b.close()
+    srv.shutdown()
+    step("look review browser rendered the page")
+
+
+ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>]")
+
+
+def terminal_pty(proj: Path):
+    """The Terminal panel's shell, through the app's own code (ui/pty_term.py), as the panel starts it. No program
+    beyond the shell is needed: the marker comes from the shell's own arithmetic, so seeing it proves the shell ran
+    the line (the echo of what was typed does not contain it). The Windows and Mac paths have not run on a developer's
+    machine: every wait is bounded and every failure says what was read."""
+    step("terminal (pseudo-terminal)")
+    from meshpool_harness.ui import pty_term as PT
+    kind = PT.backend()
+    want = "pywinpty" if os.name == "nt" else "ptyprocess"
+    if kind != want:
+        raise SystemExit(f"smoke: FAILED, the terminal library is missing ({want}): the panel would fall back to one "
+                         "command at a time")
+    p = PT.Pty(str(proj), "smoke", "powershell" if os.name == "nt" else "", 100, 30)
+    seen = {"at": 0, "text": ""}
+
+    def plain() -> str:
+        return ANSI.sub("", seen["text"])
+
+    def read_until(pred, secs: float) -> bool:
+        end = time.time() + secs
+        while time.time() < end:
+            v = p.view(seen["at"], 0.5)
+            seen["at"] = v["next"]
+            seen["text"] += v["data"]
+            if pred(plain()) or pred(re.sub(r"\s+", "", plain())):    # a redraw may break a line anywhere
+                return True
+            if not v["running"]:
+                return False
+        return False
+    pid = p.pid
+    try:
+        if not read_until(lambda t: t.strip() != "", 45):       # the first prompt (PowerShell can take a while)
+            raise SystemExit(f"smoke: FAILED, the terminal's shell printed nothing in 45 s: {seen['text'][-300:]!r}")
+        line = 'Write-Output ("MP_SMOKE_" + (40 + 2))' if os.name == "nt" else "echo MP_SMOKE_$((40 + 2))"
+        p.write(line + "\r")
+        if not read_until(lambda t: "MP_SMOKE_42" in t, 45):
+            raise SystemExit(f"smoke: FAILED, the terminal did not echo its marker: {plain()[-400:]!r}")
+        p.resize(120, 40)
+        if os.name != "nt":                                     # stty comes with every Mac and Linux system
+            p.write("stty size\r")
+            if not read_until(lambda t: "40 120" in t, 20):
+                raise SystemExit(f"smoke: FAILED, the terminal did not take its new size: {plain()[-300:]!r}")
+    finally:
+        p.close()
+    end = time.time() + 15
+    while time.time() < end and PT._alive(pid):
+        time.sleep(0.2)
+    if PT._alive(pid):
+        raise SystemExit(f"smoke: FAILED, Stop left the terminal's shell running (pid {pid})")
+    step(f"terminal: {kind} ran the shell, read back its marker and ended it")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--app", required=True, help="the built app's code folder (holds meshpool_harness)")
@@ -123,7 +326,8 @@ def main():
     step("imports")
     import importlib
     for mod in ("meshpool_harness", "pptx", "docx", "openpyxl", "reportlab", "pypdf", "pypdfium2", "pdfminer",
-                "PIL", "lxml", "yaml", "pandas", "playwright"):
+                "PIL", "lxml", "yaml", "pandas", "playwright", "prompt_toolkit",
+                "winpty" if os.name == "nt" else "ptyprocess"):
         importlib.import_module(mod)
     import meshpool_harness as MH
     if MH.__version__ != a.version:
@@ -153,7 +357,10 @@ def main():
         if bad or not made.exists() or not made.stat().st_size:
             raise SystemExit(f"smoke: FAILED, {name}: {out}")
 
+    bundled_programs()
     bundled_media(proj)
+    browser(proj)
+    terminal_pty(proj)
 
     step("kept LibreOffice session")
     # One LibreOffice for many conversions (meshpool_harness/lo_session.py). It needs LibreOffice's own Python with

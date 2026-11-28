@@ -26,8 +26,60 @@ def _write(names, path, content):
     return ("tool", "write", {"path": path, "content": content})
 
 
+GOAL_RUBRIC = {"criteria": [
+    {"text": "plan.md exists in the project folder", "check": "Open plan.md.", "weight": 2, "must": True},
+    {"text": "plan.md has the final launch date and owner", "check": "Read plan.md for a date and an owner.", "weight": 3,
+     "must": True},
+    {"text": "plan.md lists at least three risks", "check": "Count the risks in plan.md.", "weight": 2},
+    {"text": "No placeholder text such as TBD", "check": "Search plan.md for TBD.", "weight": 1}]}
+
+
+def goal_plan(messages, names):
+    """Goal mode (0.0.20): the rubric writer, the goal reviewer and the working agent for "goal demo" goals. The first
+    version of plan.md is a draft (below the bar), the second is final (it meets the bar)."""
+    import os
+    import re
+    sysmsg = str(messages[0].get("content", ""))
+    last = str(messages[-1].get("content", ""))
+    if sysmsg.startswith("You write the rubric"):
+        return ("text", json.dumps(GOAL_RUBRIC))
+    if sysmsg.startswith("You are the INDEPENDENT REVIEWER of meshpool, in goal mode"):
+        root = (re.search(r"project folder: ([^)\n]+)\)", last) or [None, ""])[1].strip()
+        try:
+            text = open(os.path.join(root, "plan.md"), encoding="utf-8").read() if root else ""
+        except OSError:
+            text = ""
+        final = "Owner:" in text
+        items = [{"id": "c1", "status": "met" if text else "not_met", "evidence": "plan.md is there" if text else "no plan.md"},
+                 {"id": "c2", "status": "met" if final else "not_met",
+                  "evidence": "Launch 12 March, owner Dana" if final else "no date or owner yet"},
+                 {"id": "c3", "status": "met" if text.count("- Risk") >= 3 else "not_met", "evidence": f"{text.count('- Risk')} risks"},
+                 {"id": "c4", "status": "met" if text and "TBD" not in text else "not_met",
+                  "evidence": "no TBD" if text and "TBD" not in text else "TBD on line 2"}]
+        return ("text", json.dumps({"items": items, "fix": [] if final else ["Add the launch date and the owner",
+                                                                          "Replace TBD", "List three risks"]}))
+    return None
+
+
+def goal_demo(messages, names, step):
+    lu = max(i for i, m in enumerate(messages) if m["role"] == "user")
+    u = str(messages[lu]["content"]).lower()
+    if "goal demo" not in u:
+        return None
+    if step == 0:
+        final = "last check:" in u
+        body = ("# Launch plan\nLaunch: 12 March. Owner: Dana.\n- Risk: supplier delay\n- Risk: budget\n- Risk: hiring\n"
+                if final else "# Launch plan\nLaunch: TBD\n- Risk: supplier delay\n")
+        return _write(names, "plan.md", body)
+    return ("text", ("Finished plan.md with the date, the owner and three risks." if "last check:" in u else
+                     "Wrote a first draft of plan.md.") + "\nGOAL: READY")
+
+
 def plan(messages, tools):
     names = {t["function"]["name"] for t in tools or []}
+    g = goal_plan(messages, names)
+    if g:
+        return g
     if str(messages[0].get("content", "")).startswith("You are the INDEPENDENT REVIEWER"):   # the grader (0.0.11)
         ev = str(messages[-1].get("content", ""))
         fixed = "Fixed:" in ev
@@ -82,6 +134,9 @@ def plan(messages, tools):
     done = [m for m in messages[last_user + 1:] if m["role"] == "tool"]
     step = len(done)
     u = utext.lower()
+    gd = goal_demo(messages, names, step)
+    if gd:
+        return gd
     if "office table demo" in u:                          # the Office panel: a table to insert into a sheet
         return ("text", "Here is the table:\n\n| Region | Sales | Share |\n|---|---:|---|\n| North | 120 | =B2/SUM(B$2:B$3) |\n| South | 80 | =B3/SUM(B$2:B$3) |\n\nInsert it where you like.")
     if "office slide demo" in u:
@@ -256,6 +311,7 @@ class H(BaseHTTPRequestHandler):
                                 "style": (lambda t: t.split("Writing style for your replies: ", 1)[1][:160] if "Writing style for your replies: " in t else "")(json.dumps(body))}) + "\n")
         if self.headers.get("Authorization") != "Bearer test-key-1234":
             self.send_response(401); self.end_headers(); self.wfile.write(b'{"error":"bad key"}'); return
+        time.sleep(float(__import__("os").environ.get("MOCK_LLM_DELAY", "0") or 0))   # a slower model, for screenshots
         p = plan(body["messages"], body.get("tools"))
         if p[0] == "text" and str(p[1]).startswith("SLOW:"):
             time.sleep(30)

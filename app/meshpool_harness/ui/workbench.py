@@ -414,7 +414,11 @@ def attach_to(r: Path, name: str, data: bytes, reuse: bool = False) -> dict:
 
 
 def git_exe() -> str | None:
-    """A Git that will not pop up the macOS 'install developer tools' dialog."""
+    """A Git that will not pop up the macOS 'install developer tools' dialog. In the app: the Git that ships inside it
+    (Contents/Resources/git/bin/git, MinGit on Windows), never a Homebrew or Xcode one the customer has."""
+    from meshpool_harness import bundled
+    if bundled.packaged():
+        return bundled.bundled_git()
     if os.name == "nt":
         return shutil.which("git")
     for c in ("/opt/homebrew/bin/git", "/usr/local/bin/git"):
@@ -473,8 +477,10 @@ def _git(root: Path, *args, check=True, timeout=60) -> str:
         raise ValueError("Git is not installed." + (" On a Mac, run: xcode-select --install" if sys.platform == "darwin" else ""))
     # A project's own .git/config must not run programs when Meshpool merely looks at it (status on opening a
     # project, diffs for the changes list): fsmonitor, an external diff tool and a pager are all programs.
-    safe = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "diff.external=", "-c", "core.quotePath=false",
-            "--no-pager"]
+    # --no-optional-locks: the changes panel asks for status again and again; without it each call could rewrite the
+    # index and hold .git/index.lock while the user ran their own git command (Claude Code #11005).
+    safe = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "diff.external=", "-c",
+            "core.quotePath=false", "--no-pager"]
     env, extra = dict(os.environ, GIT_TERMINAL_PROMPT="0"), []
     if args and args[0] in _NET_CMDS and is_managed(root):      # a clone Meshpool made: it signs in with the saved token
         env, extra = _gh_git_env(env), _CRED_FLAGS + _no_hooks()
@@ -836,13 +842,13 @@ def _shell_cmd(command: str, shell: str = "", nt: bool | None = None) -> list[st
     return [sh, "-lc", command]
 
 
-def term_run(root: str, command: str, shell: str = "") -> dict:
+def term_run(root: str, command: str, shell: str = "", owner: str = "") -> dict:
     r = check_root(root)
     if not command.strip():
         raise ValueError("Type a command.")
     tid = uuid.uuid4().hex[:8]
     t = {"id": tid, "cwd": str(r), "command": command, "out": [], "base": 0, "rc": None, "start": time.time(),
-         "p": None, "lock": threading.Lock()}
+         "p": None, "lock": threading.Lock(), "owner": owner}
     with _TERMS_LOCK:
         done = [k for k, v in TERMS.items() if v["rc"] is not None]
         for k in done[:-20]:                         # finished commands keep their output, but only the last few
@@ -888,6 +894,8 @@ def _term_kill(t: dict, wait: float = 3.0) -> None:
     p = t.get("p")
     if not p or p.poll() is not None:
         return
+    from meshpool_harness.ui import pty_term as PT
+    kids = PT._descendants(p.pid)                # those that left its process group are ended too, below
     try:
         if os.name == "nt":
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True, creationflags=NO_WINDOW)
@@ -904,6 +912,13 @@ def _term_kill(t: dict, wait: float = 3.0) -> None:
             p.kill()
         except Exception:  # noqa: BLE001
             pass
+    for k in kids:
+        if PT._alive(k):
+            try:
+                import psutil
+                psutil.Process(k).kill()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def term_stop(tid: str) -> dict:
@@ -913,14 +928,33 @@ def term_stop(tid: str) -> dict:
     return term_view(tid, 0) if t else {}
 
 
+def term_stop_owner(owner: str) -> None:
+    """A chat is closed: the commands it ran in the Terminal panel and its shells end, with all they started."""
+    from meshpool_harness.ui import pty_term as PT
+    if not owner:
+        return
+    ths = [threading.Thread(target=_term_kill, args=(t, 1.0), daemon=True) for t in list(TERMS.values())
+           if t.get("rc") is None and t.get("owner") == owner]
+    for th in ths:
+        th.start()
+    PT.stop_owner(owner)
+    for th in ths:
+        th.join(5)
+
+
 def term_stop_all() -> None:
-    """The app is quitting: no terminal command (a dev server, say) keeps running and holding its port."""
+    """The app is quitting: no terminal command (a dev server, say) keeps running and holding its port, and no shell
+    of the Terminal panel either (pty_term)."""
+    from meshpool_harness.ui import pty_term as PT
+    pt = threading.Thread(target=PT.stop_all, daemon=True)
+    pt.start()
     ths = [threading.Thread(target=_term_kill, args=(t, 1.0), daemon=True) for t in list(TERMS.values())
            if t.get("rc") is None]
     for th in ths:                               # all at once: ten dev servers must not take ten seconds to stop
         th.start()
     for th in ths:
         th.join(5)
+    pt.join(10)
 
 
 # ======================================== usage ===================================================================
@@ -1834,6 +1868,8 @@ def session_background(s, root: str) -> dict:
                             "elapsed": round(now - t["start"], 1)})
         else:
             finished += 1
+    from meshpool_harness.ui import pty_term as PT
+    running += PT.running_in(root)                 # the Terminal panel's shells in this folder
     if getattr(s, "scheduled", None):
         sch = s.scheduled
         row = {"kind": "scheduled", "id": s.id, "title": sch.get("name") or "Scheduled task",
@@ -1850,7 +1886,12 @@ def session_bg_stop(sid: str, kind: str, ident: str) -> dict:
     s = A.LIVE.get(sid)
     if not s:
         raise KeyError(sid)
-    if kind == "terminal":
+    from meshpool_harness.ui import pty_term as PT
+    if kind == "terminal" and ident in PT.PTYS:
+        if os.path.realpath(PT.PTYS[ident].root) != os.path.realpath(s.workdir):
+            raise ValueError("That terminal is not part of this session.")
+        PT.stop(ident)
+    elif kind == "terminal":
         if TERMS.get(ident, {}).get("cwd") != s.workdir:
             raise ValueError("That command is not part of this session.")
         term_stop(ident)

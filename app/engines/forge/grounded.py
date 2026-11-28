@@ -263,6 +263,112 @@ def ground(slides: list, corpus: str, request: str = "", when: _dt.date | None =
     return done
 
 
+# ------------------------------------------------------------------ a deck with no source file
+# First-hour run, 0.0.18: "make a 5-slide deck about X" with no file. The writer filled the slides with market figures
+# and cited a "Market Research Report 2034" nobody gave; P29 flagged them, the rewrites kept them, the deck shipped
+# with them unmarked (a year in a source line is not checked), and the reply said "I made none up". With no file to
+# take figures from, a figure the request, a cited web source (research facts carry their link) and the verified calcs
+# do not give is labelled illustrative on its slide, and a source line that names a document nobody gave reads
+# "Illustrative figures" instead. The engine's answer names those slides, so the reply can say so.
+ILLUSTRATIVE = "Illustrative figures, not from a file you gave or a cited source"
+_ILLUSTRATIVE_RE = re.compile(r"(?i)\billustrative figures\b")
+_UNSEEN = {"notes", "prov", "title_prov", "id", "node", "archetype", "layout", "look", "icon", "tags", "calcs",
+           "options", "section", "section_no", "tracker", "highlight_categories", "decimals", "kind", "type", "unit",
+           "fixed", "rank", "source", "footnotes", "_design", "evidence", "storyline"}
+_PAGE_IGNORE = re.compile(r"^(19|20)\d{2}$|^[0-9]{1,2}$")       # years and small ordinals, as P29 reads the page
+
+
+def _visible(x, key: str = ""):
+    """(text, None) for every string a slide shows, and (value, unit) for every plotted chart value."""
+    if isinstance(x, dict):
+        if isinstance(x.get("series"), list) and ("categories" in x or "kind" in x):      # a chart
+            unit = str(x.get("unit") or "")
+            u = "%" if "%" in unit else ""
+            for se in x["series"]:
+                for v in (se.get("values") or []) if isinstance(se, dict) else []:
+                    if isinstance(v, (int, float)) and not isinstance(v, bool) and v:
+                        yield v, u
+            for k, v in x.items():
+                if k not in ("series",) and k not in _UNSEEN:
+                    yield from _visible(v, k)
+            return
+        for k, v in x.items():
+            if k not in _UNSEEN:
+                yield from _visible(v, k)
+    elif isinstance(x, list):
+        for v in x:
+            yield from _visible(v, key)
+    elif isinstance(x, str) and x.strip():
+        yield x, None
+
+
+def has_sources(brief: str) -> bool:
+    """The request comes with something to take figures from: an attached file (engine._brief adds each under a
+    "--- name ---" line) or a Facts section the user wrote. Without either, label_unsourced applies."""
+    b = str(brief or "")
+    return "\n--- " in b or bool(re.search(r"(?im)^\W*facts\W*$", b))
+
+
+def _calc_values(s: dict) -> list[float]:
+    out = []
+    for c in s.get("calcs") or []:
+        if isinstance(c, dict):
+            for _, v, u in numbers(str(c.get("value") or "")):
+                out += candidates(abs(v), u)
+    return out
+
+
+def source_named(text: str, known: Known) -> bool:
+    """A source line the sources back: its words are in the request or the facts (a cited web page's title or link),
+    and any year in it is one they give. "Market Research Report 2034" with nothing behind it is not."""
+    t = str(text or "").strip()
+    if not t or _ILLUSTRATIVE_RE.search(t):
+        return True
+    for _, key in _dates(t):
+        if not known.date_ok(key):
+            return False
+    words = [w for w in re.findall(r"[a-z]{4,}", t.lower()) if w not in ("from", "with", "based", "data", "source",
+                                                                          "sources", "analysis", "estimates")]
+    if not words:
+        return True
+    return sum(1 for w in words if known.word_ok(w)) >= 0.6 * len(words)
+
+
+def label_unsourced(slides: list, corpus: str, request: str = "", when: _dt.date | None = None) -> list[int]:
+    """For a deck with no source file: the slides (1-based) whose figures nothing gives get the ILLUSTRATIVE footnote,
+    and their invented source line becomes "Illustrative figures". Returns those slides."""
+    known = Known(corpus, request, when)
+    out = []
+    for n, s in enumerate(slides, 1):
+        if not isinstance(s, dict) or s.get("fixed"):
+            continue
+        extra = _calc_values(s)
+        bad = []
+        for item, unit in _visible(s):
+            if unit is None:
+                for raw, v, u in numbers(item, _PAGE_IGNORE):
+                    if not known.number_ok(raw, v, u, extra):
+                        bad.append(raw)
+            elif not known.number_ok(f"{item:g}", float(item), unit, extra):
+                bad.append(f"{item:g}")
+        if not bad:                                   # every figure is given: the slide stays as written
+            continue
+        src = s.get("source")
+        src_text = src.get("text") if isinstance(src, dict) else src if isinstance(src, str) else ""
+        if src_text and not source_named(src_text, known):      # it cites what nobody gave for figures nobody gave
+            s["source"] = {"text": "Illustrative figures", "prov": []} if isinstance(src, dict) else "Illustrative figures"
+        notes = s.get("footnotes") if isinstance(s.get("footnotes"), list) else []
+        if not any(_ILLUSTRATIVE_RE.search(str(t)) for t in notes):
+            s["footnotes"] = notes + [ILLUSTRATIVE]
+        out.append(n)
+    return out
+
+
+def labelled(slide_texts: list[str]) -> bool:
+    """The slide says its figures are illustrative (label_unsourced's footnote or source line)."""
+    return any(_ILLUSTRATIVE_RE.search(t or "") for t in slide_texts)
+
+
 # ------------------------------------------------------------------ P29 on the built file
 _SKIP = ("Firm", "ov_SectionNo")
 
@@ -301,8 +407,9 @@ def check(path: str, corpus: str, request: str = "", provenance: dict | None = N
         vals = [abs(v) for _, v, _ in found]
         derived = [abs(a - b) for a in vals for b in vals] + [a / b for a in vals for b in vals if b] + \
             [a + b for a in vals for b in vals]
+        lab = labelled([t for _, t in texts])          # the slide says its figures are illustrative (no source file)
         for raw, v, u in found:
-            if not known.number_ok(raw, v, u, extra + derived):
+            if not lab and not known.number_ok(raw, v, u, extra + derived):
                 bad.append(f"the number '{raw.strip()}'")
         for name, t in texts:
             for raw, key in _dates(t):

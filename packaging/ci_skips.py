@@ -1,10 +1,10 @@
 """Count the skipped tests of a pytest run (its --junitxml report) and fail on the skips CI must not have.
 
-PA-skills-16: tests skip themselves when LibreOffice, Chromium, Playwright or jsonschema is missing. The CI job
-installs all of them, so such a skip there means an install step broke and the tests it guards did not run, while
-the job still showed green. This prints every skip, grouped by reason (and adds them to the job summary on GitHub),
-and exits 1 when a skip says one of those installed tools is missing. Other skips (a private knowledge base, bwrap,
-a Windows-only test) are listed but allowed.
+PA-skills-16: tests skip themselves when LibreOffice, Chromium, Playwright, jsonschema, prompt_toolkit or ptyprocess
+is missing. The CI job installs all of them, so such a skip there means an install step broke and the tests it guards
+did not run, while the job still showed green. This prints every skip, grouped by reason (and adds them to the job
+summary on GitHub), and exits 1 when a skip says one of those installed tools is missing. Other skips (a private
+knowledge base, bwrap, a Windows-only test) are listed but allowed.
 
 Usage: python packaging/ci_skips.py REPORT.xml
 """
@@ -23,7 +23,7 @@ from collections import Counter
 MUST_NOT_SKIP = re.compile(
     r"LibreOffice"
     r"|no Chromium|browser did not start|PLAYWRIGHT_BROWSERS_PATH is not set|playwright is not installed"
-    r"|(could not import|no module named) '?(playwright|jsonschema)", re.I)
+    r"|(could not import|no module named) '?(playwright|jsonschema|prompt_toolkit|ptyprocess)", re.I)
 
 
 def skips(xml_path: str) -> list[tuple[str, str]]:

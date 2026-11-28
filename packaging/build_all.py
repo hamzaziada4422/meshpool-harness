@@ -10,7 +10,8 @@ Everything the app needs ships inside the installer; the installed app uses none
 nothing (docs/plan/BUNDLED_TOOLS.md). This script therefore also puts in the bundle, each pinned and verified by
 packaging/bundled_tools.py: LibreOffice (<app>/vendor/libreoffice, pruned to headless conversion by
 packaging/lo_prune.py), Chromium (<app>/vendor/browsers, English only, no headless shell), Git (Windows: MinGit;
-macOS: packaging/mac/build_git.sh), ffmpeg and pandoc (<app>/vendor/ffmpeg and vendor/pandoc), the speech-to-text model
+macOS: packaging/mac/build_git.sh), bubblewrap for Linux (<app>/vendor/bwrap, packaging/linux/build_bwrap.sh), ffmpeg and
+pandoc (<app>/vendor/ffmpeg and vendor/pandoc), the speech-to-text model
 (<app>/vendor/whisper), and Hermes without its tests, website and apps, next to the Node runtime and Pi it
 already carried. Codex and OpenCode are NOT shipped (Meshpool's own agent is the product; the benchmark in testkit/
 runs them with npx). MH_BUNDLE_LIBREOFFICE=0 builds a slim test app without LibreOffice on a developer machine only:
@@ -167,9 +168,10 @@ def chromium(app_dir: Path, plat: str):
     """Playwright's Chromium into <app>/vendor/browsers, so browser use never downloads an engine nor uses the customer's
     Chrome or Edge. Browser use opens a visible window (sign-ins), so it is the full Chromium; `--no-shell` leaves out the
     headless shell that Playwright installs next to it by default (about 280 MB), and bundled_tools.prune_chromium drops
-    the other languages and Widevine. Uses the target runtime's own playwright package when this host can run it (so
-    the revision matches the bundled package), else the build machine's. NOT YET RUN on a Mac or Windows build host:
-    check the first release's browser use."""
+    the other languages and Widevine. Without the shell, every launch in the app starts this full Chromium, hidden when
+    it should be (browser_use.launch_chromium); packaging/smoke.py starts it from the built app on every system before
+    a release is published. Uses the target runtime's own playwright package when this host can run it (so the revision
+    matches the bundled package), else the build machine's."""
     import subprocess
     dest = app_dir / "vendor" / "browsers"
     exe = RT[plat] / ("python.exe" if plat == "win" else "bin/python3")
@@ -205,6 +207,15 @@ def media_tools(app_dir: Path, plat: str):
         print(f"build_all: {name} for {plat}: {mb} MB ({bt.WHEEL_PROGRAMS[name]['version']})")
 
 
+def uv_tool(dst: Path, plat: str):
+    """uv and uvx beside the app (dst = <root>/uv, next to node/), from the pinned, hash-checked PyPI wheel
+    (bundled_tools.WHEEL_PROGRAMS["uv"]), so the MCP library's uvx entries run in the packaged app. bundled.py puts the
+    folder on PATH, as it does for Node."""
+    bt = _bt()
+    exe = bt.fetch_wheel_program("uv", LO_KEY[plat], CACHE, dst)
+    print(f"build_all: uv for {plat}: {exe.stat().st_size // 1_000_000} MB ({bt.WHEEL_PROGRAMS['uv']['version']})")
+
+
 def speech_model(app_dir: Path):
     """The speech-to-text model (Whisper base, CTranslate2 format) into <app>/vendor/whisper, from the pinned revision
     with each file's SHA-256 checked. faster-whisper (in the runtime's packages) loads it from there, offline."""
@@ -229,6 +240,42 @@ def git_win(root: Path):
         if not (ub / "sh.exe").is_file():
             sys.exit("build_all: MinGit has neither usr/bin/bash.exe nor usr/bin/sh.exe; the agents would have no bash")
         shutil.copy2(ub / "sh.exe", ub / "bash.exe")
+    # MinGit has no sleep.exe either, so `sleep 2` failed in every bash command on a computer without Git for Windows.
+    # A small script stands in for it (bash runs a file with a #! line, with or without an extension).
+    if not (ub / "sleep.exe").exists() and not (ub / "sleep").exists():
+        (ub / "sleep").write_bytes(SLEEP_SHIM.encode("ascii"))     # LF line ends: bash reads CR as part of a word
+
+
+# The `sleep` the Windows app's bash finds in git/usr/bin (git_win). It takes what GNU sleep takes (numbers with an
+# optional s, m, h or d, added up; "infinity") and Windows PowerShell, on every Windows the app supports, does the wait.
+# Only digits, dots, "+" and "*" reach the PowerShell command line.
+SLEEP_SHIM = r"""#!/bin/sh
+# sleep for meshpool's bundled MinGit, which has no sleep.exe (written by packaging/build_all.py).
+[ $# -gt 0 ] || { echo "sleep: missing operand" >&2; exit 1; }
+ps="${SYSTEMROOT:-${SystemRoot:-C:/Windows}}/System32/WindowsPowerShell/v1.0/powershell.exe"
+[ -f "$ps" ] || ps=powershell.exe
+sum=0
+for a in "$@"; do
+  case "$a" in
+    inf|infinity) exec "$ps" -NoLogo -NoProfile -NonInteractive -Command "while (1) { Start-Sleep -Seconds 86400 }" ;;
+  esac
+  case "$a" in
+    *s) n=${a%s}; f=1 ;;
+    *m) n=${a%m}; f=60 ;;
+    *h) n=${a%h}; f=3600 ;;
+    *d) n=${a%d}; f=86400 ;;
+    *) n=$a; f=1 ;;
+  esac
+  case "$n" in
+    ""|.|*[!0-9.]*|*.*.*) echo "sleep: invalid time interval '$a'" >&2; exit 1 ;;
+  esac
+  case "$n" in .*) n="0$n" ;; esac
+  case "$n" in *.) n="${n}0" ;; esac
+  sum="$sum+$n*$f"
+done
+exec "$ps" -NoLogo -NoProfile -NonInteractive -Command \
+  "Start-Sleep -Milliseconds ([int][Math]::Min(2147483647, [Math]::Round(1000 * ($sum))))"
+"""
 
 
 def git_mac(root: Path, arch: str):
@@ -258,7 +305,12 @@ def check_pins():
                 got = f"unreachable ({e})"
         print(f"{key:10s} {name}\n  pinned {sha}\n  TDF    {got}  {'OK' if got == sha else 'DIFFERENT, check the .asc signature'}")
     print(f"git source {bt.GIT_VERSION}: pinned {bt.GIT_SOURCE_SHA256}")
+    print(f"bubblewrap source {bt.BWRAP_VERSION}: pinned {bt.BWRAP_SOURCE_SHA256}; libcap {bt.LIBCAP_VERSION}: pinned "
+          f"{bt.LIBCAP_SOURCE_SHA256}")
     print(f"MinGit: {bt.MINGIT_URL} {bt.MINGIT_SHA256}")
+    for key, (url, sha, _size) in bt.WHEEL_PROGRAMS["uv"]["pins"].items():
+        print(f"uv {bt.UV_VERSION} {key}: {url.rsplit('/', 1)[1]} {sha} "
+              f"(compare: https://pypi.org/project/uv/{bt.UV_VERSION}/#files)")
 
 
 def pi_and_node(app_dir: Path, node_dst: Path, plat: str):
@@ -311,8 +363,10 @@ def mac_app(arch: str):
     shutil.copy2(PKG / "mac/meshpool", root / "Resources/meshpool")
     shutil.copy2(PKG / "icons/Meshpool.icns", root / "Resources/Meshpool.icns")
     shutil.copytree(RT[arch], root / "Resources/python", symlinks=True, ignore=IGN)
+    _bt().relocatable_scripts(root / "Resources/python/bin", RT[arch] / "bin")     # pytest, ruff...: no build path
     app_code(root / "Resources/app")
     pi_and_node(root / "Resources/app", root / "Resources/node", arch)
+    uv_tool(root / "Resources/uv", arch)
     libreoffice(root / "Resources/app", arch)
     chromium(root / "Resources/app", arch)
     media_tools(root / "Resources/app", arch)
@@ -335,6 +389,19 @@ def git_linux(root: Path):
     shutil.copytree(src, root / "git", symlinks=True)
 
 
+def bwrap_linux(app_dir: Path):
+    """bubblewrap for Linux into <app>/vendor/bwrap (bwrap and its licences): the command sandbox where the computer has
+    no bwrap of its own. deps/bwrap-linux if present, else built static from the pinned sources by
+    packaging/linux/build_bwrap.sh (on a Linux build host)."""
+    src = DEPS / "bwrap-linux"
+    if not src.is_dir():
+        import subprocess
+        if not sys.platform.startswith("linux"):
+            sys.exit(f"build_all: {src} is missing. Build it on Linux: packaging/linux/build_bwrap.sh {src}")
+        subprocess.run(["bash", str(PKG / "linux/build_bwrap.sh"), str(src)], check=True)
+    shutil.copytree(src, app_dir / "vendor" / "bwrap")
+
+
 def linux_app():
     """Linux x64: one folder, Meshpool/, packed as Meshpool-Linux-x64.tar.gz. The `meshpool` command and the
     `Meshpool` app launcher sit at its top with install.sh (a menu entry and the command on PATH); the runtime, app
@@ -347,12 +414,15 @@ def linux_app():
     stamp(PKG / "linux/meshpool.desktop", root / "meshpool.desktop")
     shutil.copy2(PKG / "icons/icon-256.png", root / "meshpool.png")
     shutil.copytree(RT["linux"], root / "python", symlinks=True, ignore=IGN)
+    _bt().relocatable_scripts(root / "python" / "bin", RT["linux"] / "bin")    # pytest, ruff...: no build path
     git_linux(root)
     app_code(root / "app")
     pi_and_node(root / "app", root / "node", "linux")
+    uv_tool(root / "uv", "linux")
     libreoffice(root / "app", "linux")
     chromium(root / "app", "linux")
     media_tools(root / "app", "linux")
+    bwrap_linux(root / "app")
     speech_model(root / "app")
     docs(root / "harness-docs")
     # Playwright's own Node needs libatomic, which a desktop may lack: it runs on the app's Node 22 instead (as on macOS)
@@ -360,6 +430,14 @@ def linux_app():
     if drv and (drv / "node").exists():
         (drv / "node").unlink()
         (drv / "node").symlink_to(os.path.relpath(root / "node" / "bin" / "node", drv))
+
+
+def win_runtime(root: Path):
+    """The Windows Python into <app root>/runtime, with python3.exe beside python.exe (bundled_tools.add_python_aliases):
+    skills and models type python3, which on Windows otherwise opens the Microsoft Store stub."""
+    shutil.copytree(RT["win"], root / "runtime", ignore=IGN)
+    _bt().add_python_aliases(root / "runtime")
+    _bt().relocatable_launchers(root / "runtime" / "Scripts")                 # pytest.exe...: no build path
 
 
 def win_app():
@@ -371,10 +449,11 @@ def win_app():
     # `meshpool` would start the app (Windows tries .EXE before .CMD).
     (root / "bin").mkdir()
     shutil.copy2(PKG / "win/meshpool.cmd", root / "bin" / "meshpool.cmd")
-    shutil.copytree(RT["win"], root / "runtime", ignore=IGN)
+    win_runtime(root)
     git_win(root)
     app_code(root / "app")
     pi_and_node(root / "app", root / "node", "win")
+    uv_tool(root / "uv", "win")
     libreoffice(root / "app", "win")
     chromium(root / "app", "win")
     media_tools(root / "app", "win")
