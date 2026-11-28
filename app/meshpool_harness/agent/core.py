@@ -1644,11 +1644,6 @@ def tools_nudge(names: list) -> str:
     shown = ", ".join(names[:30]) + (f" and {len(names) - 30} more" if len(names) > 30 else "")
     return f"[Meshpool] Your tools are available: {shown}. Use them to do the change."
 
-CAP_NUDGE = ("[Meshpool] You said a tool is missing for this. Call get_capability with the need in a few words: it "
-             "finds a connector, skill or tool that does it, adds one, or builds a small one. Then carry on with the task. "
-             "If nothing can do it, say so in one line.")
-
-from meshpool_harness.core import finishing as _FIN  # noqa: E402
 _DESTRUCTIVE = PR.DESTRUCTIVE                   # shared with re-check on edit (core/tools.py _recheckable)
 
 
@@ -4130,20 +4125,6 @@ class Agent:
             self.capability_on = True
         return hit
 
-    def _cap_missing_in_reply(self, final: str) -> str:
-        """The reply's missing-capability signal while the task is open, whether or not the capability tools are on
-        yet; turns them on (0.0.21: the loop then asks for get_capability in the same turn)."""
-        if _cap_mode() in ("0", "off", "false", "no"):
-            return ""
-        if not getattr(self, "capability_on", False):
-            return self._cap_signal(final, "reply")
-        try:
-            from meshpool_harness import capability_get as CG
-            todos = getattr(self, "_todos", None) or []
-            return CG.missing_signal(final, "reply", not todos or any(i.get("status") != "completed" for i in todos))
-        except Exception:  # noqa: BLE001 - never breaks a step
-            return ""
-
     def _saved_tool_result(self, name: str, ok: bool, out: str) -> None:
         """A saved MCP tool that fails is marked failing and the user is told; a later success clears it. Never
         removed."""
@@ -4947,25 +4928,6 @@ class Agent:
                             self.emit({"type": "assistant", "text": done, "streamed": False, "has_tools": False})
                             final = done
                             break
-                    if not self.plan and not self._pace_wrapped and _FIN.task_refusal(final):
-                        # 0.0.21: an ordinary task declined, often a misread (Chinese models most of all): one retry
-                        # with the context the model lacked, then an offer of another agent. A harmful ask is never
-                        # retried: that refusal is the model's safety training working.
-                        if not _FIN.harmful_ask(g.get("req") or ""):
-                            if not g.get("refusal_retry") and not tools_off:
-                                g["refusal_retry"] = len(self.messages)
-                                self.messages.append({"role": "user",
-                                                      "content": _FIN.refusal_context(self.mode, str(self.root))})
-                                continue
-                            g["refusal_retry"] = g.get("refusal_retry") or len(self.messages)
-                            self._offer_handoff(g)
-                    if (not self.plan and not tools_off and not self._pace_wrapped and not g.get("tools_nudged")
-                            and not cx and self._cap_missing_in_reply(final) and self._cap_offered()):
-                        # 0.0.21: "I don't have a tool for Jira" mid-task: find or add one now, in this turn, instead
-                        # of ending it and offering get_capability only from the next message
-                        g["tools_nudged"] = len(self.messages)    # one "missing tool" nudge per turn, of either kind
-                        self.messages.append({"role": "user", "content": CAP_NUDGE})
-                        continue
                     if (not self.plan and not tools_off and not self._pace_wrapped and not g.get("tools_nudged")
                             and claims_no_tools(final)):
                         try:
@@ -5000,19 +4962,6 @@ class Agent:
                             self.emit({"type": "assistant", "text": done, "streamed": False, "has_tools": False})
                             final = done
                             break
-                    if (not self.plan and not tools_off and not cx and not self._pace_wrapped
-                            and not getattr(self, "goal_active", False) and not getattr(self, "_delegate_depth", 0)
-                            and not any(g.get(k) for k in ("finish_nudged", "todo_nudged", "tools_nudged", "act_nudged",
-                                                           "promise_n", "refusal_retry", "malformed_nudged"))
-                            and os.environ.get("MH_FINISH_CHECK", "1") != "0"):
-                        missing = _FIN.unaddressed(g.get("req") or "", self._turn_said(g), self.root)
-                        if missing:                     # 0.0.21: a reply that ends the turn with part of the ask
-                            g["finish_nudged"] = len(self.messages)    # untouched: once per turn, then it ends
-                            self.messages.append({"role": "user", "content": (
-                                "[Meshpool] Part of the request has no trace in your work yet:\n- "
-                                + "\n- ".join(missing) + "\nDo it now. If it is done, not needed, or needs the "
-                                "user, say so in one line and end your turn.")})
-                            continue
                     from meshpool_harness.core import textcalls as _TCM
                     if not getattr(self, "reports_to_agent", False) and _TCM.malformed_reply(final):
                         # Priya, round 3: the answer was a raw shell command, a link, a machine path and "30000".
@@ -5265,35 +5214,6 @@ class Agent:
 
     def _tool_msgs_since(self, start: int) -> int:
         return sum(1 for m in self.messages[start:] if m.get("role") == "tool")
-
-    def _turn_said(self, g) -> str:
-        """This turn's replies and tool-call arguments as one text (paths written included), for the finish check."""
-        parts = []
-        for m in self.messages[g.get("msg0", 0) + 1:]:
-            if m.get("role") == "assistant":
-                c = m.get("content")
-                parts.append(c if isinstance(c, str) else json.dumps(c, ensure_ascii=False) if c else "")
-                parts += [str((tc.get("function") or {}).get("arguments") or "") for tc in m.get("tool_calls") or []]
-        return "\n".join(parts)[-60000:]
-
-    def _offer_handoff(self, g) -> None:
-        """After a refusal that one retry did not lift (or the provider's own refusal): offer the best other ready
-        agent for this request, once per turn. Sub-agents report to the chat instead."""
-        if g.get("handoff_offered") or getattr(self, "_delegate_depth", 0) or getattr(self, "reports_to_agent", False):
-            return
-        g["handoff_offered"] = True
-        try:
-            from meshpool_harness import harness_router as HRT
-            kind = "code" if self.profile == "code" else "cowork"
-            rank = HRT.route(str(g.get("req") or ""), kind).get("ranking") or []
-            pick = next((r for r in rank if not str(r.get("harness", "")).startswith("meshpool-")), None)
-        except Exception:  # noqa: BLE001 - an offer never breaks a turn
-            pick = None
-        if pick:
-            self.emit({"type": "offer", "action": "handoff", "harness": pick["harness"], "name": pick.get("name", ""),
-                       "label": f"Try with {pick.get('name') or pick['harness']}"})
-        else:
-            self.emit({"type": "status", "text": "The model declined this. Pick another model in the model menu to try it there."})
 
     def _tools_offered(self) -> bool:
         """True when this request offers the model any tool."""
