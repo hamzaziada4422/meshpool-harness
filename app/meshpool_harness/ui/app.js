@@ -1258,7 +1258,7 @@ async function poll() {
     if (S.cur !== cur) return;
     if (/not found/i.test(e.message)) { colEl().insertAdjacentHTML("beforeend", `<div class="note bad">This chat is gone.</div>`); commitStage(cur); return; }
     cur.fails = (cur.fails || 0) + 1;            // keep trying: one dropped request must not freeze a running chat
-    let n = $("#pollErr"); if (!n && cur.fails > 1) { colEl().insertAdjacentHTML("beforeend", `<div class="note bad" id="pollErr"></div>`); n = $("#pollErr"); }
+    let n = $("#pollErr"); if (!n && cur.fails > 1) { ($("#col") || colEl()).insertAdjacentHTML("beforeend", `<div class="note bad" id="pollErr"></div>`); n = $("#pollErr"); }
     if (n) { n.textContent = `${e.message} Retrying… `; if (!$("button", n)) { const b = document.createElement("button"); b.className = "linkbtn"; b.textContent = "Reload"; b.onclick = () => location.reload(); n.appendChild(b); } }
     if (cur.fails > 1 && S.stopping) { S.stopping = false; renderBar(); }
     cur.pollT = setTimeout(poll, Math.min(15000, 500 * 2 ** cur.fails));
