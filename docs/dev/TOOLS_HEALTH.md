@@ -63,6 +63,8 @@ model) and `ask_user` (Office panel); the classic lane (`MH_LEAN_WORK=0`, plan m
 | ask_user | core | | a question with a recommended option; answered headless with it |
 | use_skill | core | the bundled skills | loads `build-code`; its instructions come back |
 | find_skill | core | | a search for a spreadsheet chart skill |
+| get_capability | core | | a search for a chart tool: finds the make-chart skill already here; the online sources are unreachable offline |
+| save_tool | core | | keeps a small script tool after its test passes (in the sandbox where there is one) |
 | load_skill | core (engines) | | runs (an engine workspace may have no skills) |
 | diagnostics | core (code route) | ruff (bundled) | checks a small `.py` file |
 | fetch_url | core | network (local page here) | reads a local page; its token comes back |

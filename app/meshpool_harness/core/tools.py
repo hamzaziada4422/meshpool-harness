@@ -90,6 +90,17 @@ def _bash():
     from meshpool_harness.config import find_bash
     return find_bash()
 
+
+def _login_path_prefix() -> str:
+    """For a login shell in the packaged app: the app's own Python and programs back in front of PATH. The login
+    profile rebuilds PATH (macOS: /etc/profile runs path_helper, which puts /usr/bin first), so python3 ran the
+    system's Python, without the app's openpyxl and python-pptx, and a chat could not make a workbook or a deck."""
+    import shlex
+    import sys
+    from meshpool_harness import bundled
+    front = list(dict.fromkeys([str(Path(sys.executable).parent), *bundled.front_dirs()]))
+    return f'PATH={shlex.quote(os.pathsep.join(front))}":$PATH"; export PATH; '
+
 MAX_TOOL_CHARS = 8000
 HEAD, TAIL = 3000, 3000
 _CAP_LOCK = threading.Lock()
@@ -951,7 +962,7 @@ _NUM_TEXT = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
 
 def coerce_arg(v, t: str):
     """A value the model sent in the wrong JSON type but with an unmistakable meaning, turned into the declared type:
-    "10" for a whole number, 10.0 for a whole number, "true"/"false" for true or false, a list written as JSON text.
+    "10" for a whole number, 10.0 for a whole number, "true"/"false" for true or false, a list or an object written as JSON text.
     Gemini, Qwen and several OpenAI-compatible servers send numbers as text; refusing the call cost a turn and could
     loop (Open WebUI #25641, Roo Code #10322). Anything else is returned as it was, so validate() still reports it."""
     if t == "integer":
@@ -973,6 +984,14 @@ def coerce_arg(v, t: str):
             except ValueError:
                 return v
             if isinstance(got, list):
+                return got
+    elif t == "object":
+        if isinstance(v, str) and v.strip().startswith("{"):
+            try:
+                got = json.loads(v)
+            except ValueError:
+                return v
+            if isinstance(got, dict):
                 return got
     return v
 
@@ -1011,12 +1030,12 @@ def validate(name: str, raw_args, allowed: list[str]) -> dict:
         v = args[k] = coerce_arg(v, t)
         ok = {"string": isinstance(v, str), "integer": isinstance(v, int) and not isinstance(v, bool),
               "number": isinstance(v, (int, float)) and not isinstance(v, bool),
-              "boolean": isinstance(v, bool), "array": isinstance(v, list)}[t]
+              "boolean": isinstance(v, bool), "array": isinstance(v, list), "object": isinstance(v, dict)}[t]
         if not ok:
             got = {"bool": "true or false", "NoneType": "nothing (null)", "int": "a number", "float": "a number",
                    "str": "text", "list": "a list", "dict": "an object"}.get(type(v).__name__, type(v).__name__)
             what = {"string": "text", "integer": "a whole number", "number": "a number", "boolean": "true or false",
-                    "array": "a list"}[t]
+                    "array": "a list", "object": "an object"}[t]
             hint = (f' For a command, send the command line itself as text, for example {{"{k}": "ls -la"}}.'
                     if t == "string" and k in ("cmd", "command") else "")
             raise ToolError(f"{name}: `{k}` must be {what}, but it was {got}. Send the call again with a valid "
@@ -2171,6 +2190,8 @@ class Workspace:
                                    encoding="utf-8", cwd=cwd)
                 elif bash:
                     offline = command.strip() in self.__dict__.get("sbx_offline", ())   # ran without a question
+                    if login and _C.packaged():
+                        command = _login_path_prefix() + command
                     r = self._proc(_SB.wrap([bash, "-lc" if login else "-c", command], self.root, cwd=cwd, mode=mode,
                                             offline=offline), env, timeout_s, cwd=cwd)
                 elif os.name == "nt":                            # no Git Bash: PowerShell, not cmd.exe
