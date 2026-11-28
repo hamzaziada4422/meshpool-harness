@@ -300,6 +300,23 @@ def _extract_debs(archive: Path, work: Path, dest: Path) -> None:
         shutil.move(str(item), str(dest / item.name))
 
 
+def collect_msi_fonts(out: Path, dest: Path) -> int:
+    """The MSI puts LibreOffice's fonts (Carlito, Liberation, Caladea ...) in Windows' Fonts folder, outside the
+    LibreOffice folder: Fonts/ with msiextract, a folder of its own under TARGETDIR with msiexec /a. Whatever .ttf and
+    .otf files are left in the unpacked tree after the LibreOffice folder moved out go to share/fonts/truetype, where
+    LibreOffice keeps them on the other platforms and the measuring code looks (lo_prune drops the spare ones).
+    Returns the number of files copied."""
+    to = dest / "share" / "fonts" / "truetype"
+    n = 0
+    for f in sorted(out.rglob("*")):
+        if f.is_file() and f.suffix.lower() in (".ttf", ".otf"):
+            to.mkdir(parents=True, exist_ok=True)
+            if not (to / f.name).exists():
+                shutil.copy2(f, to / f.name)
+                n += 1
+    return n
+
+
 def extract(archive: Path, dest: Path, key: str) -> Path:
     """Unpack a pinned download into dest so that dest/LO_EXE[key] exists. macOS: copy LibreOffice.app out of the dmg.
     Windows: msiexec /a (administrative extract). Non-Windows hosts use msiextract or 7z for the msi."""
@@ -351,12 +368,12 @@ def extract(archive: Path, dest: Path, key: str) -> Path:
             # Its fonts (Carlito, Liberation, Caladea ...) go to Windows' Fonts folder the same way (FontsFolder in the
             # MSI's Directory table), so they were left behind: no Carlito to measure Calibri with. They go where
             # LibreOffice keeps them on the other platforms, share/fonts/truetype; lo_prune drops the spare ones.
-            fonts = next((d for d in out.iterdir() if d.is_dir() and d.name.lower() == "fonts"), None)
-            if fonts:
-                (dest / "share" / "fonts" / "truetype").mkdir(parents=True, exist_ok=True)
-                for f in fonts.iterdir():
-                    if f.suffix.lower() in (".ttf", ".otf"):
-                        shutil.copy2(f, dest / "share" / "fonts" / "truetype" / f.name)
+            n = collect_msi_fonts(out, dest)
+            print(f"  LibreOffice fonts from the MSI: {n} files into share/fonts/truetype", flush=True)
+            if not (dest / "share" / "fonts" / "truetype" / "Carlito-Regular.ttf").is_file():
+                left = sorted(str(p.relative_to(out)) for p in out.rglob("*") if p.is_dir())[:40]
+                raise BundleError("Carlito is not in the unpacked LibreOffice MSI (Calibri would be measured at a "
+                                  f"guessed width). Folders left after the move: {left}")
     finally:
         shutil.rmtree(work, ignore_errors=True)
     if not (dest / LO_EXE[key]).is_file():

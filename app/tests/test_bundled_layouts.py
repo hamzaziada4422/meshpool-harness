@@ -174,3 +174,20 @@ def test_a_source_checkout_without_a_bundled_libreoffice_is_unchanged(tmp_path, 
     from engines.forge import common as CM
     monkeypatch.setattr(config, "APP", tmp_path / "app")
     assert CM._bundled_office_font("Carlito", "") is None
+
+
+# ---------------------------------------------------------------- LibreOffice's fonts from the Windows MSI
+@pytest.mark.parametrize("fonts_dir", ["Fonts", "Windows/Fonts", "PFiles/Fonts"])
+def test_the_msi_fonts_reach_share_fonts_truetype_wherever_the_unpack_put_them(tmp_path, fonts_dir):
+    """Release 0.0.20: msiextract leaves the fonts in Fonts/, msiexec /a (the Windows build) elsewhere under TARGETDIR.
+    The Windows smoke test failed with no Carlito. Every .ttf and .otf left outside the LibreOffice folder is copied."""
+    bt = _load("mp_bundled_tools", ROOT / "packaging" / "bundled_tools.py")
+    out, dest = tmp_path / "x", tmp_path / "dest"
+    for f in ("Carlito-Regular.ttf", "LiberationSans-Bold.ttf", "readme.txt"):
+        _touch(out / fonts_dir / f)
+    (dest / "share" / "fonts" / "truetype").mkdir(parents=True)
+    (dest / "share" / "fonts" / "truetype" / "LiberationSans-Bold.ttf").write_text("keep")
+    assert bt.collect_msi_fonts(out, dest) == 1
+    have = sorted(p.name for p in (dest / "share" / "fonts" / "truetype").iterdir())
+    assert have == ["Carlito-Regular.ttf", "LiberationSans-Bold.ttf"]
+    assert (dest / "share" / "fonts" / "truetype" / "LiberationSans-Bold.ttf").read_text() == "keep"
