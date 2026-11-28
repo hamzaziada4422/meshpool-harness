@@ -1820,6 +1820,15 @@ function applyEvRaw(ev) {
     case "retry_ok": clearRetry(); break;
     case "offer": {                                   // a reply that offers a folder: the action is under it
       closeGroup();
+      if (ev.action === "handoff" && ev.harness) {      // 0.0.21: the model declined; another agent may do it
+        const h = add(`<button class="btn" data-handoff="1">${esc(ev.label || "Try another agent")}</button>`, "note");
+        const hb = $("[data-handoff]", h);
+        hb?.addEventListener("click", async () => {
+          hb.disabled = true;
+          try { const v = await post(`/api/agent/${cur.id}/harness`, {harness: ev.harness, since: 1e9}); cur.view.harness = v.harness || harness(ev.harness); h.remove(); renderBar(); }
+          catch (err) { hb.disabled = false; add(esc(err.message), "note bad"); }
+        });
+        break; }
       const n = add(`<button class="btn" data-addfolder="1">${esc(ev.label || "Add a folder")}</button>`, "note");
       $("[data-addfolder]", n)?.addEventListener("click", () => { if (typeof addFolderProject === "function") addFolderProject(); });
       break; }
